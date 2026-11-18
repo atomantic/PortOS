@@ -7,7 +7,7 @@ import {
   agentContextSettingsSchema,
   createDefaultAgentContextActionGrants,
   normalizeAgentContextActionGrants,
-} from '../lib/agentContextValidation.js';
+} from '../lib/agent/agentContextValidation.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { sha256Text } from '../lib/fileUtils.js';
 

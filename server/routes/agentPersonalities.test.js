@@ -15,8 +15,8 @@ const agentPersonalities = vi.hoisted(() => ({
 const generateAgentPersonality = vi.hoisted(() => vi.fn());
 const logAction = vi.hoisted(() => vi.fn());
 
-vi.mock('../services/agentPersonalities.js', () => agentPersonalities);
-vi.mock('../services/agentPersonalityGenerator.js', () => ({ generateAgentPersonality }));
+vi.mock('../services/agent/agentPersonalities.js', () => agentPersonalities);
+vi.mock('../services/agent/agentPersonalityGenerator.js', () => ({ generateAgentPersonality }));
 vi.mock('../services/history.js', () => ({ logAction }));
 
 import agentPersonalitiesRoutes from './agentPersonalities.js';

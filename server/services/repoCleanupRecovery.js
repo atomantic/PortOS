@@ -46,7 +46,7 @@ export async function inspectOrQueueCompletedReview(input, deps = {}) {
       { phase: 'blocked-before-dispatch', taskId: null, reason: refusal });
     return { disposition: 'held', reason: refusal };
   }
-  const queueReview = deps.spawn || (await import('./agentWorktreeCleanup.js')).spawnReviewLoopFollowUp;
+  const queueReview = deps.spawn || (await import('./agent/agentWorktreeCleanup.js')).spawnReviewLoopFollowUp;
   let task;
   try {
     task = await queueReview({ originalAgentId: inspected.agentId, originalTask: inspected.originalTask,

@@ -1,7 +1,7 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, ensureDirs } from '../lib/fileUtils.js';
-import { writeAgentInstructions } from '../lib/agentInstructionsFile.js';
+import { writeAgentInstructions } from '../lib/agent/agentInstructionsFile.js';
 import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
 
 // A caret on a 0.x range admits only patch releases (^0.1.0 never reaches 0.2.0),

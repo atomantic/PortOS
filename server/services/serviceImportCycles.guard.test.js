@@ -26,7 +26,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
-import { dirname, join, relative, resolve } from 'path';
+import { dirname, join, posix, relative, resolve } from 'path';
 import { buildStaticImportGraph, findImportCycles, findImportCycleComponents } from '../lib/staticImportGraph.js';
 import { staticExportNames } from '../lib/staticExportSurface.js';
 
@@ -50,13 +50,11 @@ function cycleReport(graph) {
   return [...components.map(c => c.join(' + ')), ...(rings.length ? ['rings closing it:', ...rings] : [])];
 }
 
-// Does `file` reach `mod` with a DEFERRED import? Deliberately loose — anything
-// between the parens that names the module — so quotes, template literals, an
-// interleaved comment, `return import(...)` (no `await`) and `import ('x')` (a
-// space before the paren is valid ESM) all count. A mention inside a comment
-// trips it too; that fails CLOSED, the right bias for a structural guard.
+// Resolve quoted specifiers even with interleaved comments or a template literal,
+// so moving a target under a domain directory does not hide a deferred back-edge.
 function importsDynamically(read, file, mod) {
-  return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(read(file));
+  const calls = read(file).matchAll(/\bimport\s*\(\s*[^)]*?(['"`])(\.{1,2}\/[^'"`]+)\1[^)]*\)/g);
+  return [...calls].some(([, , specifier]) => posix.join(posix.dirname(file), specifier) === mod);
 }
 
 /** Static edges a `NO_BACK_EDGE` row forbids, as `from -> to` strings. `to: ANY` forbids every edge. */
@@ -101,8 +99,8 @@ function facadeBackEdges(graph, read, facade) {
 
 // --- The structural rules for server/services --------------------------------
 
-const AGENT_ORCHESTRATORS = ['agentLifecycle.js', 'agentCliSpawning.js', 'agentTuiSpawning.js', 'agentManagement.js', 'subAgentSpawner.js'];
-const FACADE = 'agentOrchestrator.js';
+const AGENT_ORCHESTRATORS = ['agent/agentLifecycle.js', 'agent/agentCliSpawning.js', 'agent/agentTuiSpawning.js', 'agent/agentManagement.js', 'subAgentSpawner.js'];
+const FACADE = 'agent/agentOrchestrator.js';
 
 const promptSectionsOf = (graph) => [...graph.keys()].filter(file => file.startsWith('promptSections/'));
 
@@ -111,7 +109,7 @@ const noBackEdgeRules = (graph) => [
   {
     why: 'extracted agent leaves exist only to be depended on (#2837); the TUI session controller takes its collaborators as arguments so it never needs a spawner (#8021)',
     from: [
-      'agentFinalization.js', 'agentRunFinalize.js', 'agentSummaryExtraction.js', 'agentRunnerSync.js', 'agentRunnerOutputBatchers.js',
+      'agent/agentFinalization.js', 'agent/agentRunFinalize.js', 'agent/agentSummaryExtraction.js', 'agent/agentRunnerSync.js', 'agent/agentRunnerOutputBatchers.js',
       'agentTuiSpawning/sessionController.js', 'agentTuiSpawning/spawnConfig.js', 'agentTuiSpawning/outputSpooler.js', 'agentTuiSpawning/finalizeHelpers.js',
     ],
     to: AGENT_ORCHESTRATORS,
@@ -119,11 +117,11 @@ const noBackEdgeRules = (graph) => [
   {
     why: 'prompt section modules stay leaves under agentPromptBuilder (#4896)',
     from: promptSectionsOf(graph),
-    to: ['agentPromptBuilder.js'],
+    to: ['agent/agentPromptBuilder.js'],
   },
   {
     why: 'agentState.js is how modules that cannot import each other share state; one import there closes a cycle for every such pair (#3450)',
-    from: ['agentState.js'],
+    from: ['agent/agentState.js'],
     to: ANY,
   },
   {
@@ -145,13 +143,13 @@ const noBackEdgeRules = (graph) => [
 
 /** Deferring an import hides a cycle from the static graph without removing the hazard. */
 const NO_DEFERRED_IMPORT = [
-  { from: 'cosAgentLifecycle.js', to: 'agentManagement.js', why: 'the agent STATE layer must not forward into the process layer — ask the facade (#3450)' },
-  { from: 'agentLifecycle.js', to: 'agentManagement.js', why: 'the handleOrphanedTask cycle-dodge this cluster was fixed to remove (#2837)' },
-  { from: 'agents.js', to: 'subAgentSpawner.js', why: 'agents.js reaches the kill transition through the facade, statically (#3450)' },
+  { from: 'cosAgentLifecycle.js', to: 'agent/agentManagement.js', why: 'the agent STATE layer must not forward into the process layer — ask the facade (#3450)' },
+  { from: 'agent/agentLifecycle.js', to: 'agent/agentManagement.js', why: 'the handleOrphanedTask cycle-dodge this cluster was fixed to remove (#2837)' },
+  { from: 'agent/agents.js', to: 'subAgentSpawner.js', why: 'agent/agents.js reaches the kill transition through the facade, statically (#3450)' },
 ];
 
 /** Modules that must declare everything they export (#3450: both were forwarding barrels). */
-const NO_FORWARDING_BARREL = ['subAgentSpawner.js', 'agentLifecycle.js'];
+const NO_FORWARDING_BARREL = ['subAgentSpawner.js', 'agent/agentLifecycle.js'];
 
 describe('server/services — static import graph (#5693)', () => {
   const graph = buildStaticImportGraph(SERVICES_DIR);
@@ -213,11 +211,12 @@ describe('server/services — static import graph (#5693)', () => {
 
   // What the facade re-exports out of `source`, as `{ declared, exposedAs }` —
   // the two sides of an `a as b` re-export. A renamed export's public name exists
-  // ONLY on the facade, so the facade is its one legitimate source. Both quote
-  // styles: `from "./x.js"` is valid ESM.
+  // ONLY on the facade, so the facade is its one legitimate source.
   const reexportedPairs = (source) => {
+    const relativeSource = posix.relative(posix.dirname(FACADE), source);
+    const specifier = relativeSource.startsWith('.') ? relativeSource : `./${relativeSource}`;
     const block = read(FACADE).match(new RegExp(
-      String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
+      String.raw`export\s*\{([^}]*)\}\s*from\s*['"]${specifier.replace(/\./g, '\\.')}['"]`));
     expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
     return block[1]
       .replace(/\/\/[^\n]*/g, '')
@@ -236,7 +235,7 @@ describe('server/services — static import graph (#5693)', () => {
     // against each module's REAL export surface, so a declared wrapper of the
     // same name fails as surely as a re-export.
     const stateLayer = new Set(reexportedFrom('cosAgentLifecycle.js'));
-    const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
+    const forbidden = reexportedFrom('agent/agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
     for (const barrel of ['cos.js', 'subAgentSpawner.js']) {
       const exported = staticExportNames(join(SERVICES_DIR, barrel));
@@ -252,7 +251,7 @@ describe('server/services — static import graph (#5693)', () => {
     // they call, which can never import the facade), the declaring module.
     // Derived from the facade's export blocks, so a new transition is guarded
     // the moment it lands there.
-    const declaringModules = ['agentManagement.js', 'cosAgentLifecycle.js', 'agentLifecycle.js'];
+    const declaringModules = ['agent/agentManagement.js', 'cosAgentLifecycle.js', 'agent/agentLifecycle.js'];
     const declaredBy = new Map(); // transition name → the modules allowed to serve it
     const allow = (name, source) => {
       if (!declaredBy.has(name)) declaredBy.set(name, new Set());
@@ -431,9 +430,11 @@ describe('each rule fails on the violation it exists for (fixture tree)', () => 
   it('fails a deferred import of a banned module in any spelling', () => {
     const { read } = fixture({
       'a.js': "const m = await import(`./sub/target.js`);\n",
-      'b.js': "export const go = () => import(/* lazy */ './target.js').then(m => m.go());\n",
-      'c.js': "import { go } from './target.js';\n",
+      'sibling/b.js': "export const go = () => import(/* lazy */ '../sub/target.js').then(m => m.go());\n",
+      'c.js': "import { go } from './sub/target.js';\n",
+      'other.js': "const m = await import('./target.js');\n",
     });
-    expect(['a.js', 'b.js', 'c.js'].map(file => importsDynamically(read, file, 'target.js'))).toEqual([true, true, false]);
+    expect(['a.js', 'sibling/b.js', 'c.js', 'other.js'].map(file => importsDynamically(read, file, 'sub/target.js')))
+      .toEqual([true, true, false, false]);
   });
 });

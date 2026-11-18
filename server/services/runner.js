@@ -479,7 +479,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // Restricted Claude image reads ignore settings files. Carry only the user's
   // configured environment forward so Bedrock/gateway authentication still works.
   const visionSettingsEnv = vision && toolFree && isClaudeProvider(provider)
-    ? await import('./agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
+    ? await import('./agent/agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
     : null;
   const childEnv = buildCliChildEnv({
     before: visionSettingsEnv,

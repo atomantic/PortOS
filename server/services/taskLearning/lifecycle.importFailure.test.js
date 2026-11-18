@@ -11,8 +11,8 @@ vi.mock('./store.js', async () => {
 });
 vi.mock('./metrics.js', () => metricMocks);
 vi.mock('../taskTypeHooks.js', () => ({ declaresNoCommitCriterion: vi.fn(() => false) }));
-vi.mock('../../lib/agentOutcome.js', () => ({ isAgentHandoff: vi.fn(() => false) }));
-vi.mock('../agentChurn.js', async () => {
+vi.mock('../../lib/agent/agentOutcome.js', () => ({ isAgentHandoff: vi.fn(() => false) }));
+vi.mock('../agent/agentChurn.js', async () => {
   throw new Error('simulated observer module evaluation failure');
 });
 

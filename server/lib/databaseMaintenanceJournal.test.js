@@ -242,7 +242,7 @@ describe('persistent database maintenance boundary', () => {
       return next(specifier, context);
     }`);
     const dbUrl = new URL('./db.js', import.meta.url).href;
-    const guardsUrl = new URL('../services/agentGuards.js', import.meta.url).href;
+    const guardsUrl = new URL('../services/agent/agentGuards.js', import.meta.url).href;
     const code = `import {query, withTransaction, withDatabaseMaintenance, ensureSchema, checkHealth} from ${JSON.stringify(dbUrl)};
       import {withSpawnDedupGuard} from ${JSON.stringify(guardsUrl)};
       const outcomes = [];

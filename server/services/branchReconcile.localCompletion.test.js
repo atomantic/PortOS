@@ -11,7 +11,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
   dataRoot: () => lazyTempDataRoot('portos-local-reconcile-'),
 }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => [] }));
-vi.mock('./agentState.js', async importOriginal => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
+vi.mock('./agent/agentState.js', async importOriginal => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));

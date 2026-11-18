@@ -129,6 +129,7 @@ export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
  * naming them keeps the reason explicit.
  */
 export const TEST_MEMO_NEVER = Object.freeze({
+  'server/lib/agent/moduleSummaries.test.js': 'reads every server/lib/agent module header',
   'server/lib/moduleSummaries.test.js': 'reads every server/lib module header',
   'server/lib/promptSystemStages.test.js': 'enumerates shipped prompt templates in data.reference',
   'client/src/lib/moduleSummaries.test.js': 'reads every client/src/lib module header',

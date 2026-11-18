@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./agentAppWorkspace.js', () => ({ getAppDataForTask: vi.fn() }));
+vi.mock('./agent/agentAppWorkspace.js', () => ({ getAppDataForTask: vi.fn() }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: vi.fn() }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: vi.fn() }));
@@ -8,7 +8,7 @@ vi.mock('./gitlab.js', () => ({ execGlab: vi.fn() }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
-import { getAppDataForTask } from './agentAppWorkspace.js';
+import { getAppDataForTask } from './agent/agentAppWorkspace.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
 import { execGh } from './github.js';

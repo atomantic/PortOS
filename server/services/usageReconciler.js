@@ -1028,7 +1028,7 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
 /**
  * The run-completion usage path, shared by the AI Toolkit hook
  * (`services/bootstrap.js`) and CoS agent runs
- * (`services/agentRunTracking.js`) so both record the same shape from the same
+ * (`services/agent/agentRunTracking.js`) so both record the same shape from the same
  * logic. Estimates tokens the legacy way, upgrades to the provider's measured
  * counts when a transcript can be found, and persists the result.
  *

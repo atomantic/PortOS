@@ -484,7 +484,7 @@ describe('host-control socket events need operator authority (#8708)', () => {
     const { token } = await stage('set instance password', auth.setPassword({ newPassword: 'instance-secret' }));
     let headers = { cookie: `portos_auth=${token}` };
     if (authority === 'delegated agent') {
-      const { resolveAgentApiEnv } = await stage('import agentApiAuth.js', import('./agentApiAuth.js'));
+      const { resolveAgentApiEnv } = await stage('import agentApiAuth.js', import('./agent/agentApiAuth.js'));
       const { PORTOS_API_TOKEN } = await stage('resolve delegated agent token', resolveAgentApiEnv());
       headers = { Authorization: `Bearer ${PORTOS_API_TOKEN}` };
     }

@@ -11,7 +11,7 @@ import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
 import { getAgentIdsForDates, getAgentsByDate } from './cosAgentIndex.js';
 import { formatDuration } from '../lib/fileUtils.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { isAgentHandoff } from '../lib/agent/agentOutcome.js';
 
 // Completed-agent records for a set of UTC date buckets (YYYY-MM-DD), merged
 // from live in-memory state and the on-disk date-bucket archive. `accept(agent)`

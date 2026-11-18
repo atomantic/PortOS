@@ -9,7 +9,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * strips ANSI and returns the captured text. Persists a run record under
  * `data/runs/<runId>/` so /runs can replay TUI invocations alongside CLI/API.
  *
- * Distinct from `server/services/agentTuiSpawning.js` — that path wraps
+ * Distinct from `server/services/agent/agentTuiSpawning.js` — that path wraps
  * long-running CoS agents (worktree, /simplify, /do:pr, .agent-done sentinel).
  * This is the synchronous "send prompt, get text back" variant the central
  * promptRunner needs when `provider.type === 'tui'`.

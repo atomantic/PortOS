@@ -23,7 +23,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createCosTaskSchema } from '../lib/cosValidation.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 
 const BRANCH_RECONCILE_TEMPLATE = [
@@ -109,7 +109,7 @@ vi.mock('./github.js', async (importActual) => ({
   getIssueDispatchHint: vi.fn(async () => ({ status: 'unavailable', model: null, effort: null })),
 }));
 
-vi.mock('./agentState.js', async (importActual) => ({
+vi.mock('./agent/agentState.js', async (importActual) => ({
   ...(await importActual()),
   getActiveAgentIds: vi.fn(() => []),
 }));

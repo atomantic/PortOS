@@ -28,7 +28,7 @@ vi.mock('../services/updateExecutor.js', () => ({
 // without spawning real processes. spawningTasks is a real Set the tests mutate
 // (hoisted so the mock factory, which is hoisted above imports, can reference it).
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
-vi.mock('../services/agentState.js', () => ({
+vi.mock('../services/agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks
 }));
@@ -53,7 +53,7 @@ vi.mock('../services/cosState.js', () => ({
 
 import * as updateChecker from '../services/updateChecker.js';
 import { launchUpdate } from '../services/updateExecutor.js';
-import { getActiveAgentIds } from '../services/agentState.js';
+import { getActiveAgentIds } from '../services/agent/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
 import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
 import updateRoutes from './update.js';

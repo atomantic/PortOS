@@ -81,7 +81,7 @@ function outcomesTrackerSupported(filer) {
 import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { resolveAgentProviderPin } from '../appTaskProviderPin.js'
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js'
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js'
 import { join } from 'path'
 import { ensureForgeReachable } from '../github.js';
 

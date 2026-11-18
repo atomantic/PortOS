@@ -63,7 +63,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   return withClaimOwnershipLock(() => withGitMutationLifetime(async () => {
     await (deps.beforeMutation || (await import('./heldCheckoutRecovery.js')).assertAutomaticRetirementAllowed)();
     const agents = await readClaimOwnershipAgents();
-    const { getActiveAgentIds } = await import('./agentState.js');
+    const { getActiveAgentIds } = await import('./agent/agentState.js');
     const active = new Set(getActiveAgentIds());
     if (!agents || [...active].some(id => !agents.some(agent => agent.id === id))) return false;
     const owners = agents.map(agent => active.has(agent.id) ? { ...agent, status: 'running' } : agent);

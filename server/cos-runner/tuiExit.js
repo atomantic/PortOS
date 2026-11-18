@@ -1,7 +1,7 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 /** Finish a runner TUI on observed process exit, even after force-kill reaping. */
 import { stripAnsi } from '../lib/ansiStrip.js';
-import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
+import { SENTINEL_COMPLETION_MARKER } from '../lib/agent/agentOutputMarkers.js';
 
 // `tui:output` is live telemetry, so an immediate process exit can beat its
 // socket delivery. Keep a small terminal tail with the exit event: the PortOS

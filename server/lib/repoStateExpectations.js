@@ -1,13 +1,13 @@
 /**
  * Post-completion repo-state expectations for CoS worktree agents, the pure half: "what should the repo look like now" and "which observed facts contradict that".
  *
- * Cleanup (`services/agentWorktreeCleanup.js`) reports only steps it TRIED and failed, so an agent owning its own PR workflow (cleanup stands down: `skipMerge`, `PR_CREATION.NEVER`) can leave debris with zero warnings. No I/O (probing and remediation: `services/agentRepoStateVerification.js`). Deliberately narrow: ONE agent's branch right after it completed; the periodic whole-repo sweep is `services/branchReconcile.js`.
+ * Cleanup (`services/agent/agentWorktreeCleanup.js`) reports only steps it TRIED and failed, so an agent owning its own PR workflow (cleanup stands down: `skipMerge`, `PR_CREATION.NEVER`) can leave debris with zero warnings. No I/O (probing and remediation: `services/agent/agentRepoStateVerification.js`). Deliberately narrow: ONE agent's branch right after it completed; the periodic whole-repo sweep is `services/branchReconcile.js`.
  */
 
 import { PR_COMPLETIONS } from './prDisposition.js';
 
 /**
- * Divergences worth reporting, in order. There is no "the agent never opened a PR" code: `verifyPrClaim` (services/agentFinalization.js) owns that on every path, is forge-agnostic, and carries the
+ * Divergences worth reporting, in order. There is no "the agent never opened a PR" code: `verifyPrClaim` (services/agent/agentFinalization.js) owns that on every path, is forge-agnostic, and carries the
  * `branchProvenEmpty` carve-out (#3358: a run that found the work done must not be told to open a PR for an empty branch).
  */
 export const REPO_STATE_ISSUES = Object.freeze({

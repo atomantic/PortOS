@@ -111,11 +111,11 @@ import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
-import { persistAgentSecurityScan } from './agentSecurityScan.js';
+import { persistAgentSecurityScan } from './agent/agentSecurityScan.js';
 import { captureCompletedCheckouts, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './agentState.js';
+import { activeAgents, runnerAgents, completingAgents, spawningTasks } from './agent/agentState.js';
 
 afterAll(cleanupTempDataRoots);
 
@@ -165,7 +165,7 @@ describe('deferred delivery receipt result', () => {
   it('persists settled delivery in live and archived records without re-emitting completion', async () => {
     const agent = fixture();
     agent.metadata.runId = 'receipt-run';
-    const tracking = await import('./agentRunTracking.js');
+    const tracking = await import('./agent/agentRunTracking.js');
     const reconcileRun = vi.spyOn(tracking, 'reconcileAgentRunDelivery').mockResolvedValue(true);
     mockCosState.state = { agents: { [agent.id]: agent } };
     const directory = join(mockCosState.agentsDir, agent.completedAt.slice(0, 10), agent.id);

@@ -4,7 +4,7 @@ import { execGit } from '../lib/execGit.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { expandHome, safeJSONParse } from '../lib/fileUtils.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
-import { getAppDataForTask } from './agentAppWorkspace.js';
+import { getAppDataForTask } from './agent/agentAppWorkspace.js';
 import { listWorktrees } from './worktreeManager.js';
 import { getInstanceId } from './instanceIdentity.js';
 

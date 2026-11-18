@@ -2,11 +2,11 @@
 // module + normalized first argument, never source positions. See JSON_WRITEBACK.md.
 export const JSON_WRITEBACK_EXCEPTIONS = [
   {
-    "key": "agentRunReconciler.js :: path",
+    "key": "agent/agentRunReconciler.js :: path",
     "reason": "No failed-read write-back: repair planning and its final re-read skip null run metadata."
   },
   {
-    "key": "agentRunTracking.js :: metaPath",
+    "key": "agent/agentRunTracking.js :: metaPath",
     "reason": "No failed-read write-back: completion returns on null before metadata or output writes."
   },
   {

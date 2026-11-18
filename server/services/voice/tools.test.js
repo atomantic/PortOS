@@ -160,7 +160,7 @@ const tasksRef = { value: [] };
 vi.mock('../cosState.js', () => ({
   loadState: vi.fn(async () => cosStateRef.value),
 }));
-vi.mock('../agentState.js', () => ({
+vi.mock('../agent/agentState.js', () => ({
   isTruthyMeta: (v) => v === true || v === 'true',
 }));
 vi.mock('../cosTaskStore.js', () => ({

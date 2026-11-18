@@ -128,7 +128,7 @@ async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
   const agents = await readClaimOwnershipAgents();
   if (!agents) return false;
-  const { getActiveAgentIds } = await import('./agentState.js');
+  const { getActiveAgentIds } = await import('./agent/agentState.js');
   const related = agent => agent.id === entry.owner.agentId || agent.taskId === entry.owner.taskId || agent.taskId === entry.task.id;
   const history = observed?.owners || await (await import('./branchCompletionPolicy.js')).readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
   if (!history) return false;
@@ -290,7 +290,7 @@ export function resetReleaseSynchronization(identity, reason, actor) {
       if (synchronization?.status === 'verified') refuse('Release synchronization is already verified');
       const agents = await readClaimOwnershipAgents();
       if (!agents) refuse('Release ownership is unavailable');
-      const { getActiveAgentIds } = await import('./agentState.js');
+      const { getActiveAgentIds } = await import('./agent/agentState.js');
       const active = new Set(getActiveAgentIds());
       const repo = await realpath(entry.owner.workspace).catch(() => null);
       if (!repo) refuse('Release repository is unavailable');

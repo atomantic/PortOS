@@ -2,7 +2,7 @@
  * The window in which one CoS task is BOTH pending and active, and the single
  * settlement every reader pairing the task list with the agent list makes.
  *
- * `spawnAgentForTask` (services/agentLifecycle.js) registers an agent as
+ * `spawnAgentForTask` (services/agent/agentLifecycle.js) registers an agent as
  * `running` BEFORE flipping its task off `pending`, so between those writes a
  * surface counting each list separately reports "1 pending" AND "1 active" for
  * one task. Reordering would not close it: the writes hit two stores and the UI

@@ -501,7 +501,7 @@ Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/m
 
 `server/services/lmStudioManager.js` provides LM Studio discovery, health and model management; the only REST route is `POST /api/lmstudio/unload`, and the rest goes through `/api/local-llm`.
 
-Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
+Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agent/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
 
 ## Related Features
 

@@ -26,7 +26,7 @@ vi.mock('../lib/gitRemote.js', async importOriginal => ({ ...(await importOrigin
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => JSON.stringify(f.row)) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ cwd: '/repos/source', env: {} }) }));
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));
-vi.mock('./agentAppWorkspace.js', () => ({ getAppWorkspace: async () => '/repos/source', getAppDataForTask: async () => null }));
+vi.mock('./agent/agentAppWorkspace.js', () => ({ getAppWorkspace: async () => '/repos/source', getAppDataForTask: async () => null }));
 vi.mock('../lib/spawnCwd.js', async importOriginal => ({ ...(await importOriginal()), resolveSpawnCwd: path => path }));
 vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
@@ -45,10 +45,10 @@ vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktr
   createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead),
     ...(f.detached ? { detached: true, headSha: f.head } : {}) })),
 }));
-import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { prepareAgentWorkspace } from './agent/agentWorkspacePrep.js';
 import { createWorktree } from './worktreeManager.js';
-import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 

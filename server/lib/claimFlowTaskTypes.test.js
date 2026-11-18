@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { CLAIM_FLOW_TASK_TYPES } from './claimFlowTaskTypes.js';
-import { isClaimFlowTask } from '../services/agentPromptBuilder.js';
+import { isClaimFlowTask } from '../services/agent/agentPromptBuilder.js';
 
 describe('the shared set drives the read side', () => {
   it('lists the claim-owned task kinds', () => {

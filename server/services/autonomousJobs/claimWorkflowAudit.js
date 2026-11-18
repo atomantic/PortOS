@@ -34,7 +34,7 @@ export const CLAIM_WORKFLOW_AUDIT_JOB = Object.freeze({
 
 Audit only this PortOS instance's claim instructions and delivery machinery. This is not a managed-app audit. Respect the selected investigation scope and time budget; do not buy access, change service tier, or expand provider spending. Delivery waits may outlast the investigation budget.
 
-Inspect the actual PortOS-owned prompt delivered to this run (the private agent prompt.txt and system-prompt.md when present), resolved skill content, task configuration and continuation/recovery guidance. Read server/services/agentSpawnDispatch.js, agentPromptBuilder.js, promptSections/instructions.js, taskPromptDefaults/, taskTypeHooks.js, agentFinalization.js and worktree retirement code as applicable. Distinguish delivered instructions from repository documentation and stale installed files. The source snapshot appended below identifies generator inputs, NOT proof that each file was delivered. Record the actual run's provider/model/effort from its persisted metadata, not an assumed latest model.
+Inspect the actual PortOS-owned prompt delivered to this run (the private agent prompt.txt and system-prompt.md when present), resolved skill content, task configuration and continuation/recovery guidance. Read server/services/agent/{agentSpawnDispatch,agentPromptBuilder,agentFinalization}.js, server/services/promptSections/instructions.js, server/services/taskPromptDefaults/, server/services/taskTypeHooks.js and worktree retirement code as applicable. Distinguish delivered instructions from repository documentation and stale installed files. The source snapshot appended below identifies generator inputs, NOT proof that each file was delivered. Record the actual run's provider/model/effort from its persisted metadata, not an assumed latest model.
 
 Keep a concise private observation log: claim selection/ownership/duplicate prevention; prompt/context/startup/worktree setup; implementation/targeted validation; optional one-time pre-PR review; PR feedback/CI/waits; supported merge admission/merge; retirement/final status. Mark phases observed, historical or unexercised. Use only the configured number of recent runs; exclude this job and other workflow-audit runs from that historical sample. Never create a dummy claim or PR merely to exercise a phase.
 
@@ -60,7 +60,7 @@ export function releaseClaimWorkflowAuditReservation(jobId) {
   if (jobId === CLAIM_WORKFLOW_AUDIT_ID) reservedUntil = 0;
 }
 
-const SOURCES = ['AGENTS.md', 'ETHOS.md', 'server/services/agentPromptBuilder.js', 'server/services/agentSpawnDispatch.js', 'server/services/promptSections/instructions.js', 'server/services/taskPromptDefaults/versions.js', 'server/services/autonomousJobs/claimWorkflowAudit.js'];
+const SOURCES = ['AGENTS.md', 'ETHOS.md', 'server/services/agent/agentPromptBuilder.js', 'server/services/agent/agentSpawnDispatch.js', 'server/services/promptSections/instructions.js', 'server/services/taskPromptDefaults/versions.js', 'server/services/autonomousJobs/claimWorkflowAudit.js'];
 
 export async function prepareClaimWorkflowAudit(job) {
   if (job.id !== CLAIM_WORKFLOW_AUDIT_ID) return '';

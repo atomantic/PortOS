@@ -29,7 +29,7 @@ import { clearStaleActiveAgents } from './appActivity.js';
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
-import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
+import { COMPLETION_RECOVERY_BATCH_SIZE } from './agent/agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { sleep } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -46,7 +46,7 @@ import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
-import { useRunner, spawningTasks, hasActiveTaskOwner } from './agentState.js';
+import { useRunner, spawningTasks, hasActiveTaskOwner } from './agent/agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
 import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning } from './cosState.js';
@@ -90,7 +90,7 @@ let daemonStartPromise = null;
 import { loadAgentIndex } from './cosAgentIndex.js';
 import { archiveStaleAgents as _archiveStaleAgents } from './cosAgentArchive.js';
 import { initializeAgentFeedback } from './cosAgentFeedback.js';
-import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
+import { resolveAgentProviderAndModel } from './agent/agentProviderResolution.js';
 
 // Task generation + evaluation engine (extracted to cosTaskGenerator.js).
 // `evaluateTasks` and the generators emit `task:ready`; the spawn-side
@@ -333,7 +333,7 @@ async function runStart() {
 
 async function bootDaemon(state) {
   // First clean up orphaned agents (agents marked running but no live process)
-  const { cleanupOrphanedAgents } = await import('./agentManagement.js');
+  const { cleanupOrphanedAgents } = await import('./agent/agentManagement.js');
   const cleanedAgents = await cleanupOrphanedAgents();
   if (cleanedAgents > 0) {
     emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
@@ -472,7 +472,7 @@ async function bootDaemon(state) {
     intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
     handler: async () => {
       if (await pendingMergeSweepBlocked()) return;
-      const { sweepRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+      const { sweepRepoStateVerifications } = await import('./agent/agentRepoStateVerification.js');
       await sweepRepoStateVerifications().catch(err => console.warn(`⚠️ Completion recovery sweep deferred: ${err.message}`));
       const prWatcher = await import('./prWatcher.js');
       const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
@@ -532,7 +532,7 @@ export async function resumeDeferredCompletions() {
   if (maintenance.held()) return { checked: 0, skipReason: 'maintenance-held' };
   const reason = await pendingMergeSweepBlocked();
   if (reason) return { checked: 0, skipReason: reason };
-  const { resumeDeferredRepoStateVerifications } = await import('./agentRepoStateVerification.js');
+  const { resumeDeferredRepoStateVerifications } = await import('./agent/agentRepoStateVerification.js');
   return resumeDeferredRepoStateVerifications(async () => maintenance.held()
     ? 'maintenance-held' : pendingMergeSweepBlocked());
 }
@@ -824,7 +824,7 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
 
   // Route orphaned tasks through handleOrphanedTask for consistent retry counting,
   // cooldown enforcement, and max-spawn limits (prevents runaway respawning)
-  const { handleOrphanedTask } = await import('./agentManagement.js');
+  const { handleOrphanedTask } = await import('./agent/agentManagement.js');
 
   // A programmatic-phase card (services/preflightTaskCard.js) is `in_progress`
   // with no agent BY DESIGN — it describes deterministic pre-agent work, has no
@@ -1602,7 +1602,7 @@ export async function init() {
   // A delivery follow-up owns a parent continuation, not a new cron obligation.
   // Replay of the same completed observation is safe: the parent verifier binds
   // its exact cleanup owner and receipt, and coalesces concurrent wake-ups.
-  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  const { bindCompletionRetirementEvents } = await import('./agent/agentRepoStateVerification.js');
   bindCompletionRetirementEvents(cosEvents);
   const { bindInvestigationDependencyEvents, reconcileInvestigationDependencies } = await import('./investigationDependencyWait.js');
   bindInvestigationDependencyEvents(cosEvents);

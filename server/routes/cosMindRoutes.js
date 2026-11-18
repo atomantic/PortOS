@@ -40,7 +40,7 @@ import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPl
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
-import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
+import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agent/agentRunEventLog.js';
 import { loadState } from '../services/cosState.js';
 import {
   appendPersistentMindAnnotation,

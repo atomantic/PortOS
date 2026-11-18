@@ -56,7 +56,7 @@ import { getActiveApps, getAppTaskTypeOverrides, getAppById } from './apps.js';
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { beginPreflightActivity } from './preflightActivity.js';
 import { admitFeatureAgentTasks, admitIdleReviewTask, countUnregisteredInFlight, isUserTaskRunnableUnattended } from './cosDequeue.js';
-import { spawningTasks } from './agentState.js';
+import { spawningTasks } from './agent/agentState.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';

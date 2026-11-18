@@ -206,8 +206,8 @@ active revision, so revocation, archive, restore, and schema drift fail closed.
 
 ## MCP context tool definitions
 
-These five tools are advertised from `server/lib/agentContextValidation.js`
-and executed by `server/services/agentContextMcp.js`:
+These five tools are advertised from `server/lib/agent/agentContextValidation.js`
+and executed by `server/services/agent/agentContextMcp.js`:
 
 | Tool | Input | Output and requirement |
 |---|---|---|
@@ -342,7 +342,7 @@ Evidence anchors for these findings are the route catalog `stats` served by
 `VOICE_ADAPTERS` in `server/services/cosToolRegistry.js`, the catalog query
 schema in `server/lib/cosToolContracts.js`, the async task policy and normalized
 result path in `server/services/cosToolRegistry.js`, and
-`semanticToolsForConfig`/`getManifest` in `server/services/agentContextMcp.js`.
+`semanticToolsForConfig`/`getManifest` in `server/services/agent/agentContextMcp.js`.
 
 ## Validation
 

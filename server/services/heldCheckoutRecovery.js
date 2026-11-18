@@ -101,7 +101,7 @@ export async function readMergedDelivery(repoPath, { branch, path, head }) {
 /** Readers for `decideMergedCheckoutOwner`'s facts. */
 const ownerReaders = ({ repoPath, branch, readAgents }) => ({
   agents: () => readAgents().catch(() => null),
-  runtimeAgentIds: async () => new Set((await import('./agentState.js')).getActiveAgentIds()),
+  runtimeAgentIds: async () => new Set((await import('./agent/agentState.js')).getActiveAgentIds()),
   completionHold: async () => (await import('./branchCompletionPolicy.js'))
     .readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable'),
 });

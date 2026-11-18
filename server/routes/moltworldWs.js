@@ -13,7 +13,7 @@ import {
   moltworldWsMoveSchema,
   moltworldWsThinkSchema,
   moltworldWsInteractSchema,
-} from '../lib/agentValidation.js';
+} from '../lib/agent/agentValidation.js';
 import * as moltworldWs from '../services/moltworldWs.js';
 
 const router = Router();

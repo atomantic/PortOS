@@ -1,7 +1,7 @@
 import { isCodexProvider } from '../../lib/providerModels.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
-import { agentApiCurl } from '../../lib/agentApiToken.js';
+import { agentApiCurl } from '../../lib/agent/agentApiToken.js';
 
 // Resolve at dispatch, rather than changing only the shipped security mission:
 // customized prompts and already-queued audits need the same scanner guidance.

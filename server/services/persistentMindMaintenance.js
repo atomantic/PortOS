@@ -8,7 +8,7 @@ import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
 import {
   appendMindEvent,
   clearPersistentMindHistory,
-} from './agentRunEventLog.js';
+} from './agent/agentRunEventLog.js';
 import {
   archivePersistentMindMemories,
   clearPersistentMindRollups,

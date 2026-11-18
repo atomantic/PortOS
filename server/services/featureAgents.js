@@ -15,7 +15,7 @@ import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
-import { isQueuedContinuation } from '../lib/agentOutcome.js';
+import { isQueuedContinuation } from '../lib/agent/agentOutcome.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
 const FA_FILE = join(DATA_DIR, 'feature-agents.json');

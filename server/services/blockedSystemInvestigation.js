@@ -48,7 +48,7 @@ async function localOwner(task) {
   const agentId = task.metadata?.deliveryDecisionAgentId || task.metadata?.lastAgentId || task.metadata?.failedAgentId;
   if (!agentId) return null;
   const [{ getAgentRecord }, { getInstanceId, UNKNOWN_INSTANCE_ID }, { readAgentsStateForSafetyCheck }, { activeAgents, runnerAgents }] = await Promise.all([
-    import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agentState.js'),
+    import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agent/agentState.js'),
   ]);
   const [agent, instanceId, owners] = await Promise.all([getAgentRecord(agentId), getInstanceId(), readAgentsStateForSafetyCheck()]);
   const registered = owners.agents?.[agentId];
@@ -79,7 +79,7 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     if (producer.investigationCircuitOpen(now())) return 'circuit-open';
     return (await producer.resolveAutoInvestigationApproval(fingerprint, { now: now(), tasks })).loopReason;
   });
-  const create = deps.create || (async (task, analysis, owner) => (await import('./agentErrorAnalysis.js'))
+  const create = deps.create || (async (task, analysis, owner) => (await import('./agent/agentErrorAnalysis.js'))
     .createInvestigationTask(owner.agentId, task, analysis));
   let tail = Promise.resolve();
   const write = async (task, state, owner) => {

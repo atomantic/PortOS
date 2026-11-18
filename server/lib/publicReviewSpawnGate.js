@@ -26,7 +26,7 @@
  */
 
 import { publicReviewProviderBlock } from './providerVendors.js';
-import { PUBLIC_REVIEW_NO_TOOL_POSTURE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_NO_TOOL_POSTURE } from './agent/agentExecutionProfiles.js';
 
 const PUBLIC_REVIEW_SCAN_STATUSES = new Set(['passed', 'findings']);
 

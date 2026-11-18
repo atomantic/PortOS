@@ -46,8 +46,8 @@ vi.mock('./cosAgentIndex.js', () => ({
 vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
-import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
 import { gatherBranchState, classifyBranches, filterActionable, formatInFlightForPrompt } from './branchReconcile.js';
 import { checkReconcileOwnership } from './cosClaimOwnership.js';

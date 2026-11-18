@@ -1,0 +1,864 @@
+import { prepareWindowsAgentLaunch, watchWindowsAgentProcess } from '../../lib/windowsAgentProcess.js';
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
+/**
+ * Agent CLI Spawning
+ *
+ * Handles building spawn configurations, stream-json parsing, tool input
+ * summarization, and Claude settings env injection for agent processes.
+ */
+
+import { join } from 'path';
+import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { spawn } from '../../lib/childProcess.js';
+import { homedir } from 'os';
+import { cosEvents, emitLog } from '../cosEvents.js';
+// The DEFINING module, not a barrel (#3450) — see the note in
+// `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
+// which puts it inside the facade's closure, so the facade is out of reach here.
+import { updateAgent, completeAgent, createAgentOutputBatcher, appendAgentOutputLines } from '../cosAgentLifecycle.js';
+import { analyzeAgentFailure } from './agentErrorAnalysis.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { appendRunEvent } from './agentRunEventLog.js';
+import { finalizeAgent } from './agentFinalization.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
+import { finalizeAgentRunCommon } from './agentRunFinalize.js';
+import { activeAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import { PATHS, writeFileGuarded } from '../../lib/fileUtils.js';
+import { createCodexStderrFormatter } from '../../lib/codexCliOutput.js';
+import { isKnownCliStderrNoise } from '../../lib/cliStderrNoise.js';
+import { createStreamingAnsiStripper } from '../../lib/ansiStrip.js';
+import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
+import { createImmediateFallbackSignalDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { prepareCliPrompt } from '../../lib/cliProviderArgs.js';
+// buildCliSpawnConfig's per-vendor argv construction dispatches through the
+// PROVIDER_VENDORS registry (#3618) instead of a hand-rolled per-vendor
+// if-chain — see providerVendors.js for the vendor rows.
+import { buildVendorSpawnConfig } from '../../lib/providerVendors.js';
+import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../../lib/providerModels.js';
+import { resolveForgeTokenEnv } from '../forgeAuth.js';
+import { createTranscriptWriteReporter } from '../agentTuiSpawning/outputSpooler.js';
+import { resolveAgentCliCwd } from '../../lib/spawnCwd.js';
+import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../../lib/bufferedSpawn.js';
+import { buildCliChildEnv } from '../../lib/cliChildEnv.js';
+import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../../lib/credentialBootstrap.js';
+import { resolvePrOwnership } from '../../lib/slashdoInvocation.js';
+import { doneSentinelPath } from '../../lib/agent/agentSentinel.js';
+import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
+import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
+import { isOllamaBackedProvider } from '../providers.js';
+import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
+import { createStreamJsonParser, summarizeToolInput, safeParse } from '../../lib/streamJsonParser.js';
+
+const _AGENTS_DIR = PATHS.cosAgents;
+
+/**
+ * Build spawn command and arguments for a CLI provider.
+ * Returns { command, args, stdinMode } based on provider type.
+ *
+ * `settingsEnv` is the `~/.claude/settings.json` env block (from
+ * `getClaudeSettingsEnv()`). It MUST be folded into the Bedrock-mapping env
+ * because that is how a Bedrock host commonly supplies `CLAUDE_CODE_USE_BEDROCK`
+ * to the spawned child (see the spawn env below at the `claudeSettingsEnv`
+ * merge) — without it, a settings-only Bedrock box would map against an env
+ * missing the flag and still emit a bare, Bedrock-invalid `--model`.
+ *
+ * Per-vendor argv construction is dispatched through the PROVIDER_VENDORS
+ * registry (#3618) — see providerVendors.js for each vendor's `spawnArgs` row
+ * and the file header on the (preserved, not silently "fixed") asymmetries vs
+ * `buildCliArgs` (e.g. codex never forwards `provider.args` here, and there is
+ * no gemini-cli row so a legacy gemini-cli provider falls through to claude's
+ * default, exactly as before this registry existed).
+ */
+export function buildCliSpawnConfig(provider, model, settingsEnv = {}, {
+  systemPromptFile = null,
+  effort = null,
+  maxConcurrentThreads = null,
+  safetyProfile = null,
+} = {}) {
+  // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
+  // the CLI uses its own default without a --model flag.
+  const effectiveModel = resolveCliModel(model);
+  return buildVendorSpawnConfig(provider, {
+    effectiveModel,
+    effort,
+    maxConcurrentThreads,
+    systemPromptFile,
+    settingsEnv,
+    safetyProfile,
+  });
+}
+
+/**
+ * Check if a provider is a Claude CLI provider that needs settings.json env injection.
+ */
+export const isClaudeCliProvider = (provider) =>
+  provider?.type === PROVIDER_TYPES.CLI && (provider.id === 'claude-code' || provider.id === 'claude-code-bedrock');
+
+/**
+ * Check if a provider is a TUI-backed agent provider (Claude Code, Codex,
+ * Antigravity, etc. that run in a PTY). Used by callers that need to branch
+ * between headless CLI/API runs and TUI shell sessions.
+ */
+export { isTuiProvider } from '../../lib/providerTypes.js';
+
+/**
+ * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.
+ * Ensures user's Bedrock/provider config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.)
+ * is present in spawned agent environments even if PM2 was started without them.
+ */
+let _claudeSettingsEnvCache = null;
+let _claudeSettingsEnvCacheTime = 0;
+const SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function getClaudeSettingsEnv() {
+  if (_claudeSettingsEnvCache !== null && (Date.now() - _claudeSettingsEnvCacheTime) < SETTINGS_CACHE_TTL_MS) return _claudeSettingsEnvCache;
+  try {
+    const settingsPath = join(homedir(), '.claude', 'settings.json');
+    if (existsSync(settingsPath)) {
+      const raw = await readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(raw);
+      _claudeSettingsEnvCache = settings.env || {};
+    } else {
+      _claudeSettingsEnvCache = {};
+    }
+  } catch (err) {
+    console.warn(`⚠️ Failed to read claude settings: ${err.message}`);
+    _claudeSettingsEnvCache = {};
+  }
+  _claudeSettingsEnvCacheTime = Date.now();
+  return _claudeSettingsEnvCache;
+}
+
+/**
+ * What went wrong with a direct-CLI run, or `null` when there is nothing to
+ * analyze — a successful run, or a private security assessment whose transcript
+ * must not be read (its findings stay in the local assessment archive).
+ *
+ * The raw stream buffer is preferred over the display buffer: it still carries
+ * the full stream-json payload, error details included. A fallback signal the
+ * run already raised (a usage-limit hit, say) outranks a keyword sweep.
+ */
+function resolveCliErrorAnalysis({ finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis }) {
+  if (finalSuccess || isPrivateSecurityTask(task)) return null;
+  return immediateFallbackAnalysis || analyzeAgentFailure(rawStreamBuffer || outputBuffer, task, model);
+}
+
+/**
+ * Spawn agent directly (fallback when runner not available).
+ * Completion cleanup is not injected: `runSpawnerCompletionCleanup` is imported at top level, since
+ * nothing in its static closure reaches this module or agentLifecycle.js.
+ */
+export async function spawnDirectly({
+  agentId,
+  task,
+  prompt,
+  workspacePath,
+  model,
+  provider,
+  runId,
+  cliConfig,
+  agentDir,
+  prOpenedBy,
+  safetyProfile = null,
+}) {
+  const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
+
+  const ROOT_DIR = PATHS.root;
+  // CD no-worktree tasks get an isolated scratch cwd so native AGENTS.md
+  // discovery cannot reach the PortOS repo tree (#4650). Everyone else keeps
+  // workspacePath, falling back to the repo root when it was omitted.
+  const cwd = resolveAgentCliCwd({ workspacePath, fallbackRoot: ROOT_DIR, task, agentId });
+
+  // Direct CLI agents bypass runner.js, so their Ollama-backed harnesses need
+  // the same daemon context preparation as runner and TUI launches. This is
+  // deliberately before spawn: a per-request window cannot reach a CLI that
+  // talks to Ollama on its own.
+  const ollamaContext = isOllamaBackedProvider(provider)
+    ? await ensureOllamaAgentContext(provider, { model })
+    : null;
+  if (ollamaContext?.warning) {
+    emitLog('warn', `Agent ${agentId} Ollama context preparation: ${ollamaContext.warning}`, {
+      agentId,
+      taskId: task.id,
+    });
+  }
+
+  // Two independent async env lookups, resolved together: Claude's
+  // ~/.claude/settings.json Bedrock config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE,
+  // etc., present even if PM2 lacks them) and the repo-owner-pinned GH_TOKEN
+  // (so the agent's own `gh pr create` auths as the right account — see
+  // resolveForgeTokenEnv; `{}` when there's no owner match). Skip the token probe
+  // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
+  // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
+  // provider GITHUB_TOKEN).
+  // A third rides alongside: the loopback PortOS session token this agent's own
+  // `curl` snippets need when the install has an instance password set (see
+  // agentApiAuth.js). It is `{}` when auth is off, and never resolved for a
+  // public-content stage.
+  const [claudeSettingsEnv, forgeTokenEnv, agentApiEnv] = isPublicReviewRestrictedProfile(safetyProfile)
+    ? [{}, {}, {}]
+    : await Promise.all([
+      isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+      providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+      // Deferred, not a static import: `agentApiAuth.js` pulls the auth/session
+      // subtree, and this module is reached by enough of the suite that the eager
+      // edge added ~190 static module instantiations — over the budget
+      // `lib/importScoping.test.js` holds. The sibling TUI and runner spawn sites
+      // import it normally; almost nothing reaches those, so they cost nothing.
+      import('./agentApiAuth.js').then(({ resolveAgentApiEnv }) => resolveAgentApiEnv({ safetyProfile })),
+    ]);
+
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+  // CLAUDECODE strip) — see buildCliChildEnv. forgeTokenEnv/claudeSettingsEnv go
+  // in `before` so they sit UNDER provider.envVars and an explicit provider
+  // GH_TOKEN override still wins. `guard: true` prepends the pm2 shim onto the
+  // final PATH so a `--dangerously-skip-permissions` agent can't `pm2 kill` the
+  // shared daemon.
+  const childEnv = buildCliChildEnv({
+    before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
+    provider,
+    model,
+    cwd,
+    guard: true,
+    safetyProfile,
+  });
+
+  // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
+  // path and wrap a shim as `cmd.exe /c <path>` so spawn() under shell:false
+  // can launch it — without this Windows can't find e.g. `opencode.cmd` from the
+  // bare name → spawn ENOENT (errno -4058) → startup-failure. Mirrors the
+  // working "Run Prompt" path (server/services/runner.js); resolved against
+  // childEnv so a provider PATH override is honored. See issue #2243.
+  // Deliver the prompt per provider convention: antigravity as the --print
+  // VALUE and kimi as the --prompt VALUE (no stdin); grok's `--prompt-file
+  // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
+  // stdin (writePromptToStdin=true).
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt, { cwd });
+  // A credential-bootstrap-configured provider spawns its bootstrap CLI in
+  // front of the harness instead of the harness directly — see
+  // credentialBootstrap.js. Applied AFTER prepareCliPrompt, which still keys
+  // prompt-delivery convention off the harness's own command — and never under
+  // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
+  const { command: bootstrappedCommand, args: bootstrappedArgs, wrapped } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs, { safetyProfile });
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so every
+  // stop/timeout/cancel for this agent must signal the whole process group —
+  // here, and in agentManagement's pause/terminate/force-kill, which reads the
+  // flag back off the activeAgents entry below (#7496). The private-security
+  // sandbox wrap below is likewise a supervising parent, so it keeps the flag.
+  const processGroup = needsProcessGroup(wrapped);
+  const preparedSpawn = prepareCliSpawn(bootstrappedCommand, bootstrappedArgs, childEnv);
+  const isolatedSpawn = isPrivateSecurityTask(task)
+    ? await import('../../lib/privateSecuritySandbox.js')
+      .then(({ preparePrivateSecuritySpawn }) => preparePrivateSecuritySpawn({ ...preparedSpawn, env: childEnv, cwd, provider }))
+      .catch(async () => {
+        // No child exists yet, so no error/close listener can finish this run.
+        // Keep sandbox paths out of shared diagnostics and fail closed locally.
+        const message = 'Private assessment could not prepare its isolated local harness. Verify the CLI and macOS sandbox, then retry.';
+        cleanupPromptFile();
+        await finalizeAgent({
+          agentId, task, runId, providerId: provider.id, success: false, exitCode: 1,
+          duration: 0, outputBuffer: '', workspacePath, prExpected: false,
+          error: message, completionReason: 'spawn-error',
+          errorAnalysis: { category: 'actionable', error: message, suggestedFix: message },
+        });
+        cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
+        return null;
+      })
+    : { ...preparedSpawn, env: childEnv };
+  if (!isolatedSpawn) return null;
+  const launch = prepareWindowsAgentLaunch(agentId, isolatedSpawn.command, isolatedSpawn.args, { cwd, env: isolatedSpawn.env });
+  const { command: spawnCommand, args: spawnArgs } = launch;
+
+  const claudeProcess = spawn(spawnCommand, spawnArgs, {
+    cwd,
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: isolatedSpawn.env,
+    // Never `unref()`ed — this stays an ordinary awaited child, just one in
+    // its own signalable process group. See needsProcessGroup.
+    detached: processGroup
+  });
+  watchWindowsAgentProcess(claudeProcess, launch);
+
+  // Remember the detached group so the graceful-shutdown sweep can reach it:
+  // detaching moved this child out of the server's own process group, and a
+  // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+  trackDetachedGroup(claudeProcess, processGroup);
+
+  // Every child listener is registered HERE, in the same tick as spawn(), into
+  // forwarding shims that buffer until the real handler bodies exist further
+  // down (#5791). Those bodies close over state built by the async setup that
+  // follows — and that setup yields for real state-file I/O (`await
+  // updateAgent(..., { pid })`), not just a microtask. A CLI that starts and
+  // exits immediately (bad flag, instant auth refusal) emits its entire life
+  // cycle inside that window: without the shims its stdout/stderr is lost and
+  // its `close` lands on nothing, leaving the run record, the execution lane
+  // and the `activeAgents` entry non-terminal until the orphan reaper notices.
+  // Buffering rather than hoisting the handler bodies keeps the change local.
+  //
+  // spawn() can also hand back a handle with no pid or stdio when command
+  // lookup fails, hence the optional chaining on the stream registrations.
+  let pendingSpawnError = null;
+  let handleSpawnError = null;
+  // One ordered queue for both streams: buffering them separately would lose
+  // the relative order of interleaved stdout/stderr chunks in the transcript.
+  const pendingChildOutput = [];
+  let pendingClose = null;
+  let handleStdout = null;
+  let handleStderr = null;
+  let handleClose = null;
+  claudeProcess.on('error', (err) => {
+    if (handleSpawnError) void handleSpawnError(err);
+    else pendingSpawnError = err;
+  });
+  claudeProcess.stdout?.on('data', (data) => {
+    if (handleStdout) handleStdout(data);
+    else pendingChildOutput.push({ stream: 'stdout', data });
+  });
+  claudeProcess.stderr?.on('data', (data) => {
+    if (handleStderr) handleStderr(data);
+    else pendingChildOutput.push({ stream: 'stderr', data });
+  });
+  claudeProcess.on('close', (code) => {
+    if (handleClose) void handleClose(code);
+    else pendingClose = { code };
+  });
+  // Same reasoning for the stdin pipe: a child that exits before reading it
+  // emits EPIPE, and an unlistened stream 'error' out here would crash the
+  // server. The 'error'/'exit' handlers below settle the run with the real cause.
+  guardChildStdin(claudeProcess);
+
+  const spawnedPid = claudeProcess.pid;
+  if (spawnedPid != null) {
+    registerSpawnedAgent(spawnedPid, {
+      fullCommand,
+      agentId,
+      taskId: task.id,
+      model,
+      workspacePath: cwd,
+      prompt: (task.description || '').substring(0, 500)
+    });
+
+    deliverChildStdin(claudeProcess, writePromptToStdin ? prompt : null, `agent ${agentId}`);
+
+    activeAgents.set(agentId, {
+      process: claudeProcess,
+      // Read by agentManagement's pause/terminate/force-kill paths, which hold
+      // only this entry and cannot re-derive the bootstrap wrap (#7496).
+      processGroup,
+      taskId: task.id,
+      startedAt: Date.now(),
+      runId,
+      pid: spawnedPid,
+      providerId: provider.id
+    });
+
+    // Store PID in persisted state for zombie detection only after spawn gave
+    // us a live process identity.
+    await updateAgent(agentId, { pid: spawnedPid });
+  }
+
+  let outputBuffer = '';
+  let outputRevision = 0;
+  let rawStreamBuffer = ''; // Raw stdout for stream-json (used for error analysis)
+  let hasStartedWorking = false;
+  // Deliberately NOT `hasStartedWorking`: that flag also flips on a 3s
+  // initialization timeout with no output behind it, so reusing it would file a
+  // `run.output` for a run that has produced nothing — the exact case (a
+  // provider that never spoke) the ledger is supposed to make visible.
+  let firstOutputRecorded = false;
+  /**
+   * Record the run's first observed output, once (#4540) — never per chunk. A
+   * per-chunk event would make the ledger a copy of the output it deliberately
+   * redacts and would exhaust the retention bound in minutes. What the one event
+   * buys is time-to-first-output: a run that stalled after speaking and a run
+   * that never spoke at all are indistinguishable in the mutable record.
+   *
+   * Called from BOTH streams. Several providers say everything they have to say
+   * on stderr (codex's whole progress feed is stderr), and that output lands in
+   * the same transcript — a stdout-only recorder would file those runs as silent.
+   * The explicit key keeps the append idempotent however the two callers race.
+   */
+  const recordFirstOutput = (source, chars) => {
+    if (firstOutputRecorded) return;
+    firstOutputRecorded = true;
+    return appendRunEvent({
+      kind: 'run.output',
+      runId,
+      agentId,
+      taskId: task.id,
+      eventId: `output:${agentId}:${runId || 'no-run'}:first`,
+      data: { source, firstChunkChars: chars },
+    });
+  };
+  const outputFile = join(agentDir, 'output.txt');
+  const isStreamJson = cliConfig.streamFormat === 'stream-json';
+  const streamParser = isStreamJson ? createStreamJsonParser() : null;
+  const codexStderrFormatter = provider.id === 'codex' ? createCodexStderrFormatter(prompt) : null;
+  const transcriptWriteReporter = createTranscriptWriteReporter({ agentId });
+  // A headless CLI still colors its progress output: `opencode run` emits bare
+  // `\x1B[0m` resets around its status line. Those bytes reached output.txt and
+  // the live tail verbatim, and the browser drops only the ESC itself — so the
+  // card rendered `[stderr] [0m` and a working agent was indistinguishable from
+  // a wedged one. Strip per stream (each stripper is stateful, buffering an
+  // escape split across two `data` chunks) BEFORE the fallback-signal detector,
+  // which matches on provider text that color codes would otherwise break up.
+  // A stream-json stdout is NDJSON, which escapes an ESC into its six-character
+  // JSON form and never carries the raw byte — so the busiest stdout stream in
+  // the system skips the scan entirely.
+  const stripStdoutAnsi = isStreamJson ? (text) => text : createStreamingAnsiStripper();
+  const stripStderrAnsi = createStreamingAnsiStripper();
+  let immediateFallbackAnalysis = null;
+  const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+
+  let persistedOutputRevision = -1;
+  let persistedOutputLength = 0;
+  let transcriptFileWriteTail = Promise.resolve();
+  const persistTranscript = (bytes, revision) => {
+    // Serialize timer/manual drains. Only a successful write establishes the
+    // prefix that the next snapshot can extend; an append may fail partway.
+    const write = transcriptFileWriteTail.then(async () => {
+      const append = persistedOutputRevision === revision && persistedOutputLength <= bytes.length;
+      const delta = append ? bytes.slice(persistedOutputLength) : bytes;
+      if (append && !delta) return;
+      await writeFileGuarded(outputFile, delta, { flag: append ? 'a' : 'w' });
+      persistedOutputRevision = revision;
+      persistedOutputLength = bytes.length;
+    }).catch(err => {
+      // Rewrite the next snapshot after any failure: retrying an uncertain
+      // append could duplicate bytes, while skipping it could lose output.
+      persistedOutputRevision = -1;
+      maintenance.markResourceUnsettled('agent', agentId);
+      return transcriptWriteReporter.report('output.txt', err);
+    });
+    transcriptFileWriteTail = write;
+    return write;
+  };
+
+  // Debounced state-write batcher for streamed output. stdout/stderr `data`
+  // events fire per chunk (and stream-json yields many lines per chunk), so a
+  // per-line/per-chunk appendAgentOutput would round-trip a full state
+  // load+save each time. The batcher coalesces a ~250ms window; the close/error
+  // handlers `await outputBatcher.flush()` so the final transcript and state
+  // lines persist as one admitted batch before the agent is finalized.
+  // Findings stay in the local transcript/report, never the shared agent stream.
+  const outputBatcher = createAgentOutputBatcher(agentId, { flushBatch: batch => {
+    // Capture bytes at the same instant as this batch, before waiting for the
+    // cut. Chunks received during I/O belong to the next flush, not this pair.
+    const bytes = outputBuffer;
+    const revision = outputRevision;
+    return withBackupAssetPublication(() => Promise.all([
+      persistTranscript(bytes, revision),
+      isPrivateSecurityTask(task) ? undefined : appendAgentOutputLines(agentId, batch)
+        .catch(err => transcriptWriteReporter.report('state', err)),
+    ]));
+  } });
+  if (ollamaContext?.warning) outputBatcher.push(ollamaContext.warning);
+  if (ollamaContext?.applied) outputBatcher.push(`🪟 Reloaded Ollama at a ${ollamaContext.contextLength}-token context window`);
+
+  // Expose a drain hook on the activeAgents entry so the user-terminate/kill
+  // paths (agentManagement.js) can flush pending batched output before they
+  // mark the agent complete — otherwise up to one debounce window of
+  // stdout/stderr could land after the terminal record. (The close handler
+  // still drains too; flush() is idempotent.)
+  const cliAgentEntry = activeAgents.get(agentId);
+  // Drain the serialized write chain (defined just below) before flushing the
+  // batcher so any enqueued-but-unrun stdout/stderr push lands first.
+  if (cliAgentEntry) cliAgentEntry.flushOutput = async () => {
+    await drainTranscriptWrites();
+    await outputBatcher.flush();
+    await transcriptFileWriteTail;
+  };
+
+  // Serialize stdout/stderr buffer updates before their shared debounced file
+  // and state flush, so interleaved setup awaits cannot reorder the transcript
+  // (#2384). Fallback
+  // detection stays OUTSIDE this chain — it runs synchronously in the raw
+  // listener before the enqueue, so a blocked earlier write can never delay
+  // killing the provider on a usage-limit signal. The close/error handlers
+  // `await drainTranscriptWrites()` before finalize so the tail lands first.
+  // Mirrors shell.js `hookQueue` and pipeline/issuesShared.js `queueSeriesIssuesWrite`.
+  let transcriptWriteTail = Promise.resolve();
+  const enqueueTranscriptWrite = (fn) => {
+    transcriptWriteTail = transcriptWriteTail.then(fn).catch((err) => {
+      // Runs in a child-process callback — a rejection here would escape as an
+      // unhandled rejection and crash Node. output.txt is best-effort; log+swallow.
+      console.error(`❌ agentCli transcript write failed for ${agentId}: ${err.message}`);
+    });
+    return transcriptWriteTail;
+  };
+  const drainTranscriptWrites = () => transcriptWriteTail;
+
+  const stopForImmediateFallbackSignal = (text) => {
+    if (immediateFallbackAnalysis || claudeProcess.killed) return;
+    const analysis = detectImmediateFallbackSignal(text);
+    if (!analysis) return;
+    immediateFallbackAnalysis = analysis;
+    emitLog('warn', `Agent ${agentId} detected provider fallback signal (${analysis.category}); stopping ${provider.name || provider.id}`, {
+      agentId,
+      taskId: task.id,
+      providerId: provider.id,
+      category: analysis.category
+    });
+    // killProcessTree so a Windows cmd.exe-wrapped shim's real child isn't orphaned (#2243).
+    killProcessTree(claudeProcess, 'SIGTERM', { processGroup });
+  };
+
+  // If no output after 3 seconds, transition from initializing to working to show progress
+  const initializationTimeout = setTimeout(async () => {
+    try {
+      if (!hasStartedWorking && activeAgents.has(agentId)) {
+        hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `Agent ${agentId} working (after initialization delay)...`, { agentId, phase: 'working' });
+      }
+    } catch (err) {
+      console.error(`❌ agentCliSpawning init timeout failed for ${agentId}: ${err.message}`);
+    }
+  }, 3000);
+
+  handleStdout = (data) => {
+    try {
+      const raw = data.toString();
+      const text = stripStdoutAnsi(raw);
+      // Detect fallback signals SYNCHRONOUSLY, before enqueuing any transcript
+      // mutation — a blocked earlier write must never delay killing the provider
+      // on a usage-limit signal (#2384).
+      stopForImmediateFallbackSignal(text);
+      // Serialize the transcript body so two `data` events can't interleave their
+      // awaits and reorder output.txt / the batched live tail.
+      enqueueTranscriptWrite(async () => {
+        // Raw length, not stripped: a chunk that was ONLY color codes is still
+        // proof the child is alive, and reporting 0 would read as "no output yet".
+        await recordFirstOutput('cli-stdout', raw.length);
+        if (!hasStartedWorking) {
+          hasStartedWorking = true;
+          await updateAgent(agentId, { metadata: { phase: 'working' } });
+          emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
+        }
+
+        if (streamParser) {
+          // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+          rawStreamBuffer += text;
+          if (rawStreamBuffer.length > 512 * 1024) {
+            rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+          }
+          const lines = streamParser.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+        } else {
+          // Non-stream providers: emit stdout as-is once decolored. A chunk that
+          // was purely terminal control has nothing left to show. Unlike stderr
+          // below, whitespace is NOT dropped here — a blank line is legitimate
+          // formatting when it isn't wearing an `[stderr]` tag.
+          if (!text) return;
+          outputBuffer += text;
+          outputBatcher.push(text);
+        }
+      });
+    } catch (err) {
+      console.error(`❌ agentCli stdout handler failed: ${err.message}`);
+    }
+  };
+
+  handleStderr = (data) => {
+    try {
+      const raw = data.toString();
+      const text = stripStderrAnsi(raw);
+      // Synchronous fallback detection before the serialized write (see stdout).
+      stopForImmediateFallbackSignal(`[stderr] ${text}`);
+      enqueueTranscriptWrite(async () => {
+        await recordFirstOutput('cli-stderr', raw.length);
+        // Codex stderr: show thinking + tool names, skip config dump and command output
+        if (codexStderrFormatter) {
+          const lines = codexStderrFormatter.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+          return;
+        }
+        // A chunk that decolors down to whitespace was pure terminal control
+        // (`opencode run` emits a bare reset per progress redraw). Tagging it
+        // `[stderr]` would add one blank noise line to the tail per redraw.
+        const trimmed = text.trim();
+        if (!trimmed || isKnownCliStderrNoise(trimmed)) return;
+        outputBuffer += `[stderr] ${text}`;
+        outputBatcher.push(`[stderr] ${text}`);
+      });
+    } catch (err) {
+      console.error(`❌ agentCli stderr handler failed: ${err.message}`);
+    }
+  };
+
+  handleSpawnError = async (err) => {
+    // Runs outside the request lifecycle — an uncaught throw from the awaited
+    // completeAgent/completeAgentRun would crash the process, so wrap the body.
+    try {
+      clearTimeout(initializationTimeout);
+      cleanupPromptFile();
+      console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
+      outputBatcher.push(`❌ Agent ${agentId} spawn error: ${err.message}`);
+
+      const agentDataErr = activeAgents.get(agentId);
+      if (agentDataErr?.killTimer) {
+        clearTimeout(agentDataErr.killTimer);
+        agentDataErr.killTimer = null;
+      }
+
+      cosEvents.emit('agent:error', { agentId, error: err.message });
+      // Drain queued transcript writes before flushing the batcher + recording
+      // the run so outputBuffer reflects everything that streamed (#2384).
+      await drainTranscriptWrites();
+      await outputBatcher.flush();
+      await transcriptFileWriteTail;
+      await completeAgent(agentId, { success: false, error: err.message });
+      await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
+      unregisterSpawnedAgent(claudeProcess.pid);
+      activeAgents.delete(agentId);
+      if (!claudeProcess.pid) await maintenance.finishResource('agent', agentId);
+    } catch (handlerErr) {
+      maintenance.markResourceUnsettled('agent', agentId);
+      console.error(`❌ Agent ${agentId} error handler failed: ${handlerErr.message}`);
+      activeAgents.delete(agentId);
+    }
+  };
+
+  /**
+   * The close handler threw — outside any request lifecycle, so nothing above
+   * will catch it and the process now SURVIVES rather than restarting. Leave
+   * nothing held: free a lane the throw beat, and persist a terminal record so
+   * the agent/run aren't stuck `running` with no live process to finish them.
+   *
+   * A paused agent was already persisted + lane-released by `markAgentPaused`, so
+   * it gets ONLY the in-memory cleanup — finalizing it as failed here would
+   * overwrite the paused state and break a later resume.
+   *
+   * Each persistence call is guarded on its own so a failure can't re-crash.
+   */
+  const recoverFromCloseHandlerFailure = async (handlerErr, { outputBuffer }) => {
+    console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
+    if (pausedAgents.has(agentId)) {
+      consumePausedAgentExit(agentId);
+      unregisterSpawnedAgent(claudeProcess.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
+    try {
+      await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
+    } catch (completeErr) {
+      console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
+    }
+    try {
+      await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+    } catch (runErr) {
+      console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
+    }
+    unregisterSpawnedAgent(claudeProcess.pid);
+    activeAgents.delete(agentId);
+  };
+
+  handleClose = async (code) => {
+    // Runs outside the request lifecycle — a throw from outputBatcher.flush,
+    // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
+    // as an unhandled rejection and crash the process. The inner try/finally
+    // only covers finalizeAgent's cleanup; this outer guard is the crash net.
+    try {
+    clearTimeout(initializationTimeout);
+    cleanupPromptFile();
+    const success = code === 0;
+    const agentData = activeAgents.get(agentId);
+    const duration = Date.now() - (agentData?.startedAt || Date.now());
+
+    // If pauseAgent or killAgent scheduled a SIGKILL fallback, the process exited
+    // before it fired — clear it so we don't leak the timer.
+    if (agentData?.killTimer) {
+      clearTimeout(agentData.killTimer);
+      agentData.killTimer = null;
+    }
+
+    // This run's own sentinel (see doneSentinelName) — a worktree-less agent
+    // shares its workspace and must not read a sibling's signal as its own.
+    const sentinelPath = doneSentinelPath(cwd, agentId);
+    const completionSentinelPresent = !!sentinelPath && existsSync(sentinelPath);
+    // A mid-stream fallback signal (e.g. usage-limit hit) kills the CLI; if it
+    // races to exit 0, don't record success or the fallback/retry never fires.
+    // A completion sentinel written before host shutdown is also authoritative:
+    // TreeKill may surface its otherwise-completed child with a null exit code.
+    const completedBeforeHostShutdown = isHostShuttingDown() && completionSentinelPresent;
+    const rawSuccess = (success || completedBeforeHostShutdown) && !immediateFallbackAnalysis;
+
+    // Drain any queued transcript writes before reading/appending outputBuffer
+    // for finalization — a still-pending stdout/stderr write would otherwise
+    // land after the terminal record or clobber the final output.txt (#2384).
+    // No new `data` events fire after 'close', so a single drain is sufficient.
+    await drainTranscriptWrites();
+
+    // Flush remaining stream parser data (persists the tail of the transcript
+    // before any early-return, so a paused agent's output.txt is complete for
+    // the resume modal).
+    if (streamParser) {
+      const remaining = streamParser.flush();
+      for (const line of remaining) {
+        outputBuffer += line + '\n';
+        outputBatcher.push(line);
+      }
+      // Use the parsed final result for the output file if available
+      const finalResult = streamParser.getFinalResult();
+      if (finalResult) {
+        outputBuffer = finalResult;
+        outputRevision++;
+      }
+    }
+    if (codexStderrFormatter) {
+      for (const line of codexStderrFormatter.flush()) {
+        outputBuffer += line + '\n';
+        outputBatcher.push(line);
+      }
+    }
+
+    // Drain pending output to state before finalize so the transcript tail
+    // lands before the agent's terminal record (covers the paused early-return
+    // below too, since output.txt is written next).
+    await withBackupAssetPublication(async () => {
+      await outputBatcher.flush();
+      await transcriptFileWriteTail;
+      await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
+        maintenance.markResourceUnsettled('agent', agentId);
+        return transcriptWriteReporter.report('output.txt', err);
+      });
+    });
+
+    // The teardown both in-process spawners share: paused early return, then
+    // the host-shutdown abandon gate, the user-termination consume, the
+    // final success/error derivation.
+    // The transcript is already flushed and output.txt written above, so every
+    // early-out below still leaves a complete record. See agentRunFinalize.js.
+    const finalizeOutcome = finalizeAgentRunCommon({
+      agentId,
+      agentData,
+      success: rawSuccess,
+      error: null,
+      sentinelPresent: completionSentinelPresent,
+    });
+
+    if (finalizeOutcome.outcome === 'paused') { await maintenance.finishResource('agent', agentId); return; }
+
+    if (finalizeOutcome.outcome === 'abandoned') {
+      outputBatcher.push('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
+      emitLog('info', `Agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
+      await Promise.all([
+        outputBatcher.flush().catch(() => {}),
+        updateAgent(agentId, { metadata: { phase: 'interrupted', interruptedBy: HOST_SHUTDOWN_REASON } })
+          .catch(err => emitLog('warn', `Could not mark agent ${agentId} interrupted: ${err.message}`, { agentId })),
+      ]);
+      // activeAgents entry left in place — the shutdown handler reads that map
+      // to name the agents in the host-shutdown marker.
+      return;
+    }
+
+    const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
+
+    const errorAnalysis = resolveCliErrorAnalysis({
+      finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis,
+    });
+
+    // Every CLI agent that is a real coding harness drives its own push → PR →
+    // review → merge (#3733): a slashdo-capable Claude runs `/simplify` +
+    // `/do:pr`, codex/grok/agy/OpenCode run the plain `git`/`gh` equivalent from
+    // the same prompt (see buildCliCompletionSection in agentPromptBuilder.js).
+    // Resolved from the live provider descriptor — the same reading the TUI
+    // path takes up front — so PortOS doesn't double-fire push+PR creation; see
+    // `resolvePrOwnership` for why finalize's `prClaimExpected` and cleanup's
+    // `agentOpensOwnPr` are two predicates (#3358).
+    const prOwnership = resolvePrOwnership({
+      task,
+      persistedPrOpenedBy: prOpenedBy,
+      providerId: provider?.id,
+      providerCommand: provider?.command,
+      leanMode: isOllamaClaudeProvider(provider),
+    });
+    // Whether finalize's check ACTUALLY produced a forge answer (filled in from
+    // its return below) — not the same question as whether one was expected.
+    // Finalize substitutes `{ok:true}` for a user-terminated run and for a check
+    // that threw, and a throw from finalize skips the assignment entirely; in all
+    // three cases nothing was verified, so cleanup must ask rather than stand down.
+    let prClaimVerified = false;
+    let branchProvenEmpty = false;
+
+    // try/finally so a throw from finalizeAgent still runs the local cleanup
+    // (the shared completion dispatch, pid unregister, activeAgents delete).
+    // A PR-claim downgrade must reach cleanup, or a run that opened no PR is
+    // cleaned up as a success and loses its retry state (#3358).
+    let cleanupSuccess = finalSuccess;
+    try {
+      const finalized = await finalizeAgent({
+        agentId,
+        task,
+        runId: agentData?.runId || runId,
+        providerId: agentData?.providerId || provider.id,
+        success: finalSuccess,
+        exitCode: code,
+        duration,
+        outputBuffer,
+        finalSummary: streamParser?.getCompletionResult() ?? null,
+        errorAnalysis,
+        terminatedByUser,
+        error: finalError || undefined,
+        completionReason: terminatedByUser ? 'user-terminated' : undefined,
+        workspacePath: cwd,
+        prExpected: prOwnership.prClaimExpected,
+        // The run window the commit criterion is evaluated against (#3637).
+        startedAt: agentData?.startedAt ?? null,
+      });
+      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
+      if (finalized?.prClaimVerified === true) prClaimVerified = true;
+      if (finalized?.branchProvenEmpty === true) branchProvenEmpty = true;
+    } finally {
+      // Pipeline progression → worktree cleanup with the PR disposition →
+      // retry-hold release, in the one owner both in-process spawners share.
+      // Caught so a throw there cannot skip the in-memory teardown below — this
+      // is a child 'close' handler, outside any request lifecycle.
+      await runSpawnerCompletionCleanup({
+        agentId,
+        task,
+        success: cleanupSuccess,
+        prOwnership,
+        prClaimVerified,
+        branchProvenEmpty,
+        outputBuffer,
+      }).catch(err => {
+        maintenance.markResourceUnsettled('agent', agentId);
+        console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`);
+      });
+
+      unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
+      activeAgents.delete(agentId);
+      await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
+        .catch(error => emitLog('warn', `Completion retirement deferred for ${agentId}: ${error.message}`, { agentId }));
+    }
+    maintenance.finishResource('agent', agentId);
+    } catch (handlerErr) {
+      maintenance.markResourceUnsettled('agent', agentId);
+      await recoverFromCloseHandlerFailure(handlerErr, { outputBuffer });
+    }
+  };
+
+  // Replay whatever the child emitted while the async setup above was yielding
+  // (#5791). Output first, so the transcript is complete before a buffered
+  // terminal event finalizes the run — and it is enqueued onto
+  // `transcriptWriteTail` here, before either terminal handler's
+  // `drainTranscriptWrites()` captures that tail.
+  for (const { stream, data } of pendingChildOutput) {
+    if (stream === 'stderr') handleStderr(data);
+    else handleStdout(data);
+  }
+  pendingChildOutput.length = 0;
+  // A failed spawn emits 'error' AND then 'close'; the error path already
+  // finalizes the run, so replay exactly one terminal event, never both.
+  if (pendingSpawnError) void handleSpawnError(pendingSpawnError);
+  else if (pendingClose) void handleClose(pendingClose.code);
+
+  return agentId;
+}

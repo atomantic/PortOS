@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
   sleep: vi.fn(),
 }));
-vi.mock('./agentActivity.js', () => ({
+vi.mock('./agent/agentActivity.js', () => ({
   getTodayActionCount: async () => 0,
   logActivity: fakes.logActivity,
 }));
@@ -24,15 +24,15 @@ vi.mock('./platformAccounts.js', () => ({
   }),
   recordActivity: async () => {},
 }));
-vi.mock('./agentPersonalities.js', () => ({
+vi.mock('./agent/agentPersonalities.js', () => ({
   getAgentById: async () => ({ id: 'example-agent', enabled: true }),
 }));
 vi.mock('../integrations/moltbook/index.js', () => ({
   createMoltbookClient: () => ({ createPost: fakes.createPost }),
 }));
 vi.mock('../integrations/moltworld/index.js', () => ({}));
-vi.mock('./agentContentGenerator.js', () => ({}));
-vi.mock('./agentFeedFilter.js', () => ({}));
+vi.mock('./agent/agentContentGenerator.js', () => ({}));
+vi.mock('./agent/agentFeedFilter.js', () => ({}));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 function deferred() {
@@ -62,7 +62,7 @@ beforeEach(async () => {
   fakes.logActivity.mockReset().mockResolvedValue(undefined);
   automation = await import('./automationScheduler.js');
   scheduler = await import('./eventScheduler.js');
-  const executor = await import('./agentActionExecutor.js');
+  const executor = await import('./agent/agentActionExecutor.js');
   executor.init();
   executor.init(); // Reinitialization must replace registration, never multiply work.
 });

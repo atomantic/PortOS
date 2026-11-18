@@ -25,7 +25,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
-import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
+import { agentContextSettingsSchema } from '../lib/agent/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { federationSettingsSchema } from '../lib/federatedMediaValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';

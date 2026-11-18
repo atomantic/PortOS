@@ -13,7 +13,7 @@ import { writeFile } from 'fs/promises';
 import * as git from '../git.js';
 import { readFileTail } from '../../lib/fileUtils.js';
 import { commitsSince } from '../../lib/gitCommitProbe.js';
-import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
+import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';
 
 // Re-exported entry points for importers and tests (implementations live in
 // lib/fileUtils.js and lib/gitCommitProbe.js).

@@ -11,11 +11,11 @@ import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../servic
 import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
 // Lifecycle transitions go through the facade (#3450).
-import * as agentOrchestrator from '../services/agentOrchestrator.js';
+import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
 import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js';
-import { getDeliveryActivity } from '../services/agentDeliveryActivity.js';
+import { getDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
@@ -25,7 +25,7 @@ const router = Router();
 
 router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
   const { taskId } = validateRequest(z.object({ taskId: z.string().min(1).max(512) }).strict(), req.body ?? {});
-  const { recheckAgentCleanup } = await import('../services/agentRepoStateVerification.js');
+  const { recheckAgentCleanup } = await import('../services/agent/agentRepoStateVerification.js');
   const result = await recheckAgentCleanup(req.params.id, taskId);
   if (!result.ok) throw new ServerError(result.reason === 'cleanup-already-running'
     ? 'Cleanup is already running' : 'The cleanup owner changed; refresh this task before retrying',
@@ -35,7 +35,7 @@ router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
 
 router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
   const input = validateRequest(securityScanRequestSchema, req.body ?? {});
-  const { runAgentSecurityScan } = await import('../services/agentSecurityScan.js');
+  const { runAgentSecurityScan } = await import('../services/agent/agentSecurityScan.js');
   res.json(await runAgentSecurityScan(req.params.id, input));
 }));
 

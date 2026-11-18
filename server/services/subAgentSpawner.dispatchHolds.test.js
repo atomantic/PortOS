@@ -48,15 +48,15 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
+vi.mock('./agent/agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
-vi.mock('./agentRunnerOutputBatchers.js', () => ({
+vi.mock('./agent/agentRunnerOutputBatchers.js', () => ({
   getRunnerOutputBatcher: vi.fn(),
   flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
-vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
+vi.mock('./agent/agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
+vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
 vi.mock('./cosState.js', () => ({ loadState: vi.fn().mockResolvedValue({ agents: {} }) }));
@@ -74,7 +74,7 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
 vi.mock('./cosForgeSpawnGate.js', () => ({
   forgeSpawnHoldReason: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('./agentOrchestrator.js', () => ({
+vi.mock('./agent/agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
 }));
@@ -85,11 +85,11 @@ const taskHandlers = new Map();
 import { initSpawner } from './subAgentSpawner.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { isRunnerReachable } from './cosRunnerClient.js';
-import { spawnAgentForTask } from './agentOrchestrator.js';
+import { spawnAgentForTask } from './agent/agentOrchestrator.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isUpdateInProgress } from './updateChecker.js';
-import { setUseRunner } from './agentState.js';
+import { setUseRunner } from './agent/agentState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';

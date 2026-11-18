@@ -55,7 +55,7 @@ export function formatExecutionFailure(category) {
 }
 
 // Raw agentErrorAnalysis category → taxonomy. Keys are the `category` tokens from
-// server/services/agentErrorAnalysis.js plus the `hook-error` / `unparseable-response` tokens
+// server/services/agent/agentErrorAnalysis.js plus the `hook-error` / `unparseable-response` tokens
 // the LI hook path can raise. Deliberately conservative: a raw category with no confident home
 // is LEFT OUT so it falls through to `unknown-failure`.
 //

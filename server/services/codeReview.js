@@ -64,7 +64,7 @@ import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermiss
 import { getAllProviders, listProviders, getProviderById } from './providers.js'
 import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
 import { safeJSONLParse } from '../lib/jsonIo.js';
-import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agent/agentExecutionProfiles.js';
 import { PATHS } from '../lib/paths.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createProviderService } from '../lib/aiToolkit/providers.js'
@@ -482,7 +482,7 @@ export async function getCodeReviewDefaults() {
 }
 
 /**
- * Reviewer-loop option resolver used by `server/services/agentCompletionCleanup.js`,
+ * Reviewer-loop option resolver used by `server/services/agent/agentCompletionCleanup.js`,
  * `server/services/cosMergeHandoff.js`, `server/services/developmentWatchdog.js`,
  * and `server/routes/apps/pullRequests.js`: merges per-task metadata
  * with the user's Code Review Defaults, returning `{ reviewers, reviewStopMode,

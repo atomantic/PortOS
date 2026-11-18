@@ -122,7 +122,7 @@ export function isCheckoutRecoveryTask(task) {
 
 async function resolveCheckoutDir(task) {
   if (!task?.metadata?.app) return PATHS.root;
-  const { getAppWorkspace } = await import('./agentAppWorkspace.js');
+  const { getAppWorkspace } = await import('./agent/agentAppWorkspace.js');
   return getAppWorkspace(task.metadata.app).catch(() => null);
 }
 

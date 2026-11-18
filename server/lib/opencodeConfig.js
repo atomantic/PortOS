@@ -24,7 +24,7 @@ import {
   OPENCODE_PUBLIC_REVIEW_AGENT,
 } from './providerModels.js';
 import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './providerGateways.js';
-import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
+import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
 import { PORTS } from './ports.js';
 
@@ -162,7 +162,7 @@ const asObject = (value) => (isPlainObject(value) ? value : {});
  * to answer. Every PortOS OpenCode spawn is unattended, so these stay denied
  * unconditionally (an enforcement boundary); the rest of the blanket allow is kept so
  * agents don't stall on edit/bash approvals. UNATTENDED_RUN_RULE in
- * `services/agentPromptBuilder.js` tells the agent not to ask; this makes asking unreachable.
+ * `services/agent/agentPromptBuilder.js` tells the agent not to ask; this makes asking unreachable.
  */
 const INTERACTIVE_GATE_DENIALS = Object.freeze({
   question: 'deny',

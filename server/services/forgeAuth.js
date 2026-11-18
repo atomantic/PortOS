@@ -12,7 +12,7 @@ import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
 import { githubApiHost } from '../lib/workTracker.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { listForgePinnedApps } from './agentAppWorkspace.js';
+import { listForgePinnedApps } from './agent/agentAppWorkspace.js';
 
 const DEFAULT_SPAWN_CLI_TIMEOUT_MS = 10000;
 const TOKEN_ENV_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];

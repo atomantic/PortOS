@@ -23,7 +23,7 @@
 // we track our handlers per-socket and removeEventListener them in cleanup.
 import EventEmitter from 'events';
 import * as platformAccounts from './platformAccounts.js';
-import * as agentActivity from './agentActivity.js';
+import * as agentActivity from './agent/agentActivity.js';
 
 export const moltworldWsEvents = new EventEmitter();
 

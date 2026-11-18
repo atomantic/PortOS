@@ -248,7 +248,7 @@ describe('manual maintenance run', () => {
   });
 
   it('re-evaluates the run immediately when a stranded pause is retired with no continuation queued (#7469)', async () => {
-    // `retireStrandedPausedAgents` (server/services/agentManagement.js) also
+    // `retireStrandedPausedAgents` (server/services/agent/agentManagement.js) also
     // stamps `resumed: true` — on a pause whose task is gone or moved on — but
     // with NO `resumedTaskId`, because nothing was requeued. Reading that as a
     // handoff the same way a relaunch is read made this listener return `null`

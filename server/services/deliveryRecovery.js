@@ -1,6 +1,6 @@
-import { normalizeTaskOutcome } from '../lib/agentOutcome.js';
+import { normalizeTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
-import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
+import { resolveUndeliveredTaskUpdate } from './agent/agentErrorAnalysis.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
 import { updateTask } from './cosTaskStore.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
@@ -12,7 +12,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
   const readTasks = deps.readTasks || readAllTasksFlat;
   const update = deps.update || updateTask;
-  const release = deps.release || (await import('./agentWorktreeCleanup.js')).releaseRetryHold;
+  const release = deps.release || (await import('./agent/agentWorktreeCleanup.js')).releaseRetryHold;
   const tasks = await readTasks();
   let recovered = 0;
   for (const task of tasks) {

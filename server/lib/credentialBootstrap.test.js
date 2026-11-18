@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import * as childProcess from './childProcess.js';
 import { resolveBootstrapEnv, hasCredentialBootstrap, applyCredentialBootstrap, resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup, signalDetachedGroups, resetDetachedGroupsForTests } from './credentialBootstrap.js';
-import { PUBLIC_REVIEW_EXECUTION_PROFILE, PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILE, PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { PRIVATE_SECURITY_EXECUTION_PROFILE } from './privateSecurityPolicy.js';
 
 vi.mock('./bufferedSpawn.js', async (importOriginal) => ({

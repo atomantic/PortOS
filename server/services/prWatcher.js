@@ -585,7 +585,7 @@ async function escalatePrFailure(entry, binding, { failure, headMoved }, { app }
   try {
     const ownerPolicy = await currentHandoffOwnerPolicy(binding, { recovery: true });
     if (ownerPolicy) return await holdForOwner(app, entry, binding, ownerPolicy.ownerBlocked);
-    const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+    const { spawnReviewLoopFollowUp } = await import('./agent/agentWorktreeCleanup.js');
     const recovery = await spawnReviewLoopFollowUp({
       originalAgentId: entry.sourceAgentId || null,
       originalTask: entry.sourceTask,

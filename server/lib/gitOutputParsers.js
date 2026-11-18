@@ -4,7 +4,7 @@
 // orchestration that actually runs git lives in server/services/git.js.
 
 import { safeJSONParse } from './jsonIo.js';
-import { SENTINEL_COMPLETION_MARKER, stripLifecycleLines } from './agentOutputMarkers.js';
+import { SENTINEL_COMPLETION_MARKER, stripLifecycleLines } from './agent/agentOutputMarkers.js';
 
 /**
  * Map a 2-char porcelain status code to a human-readable label.

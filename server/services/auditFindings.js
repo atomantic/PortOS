@@ -8,7 +8,7 @@
  * deletion removes it. Runs without the version marker are not retroactively failed.
  */
 import { auditFindingsSchema, auditFindingsCheckpointPath, auditFindingsInstructions, parseAuditFindings } from '../lib/auditFindings.js';
-import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
+import { doneSentinelPath, parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { safeJSONParse, tryReadFile } from '../lib/jsonIo.js';
 import { execGit } from '../lib/execGit.js';
 

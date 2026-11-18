@@ -21,7 +21,7 @@
 
 import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isScreenedPullRequestFingerprint } from '../lib/prReviewContent.js';
-import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agent/agentExecutionProfiles.js';
 import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import { getCosTasks } from './cosTaskStore.js';

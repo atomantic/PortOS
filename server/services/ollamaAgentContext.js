@@ -23,7 +23,7 @@ import {
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
 import { ensureContextWindow, getBaseUrl, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
-import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js'
+import { LIFECYCLE_LINES } from '../lib/agent/agentOutputMarkers.js'
 
 /**
  * Prepare the Ollama daemon for an agent harness run.

@@ -6,7 +6,7 @@ import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
-} from './agentExecutionProfiles.js';
+} from './agent/agentExecutionProfiles.js';
 import {
   buildCodeReviewSpawnConfig,
   buildVendorSpawnConfig,

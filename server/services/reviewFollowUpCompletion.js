@@ -58,7 +58,7 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
     const currentApp = await getAppById(meta.app);
     if (currentApp?.id !== meta.app || currentApp.repoPath !== repoPath) return 'skip';
     const { loadState } = await import('./cosState.js');
-    const { hasActiveTaskOwner } = await import('./agentState.js');
+    const { hasActiveTaskOwner } = await import('./agent/agentState.js');
     if (hasActiveTaskOwner(fresh.id, (await loadState()).agents)) return 'skip';
     const result = await updateTask(fresh.id, { status: 'completed', metadata: {
       taskOutcome: { status: 'no-action-needed', reason: 'The assigned review/merge target is verified merged.' },

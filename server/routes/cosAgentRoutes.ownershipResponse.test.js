@@ -18,7 +18,7 @@ vi.mock('../services/cosAgentIndex.js', () => ({
 }));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
 vi.mock('../services/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: !fixture.unreadable, agents: fixture.unreadable ? null : fixture.state.agents }),
@@ -39,7 +39,7 @@ vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 vi.mock('../services/cosAgentLifecycle.js', () => ({
   getAgents: async () => fixture.unreadable ? null : Object.values(fixture.state.agents),
 }));
-vi.mock('../services/agentState.js', () => ({ getActiveAgentIds: () => [] }));
+vi.mock('../services/agent/agentState.js', () => ({ getActiveAgentIds: () => [] }));
 vi.mock('../services/worktreeManager.js', async (importOriginal) => ({
   ...await importOriginal(),
   listWorktrees: async () => [{ branch: 'refs/heads/claim/issue-101', path: '/synthetic/repo/worktree' }],

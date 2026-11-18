@@ -18,7 +18,7 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-o
 
 const getActiveAgentsMock = vi.fn(() => []);
 const killAgentMock = vi.fn(async () => ({ success: true }));
-vi.mock('../agentManagement.js', () => ({
+vi.mock('../agent/agentManagement.js', () => ({
   getActiveAgents: (...a) => getActiveAgentsMock(...a),
   killAgent: (...a) => killAgentMock(...a),
 }));

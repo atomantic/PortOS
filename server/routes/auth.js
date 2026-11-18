@@ -23,7 +23,7 @@ import {
   verifyRequestSession,
   verifySession,
 } from '../services/auth.js';
-import { getAgentKeyStatus, rotateAgentKey, setAgentKeyEnabled } from '../services/agentKey.js';
+import { getAgentKeyStatus, rotateAgentKey, setAgentKeyEnabled } from '../services/agent/agentKey.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
@@ -224,7 +224,7 @@ router.delete('/sessions/:id', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Local agent API key (services/agentKey.js): a revocable session token kept in
+// Local agent API key (services/agent/agentKey.js): a revocable session token kept in
 // a mode-0600 file so an agent PortOS did not spawn can call the API. GET shows
 // state only — never the token. Turning it on or rotating it mints an operator
 // session, so both sit on the host-control list beside POST /password.

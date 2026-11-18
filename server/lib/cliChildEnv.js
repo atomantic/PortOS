@@ -27,7 +27,7 @@ import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
-import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
+import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agent/agentExecutionProfiles.js';
 
 // Claude Code defaults to 32K output tokens; thinking-capable local models can
 // exceed that and wedge at an empty composer. Widened only for a Claude harness

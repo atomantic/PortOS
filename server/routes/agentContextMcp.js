@@ -11,8 +11,8 @@ import {
   agentContextMcpResponseSchema,
   agentContextToolCallParamsSchema,
   agentContextToolsListParamsSchema,
-} from '../lib/agentContextValidation.js';
-import { callAgentContextTool, getAgentContextManifest } from '../services/agentContextMcp.js';
+} from '../lib/agent/agentContextValidation.js';
+import { callAgentContextTool, getAgentContextManifest } from '../services/agent/agentContextMcp.js';
 
 const router = Router();
 

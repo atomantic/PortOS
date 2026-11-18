@@ -839,7 +839,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {!inactive && (
               // 'stalled' is the one phase that does NOT pulse: the run is still
               // alive but has ignored every nudge, and an animated badge reads as
-              // progress. See the stall gate in server/services/agentTuiSpawning.js.
+              // progress. See the stall gate in server/services/agent/agentTuiSpawning.js.
               <span className={`px-2 py-0.5 text-xs rounded shrink-0 ${
                 agent.metadata?.phase === 'stalled' ? 'bg-orange-500/20 text-orange-400' :
                 agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400 animate-pulse' :

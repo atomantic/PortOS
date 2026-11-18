@@ -37,9 +37,9 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   completeAgent: vi.fn(async (_id, result) => { store.agent.status = 'completed'; store.agent.result = result; return store.agent; }),
   recordCleanupOutcome: vi.fn(async (_id, outcome) => { store.agent.metadata.cleanupOutcome = outcome; return true; }),
 }));
-vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('./agentCompletionCleanup.js', () => ({ removeCompletionSentinel: vi.fn(async () => {}) }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
+vi.mock('./agent/agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
+vi.mock('./agent/agentCompletionCleanup.js', () => ({ removeCompletionSentinel: vi.fn(async () => {}) }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
 vi.mock('./codeReview.js', async original => ({ ...await original(), getGoalFidelityConfig: vi.fn(async () => null) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 
@@ -47,8 +47,8 @@ import { PATHS } from '../lib/paths.js';
 import { getAppById } from './apps.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { completeAgent } from './cosAgentLifecycle.js';
-import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agentFinalization.js';
-import { prepareAgentSpawn } from './agentSpawnPreparation.js';
+import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agent/agentFinalization.js';
+import { prepareAgentSpawn } from './agent/agentSpawnPreparation.js';
 import { settleRetirementReviewRun } from './branchReconcileCompletion.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { repositoryCleanupRecoveryMetadata } from './cleanupOnlyCompletion.js';

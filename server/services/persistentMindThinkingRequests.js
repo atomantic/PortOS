@@ -11,7 +11,7 @@ import {
 } from '../lib/persistentMindThinkingPresets.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
-import { appendMindEvent } from './agentRunEventLog.js';
+import { appendMindEvent } from './agent/agentRunEventLog.js';
 
 // A direct local API transport has no account-backed CLI fallback. Remove all
 // display/model identity heuristics before asking the shared runtime resolver.

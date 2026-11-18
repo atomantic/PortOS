@@ -15,7 +15,7 @@
  * dispatch one — Resume (`cos/tabs/AgentsTab.jsx`) and Relaunch
  * (`cos/tabs/RelaunchAgentModal.jsx`).
  *
- * The server (`resumeAgent` in `server/services/agentManagement.js`) answers with a
+ * The server (`resumeAgent` in `server/services/agent/agentManagement.js`) answers with a
  * `mode` naming what it did to the task, plus `spawned` / `spawnHold` saying
  * whether it also STARTED it: a resumed task is force-spawned when an agent slot is
  * free, so `requeued` usually means running, not waiting. Two ways to get that

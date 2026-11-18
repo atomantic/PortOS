@@ -6,7 +6,7 @@ import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
 
 const f = vi.hoisted(() => ({ agents: {}, open: [] }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => [] }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => [] }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: f.agents }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async cwd => ({ cwd }) }));
 vi.mock('./github.js', () => ({ execGh: async () => JSON.stringify(f.open) }));

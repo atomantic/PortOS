@@ -4,7 +4,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(), execGitSafe: vi.fn() }))
 import { execGit } from '../lib/execGit.js';
 import { generatePRDescription } from './git.js';
 import { initialSecurityScanEvidence } from '../lib/securityScanEvidence.js';
-import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
+import { SENTINEL_COMPLETION_MARKER } from '../lib/agent/agentOutputMarkers.js';
 
 const report = [
   '## Summary',

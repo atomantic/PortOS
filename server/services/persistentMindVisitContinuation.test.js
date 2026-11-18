@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({ history: [], live: new Set() }));
-vi.mock('./agentRunEventLog.js', () => ({ readPersistentMindHistory: vi.fn(async () => mock.history) }));
+vi.mock('./agent/agentRunEventLog.js', () => ({ readPersistentMindHistory: vi.fn(async () => mock.history) }));
 vi.mock('./eidoverseTravel.js', () => ({ isEidoverseVisitLive: (id) => mock.live.has(id) }));
 
 const { readPersistentMindVisitContinuationPrompt } = await import('./persistentMindVisitContinuation.js');

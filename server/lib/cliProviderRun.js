@@ -29,7 +29,7 @@ import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
-import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
+import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
 import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokReviewFinishReason, grokReviewProgress, grokToolsEscapingNoToolPosture } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';

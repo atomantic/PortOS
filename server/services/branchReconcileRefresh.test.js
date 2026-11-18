@@ -18,7 +18,7 @@ vi.mock('./repoCleanupObservation.js', async original => {
 });
 vi.mock('./apps.js', () => ({ getAppById: getApp }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: owners }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
 

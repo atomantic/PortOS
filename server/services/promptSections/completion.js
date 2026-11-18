@@ -6,17 +6,17 @@ import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.j
 import { DEFAULT_REVIEWER, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
-import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
+import { COMPLETION_MODES } from '../../lib/agent/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, DEFAULT_BRANCH_HEAD_GUIDANCE, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
-import { agentApiCurl } from '../../lib/agentApiToken.js';
+import { agentApiCurl } from '../../lib/agent/agentApiToken.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
@@ -752,10 +752,10 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   return lines.join('\n');
 }
 
-// `portosMergesBranchOnExit` moved to `lib/agentCompletionMode.js` (it is an
+// `portosMergesBranchOnExit` moved to `lib/agent/agentCompletionMode.js` (it is an
 // input to the one completion-mode decision); re-exported here so the prompt
 // sections that already import it from this module keep working.
-export { portosMergesBranchOnExit } from '../../lib/agentCompletionMode.js';
+export { portosMergesBranchOnExit } from '../../lib/agent/agentCompletionMode.js';
 
 // The one commit-hygiene sentence every manual commit step composes — the
 // slashdo-free TUI workflow, the PR-owning CLI workflow and the auto-merge
@@ -781,7 +781,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
  * branch (review fixes), or hand off to PortOS's post-exit push.
  *
- * `mode` is the resolver's decision (see `lib/agentCompletionMode.js`); by the
+ * `mode` is the resolver's decision (see `lib/agent/agentCompletionMode.js`); by the
  * time the TUI and existing-branch arms above have already returned, `mode`
  * being `WORKTREE_NO_PUSH` / `PORTOS_MERGES` implies a non-TUI host, so
  * `canTypeSlashCommands` alone (no separate `isTui` re-check) tells the two
@@ -1360,7 +1360,7 @@ export function buildInlineReviewLoopSection({
  * to the legacy commit-only block where PortOS handles push+PR on exit.
  *
  * Branches on `mode` first, mirroring the resolver's own rule order
- * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
+ * (`lib/agent/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
  * `willOpenPR` — the caller already resolved those into `mode`.
  */
 export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false, mergeHandoff = false }) {

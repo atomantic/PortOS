@@ -14,7 +14,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import { getAgentDates, getAgentsByDate } from './cosAgentIndex.js';
 import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
 import { getWeekId, weekStartFromWeekId } from '../lib/isoWeek.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { isAgentHandoff } from '../lib/agent/agentOutcome.js';
 
 const DIGESTS_DIR = PATHS.digests;
 

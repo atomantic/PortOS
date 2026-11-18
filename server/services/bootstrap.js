@@ -85,9 +85,9 @@ import { markCosAgentMigrationsSettled } from './cosState.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
-import { activeAgents, dispatchingAgentIds } from './agentState.js';
+import { activeAgents, dispatchingAgentIds } from './agent/agentState.js';
 import * as automationScheduler from './automationScheduler.js';
-import * as agentActionExecutor from './agentActionExecutor.js';
+import * as agentActionExecutor from './agent/agentActionExecutor.js';
 import * as telegram from './telegram.js';
 import * as telegramBridge from './telegramBridge.js';
 import { getSettings as getInitSettings } from './settings.js';
@@ -460,7 +460,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
   // with the rest of this function, so a smoke run never writes to $HOME.
-  import('./agentKey.js')
+  import('./agent/agentKey.js')
     .then(({ initAgentKey }) => initAgentKey({ httpsEnabled, port }))
     .catch((err) => logBootstrapFailure('❌ Agent API key init failed', err));
 

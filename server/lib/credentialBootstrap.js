@@ -28,7 +28,7 @@ import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, prepareCli
 import { execFile } from './childProcess.js';
 import { tmpdir } from 'node:os';
 import { withSpawnCwdEnv } from './spawnCwd.js';
-import { isPublicReviewNoToolProfile, isPublicReviewActionsProfile } from './agentExecutionProfiles.js';
+import { isPublicReviewNoToolProfile, isPublicReviewActionsProfile } from './agent/agentExecutionProfiles.js';
 import { composeBootstrapSpawn, hasCredentialBootstrap } from './aiToolkit/internal/credentialBootstrap.js';
 
 export { hasCredentialBootstrap };

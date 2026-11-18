@@ -1,5 +1,5 @@
 import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agent/agentExecutionProfiles.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { probeCodexModelsViaAppServer } from '../lib/aiToolkit/internal/codexModelListProbe.js';
 import { probeGrokModelCatalog } from '../lib/grokModelCatalog.js';

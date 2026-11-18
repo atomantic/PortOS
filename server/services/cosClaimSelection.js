@@ -36,7 +36,7 @@ export async function recordClaimSelection({ agentId, issueNumber }) {
       return refuse('picker-already-claimed');
     }
     const [{ getTaskById }, { getAppDataForTask }, { resolveAppForgeTarget }, { getInstanceId }] = await Promise.all([
-      import('./cosTaskStore.js'), import('./agentAppWorkspace.js'), import('../lib/workTracker.js'), import('./instanceIdentity.js'),
+      import('./cosTaskStore.js'), import('./agent/agentAppWorkspace.js'), import('../lib/workTracker.js'), import('./instanceIdentity.js'),
     ]);
     const task = await getTaskById(agent.taskId);
     if (task?.id !== agent.taskId || !hasClaimFlowContract(task) || task.metadata?.claimTarget) return refuse('task-binding-unverified');

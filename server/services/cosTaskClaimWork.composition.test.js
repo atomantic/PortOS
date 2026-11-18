@@ -30,7 +30,7 @@ vi.mock('./tools.js', () => ({
 }));
 
 import { buildClaimWorkTask } from './cosTaskClaimWork.js';
-import { buildAgentPrompt, buildLightContextPrompt } from './agentPromptBuilder.js';
+import { buildAgentPrompt, buildLightContextPrompt } from './agent/agentPromptBuilder.js';
 import { getTaskPrompt, DEFAULT_TASK_PROMPTS } from './taskPromptService.js';
 import { buildImprovementTaskDescription } from './cosTaskPreStepBlocks.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';

@@ -11,7 +11,7 @@
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
 import { UNKNOWN_STATUS_BLOCKED_CATEGORY } from './taskParser.js';
 
-/** A PERMANENT provider-config failure: the task's resolved provider can't run an agent at all (an `api`-type provider has no file-writing harness). Stamped by `runAgentSpawn` (services/agentLifecycle.js) and read by both sets below, so it lives here, not as a third literal. */
+/** A PERMANENT provider-config failure: the task's resolved provider can't run an agent at all (an `api`-type provider has no file-writing harness). Stamped by `runAgentSpawn` (services/agent/agentLifecycle.js) and read by both sets below, so it lives here, not as a third literal. */
 export const PROVIDER_CONFIG_BLOCKED_CATEGORY = 'provider-config';
 
 /**

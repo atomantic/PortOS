@@ -2,6 +2,7 @@ import { beforeEach, afterAll, expect, it as vitestIt, vi } from 'vitest';
 import { join } from 'node:path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
@@ -140,6 +141,24 @@ it('reports measured recovery overhead with unknown cost and no private identifi
   expect(summary.sources[0]).toMatchObject({ pending: 1, metrics: { recovery: 1, lineageKnown: 1, noProgress: 1, cost: { value: null, measured: 0 } }, knownCleanupFix: null });
   expect(JSON.stringify(summary)).not.toMatch(/agent-parent|Synthetic task/); expect(summary.sources[1].pending).toBeNull();
 });
+for (const agentDir of ['', 'agent/']) {
+  it(`recognizes the known cleanup mechanism at ${agentDir || 'the pre-move location'}`, async () => {
+    mocks.apps[0].fullName = UPSTREAM_FULL_NAME;
+    mocks.records['agent-example'].metadata.recoveryOrigin = {
+      parentAgentId: 'agent-parent', parentTaskId: 'task-example', subsystem: 'repository-cleanup',
+      attempt: 2, noProgress: true, observation: 'a'.repeat(64),
+    };
+    const { receiptId } = (await next()).jobs[0];
+    const result = await audit.recordProcessAuditOutcome({
+      appId: 'example', receiptId, outcome: 'finding', template: 'recovery-loop',
+      anchors: [`server/services/${agentDir}agentRepoStateVerification.js`],
+    }, turn);
+    expect(result).toMatchObject({
+      ok: true, outcome: 'insufficient-evidence', reason: 'Known cleanup fix exists; run revision is not comparable',
+    });
+    expect(mocks.file).not.toHaveBeenCalled();
+  });
+}
 it('uses the archive index locator and skips unknown-app legacy jobs', async () => {
   const record = mocks.records['agent-example'];
   // Keep the indexed bucket inside the scan window while differing from completedAt.

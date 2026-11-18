@@ -11,7 +11,7 @@ import { addTask } from './cosTaskStore.js';
 import { buildQueuedTask } from './cosTaskIntake.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { queueNotificationResolveTask } from './githubNotificationResolveTask.js';
-import { buildAgentPrompt, buildLightContextPrompt } from './agentPromptBuilder.js';
+import { buildAgentPrompt, buildLightContextPrompt } from './agent/agentPromptBuilder.js';
 
 const account = { id: 'example-account', host: 'github.com', login: 'example-owner' };
 const repo = 'example-owner/example-tool';

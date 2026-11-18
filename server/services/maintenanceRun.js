@@ -58,7 +58,7 @@ import { familyForProvider } from '../lib/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
 import { pluralize } from '../lib/textUtils.js';
-import { isQueuedContinuation } from '../lib/agentOutcome.js';
+import { isQueuedContinuation } from '../lib/agent/agentOutcome.js';
 import { cosEvents } from './cosEvents.js';
 import { getOnDemandHandoffs } from './onDemandHandoff.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';

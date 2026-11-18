@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ state: null, pointer: null }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => fixture.state }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ resolveTaskResumePatch: async () => fixture.pointer }));
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({ resolveTaskResumePatch: async () => fixture.pointer }));
 import { prepareExplicitOrphanBudgetReset } from './explicitSpawnBudgetReset.js';
 
 const task = { id: 'task-example', status: 'in_progress', taskType: 'user', metadata: { totalSpawnCount: '1' } };

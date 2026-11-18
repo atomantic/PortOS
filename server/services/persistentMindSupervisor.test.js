@@ -76,7 +76,7 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
   providerBaseUrl: (provider) => provider?.endpoint || null,
 }));
 
-vi.mock('./agentRunEventLog.js', () => ({
+vi.mock('./agent/agentRunEventLog.js', () => ({
   appendMindEvent: (...args) => mock.appendMindEvent(...args),
 }));
 

@@ -128,7 +128,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
-import { activeAgents, runnerAgents } from './agentState.js';
+import { activeAgents, runnerAgents } from './agent/agentState.js';
 
 const baseState = () => ({ agents: {} });
 
@@ -381,7 +381,7 @@ it('wakes the exact local parent from a persisted completed-follow-up edit', asy
   const identity = await import('./instanceIdentity.js');
   const instanceId = 'fixture-local';
   const localIdentity = vi.spyOn(identity, 'getInstanceId').mockResolvedValue(instanceId);
-  const { bindCompletionRetirementEvents } = await import('./agentRepoStateVerification.js');
+  const { bindCompletionRetirementEvents } = await import('./agent/agentRepoStateVerification.js');
   getAgentRecord.mockClear();
   getAgentRecord.mockResolvedValue({ id: 'original-agent', taskId: 'original-task', status: 'completed',
     metadata: { instanceId } });
@@ -476,7 +476,7 @@ describe('cosTaskStore.updateTask expectedStatus', () => {
   });
 
   it('releases an extended Deep retry through the real persisted adapter, preserving the branch', async () => {
-    const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
+    const { releaseRetryHold } = await import('./agent/agentWorktreeCleanup.js');
     await addTask({ id: 'sys-extended-retry', description: 'Example audit' }, 'internal');
     const task = await updateTask('sys-extended-retry', { status: 'in_progress', metadata: {
       auditDepth: 'deep', auditWorkflow: 'extended-v1', retryPendingCleanup: 'agent-owner',

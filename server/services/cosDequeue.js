@@ -21,7 +21,7 @@
  * event-driven dequeue deliberately has no counterpart.
  */
 
-import { hasActiveTaskOwner } from './agentState.js';
+import { hasActiveTaskOwner } from './agent/agentState.js';
 import { emitLog } from './cosEvents.js';
 
 /**

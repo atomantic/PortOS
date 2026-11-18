@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
+import { COMPLETION_MODES } from '../../lib/agent/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
 import { buildTuiCompletionSection, buildClaimFlowCompletionSection } from './completion.js';

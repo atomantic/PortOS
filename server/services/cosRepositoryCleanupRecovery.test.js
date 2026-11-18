@@ -59,9 +59,9 @@ const PR_URL = 'https://github.com/example/repo/pull/7';
 import { addTask } from './cosTaskStore.js';
 import { findPullRequestForBranch } from './github.js';
 import { buildTaskMetadata } from './cosTaskIntake.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { registerAgent, recordRepoStateRecovery } from './cosAgentLifecycle.js';
-import { verifyAgentRepoState } from './agentRepoStateVerification.js';
+import { verifyAgentRepoState } from './agent/agentRepoStateVerification.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 
 const persist = () => { f.disk = structuredClone(f.state); };

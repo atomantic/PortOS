@@ -7,7 +7,7 @@ import * as pipelineSeriesService from './pipeline/series.js';
 import * as taskScheduleService from './taskSchedule.js';
 import * as loopsService from './loops.js';
 import * as featureAgentsService from './featureAgents.js';
-import * as agentPersonalitiesService from './agentPersonalities.js';
+import * as agentPersonalitiesService from './agent/agentPersonalities.js';
 import * as autonomousJobsService from './autonomousJobs.js';
 import { getVoiceConfig, updateVoiceConfig } from './voice/config.js';
 import { isPlainObject } from '../lib/objects.js';

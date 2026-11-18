@@ -85,10 +85,10 @@ const EXCLUDED_PREFIXES = [
 // and this test. Everywhere else, a bare `CLAUDE.md` must be paired with
 // `AGENTS.md` on the same line.
 const DUAL_NAME_IMPLEMENTATION = [
-  'server/services/agentPromptBuilder.test.js',
+  'server/services/agent/agentPromptBuilder.test.js',
   'server/services/promptSections/instructions.js',
-  'server/lib/agentInstructionsFile.js',
-  'server/lib/agentInstructionsFile.test.js',
+  'server/lib/agent/agentInstructionsFile.js',
+  'server/lib/agent/agentInstructionsFile.test.js',
   'scripts/agent-instructions-files.guard.test.js',
 ];
 

@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { persistentMindImageWorkGuard } from '../lib/persistentMind.js';
-import { getActiveAgentIds, spawningTasks } from './agentState.js';
+import { getActiveAgentIds, spawningTasks } from './agent/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';

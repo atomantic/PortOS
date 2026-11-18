@@ -8,7 +8,7 @@ vi.mock('../lib/childProcess.js', async (original) => ({ ...(await original()), 
 // The managed-app registry read is the only thing forge auth needs from the app
 // layer; doubling it keeps this suite off the filesystem and makes the pinned
 // vs. inferred account split explicit per test.
-vi.mock('./agentAppWorkspace.js', () => ({ listForgePinnedApps: vi.fn(async () => []) }));
+vi.mock('./agent/agentAppWorkspace.js', () => ({ listForgePinnedApps: vi.fn(async () => []) }));
 vi.mock('./githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccountEnv: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: vi.fn() }));
 
@@ -16,7 +16,7 @@ import { spawn } from '../lib/childProcess.js';
 vi.mock('../lib/windowsGitProcess.js', async importOriginal => ({
   ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, options)),
 }));
-import { listForgePinnedApps } from './agentAppWorkspace.js';
+import { listForgePinnedApps } from './agent/agentAppWorkspace.js';
 import { resolveForgeForRepo, resolveForgeTokenEnv, getWorkflowScopeStatus, __resetWorkflowScopeCache } from './forgeAuth.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getAccount, resolveGitHubAccountEnv } from './githubAccounts.js';

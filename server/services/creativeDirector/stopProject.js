@@ -97,7 +97,7 @@ export async function retireRuns(projectId, { runs = [], reason = 'Stopped', tas
   if (!taskIds.size) return { runs: runs.length, tasks: 0, agents: 0 };
 
   // An agent that already exited is absent from the active list (killAgent 404s): not an error.
-  const { getActiveAgents, killAgent } = await loadOrEmpty(() => import('../agentManagement.js'), 'agent', projectId);
+  const { getActiveAgents, killAgent } = await loadOrEmpty(() => import('../agent/agentManagement.js'), 'agent', projectId);
   if (getActiveAgents && killAgent) {
     for (const agent of getActiveAgents().filter((a) => taskIds.has(a.taskId))) {
       agents += await tally(killAgent(agent.id), `kill agent ${agent.id}`, projectId);

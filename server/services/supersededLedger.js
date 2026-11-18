@@ -16,7 +16,7 @@
 
 import { PATHS, tryReadFile, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 import { join } from 'node:path';
-import { isAgentScratchPath } from '../lib/agentScratchPaths.js';
+import { isAgentScratchPath } from '../lib/agent/agentScratchPaths.js';
 
 export const LEDGER_VERSION = 1;
 

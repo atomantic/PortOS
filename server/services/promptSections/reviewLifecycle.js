@@ -10,7 +10,7 @@ import { detectForgeCli } from '../../lib/gitForge.js';
 import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/forkHead.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
-import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
+import { agentApiAuthNote, agentApiCurl } from '../../lib/agent/agentApiToken.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';

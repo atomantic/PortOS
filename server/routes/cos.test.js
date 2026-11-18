@@ -7,7 +7,7 @@ import express from 'express';
 import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { withDeliveryActivity } from '../services/agentDeliveryActivity.js';
+import { withDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 
 // The CoS task routes write operator-action rows (#5594) through the ledger's
 // file backend, which resolves under PATHS.data — re-root it so this suite can
@@ -93,7 +93,7 @@ vi.mock('../services/cosReports.js', () => ({
 }));
 
 // Lifecycle transitions moved off `cos.js` onto the agentOrchestrator facade (#3450).
-vi.mock('../services/agentOrchestrator.js', () => ({
+vi.mock('../services/agent/agentOrchestrator.js', () => ({
   pauseAgent: vi.fn(),
   resumeAgent: vi.fn(),
   killAgent: vi.fn(),
@@ -160,7 +160,7 @@ import { getConfig } from '../services/cosState.js';
 import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
 import { getScript, getStatus, listScripts, pause, resume, start, stop, updateConfig } from '../services/cos.js';
-import * as agentOrchestrator from '../services/agentOrchestrator.js';
+import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';

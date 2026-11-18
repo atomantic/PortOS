@@ -45,7 +45,7 @@ import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { claimCheckoutOwnerReason, RECONCILE_AGENT_ID_PLACEHOLDER } from '../lib/claimContinuation.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { agentApiCurl } from '../lib/agentApiToken.js';
+import { agentApiCurl } from '../lib/agent/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 
 // Never reconciled — the canonical long-lived-branch set (`main`/`master`/`dev`/
@@ -1922,7 +1922,7 @@ const verifyGate = 'Fetch the default branch for comparison before opening or up
 // Immediate merges still require the current-head CI and ownership gates.
 // `pr` is the PR's number when the branch already has one, else the `<num>`
 // placeholder the agent fills in after opening it.
-// Exported so the per-agent repo-state audit (services/agentRepoStateVerification.js)
+// Exported so the per-agent repo-state audit (services/agent/agentRepoStateVerification.js)
 // hands a recovery agent the SAME merge procedure, rather than re-authoring a
 // `gh pr merge` line that loses these caveats.
 export const driveToMerge = (pr, { mergeHandoff = false } = {}) => [

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { planListSave } from '../lib/cosTaskRows.js';
-import { parseSentinelPayload } from '../lib/agentSentinel.js';
+import { parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 const fixture = vi.hoisted(() => ({ agents: {}, forge: null, denyProof: false }));
 vi.mock('../lib/paths.js', async original => {

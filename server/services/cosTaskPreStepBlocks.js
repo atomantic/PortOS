@@ -585,7 +585,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
   const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
-  const { getActiveAgentIds } = await import('./agentState.js');
+  const { getActiveAgentIds } = await import('./agent/agentState.js');
   const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const pendingMergeBranches = await readPendingMergeBranches(app, metadata);
   const liveAgents = await readClaimOwnershipAgents().catch((err) => {
@@ -801,7 +801,7 @@ export async function resolveRepoSyncBlock(app, taskType, metadata) {
     REPO_SYNC_ACTION_KEYS, syncRepos, resolveSyncTargets, summarizeSync,
     shouldDispatchVerifier, formatRepoSyncReport, formatWithheldSweepReport
   } = await import('./repoSync.js');
-  const { getActiveAgentIds, isTruthyMeta } = await import('./agentState.js');
+  const { getActiveAgentIds, isTruthyMeta } = await import('./agent/agentState.js');
 
   // Action toggles were merged (global → per-app override) + value-constrained by
   // sanitizeTaskMetadata into `metadata`. Only keys actually present are carried,

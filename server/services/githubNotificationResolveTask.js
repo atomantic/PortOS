@@ -18,7 +18,7 @@
  * the thread goes back to its old decision with a failed marker for the pill.
  */
 import { query } from '../lib/db.js';
-import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agentOutcome.js';
+import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
 import { GENERIC_AGENT_LANE, notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 import { notificationHtmlUrl, repoApiPath } from '../lib/githubNotificationParse.js';
 import { toPgJson } from '../lib/pgJson.js';

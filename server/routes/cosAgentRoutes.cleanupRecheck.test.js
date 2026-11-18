@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../services/agentRepoStateVerification.js', () => ({ recheckAgentCleanup: vi.fn() }));
+vi.mock('../services/agent/agentRepoStateVerification.js', () => ({ recheckAgentCleanup: vi.fn() }));
 vi.mock('../services/cosAgentArchive.js', () => ({}));
 vi.mock('../services/cosAgentFeedback.js', () => ({}));
 vi.mock('../services/cosAgentIndex.js', () => ({}));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/cosTaskStore.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 
-import { recheckAgentCleanup } from '../services/agentRepoStateVerification.js';
+import { recheckAgentCleanup } from '../services/agent/agentRepoStateVerification.js';
 import router from './cosAgentRoutes.js';
 
 const call = body => new Promise(resolve => {

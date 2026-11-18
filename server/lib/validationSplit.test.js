@@ -3,7 +3,7 @@ import * as validation from './validation.js';
 import * as peerSyncValidation from './peerSyncValidation.js';
 import * as creativeDirectorValidation from './creativeDirectorValidation.js';
 import * as storyBuilderValidation from './storyBuilderValidation.js';
-import * as agentValidation from './agentValidation.js';
+import * as agentValidation from './agent/agentValidation.js';
 import * as cosValidation from './cosValidation.js';
 import * as mediaValidation from './mediaValidation.js';
 import * as pipelineValidation from './pipelineValidation.js';

@@ -10,7 +10,7 @@ vi.mock('../services/cosAgentFeedback.js', () => ({}));
 vi.mock('../services/cosAgentIndex.js', () => ({}));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 
 import routes from './cosAgentRoutes.js';
 

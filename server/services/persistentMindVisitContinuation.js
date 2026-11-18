@@ -1,5 +1,5 @@
 /** Prompt section that lets a wake resume a still-open outbound Eidoverse visit (#9791). */
-import { readPersistentMindHistory } from './agentRunEventLog.js';
+import { readPersistentMindHistory } from './agent/agentRunEventLog.js';
 import { isEidoverseVisitLive } from './eidoverseTravel.js';
 import { selectOpenVisitReceipts, renderVisitContinuationPrompt } from '../lib/persistentMindVisitReceipts.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';

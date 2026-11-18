@@ -63,7 +63,7 @@ vi.mock('./taskSchedule.js', () => ({
 }));
 vi.mock('./loops.js', () => ({ getLoops: mocks.getLoops, updateLoop: mocks.updateLoop }));
 vi.mock('./featureAgents.js', () => ({ getAllFeatureAgents: mocks.getAllFeatureAgents, updateFeatureAgent: mocks.updateFeatureAgent }));
-vi.mock('./agentPersonalities.js', () => ({
+vi.mock('./agent/agentPersonalities.js', () => ({
   getAllAgents: mocks.getAllAgents,
   getAgentById: mocks.getAgentById,
   updateAgent: mocks.updateAgent,

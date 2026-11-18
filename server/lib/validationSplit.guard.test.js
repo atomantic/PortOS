@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CATALOG_DIRS } from '../../scripts/lib-catalog.js';
 import * as validation from './validation.js';
 
 // Issue #5730: `server/AGENTS.md` requires that *all* inputs be validated —
@@ -28,11 +29,11 @@ describe('exported validation schemas are wired (#5730)', () => {
   const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/g;
   const EXPORTED_SCHEMA = /export\s+const\s+([A-Za-z0-9_$]+(?:Schema|Enum))\b/g;
 
-  // Domain subdirectories that hold validation modules (#16561 moved the music-video ones), so a
-  // move out of the flat directory never silently drops a module from this scan.
-  const VALIDATION_SUBDIRS = ['musicVideo'];
-  const moduleFiles = ['', ...VALIDATION_SUBDIRS.map((dir) => `${dir}/`)]
-    .flatMap((prefix) => readdirSync(path.join(libDir, prefix)).map((f) => `${prefix}${f}`))
+  // Keep validation coverage when a cataloged module moves into a domain directory.
+  const libCatalogDirs = CATALOG_DIRS.filter((dir) => dir === 'server/lib' || dir.startsWith('server/lib/'));
+  const moduleFiles = libCatalogDirs
+    .flatMap((dir) => readdirSync(path.join(repoRoot, dir)).map((file) =>
+      path.posix.relative('server/lib', `${dir}/${file}`)))
     .filter((f) => (f.endsWith('Validation.js') || f === 'validation.js') && !f.endsWith('.test.js'))
     .sort();
 
