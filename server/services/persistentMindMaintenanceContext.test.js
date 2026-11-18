@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({ root: null, scan: vi.fn(), actions: vi.fn(), queue: vi.fn(), save: vi.fn(), visibility: vi.fn(), reports: vi.fn() }));
-vi.mock('./cosState.js', () => ({ loadState: async () => mock.root, saveState: (...args) => mock.save(...args), withStateLock: fn => fn() }));
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => mock.root, saveState: (...args) => mock.save(...args), withStateLock: fn => fn() }));
 vi.mock('./developmentWatchdog.js', () => ({ runDevelopmentWatchdog: (...args) => mock.scan(...args), readDevelopmentWatchdogSnapshot: (...args) => mock.scan(...args) }));
 vi.mock('./userActions.js', () => ({ listUserActions: (...args) => mock.actions(...args) }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: (...args) => mock.queue(...args) }));

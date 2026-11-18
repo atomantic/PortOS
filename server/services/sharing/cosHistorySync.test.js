@@ -40,7 +40,7 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
 }));
 // cosAgentIndex is dynamic-imported by the receiver to merge the agentId→date index.
 // Spy it so the merge is observable AND can't write the real data/cos index.
-vi.mock('../cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockResolvedValue(0), invalidateArchivedRecord: vi.fn() }));
+vi.mock('../cos/cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockResolvedValue(0), invalidateArchivedRecord: vi.fn() }));
 
 import {
   buildCosHistoryManifest,
@@ -48,7 +48,7 @@ import {
 import { diffCosHistoryManifestAgainstLocal, syncCosHistoryFromPeer } from './peerCosSync.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
-import { addAgentArchivesToIndex, invalidateArchivedRecord } from '../cosAgentIndex.js';
+import { addAgentArchivesToIndex, invalidateArchivedRecord } from '../cos/cosAgentIndex.js';
 
 // A chunked body with no Content-Length that never ends; only the streaming
 // cap in readPeerBody can stop it.

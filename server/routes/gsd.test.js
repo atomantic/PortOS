@@ -37,7 +37,7 @@ vi.mock('../services/apps.js', () => ({
   getActiveApps: vi.fn(async () => mocks.activeApps),
 }));
 
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   addTask: mocks.addTask,
 }));
 

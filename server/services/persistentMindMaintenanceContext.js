@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
-import { loadState, saveState, withStateLock } from './cosState.js';
+import { loadState, saveState, withStateLock } from './cos/cosState.js';
 
 const WINDOW_MS = 86400000;
 const ACTION_LIMIT = 200;

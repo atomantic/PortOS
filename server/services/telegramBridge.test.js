@@ -26,7 +26,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 // a real state.json. Default 'execute' keeps the pre-existing forwarding tests
 // behaving as before.
 let mockMessagesMode = 'execute';
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   getDomainAutonomyMode: vi.fn(async () => mockMessagesMode)
 }));
 

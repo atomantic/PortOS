@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }))
 
 // Mock modules before import
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() }
 }))
 
@@ -49,7 +49,7 @@ vi.mock('./worktreeManager.js', () => ({
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0)
 }))
 
-vi.mock('./cosAgentRepository.js', () => ({ listStoredAgentStatuses: vi.fn(async () => []) }))
+vi.mock('./cos/cosAgentRepository.js', () => ({ listStoredAgentStatuses: vi.fn(async () => []) }))
 vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([])
 }))
@@ -79,8 +79,8 @@ import {
   initJobs
 } from './autonomousJobs.js'
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js'
-import { listStoredAgentStatuses } from './cosAgentRepository.js'
-import { cosEvents } from './cosEvents.js'
+import { listStoredAgentStatuses } from './cos/cosAgentRepository.js'
+import { cosEvents } from './cos/cosEvents.js'
 import { checkAndPrompt } from './autobiography.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees } from './worktreeManager.js'
 import { getActiveAgentIds } from './agent/agentState.js'

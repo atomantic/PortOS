@@ -14,7 +14,7 @@ import {
   agentActivityAgentQuerySchema,
   agentActivityStatsQuerySchema,
 } from '../lib/validation.js';
-import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cosValidation.js';
+import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cos/cosValidation.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
 import * as runEventLog from '../services/agent/agentRunEventLog.js';
 import * as runReconciler from '../services/agent/agentRunReconciler.js';

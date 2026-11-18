@@ -6,17 +6,17 @@ const f = vi.hoisted(() => ({
   request: vi.fn(), queue: vi.fn(), acknowledge: vi.fn(), mark: vi.fn(),
 }));
 
-vi.mock('./cosState.js', async original => ({ ...await original(),
+vi.mock('./cos/cosState.js', async original => ({ ...await original(),
   loadState: async () => f.state, isDaemonRunning: () => true,
   isImprovementEnabled: () => true, canQueueImprovementTasks: () => f.automatic,
 }));
-vi.mock('./cosTaskStore.js', async original => ({ ...await original(),
+vi.mock('./cos/cosTaskStore.js', async original => ({ ...await original(),
   getTaskById: async () => f.task, getCosTasks: async () => ({ tasks: [f.task] }),
 }));
-vi.mock('./cosTaskGenerator.js', async original => ({ ...await original(),
+vi.mock('./cos/cosTaskGenerator.js', async original => ({ ...await original(),
   queueEligibleImprovementTasks: (...args) => f.queue(...args),
 }));
-vi.mock('./cosAgentLifecycle.js', async original => ({ ...await original(),
+vi.mock('./cos/cosAgentLifecycle.js', async original => ({ ...await original(),
   getAgentRecord: async () => f.agent,
   markSwarmCleanupContinuationIssued: (...args) => f.mark(...args),
 }));
@@ -29,7 +29,7 @@ vi.mock('./taskSchedule.js', async original => ({ ...await original(),
   queuePerpetualRefill: (...args) => f.request(...args), acknowledgeSwarmCleanupRefill: (...args) => f.acknowledge(...args),
 }));
 
-import { perpetualRefillPlan } from './cos.js';
+import { perpetualRefillPlan } from './cos/cos.js';
 import { refillDeliveredCleanupSwarm } from './swarmCleanupRefill.js';
 const refill = (agentId, options) => refillDeliveredCleanupSwarm(agentId, { refillPlan: perpetualRefillPlan, ...options });
 

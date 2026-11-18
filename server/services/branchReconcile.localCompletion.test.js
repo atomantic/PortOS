@@ -10,15 +10,15 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-local-reconcile-'),
 }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => [] }));
+vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => [] }));
 vi.mock('./agent/agentState.js', async importOriginal => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
 
 import { PATHS } from '../lib/paths.js';
-import { resolveBranchReconcileBlock } from './cosTaskPreStepBlocks.js';
+import { resolveBranchReconcileBlock } from './cos/cosTaskPreStepBlocks.js';
 import * as schedule from './taskSchedule.js';
 import * as outcomes from './branchReconcileOutcome.js';
 

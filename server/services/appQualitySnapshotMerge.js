@@ -23,9 +23,9 @@ async function listSnapshotCheckouts(app, deps) {
 async function retireSnapshotTrees(app, deps, trees) {
   const { forceRemoveWorktreeDir, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const checkOwner = deps.checkSnapshotPublicationOwnership
-    || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
+    || (await import('./cos/cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
   const held = [];
   for (const tree of trees) {
     const ownership = async () => (await checkOwner({ appId: app.id, branch: 'portos/quality-snapshot', prUrl: tree.prUrl }))?.admitted === true;

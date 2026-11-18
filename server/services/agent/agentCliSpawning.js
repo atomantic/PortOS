@@ -14,11 +14,11 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from '../../lib/childProcess.js';
 import { homedir } from 'os';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
 // which puts it inside the facade's closure, so the facade is out of reach here.
-import { updateAgent, completeAgent, createAgentOutputBatcher, appendAgentOutputLines } from '../cosAgentLifecycle.js';
+import { updateAgent, completeAgent, createAgentOutputBatcher, appendAgentOutputLines } from '../cos/cosAgentLifecycle.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';

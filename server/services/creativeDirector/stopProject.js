@@ -105,7 +105,7 @@ export async function retireRuns(projectId, { runs = [], reason = 'Stopped', tas
   }
 
   // taskType MUST be 'internal' and status one generateTasksMarkdown supports (see recovery.js#recoverInFlightProjects).
-  const { updateTask } = await loadOrEmpty(() => import('../cosTaskStore.js'), 'cos', projectId);
+  const { updateTask } = await loadOrEmpty(() => import('../cos/cosTaskStore.js'), 'cos', projectId);
   if (updateTask) {
     for (const taskId of taskIds) {
       tasks += await tally(updateTask(taskId, {

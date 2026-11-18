@@ -10,7 +10,7 @@ vi.mock('./github.js', () => ({
   getPullRequestState: vi.fn().mockResolvedValue({ status: 'unavailable', state: null, detail: null }),
 }));
 const hasQueuedMergeHandoff = vi.hoisted(() => vi.fn());
-vi.mock('./cosMergeHandoff.js', () => ({ hasQueuedMergeHandoff }));
+vi.mock('./cos/cosMergeHandoff.js', () => ({ hasQueuedMergeHandoff }));
 vi.mock('./gitlab.js', () => ({
   findMergeRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
 }));

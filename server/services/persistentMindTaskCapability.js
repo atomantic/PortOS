@@ -25,8 +25,8 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { getActiveApps, getAppWorkTracker } from './apps.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
-import { loadState } from './cosState.js';
-import { addTask, firstLine, getCosTasks, getTaskById } from './cosTaskStore.js';
+import { loadState } from './cos/cosState.js';
+import { addTask, firstLine, getCosTasks, getTaskById } from './cos/cosTaskStore.js';
 import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
 import { listManagedBackendModels } from './localLlm.js';
 // listSelectableProviders, not listProviders: both reads below OFFER models

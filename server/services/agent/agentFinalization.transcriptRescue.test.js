@@ -37,7 +37,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: TEMP_ROOT });
 });
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => ({ id: 'agent-example', status: 'running', metadata: {} })),
   getAgentRecord: vi.fn(async () => ({ id: 'agent-example', status: 'running', metadata: {} })),
   updateAgent: vi.fn(async () => ({})),

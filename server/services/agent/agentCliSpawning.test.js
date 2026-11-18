@@ -12,8 +12,8 @@ import { join } from 'path';
 vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 
 // Heavy modules needed only by spawnDirectly — mock them all before importing.
-vi.mock('../cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('../cosAgentLifecycle.js', () => {
+vi.mock('../cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('../cos/cosAgentLifecycle.js', () => {
   const appendAgentOutput = vi.fn().mockResolvedValue(undefined);
   const appendAgentOutputLines = vi.fn().mockResolvedValue(undefined);
   // Faithful stand-in for the real debounced batcher: accumulates pushed lines
@@ -150,7 +150,7 @@ import { isOllamaBackedProvider } from '../providers.js';
 // Real module — the flag is a plain process-local boolean, so driving it
 // directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { existsSync } from 'fs';
 import { spawn } from '../../lib/childProcess.js';
 import { prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
@@ -533,7 +533,7 @@ describe('stream error containment', () => {
   beforeEach(async () => {
     fakeProcess = makeFakeProcess();
     // Fresh mocked module reference for each test so mockRejectedValueOnce is clean.
-    agentStateMocks = await import('../cosAgentLifecycle.js');
+    agentStateMocks = await import('../cos/cosAgentLifecycle.js');
     // Reset all implementations to their default "resolve" state before each test.
     agentStateMocks.updateAgent.mockResolvedValue(undefined);
     agentStateMocks.completeAgent.mockResolvedValue(undefined);

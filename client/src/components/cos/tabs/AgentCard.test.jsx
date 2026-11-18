@@ -1262,7 +1262,7 @@ describe('AgentCard branch posture badges', () => {
   });
 });
 
-// The listing bounds `metadata.taskDescription` — see server/lib/cosAgentListProjection.js.
+// The listing bounds `metadata.taskDescription` — see server/lib/cos/cosAgentListProjection.js.
 // The card must still be able to show the whole thing, without every row paying
 // for it on load.
 describe('AgentCard truncated task description', () => {

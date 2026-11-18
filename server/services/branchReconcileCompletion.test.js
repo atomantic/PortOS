@@ -1,24 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('./cosAgentLifecycle.js', () => ({ recordCleanupOutcome: vi.fn(async () => true), recordRepoCleanupRecovery: vi.fn(async () => true) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ recordCleanupOutcome: vi.fn(async () => true), recordRepoCleanupRecovery: vi.fn(async () => true) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: vi.fn() }));
 vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: vi.fn(() => new Set(['active'])) }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
+vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
 vi.mock('./branchReconcile.js', async (importOriginal) => ({
   ...await importOriginal(),
   reconcile: vi.fn(), buildActiveOwnerIds: vi.fn(() => new Set(['active'])),
 }));
 vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: vi.fn(), recordBranchReconcileOutcome: vi.fn() }));
 vi.mock('./repoCleanupObservation.js', () => ({ readCheckoutPathPresence: vi.fn(), readLocalBranchPresence: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn(() => [{ prBranch: 'claim/queued' }]) }));
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
-import { recordCleanupOutcome, recordRepoCleanupRecovery } from './cosAgentLifecycle.js';
+import { recordCleanupOutcome, recordRepoCleanupRecovery } from './cos/cosAgentLifecycle.js';
 import { getAppById } from './apps.js';
-import { getTaskById } from './cosTaskStore.js';
-import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { getTaskById } from './cos/cosTaskStore.js';
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { reconcile } from './branchReconcile.js';
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { settleBranchReconcileRun, settleRetirementReviewRun } from './branchReconcileCompletion.js';
 

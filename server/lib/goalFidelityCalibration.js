@@ -75,7 +75,7 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
   objective: Object.freeze({
     file: 'server/lib/goalFidelity.js',
     symbol: 'taskObjective',
-    describe: 'the OBJECTIVE block — `taskObjective()` in `server/lib/goalFidelity.js`, which composes the task\'s own `description` and `taskContextBlock(task)` (`server/lib/cosTaskPrompt.js`) within `MAX_OBJECTIVE_CHARS`, plus a marker for task screenshots whose separately bounded image content is passed to the local reviewer',
+    describe: 'the OBJECTIVE block — `taskObjective()` in `server/lib/goalFidelity.js`, which composes the task\'s own `description` and `taskContextBlock(task)` (`server/lib/cos/cosTaskPrompt.js`) within `MAX_OBJECTIVE_CHARS`, plus a marker for task screenshots whose separately bounded image content is passed to the local reviewer',
   }),
   diff: Object.freeze({
     file: 'server/services/agent/agentFinalization.js',

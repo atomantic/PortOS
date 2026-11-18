@@ -41,7 +41,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(),
   getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock('../taskTypeHooks.js', () => ({
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),
 }));
 
-import { getAgent, getAgentRecord, updateAgent, completeAgent } from '../cosAgentLifecycle.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from '../cos/cosAgentLifecycle.js';
 import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType } from '../taskTypeHooks.js';
 import {
   finalizeAgent,
@@ -68,7 +68,7 @@ import {
 } from './agentFinalization.js';
 
 
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn(async () => ({})),
   getTaskById: vi.fn(async () => null),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })),
@@ -86,14 +86,14 @@ vi.mock('./agentErrorAnalysis.js', async importOriginal => {
 });
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
-import { emitLog } from '../cosEvents.js';
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+import { emitLog } from '../cos/cosEvents.js';
 vi.mock('../taskSchedule.js', () => ({
   recordTaskTypeFailure: vi.fn(async () => null),
   recordTaskTypeSuccess: vi.fn(async () => null),
   recordRecommendedAudits: vi.fn(async () => null),
 }));
-import { updateTask, addTask, getTaskById } from '../cosTaskStore.js';
+import { updateTask, addTask, getTaskById } from '../cos/cosTaskStore.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
@@ -629,10 +629,10 @@ describe('recovery output-hook dispatch (#3182)', () => {
     'malformed-original', 'changed-during-inspection', 'sentinel-only', 'failed', 'interrupted', 'terminated', 'blocked', 'incomplete'])
     ('settles runtime verification only with %s evidence', async kind => {
       isProgrammaticIoTaskType.mockReturnValue(false);
-      const { getAllTasks } = await import('../cosTaskStore.js');
+      const { getAllTasks } = await import('../cos/cosTaskStore.js');
       const { bindCompletionTaskDispatch } = await import('./agentCompletionTaskHandoff.js');
       const { resolveRuntimeVerificationUpdate, sweepRuntimeVerifications } = await import('../runtimeVerification.js');
-      const state = await import('../cosState.js');
+      const state = await import('../cos/cosState.js');
       const github = await import('../github.js');
       const git = await import('../../lib/execGit.js');
       const boot = await import('../installState.js');

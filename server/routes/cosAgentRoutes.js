@@ -4,23 +4,23 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
-import { getTaskView } from '../services/cosTaskStore.js';
-import { clearCompletedAgents } from '../services/cosAgentArchive.js';
-import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cosAgentIndex.js';
-import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cosAgentFeedback.js';
-import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgentPrompt, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { getTaskView } from '../services/cos/cosTaskStore.js';
+import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
+import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
+import { getFeedbackStats, getPendingAgentFeedback, getPendingAgentFeedbackCount, getPendingAgentFeedbackPage, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
 // Lifecycle transitions go through the facade (#3450).
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { toAgentListItems } from '../lib/cosAgentListProjection.js';
+import { toAgentListItems } from '../lib/cos/cosAgentListProjection.js';
 import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js';
 import { getDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
 import { releasePublicationRequestSchema, releaseCandidateRequestSchema } from '../lib/releasePublication.js';
-import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cosClaimOwnership.js';
+import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cos/cosClaimOwnership.js';
 const router = Router();
 
 router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
@@ -66,7 +66,7 @@ const mergeHandoffSchema = z.object({
 });
 router.post('/merge-handoff', asyncHandler(async (req, res) => {
   const input = validateRequest(mergeHandoffSchema, req.body ?? {});
-  const { handoffPendingMerge } = await import('../services/cosMergeHandoff.js');
+  const { handoffPendingMerge } = await import('../services/cos/cosMergeHandoff.js');
   res.json(await handoffPendingMerge(input));
 }));
 
@@ -94,7 +94,7 @@ router.post('/claim-selection', asyncHandler(async (req, res) => {
     agentId: z.string().min(1).max(200),
     issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   }).strict(), req.body ?? {});
-  const { recordClaimSelection } = await import('../services/cosClaimSelection.js');
+  const { recordClaimSelection } = await import('../services/cos/cosClaimSelection.js');
   res.json(await recordClaimSelection(input));
 }));
 

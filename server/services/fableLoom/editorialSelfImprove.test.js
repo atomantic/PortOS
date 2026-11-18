@@ -5,7 +5,7 @@ const getDomainBudgetStatus = vi.hoisted(() => vi.fn(async () => ({ withinBudget
 const recordDomainUsage = vi.hoisted(() => vi.fn(async () => {}));
 const runStagedLLM = vi.hoisted(() => vi.fn());
 
-vi.mock('../cosTaskStore.js', () => ({ addTask: (...args) => addTask(...args) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ addTask: (...args) => addTask(...args) }));
 vi.mock('../domainUsage.js', () => ({
   getDomainBudgetStatus: (...args) => getDomainBudgetStatus(...args),
   recordDomainUsage: (...args) => recordDomainUsage(...args),

@@ -5,7 +5,7 @@
  */
 
 import { attachSseClient, broadcastSse, SSE_CLEANUP_DELAY_MS } from '../../../lib/sseUtils.js';
-import * as cosTaskStore from '../../cosTaskStore.js';
+import * as cosTaskStore from '../../cos/cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
 import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../../notifications.js';
 import { getSeries, updateSeries } from '../series.js';

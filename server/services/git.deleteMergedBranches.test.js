@@ -7,11 +7,11 @@ vi.mock('../lib/execGit.js', () => {
 vi.mock('./worktreeManager.js', () => ({ isGitLockError: vi.fn(), listWorktrees: vi.fn(async () => []) }));
 vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/repo', forgeAccount: 'example-account' } })) }));
 vi.mock('./branchReconcile.js', () => ({ cleanupMerged: vi.fn() }));
-vi.mock('./cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: vi.fn(async () => []) }));
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: vi.fn(async () => []) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: vi.fn(async () => null) }));
 import { execGit } from '../lib/execGit.js';
 import { cleanupMerged } from './branchReconcile.js';
-import { readClaimOwnershipAgents } from './cosClaimOwnershipState.js';
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnershipState.js';
 import { readBranchCompletionHold } from './branchCompletionPolicy.js';
 import { listWorktrees } from './worktreeManager.js';
 import { deleteMergedBranches, deleteMergedRemoteBranches } from './git.js';

@@ -14,7 +14,7 @@
  * config error the user must fix deliberately.
  */
 
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { updateProvider } from './providers.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import * as ollamaManager from './ollamaManager.js';

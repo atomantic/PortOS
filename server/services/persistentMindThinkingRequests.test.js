@@ -2,7 +2,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState } from '../lib/persistentMind.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 const mock = vi.hoisted(() => ({ root: null, provider: null, events: [] }));
-vi.mock('./cosState.js', () => ({ loadState: async () => mock.root,
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => mock.root,
   saveState: async (root) => { mock.root = JSON.parse(JSON.stringify(root)); }, withStateLock: async (fn) => fn() }));
 vi.mock('./providers.js', () => ({ getProviderById: async () => mock.provider }));
 vi.mock('./providerStatus.js', () => ({ isProviderAvailable: () => true, getProviderStatus: () => null }));

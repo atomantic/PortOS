@@ -25,7 +25,7 @@ export function armSystemActivityWatchers() {
 
 async function attachWatchers() {
   const { mediaJobEvents, listJobs } = await import('./mediaJobQueue/index.js');
-  const { cosEvents } = await import('./cosEvents.js');
+  const { cosEvents } = await import('./cos/cosEvents.js');
   let previousMind = null;
   const unsubs = [];
   const listen = (emitter, event, handler) => {

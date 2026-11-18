@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 const mock = vi.hoisted(() => ({ capabilities: {}, agentContext: {}, recipes: [], dispatch: vi.fn(), runPrompt: vi.fn(), mutations: [] }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: async () => ({
     config: { persistentMindCapabilities: mock.capabilities },
     persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } },
@@ -30,7 +30,7 @@ vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => moc
 vi.mock('./runner.js', () => ({ stopRun: vi.fn() }));
 vi.mock('./mindToolRecipes.js', async () => {
   const { validateMindToolRecipe } = await import('../lib/mindToolRecipes.js');
-  const validate = async (candidate) => validateMindToolRecipe(candidate, (await import('./cosToolRegistry.js')).getCosToolCatalog().tools).definition;
+  const validate = async (candidate) => validateMindToolRecipe(candidate, (await import('./cos/cosToolRegistry.js')).getCosToolCatalog().tools).definition;
   return {
     listRecipes: async () => ({ recipes: structuredClone(mock.recipes) }),
     getRecipeByName: async (name) => structuredClone(mock.recipes.find((recipe) => recipe.name === name)),
@@ -51,7 +51,7 @@ vi.mock('./mindToolRecipes.js', async () => {
     },
   };
 });
-import { executeCosToolCall, readCosToolRecipeCatalog, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cosToolRegistry.js';
+import { executeCosToolCall, readCosToolRecipeCatalog, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cos/cosToolRegistry.js';
 import { createPersistentMindTurnAdapter } from './persistentMindAdapter.js';
 const definition = (steps = 2) => ({
   schemaVersion: 1, name: 'recipe.project-check', purpose: 'Read a project check-in',

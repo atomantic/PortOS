@@ -35,21 +35,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const runnerHandlers = new Map();
 
-vi.mock('./cosRunnerClient.js', () => ({
+vi.mock('./cos/cosRunnerClient.js', () => ({
   onCosRunnerEvent: vi.fn((event, handler) => { runnerHandlers.set(event, handler); }),
   initCosRunnerConnection: vi.fn(),
   isRunnerAvailable: vi.fn().mockResolvedValue(true),
   isRunnerReachable: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn((event, handler) => { taskHandlers.set(event, handler); }) },
 }));
 
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agent/agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
 vi.mock('./agent/agentRunnerOutputBatchers.js', () => ({
   getRunnerOutputBatcher: vi.fn(),
   flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined),
@@ -59,19 +59,19 @@ vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mo
 vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
-vi.mock('./cosState.js', () => ({ loadState: vi.fn().mockResolvedValue({ agents: {} }) }));
+vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn().mockResolvedValue({ agents: {} }) }));
 // The real slot module is covered end-to-end in cos.test.js (resolvers, running
 // tally, reservations). Mocked here so this suite stays about the LISTENER's
 // wiring — hold vs spawn vs release — and doesn't drag promptRunner's provider
 // graph into a file that mocks providerStatus.
-vi.mock('./cosLocalEndpointSlots.js', () => ({
+vi.mock('./cos/cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointSpawnSlot: vi.fn().mockResolvedValue({ ok: true, release: vi.fn() }),
 }));
 // Same reason: the real gate reaches the app registry through agentPromptBuilder,
 // whose graph reads files at module load and pulls in cos.js. Its own decisions
 // (which statuses hold, which hosts are probed, the expiry) are covered directly
 // in cosForgeSpawnGate.test.js; here it is a seam for the LISTENER's wiring.
-vi.mock('./cosForgeSpawnGate.js', () => ({
+vi.mock('./cos/cosForgeSpawnGate.js', () => ({
   forgeSpawnHoldReason: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('./agent/agentOrchestrator.js', () => ({
@@ -83,15 +83,15 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 const taskHandlers = new Map();
 
 import { initSpawner } from './subAgentSpawner.js';
-import { cosEvents, emitLog } from './cosEvents.js';
-import { isRunnerReachable } from './cosRunnerClient.js';
+import { cosEvents, emitLog } from './cos/cosEvents.js';
+import { isRunnerReachable } from './cos/cosRunnerClient.js';
 import { spawnAgentForTask } from './agent/agentOrchestrator.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { setUseRunner } from './agent/agentState.js';
-import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
-import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
+import { acquireLocalEndpointSpawnSlot } from './cos/cosLocalEndpointSlots.js';
+import { forgeSpawnHoldReason } from './cos/cosForgeSpawnGate.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 const dispatch = (task) => taskHandlers.get('task:ready')(task);

@@ -9,10 +9,10 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * failed-task status resolution for CoS agents.
  */
 
-import { emitLog } from '../cosEvents.js';
-import { addTask, updateTask } from '../cosTaskStore.js';
-import { cosEvents } from '../cosEvents.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cosValidation.js';
+import { emitLog } from '../cos/cosEvents.js';
+import { addTask, updateTask } from '../cos/cosTaskStore.js';
+import { cosEvents } from '../cos/cosEvents.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { redactOutput } from '../../lib/commandSecurity.js';
 import { scrubSecretTokens } from '../../lib/secretText.js';
 import { redactPii } from '../../lib/piiRedactionPatterns.js';
@@ -34,7 +34,7 @@ import {
 import { investigationCircuitOpen, noteInvestigationFiled, readAllTasksFlat, recentInvestigationCreations } from '../investigationTaskProducer.js';
 import { PRIMARY_CHECKOUT_MUTATED_CATEGORY, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../../lib/primaryCheckoutGuard.js';
 import { isPortosSuppliedConfigKey } from '../../lib/providerModels.js';
-import { getConfig } from '../cosState.js';
+import { getConfig } from '../cos/cosState.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;

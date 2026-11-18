@@ -3,9 +3,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // maybeCreateInvestigationTask → createInvestigationTask → addTask does real
 // store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
 // getAllTasks feeds the fingerprint dedup scan (#2615).
-vi.mock('../cosState.js', () => ({ getConfig: vi.fn().mockResolvedValue({ autoApproveInvestigations: true }) }));
+vi.mock('../cos/cosState.js', () => ({ getConfig: vi.fn().mockResolvedValue({ autoApproveInvestigations: true }) }));
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn().mockResolvedValue('fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
-vi.mock('../cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
 import { analyzeAgentFailure, COMPLETION_REASON_ANALYSES, ERROR_PATTERNS, SNIPPET_RAW_MAX_CHARS, resolveFailedTaskDecision, resolveTypeFailureSignal, maybeCreateInvestigationTask, createInvestigationTask, redactFailureSnippet, endsAwaitingUserInput, AWAITING_INPUT_TAIL_CHARS, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 import { INVESTIGATION_CIRCUIT_WINDOW_MS, INVESTIGATION_CIRCUIT_MAX_CREATIONS } from '../../lib/investigationTasks.js';
@@ -21,8 +21,8 @@ import { PII_PATTERNS } from '../../lib/piiRedactionPatterns.js';
 import { detectImmediateFallbackSignal } from '../../lib/aiToolkit/errorDetection.js';
 import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from '../taskLearning/metrics.js';
-import { getConfig } from '../cosState.js';
-import { addTask, updateTask, getAllTasks } from '../cosTaskStore.js';
+import { getConfig } from '../cos/cosState.js';
+import { addTask, updateTask, getAllTasks } from '../cos/cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/validation.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks } from '../../lib/taskParser.js';
 

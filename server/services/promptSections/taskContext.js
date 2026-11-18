@@ -4,7 +4,7 @@
 
 import { join, basename } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
-import { TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../lib/cosTaskPrompt.js';
+import { TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../lib/cos/cosTaskPrompt.js';
 
 /**
  * Build a compaction instruction section for retries after context-limit failures.

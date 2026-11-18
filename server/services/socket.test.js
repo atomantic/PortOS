@@ -32,7 +32,7 @@ vi.mock('./pm2.js', () => ({
   buildEnv: vi.fn((pm2Home) => ({ PATH: '/usr/bin', ...(pm2Home ? { PM2_HOME: pm2Home } : {}) }))
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), updateApp: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.

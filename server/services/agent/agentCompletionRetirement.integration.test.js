@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../../lib/gitTestRepo.js';
 import { execGit } from '../../lib/execGit.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
-import { storedForm } from '../../lib/cosTaskRows.js';
+import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import { PREGATE_REPORT_PATH, writePregateReport } from '../../../scripts/lib/pregateReport.js';
 const fixture = vi.hoisted(() => ({ root: null, app: null, forge: null, task: null, agents: {}, schedule: null, raceTaskEdit: false, inventoryAlias: false }));
 async function persistTask() {
@@ -24,9 +24,9 @@ vi.mock('../worktreeManager.js', async original => {
 });
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'fixture-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../claimDisposition.js', () => ({ verifyCleanupClaimDisposition: async () => ({ status: 'verified', issues: [{ issue: 41, disposition: 'delivered' }, { issue: 42, disposition: 'operator-blocked' }] }) }));
-vi.mock('../cos.js', () => ({}));
+vi.mock('../cos/cos.js', () => ({}));
 vi.mock('../domainUsage.js', () => ({ recordDomainUsage: async () => {} }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
 vi.mock('../apps.js', () => ({ getAppById: async id => id === fixture.app?.id ? fixture.app : null }));
 vi.mock('../heldCheckoutRecovery.js', async original => ({ ...await original(), assertAutomaticRetirementAllowed: async () => {} }));
 vi.mock('../branchReconcile.js', async original => ({ ...await original(), listRemoteHeads: async () => new Map() }));
@@ -35,7 +35,7 @@ vi.mock('../prProbe.js', async original => ({ ...await original(), probePrForBra
   prUrl: fixture.forges[branch]?.prUrl || null, prNumber: fixture.forges[branch] ? 42 : null, cli: 'gh' } : ({ readable: true,
   prState: fixture.forge ? 'MERGED' : 'OPEN', prUrl: 'https://github.com/example/repo/pull/42', prNumber: 42, cli: 'gh' }) }));
 vi.mock('../prWatcher.js', () => ({ readPendingMergePrs: () => [] }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   getTaskById: async () => JSON.parse(await readFile(join(fixture.root, 'task.json'), 'utf8')),
   getAllTasks: async () => ({ user: { tasks: [fixture.task] }, cos: { tasks: [] } }),
   updateTask: async (_id, patch, _type, { expectedStatus, expectedMetadata } = {}) => {
@@ -51,7 +51,7 @@ vi.mock('../cosTaskStore.js', () => ({
     await persistTask(); return fixture.task;
   }, addTask: async () => { throw new Error('unexpected cognitive recovery'); },
 }));
-vi.mock('../cosState.js', async () => ({
+vi.mock('../cos/cosState.js', async () => ({
   AGENTS_DIR: join((await import('../../lib/paths.js')).PATHS.cos, 'agents'),
   loadState: async () => ({ agents: fixture.agents, stats: {} }),
   saveState: async state => { fixture.agents = state.agents; await writeFile(join(fixture.root, 'agents-state.json'), JSON.stringify(state)); },
@@ -64,11 +64,11 @@ vi.mock('../taskScheduleStore.js', async original => ({ ...await original(), loa
 }));
 const { verifyAgentRepoState, sweepRepoStateVerifications, resumeDeferredRepoStateVerifications } = await import('./agentRepoStateVerification.js');
 const { bindCompletionTaskDispatch, prepareCompletionTaskHandoff } = await import('./agentCompletionTaskHandoff.js');
-const { completeAgent, getAgentRecord } = await import('../cosAgentLifecycle.js');
+const { completeAgent, getAgentRecord } = await import('../cos/cosAgentLifecycle.js');
 const { getBranchReconcileOutcome } = await import('../branchReconcileOutcome.js');
 const { activeAgents } = await import('./agentState.js');
 const { PATHS } = await import('../../lib/paths.js');
-const { cosEvents } = await import('../cosEvents.js');
+const { cosEvents } = await import('../cos/cosEvents.js');
 afterAll(cleanupTempDataRoots);
 let scratch;
 afterEach(async () => { fixture.forges = null; fixture.inventoryAlias = false; activeAgents.clear(); if (scratch) await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); });
@@ -189,7 +189,7 @@ describe('completion to in-place retirement (real Git and persisted service stat
     if (scenario === 'concurrent-task-edit') fixture.raceTaskEdit = true;
     if (scenario === 'claim-reacquired') {
       // prepareAgentSpawn reclaims before registration or a fresh spawn stamp.
-      const { buildClaim } = await import('../cosTaskClaim.js');
+      const { buildClaim } = await import('../cos/cosTaskClaim.js');
       Object.assign(fixture.task.metadata, buildClaim('fixture-instance'));
       await writeFile(join(fixture.root, 'task.json'), JSON.stringify(fixture.task));
     }

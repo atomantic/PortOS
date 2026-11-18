@@ -6,15 +6,15 @@ import { materializeGitRepo } from '../../lib/gitTestRepo.js';
 import { execGit } from '../../lib/execGit.js';
 
 const fixture = vi.hoisted(() => ({ recordPath: null, runRoot: null, failWrite: false, indexReady: true }));
-vi.mock('../cosAgentIndex.js', () => ({
+vi.mock('../cos/cosAgentIndex.js', () => ({
   loadAgentIndex: async () => { fixture.indexReady = true; return new Map(); },
   getAgentDir: id => join(fixture.runRoot, ...(fixture.indexReady ? [] : ['unindexed']), id),
 }));
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
-vi.mock('../cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
+vi.mock('../cos/cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   getAgentRecord: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   updateAgent: vi.fn(),
@@ -43,8 +43,8 @@ import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agent
 import { storeCompletionData, readCompletionData } from './agentCompletionData.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { handleCreativeDirectorCompletion } from '../creativeDirector/completionHook.js';
-import { updateTask, addTask, getTaskById } from '../cosTaskStore.js';
-import { updateAgent } from '../cosAgentLifecycle.js';
+import { updateTask, addTask, getTaskById } from '../cos/cosTaskStore.js';
+import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { settleAuditFindings } from '../auditFindings.js';
 
 describe('durable post-ingestion cleanup replay', () => {

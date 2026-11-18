@@ -70,7 +70,7 @@ async function failWithGitConflict({ app, repoPath, pullResult, stepId, emit, st
       + `stashed work, then leave the checkout clean on origin/${branch} so the update can be re-run.`,
     position: 'top'
   };
-  const created = await import('./cosTaskStore.js')
+  const created = await import('./cos/cosTaskStore.js')
     .then(({ addTask }) => addTask(task, 'internal'))
     .catch((err) => {
       console.error(`❌ Failed to queue conflict-resolution task for ${label}: ${err.message}`);

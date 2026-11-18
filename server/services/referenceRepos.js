@@ -38,7 +38,7 @@ import {
   getAppById,
   updateApp,
 } from './apps.js';
-import { DEFAULT_REVIEWER } from '../lib/cosValidation.js';
+import { DEFAULT_REVIEWER } from '../lib/cos/cosValidation.js';
 import { clampText, fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { resolveAppWorkTracker, isFileTracker, formatTrackerInstructions } from '../lib/workTracker.js';
 import { FILE_ISSUES_DELIVERY_SETTINGS } from '../lib/auditCatalog.js';
@@ -700,7 +700,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
   }
   if (!app) return { queued: false, reason: 'app-not-found' };
 
-  const { addTask } = await import('./cosTaskStore.js');
+  const { addTask } = await import('./cos/cosTaskStore.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
 
   const referenceDataBlock = formatReferenceForPrompt(ref, snapshot);
@@ -755,7 +755,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
       ...(!isFileTracker(workTracker.resolved) && FILE_ISSUES_DELIVERY_SETTINGS),
       // A multi-line payload here is the agent PROMPT, not the one-line human
       // note — `cosTaskStore.addTask` routes it to `metadata.prompt` on write
-      // (#4153, server/lib/cosTaskPrompt.js).
+      // (#4153, server/lib/cos/cosTaskPrompt.js).
       context: fullPrompt,
     },
     autoApproved: true,

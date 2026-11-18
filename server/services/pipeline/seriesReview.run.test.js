@@ -49,7 +49,7 @@ vi.mock('./manuscriptReview.js', partial({ getReview: vi.fn(), seedReviewFromFin
 // The fix runner's autonomy gate. An empty config leaves the cos domain off, so
 // `runSeriesFix` rejects immediately and writes nothing — the coalescing tests
 // below only care about which starts reach a run at all.
-vi.mock('../cosState.js', partial({ loadState: vi.fn(async () => ({ config: {} })) }));
+vi.mock('../cos/cosState.js', partial({ loadState: vi.fn(async () => ({ config: {} })) }));
 
 const { judgeFoundation } = await import('./foundationJudge.js');
 const { checkSeriesCanonReadiness } = await import('./canonReadiness.js');

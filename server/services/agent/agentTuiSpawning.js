@@ -26,8 +26,8 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { join } from 'path';
 import * as shellService from '../shell.js';
-import { emitLog } from '../cosEvents.js';
-import { updateAgent } from '../cosAgentLifecycle.js';
+import { emitLog } from '../cos/cosEvents.js';
+import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { createOutputSpooler } from '../agentTuiSpawning/outputSpooler.js';
 import { resolveErrorAnalysis } from '../agentTuiSpawning/finalizeHelpers.js';
 import { createTuiSessionController } from '../agentTuiSpawning/sessionController.js';
@@ -47,7 +47,7 @@ import { resolvePrOwnership, PR_OPENED_BY } from '../../lib/slashdoInvocation.js
 import { mergeGateOwed } from '../../lib/mergeGateContract.js';
 import { probePrForBranch } from '../prProbe.js';
 import * as git from '../git.js';
-import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cosRunnerClient.js';
+import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import { providerSuppliesGithubToken } from '../../lib/providerModels.js';
 import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { agentGuardEnv } from '../../lib/agentGuard/index.js';

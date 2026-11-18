@@ -1,7 +1,7 @@
 // The task kinds whose prompts own their own claim/<item> worktree and
 // push/PR/MR/review lifecycle, declared ONCE for both sides of the contract:
 //
-//   - WRITE side (`services/cosTaskGenerator.js`) stamps `metadata.claimFlow`
+//   - WRITE side (`services/cos/cosTaskGenerator.js`) stamps `metadata.claimFlow`
 //     on a queued task.
 //   - READ side (`services/agent/agentPromptBuilder.js` → `isClaimFlowTask`) decides
 //     a run's claim posture (prompt shape, `configClaimFlow`,

@@ -4,9 +4,9 @@ import { persistentMindMaintainerSchema } from '../lib/persistentMindMaintainer.
  */
 
 import { Router } from 'express';
-import { getConfig } from '../services/cosState.js';
-import { RETIRED_CONFIG_KEYS } from '../lib/cosRetiredConfigKeys.js';
-import { getStatus, pause, resume, start, stop, updateConfig } from '../services/cos.js';
+import { getConfig } from '../services/cos/cosState.js';
+import { RETIRED_CONFIG_KEYS } from '../lib/cos/cosRetiredConfigKeys.js';
+import { getStatus, pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';

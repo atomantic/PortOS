@@ -439,7 +439,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // Purge leases its intent manifest and both unlinks (file-primary records).
     id: 'cos-recording-compression-and-purge',
     status: 'admitted',
-    modules: ['services/cosAgentStorage.js'],
+    modules: ['services/cos/cosAgentStorage.js'],
   },
   {
     // Completion, zombie/stale archival and deletion pair moved/removed trees
@@ -447,7 +447,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // precedes the state lock. Legacy layout migration owns the same pair.
     id: 'cos-agent-archive-and-index-publication',
     status: 'admitted',
-    modules: ['services/cosAgentLifecycle.js', 'services/cosAgentArchive.js', 'services/cosAgentIndex.js'],
+    modules: ['services/cos/cosAgentLifecycle.js', 'services/cos/cosAgentArchive.js', 'services/cos/cosAgentIndex.js'],
   },
   {
     // Versioned manifest plus the compiledManifest/history pointers in the

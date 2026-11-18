@@ -36,7 +36,7 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
       'pendingMergeGuardTarget', 'pendingMergeGuardLaunchEvidence', 'resumedFromAgentId', 'resumeWorktreePath',
       'existingBranch', 'deliveryRecovery'].some(key => meta[key])) return false;
   const { isDeepStrictEqual } = await import('node:util');
-  const { getTaskById, updateTask } = await import('./cosTaskStore.js');
+  const { getTaskById, updateTask } = await import('./cos/cosTaskStore.js');
   const fresh = await getTaskById(input.id);
   if (!fresh || !['pending', 'approved'].includes(fresh.status)
     || fresh.taskType !== input.taskType || !isDeepStrictEqual(fresh.metadata, meta)
@@ -50,14 +50,14 @@ export async function settleMergedReviewFollowUpBeforeSpawn(input) {
   // task/app and live ownership are re-read under it immediately before CAS.
   const proof = await verifyMergedReviewFollowUp(fresh, repoPath).catch(() => null);
   if (!proof) return false;
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   return withClaimOwnershipLock(async () => {
     const current = await getTaskById(fresh.id);
     if (!current || current.status !== fresh.status || current.taskType !== fresh.taskType
       || Object.entries(expectedTask).some(([key, value]) => !isDeepStrictEqual(current[key], value))) return 'skip';
     const currentApp = await getAppById(meta.app);
     if (currentApp?.id !== meta.app || currentApp.repoPath !== repoPath) return 'skip';
-    const { loadState } = await import('./cosState.js');
+    const { loadState } = await import('./cos/cosState.js');
     const { hasActiveTaskOwner } = await import('./agent/agentState.js');
     if (hasActiveTaskOwner(fresh.id, (await loadState()).agents)) return 'skip';
     const result = await updateTask(fresh.id, { status: 'completed', metadata: {

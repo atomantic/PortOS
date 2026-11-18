@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
   emitLog: vi.fn()
 }))
 
-// fileUtils mock: include every named export consumed by ./cosState.js too,
-// so vi.importActual('./cosState.js') below resolves cleanly.
+// fileUtils mock: include every named export consumed by ./cos/cosState.js too,
+// so vi.importActual('./cos/cosState.js') below resolves cleanly.
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(),
@@ -98,8 +98,8 @@ vi.mock('./notifications.js', () => ({
 
 // Use the real isImprovementEnabled implementation; only stub loadState.
 // Mocking the helper would let regressions in production logic slip through.
-vi.mock('./cosState.js', async () => {
-  const actual = await vi.importActual('./cosState.js')
+vi.mock('./cos/cosState.js', async () => {
+  const actual = await vi.importActual('./cos/cosState.js')
   return {
     ...actual,
     loadState: vi.fn().mockResolvedValue({ config: { improvementEnabled: true } })
@@ -117,7 +117,7 @@ import {
   recordHeldCheckoutRetirement,
   recordWorkspaceCheckoutRetirement
 } from './branchReconcileOutcome.js'
-import { cosEvents, emitLog } from './cosEvents.js'
+import { cosEvents, emitLog } from './cos/cosEvents.js'
 import { recordUserAction } from './userActions.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
@@ -137,7 +137,7 @@ import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
 import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
 import { NO_CHANGE_SCHEDULED_TYPES } from '../lib/noChangeCompletion.js'
 
-import { loadState } from './cosState.js'
+import { loadState } from './cos/cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { writeFile } from 'fs/promises'

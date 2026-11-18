@@ -16,8 +16,8 @@
  *  - Nothing here can fail a run or request beyond its own result.
  */
 
-import { updateTask } from './cosTaskStore.js';
-import { getAgents, updateAgent } from './cosAgentLifecycle.js';
+import { updateTask } from './cos/cosTaskStore.js';
+import { getAgents, updateAgent } from './cos/cosAgentLifecycle.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { SUPERVISED_INVESTIGATION_DELIVERY, investigationOutcome } from '../lib/investigationTasks.js';

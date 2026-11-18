@@ -5,12 +5,12 @@
  */
 
 import { Router } from 'express';
-import { getAgentDates, getAgentsByDate } from '../../services/cosAgentIndex.js';
-import { getAgents } from '../../services/cosAgentLifecycle.js';
+import { getAgentDates, getAgentsByDate } from '../../services/cos/cosAgentIndex.js';
+import { getAgents } from '../../services/cos/cosAgentLifecycle.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { limitQuerySchema } from '../../lib/queryValidation.js';
-import { toAgentListItems } from '../../lib/cosAgentListProjection.js';
+import { toAgentListItems } from '../../lib/cos/cosAgentListProjection.js';
 import { parsePagination } from '../../lib/validation.js';
 import { loadApp } from './shared.js';
 

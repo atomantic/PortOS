@@ -32,14 +32,14 @@ import { normalizeTaskOutcome, resolveTaskOutcome } from '../../lib/agent/agentO
 import { execGit } from '../../lib/execGit.js';
 import { outsideGitMutationLifetime } from '../../lib/gitMutationLifetime.js';
 import { PATHS, safeJSONParse, tryReadFile, readFileTail } from '../../lib/fileUtils.js';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
-import { getAgentsWithArchive } from '../cosAgentHistory.js';
-import { getAgent, getAgentRecord, updateAgent, completeAgent } from '../cosAgentLifecycle.js';
-import { updateTask } from '../cosTaskStore.js';
+import { getAgentsWithArchive } from '../cos/cosAgentHistory.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from '../cos/cosAgentLifecycle.js';
+import { updateTask } from '../cos/cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../../lib/autonomousJobTask.js';
 import { getActiveProvider } from '../providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from '../providerStatus.js';

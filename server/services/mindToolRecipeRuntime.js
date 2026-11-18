@@ -1,6 +1,6 @@
 /** Mind-only recipe catalog and bounded orchestration over semantic reads. */
 import { z } from 'zod';
-import { COS_TOOL_SCHEMA_VERSION, COS_TOOL_CALL_LIMITS, providerToolName } from '../lib/cosToolContracts.js';
+import { COS_TOOL_SCHEMA_VERSION, COS_TOOL_CALL_LIMITS, providerToolName } from '../lib/cos/cosToolContracts.js';
 import { validateMindToolRecipe, resolveMindToolRecipeBinding } from '../lib/mindToolRecipes.js';
 import { zodToOpenApiSchema } from '../lib/apiContractSchemas.js';
 import {
@@ -96,7 +96,7 @@ export async function readMindRecipeTools(capabilities, primitives) {
 }
 
 export async function currentMindAuthority(authority) {
-  const { loadState } = await import('./cosState.js');
+  const { loadState } = await import('./cos/cosState.js');
   const root = await loadState();
   return { ...authority, capabilities: root.config?.persistentMindCapabilities || {} };
 }
@@ -129,7 +129,7 @@ export async function executeRecipeManagement(tool, args, context) {
 }
 
 export async function executeRecipe(tool, inputs, context, authority) {
-  const { executeCosToolCall, getCosToolCatalog } = await import('./cosToolRegistry.js');
+  const { executeCosToolCall, getCosToolCatalog } = await import('./cos/cosToolRegistry.js');
   const { id: recipeId, activeRevision: revision, definition } = tool.adapter.recipe;
   const scope = tool.adapter.scope || authority?.scope || 'mind';
   const accessCapability = recipeAccessCapability(scope);

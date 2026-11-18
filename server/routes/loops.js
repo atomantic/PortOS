@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import * as loopsService from '../services/loops.js';
-import { createLoopSchema } from '../lib/cosValidation.js';
+import { createLoopSchema } from '../lib/cos/cosValidation.js';
 
 // updateLoop accepts a subset of createLoopSchema fields (name/prompt/interval/cwd/providerId/timeout)
 const updateLoopSchema = createLoopSchema.pick({

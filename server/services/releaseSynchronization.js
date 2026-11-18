@@ -15,8 +15,8 @@ import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SY
   releaseSynchronizationReset, releaseSynchronizationResetSchema } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
-import { storedForm } from '../lib/cosTaskRows.js';
-import { cosEvents } from './cosEvents.js';
+import { storedForm } from '../lib/cos/cosTaskRows.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const queue = createFileWriteQueue();
@@ -125,7 +125,7 @@ export async function observeReleaseDeliveries(task, { ignoreAgentId = null } = 
 }
 
 async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const agents = await readClaimOwnershipAgents();
   if (!agents) return false;
   const { getActiveAgentIds } = await import('./agent/agentState.js');
@@ -149,7 +149,7 @@ async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
     if (scope !== false) relevantRunners.push(agent);
   }
   if (!observed && [...relevantRunners, ...owners].some(runnerBacked)) {
-    const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
+    const { getActiveAgentsFromRunner } = await import('./cos/cosRunnerClient.js');
     const running = await getActiveAgentsFromRunner().catch(() => null);
     if (!Array.isArray(running) || running.some(agent => !agent || typeof agent.id !== 'string')) return false;
     const { runnerEntryShieldsRunningRecord } = await import('../lib/runnerAgentLiveness.js');
@@ -170,7 +170,7 @@ async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
     let task;
     if (!type) {
       if (!agent.taskId) return false;
-      const { getTaskById } = await import('./cosTaskStore.js');
+      const { getTaskById } = await import('./cos/cosTaskStore.js');
       task = await getTaskById(agent.taskId);
       type = currentTaskTypeName(task?.metadata?.analysisType || task?.metadata?.selfImprovementType);
       if (!type && task?.taskType !== 'user') return false;
@@ -255,7 +255,7 @@ export async function verifyIndependentReleaseDelivery(identity, number) {
   const ownerState = await releaseOwnersIdle(initial);
   if (!ownerState) refuse('A release or synchronization is still active or ownership is unavailable');
   const updated = await queue(async () => {
-    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
     return withClaimOwnershipLock(async () => {
       const entry = (await readOutbox()).publications[identity];
       if (!entry || !entry.registeredAt || !entry.synchronization || releaseSynchronizationReset(entry)
@@ -276,7 +276,7 @@ export async function verifyIndependentReleaseDelivery(identity, number) {
 /** Retire one stale checkpoint; retain its original verdict and publication. */
 export function resetReleaseSynchronization(identity, reason, actor) {
   return queue(async () => {
-    const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+    const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
     return withClaimOwnershipLock(async () => {
       const entry = (await readOutbox()).publications[identity];
       if (!entry) refuse('Release synchronization was not found');
@@ -296,7 +296,7 @@ export function resetReleaseSynchronization(identity, reason, actor) {
       if (!repo) refuse('Release repository is unavailable');
       if (agents.some(agent => isTruthyMeta(agent.metadata?.useRunner)
         || ['runner', 'runner-tui'].includes(agent.metadata?.executionMode))) {
-        const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
+        const { getActiveAgentsFromRunner } = await import('./cos/cosRunnerClient.js');
         const running = await getActiveAgentsFromRunner();
         if (!Array.isArray(running) || running.some(agent => !agent || typeof agent.id !== 'string')) refuse('Release runner ownership is unavailable or active');
         const { runnerEntryShieldsRunningRecord } = await import('../lib/runnerAgentLiveness.js');
@@ -310,7 +310,7 @@ export function resetReleaseSynchronization(identity, reason, actor) {
         if (ownsCheckpoint) refuse('A release or synchronization is still active');
         let type = currentTaskTypeName(agent.metadata?.taskAnalysisType || agent.metadata?.analysisType || agent.metadata?.selfImprovementType);
         if (!type) {
-          const { getTaskById } = await import('./cosTaskStore.js');
+          const { getTaskById } = await import('./cos/cosTaskStore.js');
           const task = agent.taskId && await getTaskById(agent.taskId);
           if (!task) refuse('Active agent type is unavailable');
           type = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
@@ -351,7 +351,7 @@ export async function retireReleaseSynchronizationForDeletion(identity, actor) {
 }
 
 async function parkRetiredContinuation(entry) {
-  const { getTaskById, updateTask } = await import('./cosTaskStore.js');
+  const { getTaskById, updateTask } = await import('./cos/cosTaskStore.js');
   const task = await getTaskById(entry.task.id);
   if (!task || task.status !== 'pending') return;
   const result = await updateTask(task.id, { status: 'blocked', metadata: {
@@ -387,7 +387,7 @@ The post-release quality snapshot is a separate development update, never part o
 }
 
 async function newEntry(agent, publication) {
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const { getCodeReviewDefaults, resolveReviewLoopOptions } = await import('./codeReview.js');
   const { getAppById } = await import('./apps.js');
@@ -429,7 +429,7 @@ async function newEntry(agent, publication) {
 }
 
 async function registerEntry(entry) {
-  const { addTask, getTaskById } = await import('./cosTaskStore.js');
+  const { addTask, getTaskById } = await import('./cos/cosTaskStore.js');
   if (!hasFrozenPrDisposition(entry.task.metadata)) {
     throw new ServerError('Release synchronization review policy was not captured; retain the original task and recover from historical delivery evidence (docs/VERSIONING.md)',
       { status: 409, code: 'RELEASE_SYNC_REVIEW_POLICY_UNVERIFIED' });
@@ -562,7 +562,7 @@ async function verifyEntry(entry, agents) {
 
 async function emitReleaseSynchronization(entry, agents, { suppressCompletionWake = false } = {}) {
   const { projectTaskReleaseMilestones, projectAgentReleaseMilestones } = await import('./releaseSynchronizationProjection.js');
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
 
   const continuationTask = await getTaskById(entry.task.id).catch(() => null);
   const projectedContinuation = continuationTask ? projectTaskReleaseMilestones(continuationTask, entry) : null;

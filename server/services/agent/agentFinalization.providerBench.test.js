@@ -38,14 +38,14 @@ vi.mock('../github.js', () => ({
 }));
 vi.mock('../gitlab.js', () => ({ findMergeRequestForBranch: vi.fn() }));
 vi.mock('../git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
   completeAgent: vi.fn(async () => null),
 }));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})) }));
 
 const getActiveProviderMock = vi.fn(async () => null);
 vi.mock('../providers.js', () => ({ getActiveProvider: (...a) => getActiveProviderMock(...a) }));

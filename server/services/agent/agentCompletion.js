@@ -6,13 +6,13 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * and direct mode (spawnDirectly): memory extraction and app cooldown.
  */
 
-import { updateAgent } from '../cosAgentLifecycle.js';
+import { updateAgent } from '../cos/cosAgentLifecycle.js';
 // agentCompletion.test.js's getConfig stub must name cosState.js: that is the
 // declaring module, and a stub on any other specifier intercepts nothing (the
 // suite would silently read the running install's config).
-import { getConfig } from '../cosState.js';
+import { getConfig } from '../cos/cosState.js';
 import { startAppCooldown, updateAppActivity } from '../appActivity.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { extractAndStoreMemories } from '../memoryExtractor.js';
 import { isRecoveryTask } from '../recoveryTasks.js';
 import { finalizeMalwareScan } from '../malwareScanReports.js';

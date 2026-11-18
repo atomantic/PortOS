@@ -483,7 +483,7 @@ export async function getCodeReviewDefaults() {
 
 /**
  * Reviewer-loop option resolver used by `server/services/agent/agentCompletionCleanup.js`,
- * `server/services/cosMergeHandoff.js`, `server/services/developmentWatchdog.js`,
+ * `server/services/cos/cosMergeHandoff.js`, `server/services/developmentWatchdog.js`,
  * and `server/routes/apps/pullRequests.js`: merges per-task metadata
  * with the user's Code Review Defaults, returning `{ reviewers, reviewStopMode,
  * reviewerApplies }` in the exact shape `cleanupAgentWorktree` expects.

@@ -13,8 +13,8 @@ vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn() }));
-vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
+vi.mock('./cos/cos.js', () => ({ forceSpawnTask: vi.fn() }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 
 const { generateTaskFromFeatureAgent, getDueFeatureAgents } = await import('./featureAgents.js');

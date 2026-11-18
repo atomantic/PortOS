@@ -233,7 +233,7 @@ const world = new Proxy(rawWorld, {
   },
 });
 const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
-const { executeCosToolCall, getCosToolCatalog, __testing: semanticTesting } = await import('./cosToolRegistry.js');
+const { executeCosToolCall, getCosToolCatalog, __testing: semanticTesting } = await import('./cos/cosToolRegistry.js');
 const { eidoverseInspectSceneOutputSchema } = await import('../lib/eidoverseSceneInspection.js');
 
 beforeEach(async () => {

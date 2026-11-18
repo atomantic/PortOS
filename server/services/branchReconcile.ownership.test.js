@@ -62,7 +62,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
   ...await importOriginal(), loadSchedule: async () => injected.schedule,
   updateSchedule: async mutate => (await mutate(injected.schedule)).result,
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
     agents: injected.owners && Object.fromEntries(injected.owners.map(agent => [agent.id, agent])) }),
 }));

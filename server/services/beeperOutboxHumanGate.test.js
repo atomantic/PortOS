@@ -28,7 +28,7 @@ import { describe, it, expect } from 'vitest';
 // module collection it is not budgeted at all. Both values are plain constants
 // once loaded, so nothing here needs a per-test instance.
 // Guarded by `lib/importScoping.test.js`.
-const { getCosToolCatalog } = await import('./cosToolRegistry.js');
+const { getCosToolCatalog } = await import('./cos/cosToolRegistry.js');
 const { PERSISTENT_MIND_TOOL_BOUNDARIES } = await import('../lib/persistentMindCapabilities.js');
 
 describe('beeper outbox has no agent-initiated send path (#36)', () => {

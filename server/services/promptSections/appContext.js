@@ -5,7 +5,7 @@
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { getActiveProvider } from '../providers.js';
 import * as jiraService from '../jira.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 
 export { getAppWorkspace, getAppDataForTask } from '../agent/agentAppWorkspace.js';
 

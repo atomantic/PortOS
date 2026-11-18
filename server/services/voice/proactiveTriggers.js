@@ -34,7 +34,7 @@
 // out to that `.catch` rather than being swallowed.
 
 import { errorEvents } from '../../lib/errorHandler.js';
-import { cosEvents } from '../cosEvents.js';
+import { cosEvents } from '../cos/cosEvents.js';
 import { getNotifications, notificationEvents } from '../notifications.js';
 import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
 import { getVoiceConfig } from './config.js';

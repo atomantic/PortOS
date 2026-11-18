@@ -17,7 +17,7 @@
 
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { getActiveApps } from './apps.js';
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 
 const MAX_ROSTER_APPS = 50;

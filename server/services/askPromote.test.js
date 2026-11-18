@@ -9,7 +9,7 @@ const identityService = { addProgressEntry: vi.fn() };
 
 vi.mock('./askConversations.js', () => convs);
 vi.mock('./brain.js', () => brainService);
-vi.mock('./cosTaskStore.js', () => cosService);
+vi.mock('./cos/cosTaskStore.js', () => cosService);
 vi.mock('./identity.js', () => identityService);
 vi.mock('./settings.js', async (importOriginal) => ({
   ...(await importOriginal()),

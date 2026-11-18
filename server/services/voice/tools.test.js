@@ -157,18 +157,18 @@ vi.mock('./config.js', () => ({
 // agentState.js. Default to empty so tests that don't care can ignore it.
 const cosStateRef = { value: { agents: {} } };
 const tasksRef = { value: [] };
-vi.mock('../cosState.js', () => ({
+vi.mock('../cos/cosState.js', () => ({
   loadState: vi.fn(async () => cosStateRef.value),
 }));
 vi.mock('../agent/agentState.js', () => ({
   isTruthyMeta: (v) => v === true || v === 'true',
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
   reviveBlockedTask: vi.fn(async () => ({})),
   getAllTasks: vi.fn(async () => ({ user: { tasks: tasksRef.value }, cos: { tasks: [] } })),
 }));
-vi.mock('../cos.js', () => ({
+vi.mock('../cos/cos.js', () => ({
   isRunning: vi.fn(() => true),
 }));
 // dispatch_code_agent fuzzy-resolves the optional `app` parameter against the
@@ -209,8 +209,8 @@ vi.mock('../providers.js', () => ({
 
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
-const { addTask: mockedAddTask } = await import('../cosTaskStore.js');
-const { isRunning: mockedIsRunning } = await import('../cos.js');
+const { addTask: mockedAddTask } = await import('../cos/cosTaskStore.js');
+const { isRunning: mockedIsRunning } = await import('../cos/cos.js');
 const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
 
 describe('getToolSpecs', () => {

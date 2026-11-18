@@ -12,11 +12,11 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * or `agentManagement.js` (enforced by `serviceImportCycles.guard.test.js`).
  */
 
-import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cosRunnerClient.js';
+import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cos/cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { isAgentOwnedLocally, runnerAgents, spawningTasks } from './agentState.js';
-import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from '../cosAgentLifecycle.js';
+import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from '../shell.js';
 import { join } from 'path';
@@ -75,7 +75,7 @@ export async function syncRunnerAgents() {
   console.log(`🔄 Syncing ${agents.length} running agents from CoS Runner`);
 
   // Get all tasks to find task data for each agent
-  const { getAllTasks } = await import('../cosTaskStore.js');
+  const { getAllTasks } = await import('../cos/cosTaskStore.js');
   const allTasksData = await getAllTasks().catch(() => ({ user: {}, cos: {} }));
 
   // Build a task lookup map from all task sources, tagging each with its taskType

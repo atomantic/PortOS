@@ -29,7 +29,7 @@ vi.mock('../github.js', () => ({
 }));
 vi.mock('../gitlab.js', () => ({ findMergeRequestForBranch: vi.fn() }));
 vi.mock('../git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 
 const detectPrimaryCheckoutDriftMock = vi.fn(async () => ({ drifted: false }));
 vi.mock('../../lib/primaryCheckoutGuard.js', async (importOriginal) => ({
@@ -39,7 +39,7 @@ vi.mock('../../lib/primaryCheckoutGuard.js', async (importOriginal) => ({
 
 const getAgentRecordMock = vi.fn(async () => null);
 const completeAgentMock = vi.fn();
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: (...args) => getAgentRecordMock(...args),
   updateAgent: vi.fn(async () => null),
@@ -47,7 +47,7 @@ vi.mock('../cosAgentLifecycle.js', () => ({
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('../providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
@@ -82,7 +82,7 @@ vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () 
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
 
 import { checkPrimaryCheckoutDrift, finalizeAgent } from './agentFinalization.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { PRIMARY_CHECKOUT_MUTATED_CATEGORY, PRIMARY_CHECKOUT_MUTATED_REASON } from '../../lib/primaryCheckoutGuard.js';
 
 const BASELINE = { path: '/example/repo', branch: 'main', head: 'a'.repeat(40) };

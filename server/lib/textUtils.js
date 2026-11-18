@@ -100,7 +100,7 @@ export function escapeRegExp(value) {
 
 /**
  * First non-empty line of a string, trimmed: the CoS task-description headline (`cosTaskStore.addTask` collapses a description to its first line). A dependency-free leaf because the goal-fidelity
- * follow-up needs it for its dedup key and can't import the task store (server/AGENTS.md "Import scoping"); `services/cosTaskStore.js` re-exports it.
+ * follow-up needs it for its dedup key and can't import the task store (server/AGENTS.md "Import scoping"); `services/cos/cosTaskStore.js` re-exports it.
  */
 export const firstLine = (text) => String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) || '';
 

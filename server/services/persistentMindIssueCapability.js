@@ -15,7 +15,7 @@
  * a claim would read from.
  */
 
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import { fileForgeIssue, listAppIssues, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';

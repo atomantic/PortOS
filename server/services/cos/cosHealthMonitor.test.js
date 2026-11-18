@@ -1,0 +1,341 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const mock = vi.hoisted(() => ({
+  daemonRunning: true,
+  state: null,
+  savedState: null,
+  // `null` = PM2 read failed (issue #8164 absent-vs-empty contract); an array
+  // (incl. []) = a successful read.
+  pm2Processes: [],
+  restartImpl: null,
+  // What a fresh PM2 read returns once a restart has been issued (null = read
+  // failed). Default models a healthy recovery; tests override to model a
+  // process that falls straight back to errored, vanishes, or is unreadable.
+  postRestart: null,
+  restartIssued: false,
+  readsAfterRestart: 0,
+  cacheClears: 0,
+  events: [],
+  // PM2 process names belonging to desktop (GUI) apps — exempt from auto-restart.
+  desktopProcessNames: new Set()
+}));
+
+// Mocked so the health check never reads the real apps registry off disk.
+// Fail-open on a registry read error is covered in appProcessStatus.test.js.
+vi.mock('../appProcessStatus.js', () => ({
+  annotateExpectedExit: vi.fn(async (processes) => {
+    return processes.map(p => ({ ...p, expectedExit: mock.desktopProcessNames.has(p?.name) }));
+  })
+}));
+
+vi.mock('./cosState.js', () => ({
+  loadState: vi.fn(async () => mock.state),
+  saveState: vi.fn(async (s) => { mock.savedState = s; }),
+  withStateLock: async (fn) => fn(),
+  isDaemonRunning: () => mock.daemonRunning
+}));
+
+vi.mock('../pm2.js', () => ({
+  restartApp: vi.fn(async (name) => { mock.restartIssued = true; return mock.restartImpl(name); }),
+  clearJlistCache: vi.fn(() => { mock.cacheClears += 1; }),
+  listProcessesStrict: vi.fn(async () => {
+    if (!mock.restartIssued) return mock.pm2Processes;
+    mock.readsAfterRestart += 1;
+    return mock.postRestart(mock.pm2Processes);
+  })
+}));
+
+vi.mock('../../lib/memoryStats.js', () => ({
+  getMemoryStats: vi.fn(async () => ({ usedMb: 100 }))
+}));
+
+vi.mock('./cosEvents.js', () => ({
+  cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) },
+  emitLog: vi.fn()
+}));
+
+import { emitLog } from './cosEvents.js';
+import { runHealthCheck, getHealthStatus, RESTART_VERIFY } from './cosHealthMonitor.js';
+
+const recoverAll = (procs) => procs.map(p => (p.status === 'errored' ? { ...p, status: 'online' } : p));
+
+const recordRestarts = sink => async name => {
+  sink.push(name);
+  return { success: true };
+};
+
+const baseState = () => ({
+  config: { maxTotalProcesses: 10, maxProcessMemoryMb: 1024 },
+  stats: {}
+});
+
+describe('cosHealthMonitor.runHealthCheck', () => {
+  beforeEach(() => {
+    mock.daemonRunning = true;
+    mock.state = baseState();
+    mock.savedState = null;
+    mock.pm2Processes = [];
+    mock.postRestart = recoverAll;
+    mock.restartIssued = false;
+    mock.readsAfterRestart = 0;
+    mock.cacheClears = 0;
+    emitLog.mockClear();
+    RESTART_VERIFY.delayMs = 0;
+    mock.events = [];
+    mock.desktopProcessNames = new Set();
+    // default restart success
+    mock.restartImpl = async () => ({ success: true });
+  });
+
+  it('short-circuits when the daemon is not running', async () => {
+    mock.daemonRunning = false;
+    const result = await runHealthCheck();
+    expect(result).toBeUndefined();
+    expect(mock.savedState).toBeNull();
+  });
+
+  // Issue #8164: a FAILED PM2 read (listProcessesStrict → null) must be
+  // recorded as unavailable, never as zero processes — collapsing it to []
+  // would suppress restart of a genuinely errored process and report a
+  // health check as clean when PM2 was simply unreachable.
+  it('records PM2 metrics as unavailable (not empty) when the read fails', async () => {
+    mock.pm2Processes = null;
+    const { metrics, issues } = await runHealthCheck();
+    expect(metrics.pm2).toBeNull();
+    expect(issues.some(i => i.type === 'error' && i.category === 'processes' && /read failed/.test(i.message))).toBe(true);
+  });
+
+  it('attempts no auto-restart when the PM2 read fails', async () => {
+    mock.pm2Processes = null;
+    const restarted = [];
+    mock.restartImpl = recordRestarts(restarted);
+    await runHealthCheck();
+    expect(restarted).toEqual([]);
+  });
+
+  it('counts a genuine empty read as zero processes, not unavailable', async () => {
+    mock.pm2Processes = [];
+    const { metrics } = await runHealthCheck();
+    expect(metrics.pm2).toEqual({ total: 0, online: 0, errored: 0, stopped: 0, desktopExited: 0 });
+  });
+
+  it('flags a high process count over the configured limit', async () => {
+    mock.pm2Processes = Array.from({ length: 12 }, (_, i) => ({ name: `p${i}`, status: 'online' }));
+    const { issues } = await runHealthCheck();
+    expect(issues.some(i => i.category === 'processes' && /High process count/.test(i.message))).toBe(true);
+  });
+
+  it('auto-restarts errored processes without reporting a resolved problem', async () => {
+    mock.pm2Processes = [{ name: 'boom', status: 'errored' }];
+    const { issues } = await runHealthCheck();
+    expect(issues).toEqual([]);
+    expect(issues.some(i => i.type === 'error')).toBe(false);
+  });
+
+  describe('post-restart verification', () => {
+    const errored = () => [{ name: 'boom', pm_id: 3, status: 'errored' }];
+    const critical = () => mock.events.some(e => e.name === 'health:critical');
+
+    it('observed online recovery clears the issue, logs success and reports fresh metrics', async () => {
+      mock.pm2Processes = errored();
+      const { issues, metrics } = await runHealthCheck();
+      expect(issues).toEqual([]);
+      expect(critical()).toBe(false);
+      expect(mock.cacheClears).toBeGreaterThan(0);
+      expect(metrics.pm2).toMatchObject({ errored: 0, online: 1 });
+      expect(emitLog).toHaveBeenCalledWith('success', expect.stringContaining('boom'));
+      expect(mock.savedState.stats.healthIssues).toEqual([]);
+    });
+
+    it('keeps a persisted issue and logs no success when the restarted process is errored again', async () => {
+      mock.pm2Processes = errored();
+      mock.postRestart = (p) => p;
+      const { issues } = await runHealthCheck();
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({ type: 'error', category: 'processes' });
+      expect(issues[0].message).toMatch(/unconfirmed.*boom \(errored\)/);
+      expect(critical()).toBe(true);
+      expect(emitLog).not.toHaveBeenCalledWith('success', expect.anything());
+      expect((await getHealthStatus()).issues).toHaveLength(1);
+    });
+
+    it('keeps an issue when the process is missing after the restart', async () => {
+      mock.pm2Processes = errored();
+      mock.postRestart = () => [];
+      const { issues } = await runHealthCheck();
+      expect(issues[0].message).toMatch(/boom \(missing after restart\)/);
+    });
+
+    it('never reports healthy when the verification read fails', async () => {
+      mock.pm2Processes = errored();
+      mock.postRestart = () => null;
+      const { issues } = await runHealthCheck();
+      expect(issues).toHaveLength(1);
+      expect(issues[0].message).toMatch(/boom \(verification read failed\)/);
+      expect(mock.savedState.stats.healthIssues).toHaveLength(1);
+      expect(emitLog).not.toHaveBeenCalledWith('success', expect.anything());
+    });
+
+    it('waits a bounded number of reads on a transitional state, then reports unconfirmed', async () => {
+      mock.pm2Processes = errored();
+      mock.postRestart = (p) => p.map(x => ({ ...x, status: 'launching' }));
+      const { issues } = await runHealthCheck();
+      expect(mock.readsAfterRestart).toBe(RESTART_VERIFY.attempts);
+      expect(issues[0].message).toMatch(/boom \(still launching\)/);
+    });
+
+    it('confirms recovery once a launching process comes online within the bound', async () => {
+      mock.pm2Processes = errored();
+      let reads = 0;
+      mock.postRestart = (p) => p.map(x => ({ ...x, status: ++reads < 2 ? 'launching' : 'online' }));
+      const { issues } = await runHealthCheck();
+      expect(issues).toEqual([]);
+      expect(mock.readsAfterRestart).toBe(2);
+    });
+
+    it('identifies cluster instances by pm_id, not name alone', async () => {
+      mock.pm2Processes = [{ name: 'web', pm_id: 1, status: 'errored' }, { name: 'web', pm_id: 2, status: 'online' }];
+      mock.postRestart = (p) => p; // pm_id 1 stays errored; pm_id 2 online must not mask it
+      const { issues } = await runHealthCheck();
+      expect(issues[0].message).toMatch(/web \(errored\)/);
+    });
+
+    it('still reports a rejected restart command as actionable and does not verify it', async () => {
+      mock.pm2Processes = errored();
+      mock.restartImpl = async () => { throw new Error('nope'); };
+      const { issues } = await runHealthCheck();
+      expect(issues.map(i => i.message).join('|')).toMatch(/failed to auto-restart: boom/);
+      expect(mock.readsAfterRestart).toBe(0);
+    });
+  });
+
+  it('keeps an unknown restart outcome actionable without claiming the mutation failed', async () => {
+    mock.pm2Processes = [{ name: 'example-worker', status: 'errored' }];
+    mock.restartImpl = async () => { throw Object.assign(new Error('CLI cleanup unconfirmed'), { outcome: 'unknown' }); };
+    const { issues } = await runHealthCheck();
+    expect(issues).toEqual([expect.objectContaining({ message: expect.stringMatching(/outcome unknown.*example-worker/) })]);
+    expect(mock.events.some(event => event.name === 'health:critical')).toBe(true);
+    expect(emitLog).not.toHaveBeenCalledWith('success', expect.anything());
+    expect(mock.savedState.stats.healthIssues).toEqual(issues);
+  });
+
+  it('records an error issue and emits health:critical when a restart fails', async () => {
+    mock.pm2Processes = [{ name: 'boom', status: 'errored' }];
+    mock.restartImpl = async () => { throw new Error('restart failed'); };
+    const { issues } = await runHealthCheck();
+    expect(issues.some(i => i.type === 'error' && /failed to auto-restart/.test(i.message))).toBe(true);
+    expect(mock.events.some(e => e.name === 'health:critical')).toBe(true);
+  });
+
+  // Desktop (GUI) processes: closing or force-quitting the window can leave PM2
+  // `errored`, and restarting would reopen the window the user just closed —
+  // the relaunch loop `autorestart: false` prevents, by another path (#2991).
+  describe('desktop (GUI) process exemption', () => {
+    const erroredGame = () => [{ name: 'game', status: 'errored' }];
+
+    it('never auto-restarts an errored desktop process', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Processes = erroredGame();
+      const restarted = [];
+      mock.restartImpl = recordRestarts(restarted);
+
+      const { issues } = await runHealthCheck();
+
+      expect(restarted).toEqual([]);
+      expect(issues.some(i => /Auto-restarted/.test(i.message))).toBe(false);
+    });
+
+    it('reports a quit game separately instead of as an error', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Processes = erroredGame();
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2.errored).toBe(0);
+      expect(metrics.pm2.desktopExited).toBe(1);
+    });
+
+    it('counts a cleanly stopped desktop process as exited too', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Processes = [{ name: 'game', status: 'stopped' }];
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2.errored).toBe(0);
+      expect(metrics.pm2.desktopExited).toBe(1);
+    });
+
+    it('still counts a RUNNING desktop process as online', async () => {
+      // The exemption is about exit semantics, not liveness. Filtering `online`
+      // on it too would leave a live game in `total` and in no bucket at all —
+      // and make the metric read identically whether it is running or quit.
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Processes = [
+        { name: 'game', status: 'online' },
+        { name: 'web', status: 'online' }
+      ];
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2).toEqual({ total: 2, online: 2, errored: 0, stopped: 0, desktopExited: 0 });
+    });
+
+    it('still auto-restarts non-desktop processes alongside an exempt one', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Processes = [
+        { name: 'game', status: 'errored' },
+        { name: 'web', status: 'errored' }
+      ];
+      const restarted = [];
+      mock.restartImpl = recordRestarts(restarted);
+
+      const { metrics, issues } = await runHealthCheck();
+
+      expect(restarted).toEqual(['web']);
+      // Fresh post-restart metrics: web observed online.
+      expect(metrics.pm2).toMatchObject({ errored: 0 });
+      expect(issues).toEqual([]);
+    });
+  });
+
+  it('keeps memory telemetry without flagging large processes', async () => {
+    mock.pm2Processes = [
+      { name: 'example-worker', status: 'online' },
+      { name: 'portos-llama-server', status: 'online' }
+    ];
+    const { metrics, issues } = await runHealthCheck();
+    expect(metrics.memory).toEqual({ usedMb: 100 });
+    expect(issues).toEqual([]);
+  });
+
+  it('persists the latest snapshot to state and emits health:check', async () => {
+    mock.pm2Processes = [];
+    const { metrics } = await runHealthCheck();
+    expect(mock.savedState.stats.lastHealthCheck).toBe(metrics.timestamp);
+    expect(mock.events.some(e => e.name === 'health:check')).toBe(true);
+  });
+});
+
+describe('cosHealthMonitor.getHealthStatus', () => {
+  it('returns the persisted last check and issues', async () => {
+    mock.state = { ...baseState(), stats: { lastHealthCheck: 'T', healthIssues: [{ type: 'warning' }] } };
+    const status = await getHealthStatus();
+    expect(status).toEqual({ lastCheck: 'T', issues: [{ type: 'warning' }] });
+  });
+
+  it('drops legacy memory and successful-restart warnings before the next poll', async () => {
+    const failure = { type: 'error', category: 'processes', message: 'Failed to restart' };
+    mock.state = { ...baseState(), stats: { healthIssues: [
+      { type: 'warning', category: 'memory', message: 'High memory usage' },
+      { type: 'warning', category: 'processes', message: 'Auto-restarted 1 errored PM2 process(es)' },
+      failure
+    ] } };
+    expect((await getHealthStatus()).issues).toEqual([failure]);
+  });
+
+  it('defaults issues to an empty array when none recorded', async () => {
+    mock.state = { ...baseState(), stats: {} };
+    const status = await getHealthStatus();
+    expect(status.issues).toEqual([]);
+  });
+});

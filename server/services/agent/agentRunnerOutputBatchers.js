@@ -10,7 +10,7 @@
  * spawner barrel.
  */
 
-import { createAgentOutputBatcher } from '../cosAgentLifecycle.js';
+import { createAgentOutputBatcher } from '../cos/cosAgentLifecycle.js';
 
 const runnerOutputBatchers = new Map();
 

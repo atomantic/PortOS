@@ -258,7 +258,7 @@ export const getCosAgent = (id, { lines, ...options } = {}) =>
   request(`/cos/agents/${id}${lines ? `?lines=${lines}` : ''}`, options);
 
 // Agent LIST responses bound `metadata.taskDescription` (see
-// `server/lib/cosAgentListProjection.js`), which is fine for a clamped card but
+// `server/lib/cos/cosAgentListProjection.js`), which is fine for a clamped card but
 // NOT for anything that reuses the text — Resume and Relaunch build a new task
 // prompt out of it, so a clipped copy would silently ship a truncated task.
 // Callers in those paths hydrate first; the record comes back unchanged when it

@@ -36,7 +36,7 @@ vi.mock('./git.js', () => ({
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
-vi.mock('./cosClaimOwnership.js', async (importOriginal) => ({
+vi.mock('./cos/cosClaimOwnership.js', async (importOriginal) => ({
   ...await importOriginal(), readClaimOwnershipAgents: async () => [],
 }));
 vi.mock('./worktreeManager.js', async () => {

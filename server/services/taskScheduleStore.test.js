@@ -5,7 +5,7 @@ const state = vi.hoisted(() => ({
   writes: []
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
   emitLog: vi.fn()
 }));
@@ -32,8 +32,8 @@ vi.mock('./eventScheduler.js', () => ({
   parseCronToPrevRun: vi.fn()
 }));
 
-vi.mock('./cosState.js', async () => {
-  const actual = await vi.importActual('./cosState.js');
+vi.mock('./cos/cosState.js', async () => {
+  const actual = await vi.importActual('./cos/cosState.js');
   return {
     ...actual,
     loadState: vi.fn().mockResolvedValue({ config: { improvementEnabled: true } })

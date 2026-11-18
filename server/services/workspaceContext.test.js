@@ -41,7 +41,7 @@ vi.mock('./shell.js', () => ({
   listAllSessions: vi.fn(() => mockSessions)
 }));
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => mockTasks)
 }));
 

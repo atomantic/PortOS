@@ -28,13 +28,13 @@ vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks,
 }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   filterLiveAgentIds: vi.fn(async (ids) => ids),
 }));
 const { mockCosState } = vi.hoisted(() => ({
   mockCosState: { persistentMind: { queuedMessages: [], activeTurn: null } },
 }));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   readPersistentMindStateForSafetyCheck: vi.fn(async () => ({
     trusted: true,
     persistentMind: mockCosState.persistentMind,
@@ -56,7 +56,7 @@ vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 import * as updateChecker from '../services/updateChecker.js';
 import { launchUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds } from './agent/agentState.js';
-import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
+import { readPersistentMindStateForSafetyCheck } from './cos/cosState.js';
 import { updateApp as appUpdaterUpdateApp } from '../services/appUpdater.js';
 import updateRoutes from '../routes/update.js';
 import { registerAppHandlers } from '../sockets/apps.js';

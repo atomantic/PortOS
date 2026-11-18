@@ -1,7 +1,7 @@
 /**
  * Contract for the status-transition descriptor (#6620).
  *
- * `writeTaskUpdate`'s own boundary tests (services/cosTaskStore.test.js) are the
+ * `writeTaskUpdate`'s own boundary tests (services/cos/cosTaskStore.test.js) are the
  * behavioral oracle — these pin the classification itself, which now answers for
  * seven separate lifecycle rules at once. The cases below are distinct transition
  * CLASSES, not permutations: each one is a different answer the seven rules read.

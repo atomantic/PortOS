@@ -261,7 +261,7 @@ function restoreDbAnswer({ feed = [], sessions = 0, receipt = null } = {}) {
   };
 }
 
-vi.mock('./cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
+vi.mock('./cos/cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
 vi.mock('../lib/mediaModels.js', () => ({ withLiveMediaModelsRestore: vi.fn(fn => fn()) }));
 
 const scheduleStoreBoundary = vi.hoisted(() => ({ restore: null }));

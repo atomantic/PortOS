@@ -6,12 +6,12 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { existsSync } from 'fs';
 import { isRepo, notGitRepoMessage } from '../services/git.js';
-import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cosTaskStore.js';
-import { evaluateTasks } from '../services/cosTaskGenerator.js';
-import { forceSpawnTask } from '../services/cos.js';
-import { getAgents } from '../services/cosAgentLifecycle.js';
+import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cos/cosTaskStore.js';
+import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
+import { forceSpawnTask } from '../services/cos/cos.js';
+import { getAgents } from '../services/cos/cosAgentLifecycle.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
-import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
+import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cos/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { titleMarksEpic } from '../lib/dispatchLabels.js';
@@ -19,7 +19,7 @@ import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
-import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cosSpawnWindow.js';
+import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cos/cosSpawnWindow.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
 import { NON_PM2_TYPES } from '../services/appProcessTypes.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -163,7 +163,7 @@ const router = Router();
 
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
-// Settled for the spawn window (lib/cosSpawnWindow.js): an agent registers as
+// Settled for the spawn window (lib/cos/cosSpawnWindow.js): an agent registers as
 // `running` a beat before its task leaves `pending`, so a caller that counted
 // `grouped.pending` raw reported the one task it was already working as queued
 // too. Settling HERE rather than in `getAllTasks()` keeps the dispatch readers
@@ -417,7 +417,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     shape = {
       description: `${workflow.label} for ${appObj.name} — ${scope} and ship it`,
       // The claim body is the agent's PROMPT, not a human note (#4153) — see
-      // server/lib/cosTaskPrompt.js for the field split.
+      // server/lib/cos/cosTaskPrompt.js for the field split.
       prompt: claim.prompt,
       // claim.taskMetadata overrides the catalog posture only where it carries a
       // key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab

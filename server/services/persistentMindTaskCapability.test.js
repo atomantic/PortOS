@@ -23,8 +23,8 @@ vi.mock('./apps.js', () => ({
   getActiveApps: vi.fn(async () => mocks.apps),
   getAppWorkTracker: (...args) => mocks.getAppWorkTracker(...args),
 }));
-vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: (...args) => mocks.addTask(...args),
   firstLine: (value) => (value || '').split('\n').map((line) => line.trim()).find(Boolean) || '',
   getCosTasks: vi.fn(async () => ({ tasks: mocks.cosTasks })),

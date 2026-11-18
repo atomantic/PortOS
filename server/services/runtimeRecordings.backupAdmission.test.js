@@ -12,7 +12,7 @@ vi.mock('../lib/fileUtils.js', async original => {
     return actual.atomicWrite(path, data);
   } };
 });
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   appendAgentOutputLines: async (_id, lines) => {
     const { atomicWrite } = await import('../lib/fileUtils.js');
     await atomicWrite(join(state.root, 'state.json'), { lines });

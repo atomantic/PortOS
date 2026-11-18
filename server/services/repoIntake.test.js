@@ -9,7 +9,7 @@ const readOriginRemoteUrl = vi.fn();
 const { existsSync } = vi.hoisted(() => ({ existsSync: vi.fn() }));
 const pullRepo = vi.fn();
 
-vi.mock('./cosTaskStore.js', () => ({ addTask: (...args) => addTask(...args) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: (...args) => addTask(...args) }));
 vi.mock('./apps.js', () => ({
   PORTOS_APP_ID: 'portos-default',
   getAppById: (...args) => getAppById(...args),

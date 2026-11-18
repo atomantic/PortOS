@@ -48,7 +48,7 @@ import { reapMergedWorktrees, deleteCompletedLocalBranch, readWorktreeStatus } f
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
 const mergedPrHeads = new Set();
 vi.mock('./prProbe.js', () => ({ isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 // lsof is absent on some CI hosts and fails closed there; a checkout a process
 // sits in is named per test instead.
 const occupiedCheckouts = new Set();

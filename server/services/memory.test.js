@@ -18,7 +18,7 @@ vi.mock('../lib/uuid.js', () => ({
 }));
 
 // Mock cosEvents (memory.js imports from cosEvents.js directly)
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: new EventEmitter()
 }));
 
@@ -60,7 +60,7 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: vi.fn(), updateAgent: vi.fn() }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgent: vi.fn(), updateAgent: vi.fn() }));
 
 // Mock memoryConfig
 vi.mock('./memoryConfig.js', () => ({
@@ -82,7 +82,7 @@ import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import { generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import {
   createMemory,
   getMemory,
@@ -724,7 +724,7 @@ describe('memory service', () => {
       });
 
       // Exercise the real approval-count side effect behind the public memory workflow.
-      const lifecycle = await import('./cosAgentLifecycle.js');
+      const lifecycle = await import('./cos/cosAgentLifecycle.js');
       lifecycle.getAgent.mockResolvedValue({ memoryExtraction: { pendingApproval: 2, created: 4 } });
       lifecycle.updateAgent.mockResolvedValue(undefined);
       const actualConfig = await vi.importActual('./memoryConfig.js');

@@ -1,10 +1,10 @@
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
+vi.mock('./cos/cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
-import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 vi.mock('./publicationValidation.js', () => ({ validatePublication: vi.fn() }));
 import { validatePublication } from './publicationValidation.js';
 
@@ -42,7 +42,7 @@ vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn(() => 'mock-uuid')
 }));
 
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   recordCleanupOutcome: vi.fn(async () => true),
   recordRepoStateVerification: vi.fn(async () => true),
   registerAgent: vi.fn().mockResolvedValue(undefined),
@@ -53,16 +53,16 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn().mockResolvedValue(null),
   getAgents: vi.fn().mockResolvedValue([])
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   getConfig: vi.fn().mockResolvedValue({})
 }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   addTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } }))
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
@@ -71,7 +71,7 @@ vi.mock('./appActivity.js', () => ({
   updateAppActivity: vi.fn()
 }));
 
-vi.mock('./cosRunnerClient.js', () => ({
+vi.mock('./cos/cosRunnerClient.js', () => ({
   isRunnerAvailable: vi.fn(() => false),
   spawnAgentViaRunner: vi.fn(),
   terminateAgentViaRunner: vi.fn(),
@@ -244,9 +244,9 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agent/agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getAgents, updateAgent } from './cosAgentLifecycle.js';
-import { getAllTasks, getTaskById, addTask, updateTask } from './cosTaskStore.js';
-import { forceSpawnTask } from './cos.js';
+import { getAgent, getAgentRecord, getAgents, updateAgent } from './cos/cosAgentLifecycle.js';
+import { getAllTasks, getTaskById, addTask, updateTask } from './cos/cosTaskStore.js';
+import { forceSpawnTask } from './cos/cos.js';
 import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -2346,14 +2346,14 @@ describe('spawnReviewLoopFollowUp', () => {
 
 describe('cleanup warning recovery', () => {
   it('leaves failed persistence unresolved instead of claiming recovery was recorded', async () => {
-    const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+    const { recordRepoStateVerification } = await import('./cos/cosAgentLifecycle.js');
     vi.mocked(recordRepoStateVerification).mockResolvedValueOnce(false);
     await expect(spawnMergeRecoveryTask(['cleanup unavailable'], 'agent-1', { id: 'original' }, 'Example', '/mock/workspace'))
       .rejects.toThrow('cleanup-warning-replay-unavailable');
   });
 
   it('keeps repeated failures on the original durable receipt without successor tasks', async () => {
-    const { recordCleanupOutcome, recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
+    const { recordCleanupOutcome, recordRepoStateVerification } = await import('./cos/cosAgentLifecycle.js');
     vi.clearAllMocks();
     for (let i = 0; i < 3; i++) {
       await spawnMergeRecoveryTask(['PR creation failed for branch claim/example: unavailable forge'], 'agent-1',

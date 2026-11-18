@@ -11,13 +11,13 @@ const mocks = vi.hoisted(() => ({
   readRecipes: vi.fn(),
 }));
 
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   loadState: vi.fn(async () => ({ config: { persistentMindCapabilities: { readPortos: true } } })),
 }));
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ agentContext: { actions: { readPortos: false, writePortos: true } } })),
 }));
-vi.mock('../services/cosToolRegistry.js', () => ({
+vi.mock('../services/cos/cosToolRegistry.js', () => ({
   getCosToolCatalog: (...args) => mocks.catalog(...args),
   formatCosToolCatalog: (...args) => mocks.format(...args),
   executeCosToolCall: (...args) => mocks.execute(...args),

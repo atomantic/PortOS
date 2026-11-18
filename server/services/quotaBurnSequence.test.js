@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn() }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('./perpetualWork.js', () => ({ detectActionableWork: vi.fn() }));
 vi.mock('./quotaBurnInvoke.js', () => ({ resolveQuotaBurnStep: vi.fn() }));
 vi.mock('./quotaBurnStore.js', () => ({ getQuotaBurnConfig: vi.fn() }));
 vi.mock('./quotaBurnCompletions.js', () => ({ recordQuotaBurnJobCompletion: vi.fn() }));
-import { getAllTasks } from './cosTaskStore.js';
+import { getAllTasks } from './cos/cosTaskStore.js';
 import { getAppById } from './apps.js';
 import { detectActionableWork } from './perpetualWork.js';
 import { resolveQuotaBurnStep } from './quotaBurnInvoke.js';

@@ -31,7 +31,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  */
 
 import { readFile } from 'fs/promises';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
 import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agent/agentSentinel.js';
 import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agent/agentOutputMarkers.js';

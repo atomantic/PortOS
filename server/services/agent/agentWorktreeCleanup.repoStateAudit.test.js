@@ -11,14 +11,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({}),
   updateTask: vi.fn().mockResolvedValue({}),
   getTaskById: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
@@ -46,8 +46,8 @@ vi.mock('./agentRepoStateVerification.js', () => ({
 import { probePrForBranch } from '../prProbe.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { verifyAgentRepoState } from './agentRepoStateVerification.js';
-import { getAgent, getAgentRecord } from '../cosAgentLifecycle.js';
-import { addTask } from '../cosTaskStore.js';
+import { getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
+import { addTask } from '../cos/cosTaskStore.js';
 import { removeWorktree } from '../worktreeManager.js';
 
 const worktreeAgent = {

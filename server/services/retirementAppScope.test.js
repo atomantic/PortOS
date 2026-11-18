@@ -35,8 +35,8 @@ vi.mock('./apps.js', () => ({
   getAllApps: async () => { if (injected.apps instanceof Error) throw injected.apps; return injected.apps ?? (injected.app ? [injected.app] : []); },
   getAppById: async id => injected.app?.id === id ? injected.app : null,
 }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
-vi.mock('./cosAgentRepository.js', () => ({ listStoredAgentStatuses: async () => [] }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosAgentRepository.js', () => ({ listStoredAgentStatuses: async () => [] }));
 vi.mock('./autobiography.js', () => ({ checkAndPrompt: vi.fn() }));
 vi.mock('./goalCheckIn.js', () => ({ runGoalCheckIn: vi.fn() }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));

@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
-import { loadState } from '../services/cosState.js';
+import { loadState } from '../services/cos/cosState.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   recordLearningInsightSchema,
@@ -16,7 +16,7 @@ import {
   validateRequest,
 } from '../lib/validation.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
-import { cosDigestCompareQuerySchema } from '../lib/cosValidation.js';
+import { cosDigestCompareQuerySchema } from '../lib/cos/cosValidation.js';
 
 const router = Router();
 

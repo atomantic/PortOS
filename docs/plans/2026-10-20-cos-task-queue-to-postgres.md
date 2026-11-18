@@ -30,7 +30,7 @@ sense, so the end state replaced it: ONE table, no files.
 - `cos_tasks` (one row per task, key `(source, task_id COLLATE "C")`) and
   `cos_task_lists` (a per-queue write version).
 - A task is stored in its **stored form**: the old Markdown round-trip's
-  normalization (`lib/cosTaskRows.js#storedForm`). Many consumers handle scalar
+  normalization (`lib/cos/cosTaskRows.js#storedForm`). Many consumers handle scalar
   metadata read back as strings; storing anything else would have changed their
   behavior as a side effect. Typed metadata is a separate cleanup.
 - `position` is a fractional tie-break inside a status+priority, so insertion
@@ -77,10 +77,10 @@ only in `cos_tasks`. To return to a release that reads the Markdown files, take 
 
 ## Verification
 
-- `lib/cosTaskRows.test.js`: stored form, working-set rule, position assignment,
+- `lib/cos/cosTaskRows.test.js`: stored form, working-set rule, position assignment,
   save planning. `services/_cosTaskRepositoryContract.js` runs the same
   assertions against the in-memory backend and, in `npm run test:db`, PostgreSQL.
-- `services/cosTaskStore.test.js`: cache behavior (hit, in-place update, version
+- `services/cos/cosTaskStore.test.js`: cache behavior (hit, in-place update, version
   reload, cold-read coalescing, overlapping read and write), views, unique ids,
   history older than the working set, peer merge, and the interleaved-writer races.
 - Migrations 018/019: unit tests over real fixture files, plus a real-PostgreSQL

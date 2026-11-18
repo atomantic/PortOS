@@ -16,7 +16,7 @@ vi.mock('./agentManagement.js', () => ({
   getAgentProcessStats: () => {}
 }));
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   completeAgent: () => {}
 }));
 
@@ -26,7 +26,7 @@ vi.mock('./agentLifecycle.js', () => ({
 
 import * as orchestrator from './agentOrchestrator.js';
 import * as agentManagement from './agentManagement.js';
-import * as cosAgentLifecycle from '../cosAgentLifecycle.js';
+import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as agentLifecycle from './agentLifecycle.js';
 
 // [facade export, source module, name in that module]

@@ -1,8 +1,8 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { getAgentRecord, updateAgent } from '../cosAgentLifecycle.js';
-import { getAgentDir } from '../cosAgentIndex.js';
-import { requestSecurityScanViaRunner } from '../cosRunnerClient.js';
+import { getAgentRecord, updateAgent } from '../cos/cosAgentLifecycle.js';
+import { getAgentDir } from '../cos/cosAgentIndex.js';
+import { requestSecurityScanViaRunner } from '../cos/cosRunnerClient.js';
 import { parseRunnerSecurityScanEvidence } from '../../lib/securityScanEvidence.js';
 import { ServerError } from '../../lib/errorHandler.js';
 

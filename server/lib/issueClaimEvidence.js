@@ -10,7 +10,7 @@ const COMMIT_OID_RE = /^[a-f0-9]{40}$/;
 // `issueMinAgeMinutes` (claim-issue / claim-work task metadata): autonomous
 // claiming skips an issue younger than this. The agent that files an issue
 // usually claims it moments later; a scheduled run that raced it would snipe the
-// work out from under that agent. 0 disables the grace; lib/cosValidation.js
+// work out from under that agent. 0 disables the grace; lib/cos/cosValidation.js
 // caps it.
 export const DEFAULT_ISSUE_MIN_AGE_MINUTES = 5;
 

@@ -33,12 +33,12 @@ describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
     // imports the set — the read side consumes the shared set transitively while
     // finalization/learning resolve the SAME shapes (#6613 writer/reader guard).
     ['services/agent/agentPromptBuilder.js', 'reads the set back via isClaimFlowDispatch()', false],
-    ['services/cosTaskGenerator.js', 'stamps metadata.claimFlow from the set', true],
+    ['services/cos/cosTaskGenerator.js', 'stamps metadata.claimFlow from the set', true],
   ])('%s imports the shared set (%s)', (relPath, _desc, direct) => {
     const source = readServerSource(relPath);
     expect(LOCAL_DECLARATION.test(source)).toBe(false);
     if (direct) {
-      expect(source).toMatch(/import\s*\{[^}]*\bCLAIM_FLOW_TASK_TYPES\b[^}]*\}\s*from\s*'\.\.\/lib\/claimFlowTaskTypes\.js'/);
+      expect(source).toMatch(/import\s*\{[^}]*\bCLAIM_FLOW_TASK_TYPES\b[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/claimFlowTaskTypes\.js'/);
     } else {
       expect(source).toMatch(/import\s*\{[^}]*\bisClaimFlowDispatch\b[^}]*\}\s*from\s*'\.\.\/taskTypeHooks\.js'/);
       // The delegation itself must stay — dropping it would narrow the prompt

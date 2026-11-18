@@ -1565,7 +1565,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       warnings: removal.warning ? [removal.warning] : [],
     };
   }
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const ownershipHold = async () => claimCheckoutOwnerReason({
     branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
     agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
@@ -1582,7 +1582,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
  * without the lock, so removal re-checks them at Git's mutation boundary.
  */
 async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold) {
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const worktreePath = join(WORKTREES_DIR, agentId);
   const warnings = [];
   let merged = false;
@@ -2139,7 +2139,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
   if (!existsSync(WORKTREES_DIR)) return 0;
 
   const readActiveIds = activeIdsReader(getActiveIds);
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const readOwners = claimOwnerReader(claimOwners, readClaimOwnershipAgents);
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
   let cleaned = 0;
@@ -2240,7 +2240,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   appId = null
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence, readBranchLineage, readBranchPublished } = await import('./git.js');
-  const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
@@ -2348,7 +2348,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  */
 async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners, retainedPaths) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
   let cleaned = 0;

@@ -4,10 +4,10 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import jobRoutes from './cosJobRoutes.js';
 
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   addTask: vi.fn()
 }));
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cos/cos.js', () => ({
   forceSpawnTask: vi.fn()
 }));
 
@@ -48,8 +48,8 @@ vi.mock('../services/userTimezone.js', () => ({
   getUserTimezone: vi.fn(),
 }));
 
-import { addTask } from '../services/cosTaskStore.js';
-import { forceSpawnTask } from '../services/cos.js';
+import { addTask } from '../services/cos/cosTaskStore.js';
+import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';

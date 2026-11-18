@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
   emitLog: vi.fn()
 }));
@@ -17,7 +17,7 @@ vi.mock('./forgeAuth.js', () => ({
 
 // The live CoS claim registry the in-flight scan reads; null = unreadable.
 let cosAgents = {};
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => (cosAgents ? { trusted: true, agents: cosAgents } : { trusted: false, agents: null })
 }));
 

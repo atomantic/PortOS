@@ -97,7 +97,7 @@ const SERVICE_REF_LOOKUPS = Object.freeze({
     return message ? { title: message.subject } : null;
   },
   'cos.task': async (id) => {
-    const { getTaskById, firstLine } = await import('./cosTaskStore.js');
+    const { getTaskById, firstLine } = await import('./cos/cosTaskStore.js');
     const task = await getTaskById(id);
     // A task's text lives in `description`, which is MULTI-LINE (the body a
     // generator folds in below line 1) — a chip gets the first line only.

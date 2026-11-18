@@ -139,7 +139,7 @@ describe('remainingActionBudget', () => {
 // regression test ties that contract to the real DEFAULT_CONFIG.
 describe('DEFAULT_CONFIG is unlimited (opt-in budgets, no constraint by default)', () => {
   it('every default domain budget is fully unlimited and gates to no-op', async () => {
-    const { DEFAULT_CONFIG } = await import('../services/cosState.js');
+    const { DEFAULT_CONFIG } = await import('../services/cos/cosState.js');
     for (const id of DOMAIN_IDS) {
       const budget = getDomainBudget(DEFAULT_CONFIG, id);
       // Both caps null → unlimited.

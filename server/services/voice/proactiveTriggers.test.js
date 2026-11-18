@@ -12,7 +12,7 @@ vi.mock('./config.js', async (importActual) => ({
 }));
 
 import { errorEvents } from '../../lib/errorHandler.js';
-import { cosEvents } from '../cosEvents.js';
+import { cosEvents } from '../cos/cosEvents.js';
 import { notificationEvents } from '../notifications.js';
 import { getVoiceConfig } from './config.js';
 import {

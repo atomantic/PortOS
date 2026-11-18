@@ -11,7 +11,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await im
   dataRoot: () => repair.repoPath,
   extraOverrides: () => ({ root: repair.repoPath }),
 }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async () => repair.task) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: vi.fn(async () => repair.task) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance' }));
 
 const owned = ownTestBodies(vitestIt);
@@ -21,7 +21,7 @@ const it = owned.it;
 // the temp repos are not a PortOS install, so the live registry read fails
 // closed and every verdict would come back blocked on it. Doubled as "no agents
 // running" — the condition each case below is actually about.
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: async () => repair.owner ? [repair.owner] : [],
   getAgentRecord: async () => repair.owner,
 }));
@@ -122,7 +122,7 @@ describe('update repo readiness', () => {
     git(repo, 'fetch', 'origin');
     // Being behind is for the updater to resolve, not another repair attempt.
     expect(await verify()).toBe(true);
-    const lifecycle = await import('./cosAgentLifecycle.js');
+    const lifecycle = await import('./cos/cosAgentLifecycle.js');
     const agents = vi.spyOn(lifecycle, 'getAgents').mockResolvedValue([repair.owner,
       { id: 'agent-other', status: 'paused', metadata: { workspacePath: repo } }]);
     expect(await verify()).toBe(false);
@@ -150,7 +150,7 @@ describe('update repo readiness', () => {
     repair.owner.metadata.completionTaskDispatch.expected[3][1] = '2';
     expect(await verify()).toBe(false);
     repair.owner.metadata.completionTaskDispatch.expected[3][1] = '3';
-    const store = await import('./cosTaskStore.js');
+    const store = await import('./cos/cosTaskStore.js');
     vi.spyOn(store, 'getTaskById').mockResolvedValueOnce(repair.task).mockResolvedValueOnce(null);
     expect(await verify()).toBe(false);
   });
@@ -270,7 +270,7 @@ describe('update repo readiness', () => {
   // restart, and the branch move, would both land on top of its work.
   it('refuses while a CoS agent is working in the checkout', async () => {
     const repo = makeRepo();
-    const lifecycle = await import('./cosAgentLifecycle.js');
+    const lifecycle = await import('./cos/cosAgentLifecycle.js');
     vi.spyOn(lifecycle, 'getAgents').mockResolvedValue([
       { id: 'agent-1', status: 'running', metadata: { workspacePath: repo } },
     ]);

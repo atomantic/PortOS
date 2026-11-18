@@ -13,12 +13,12 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => {
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
   continueSettlement: fn => fn(), recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
 } }));
-vi.mock('../cosRunnerClient.js', () => ({
+vi.mock('../cos/cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(), connectTuiSessionViaRunner: vi.fn(),
   spawnAgentViaRunner: vi.fn(), getRunnerHealth: vi.fn(), classifyRunnerSpawnFailure: vi.fn(),
 }));
 vi.mock('../shell.js', () => ({ getSession: vi.fn(() => ({})) }));
-vi.mock('../cosAgentLifecycle.js', async importOriginal => ({
+vi.mock('../cos/cosAgentLifecycle.js', async importOriginal => ({
   ...(await importOriginal()),
   readAgentRecordOrUnreadable: vi.fn(),
   getAgent: vi.fn(async id => fixture.records.get(id)),
@@ -41,13 +41,13 @@ vi.mock('../cosAgentLifecycle.js', async importOriginal => ({
     Object.assign(fixture.records.get(id), { status: 'completed', result });
   }),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => ({ user: { grouped: {} }, cos: { grouped: { active: fixture.tasks } } })),
   getTaskById: vi.fn(async id => fixture.tasks.find(t => t.id === id)),
   updateTask: vi.fn(async (id, update) => Object.assign(fixture.tasks.find(t => t.id === id), update)),
   addTask: vi.fn(), reviveBlockedTask: vi.fn(),
 }));
-vi.mock('../cosTaskGenerator.js', () => ({ checkStagePrecondition: vi.fn() }));
+vi.mock('../cos/cosTaskGenerator.js', () => ({ checkStagePrecondition: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(async id => {
     fixture.trace.push('cleanup');
@@ -83,7 +83,7 @@ vi.mock('../../lib/gitCommitProbe.js', async importOriginal => ({
 vi.mock('./agentErrorAnalysis.js', async importOriginal => ({
   ...(await importOriginal()), resolveFailedTaskUpdate: vi.fn(async () => ({ status: 'blocked' })),
 }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn() }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn() }));
@@ -114,8 +114,8 @@ vi.mock('./agentRepoStateVerification.js', async importOriginal => {
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
-import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cosAgentLifecycle.js';
-import { getActiveAgentsFromRunner } from '../cosRunnerClient.js';
+import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
+import { getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';

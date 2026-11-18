@@ -16,8 +16,8 @@ const recoveredPty = {
   kill: vi.fn(),
 };
 
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosRunnerClient.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn(),
   terminateAgentViaRunner: vi.fn(async () => ({ success: true, terminated: true })),
   connectTuiSessionViaRunner: vi.fn(() => ({
@@ -33,7 +33,7 @@ vi.mock('../shell.js', () => ({
   unregisterExternalSession: vi.fn(),
 }));
 
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn().mockResolvedValue({
     user: { grouped: { active: [{ id: 'task-1', description: 'Example task' }] } },
     cos: { grouped: {} },
@@ -44,7 +44,7 @@ vi.mock('../cosTaskStore.js', () => ({
 // so it comes from the real module — a re-implemented copy here would keep
 // passing if the real predicate changed (e.g. started treating `paused` as
 // terminal) while production behavior flipped underneath it.
-vi.mock('../cosAgentLifecycle.js', async (importOriginal) => ({
+vi.mock('../cos/cosAgentLifecycle.js', async (importOriginal) => ({
   ...(await importOriginal()),
   readAgentRecordOrUnreadable: vi.fn(),
 }));
@@ -55,9 +55,9 @@ vi.mock('../cosAgentLifecycle.js', async (importOriginal) => ({
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
-import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cosRunnerClient.js';
+import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
-import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cosAgentLifecycle.js';
+import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
 import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
 import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
 import { PATHS } from '../../lib/fileUtils.js';

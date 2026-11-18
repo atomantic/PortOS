@@ -9,8 +9,8 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { STATE_FILE } from '../../services/cosState.js';
-import { feedbackArchiveDate, isAgentFeedbackEligible } from '../../lib/cosAgentFeedback.js';
+import { STATE_FILE } from '../../services/cos/cosState.js';
+import { feedbackArchiveDate, isAgentFeedbackEligible } from '../../lib/cos/cosAgentFeedback.js';
 
 export function derivePendingFeedbackRefs(state) {
   return Object.entries(state?.agents || {})

@@ -1,4 +1,4 @@
-import { isLeaseLive } from './cosTaskClaim.js';
+import { isLeaseLive } from './cos/cosTaskClaim.js';
 import { spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
 
 const KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
@@ -6,7 +6,7 @@ const KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
 /** Correct a stopped task only from its own latest server-owned dispatch proof. */
 export async function reconcileSpawnBudget(taskId) {
   const [{ getTaskById, updateTask }, { readAgentsStateForSafetyCheck }] = await Promise.all([
-    import('./cosTaskStore.js'), import('./cosState.js'),
+    import('./cos/cosTaskStore.js'), import('./cos/cosState.js'),
   ]);
   const task = await getTaskById(taskId);
   const proof = task?.metadata?.spawnBudgetProof;

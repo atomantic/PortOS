@@ -80,8 +80,8 @@ import { initTaskLearning } from './taskLearning.js';
 import { initSpawner } from './subAgentSpawner.js';
 import { initCertRenewer } from './certRenewer.js';
 
-import * as cos from './cos.js';
-import { markCosAgentMigrationsSettled } from './cosState.js';
+import * as cos from './cos/cos.js';
+import { markCosAgentMigrationsSettled } from './cos/cosState.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.

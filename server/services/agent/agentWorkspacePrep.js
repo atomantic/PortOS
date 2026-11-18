@@ -31,8 +31,8 @@ import { withGitMutationLifetime } from '../../lib/gitMutationLifetime.js';
 import { basename, join, resolve } from 'path';
 import { existsSync } from 'fs';
 import { execGit } from '../../lib/execGit.js';
-import { emitLog } from '../cosEvents.js';
-import { updateTask, addTask } from '../cosTaskStore.js';
+import { emitLog } from '../cos/cosEvents.js';
+import { updateTask, addTask } from '../cos/cosTaskStore.js';
 import { getAppById } from '../apps.js';
 import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
@@ -117,7 +117,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
-  const { getAgents } = await import('../cosAgentLifecycle.js');
+  const { getAgents } = await import('../cos/cosAgentLifecycle.js');
   const agents = await getAgents().catch(err => {
     emitLog('warn', `🌳 Skipping worktree adoption for task ${taskId} — could not read the agent list: ${err.message}`, { taskId });
     return null;
@@ -158,7 +158,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
     if (refused) return { refused };
   }
   if (reviewTarget) {
-    const { validateCleanupReviewTarget } = await import('../cosMergeHandoff.js');
+    const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
     const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: holder.path, requireCheckout: true, launchTaskId: taskId });
     if (refused) return { refused };
   }
@@ -177,7 +177,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
  * @returns {Promise<boolean>} true when the holder was released
  */
 async function releaseOwnerlessForeignHolderForTask({ workspacePath, branchName, agentId, taskId }) {
-  const { getAgents } = await import('../cosAgentLifecycle.js');
+  const { getAgents } = await import('../cos/cosAgentLifecycle.js');
   const agents = await getAgents().catch(() => null);
   if (!Array.isArray(agents)) return false;
   const activeIds = protectedAgentIds(agents);
@@ -413,7 +413,7 @@ async function prepareRequestedWorktree({
  * Read-only: nothing here rebases, commits, pushes, moves or removes.
  */
 async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWorkspace }) {
-  const { getAgents } = await import('../cosAgentLifecycle.js');
+  const { getAgents } = await import('../cos/cosAgentLifecycle.js');
   const [agents, worktrees] = await Promise.all([
     getAgents().catch(() => null),
     listWorktrees(sourceWorkspace).catch(() => null),
@@ -542,7 +542,7 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
       result.cleanupReviewPinConsumed = true;
     }
     if (result.outcome === 'ready' && task.metadata?.cleanupReviewTarget) {
-      const { validateCleanupReviewTarget } = await import('../cosMergeHandoff.js');
+      const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
       const refused = await validateCleanupReviewTarget({ target: task.metadata.cleanupReviewTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
       if (refused) {
         await blockTask(task, refused, 'pr-head-moved');
@@ -589,7 +589,7 @@ async function refuseUnsafeLaunchTarget({ task, workspacePath }) {
   }
   const recoveryTarget = task.metadata?.cleanupReviewTarget;
   if (recoveryTarget) {
-    const { validateCleanupReviewTarget } = await import('../cosMergeHandoff.js');
+    const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
     const refused = recoveryTarget.repoPath !== workspacePath || resolveTaskTargetBranch(task.metadata) !== recoveryTarget.branch || prHeldForOperator(task)
       ? 'review-target-task-changed' : await validateCleanupReviewTarget({ target: recoveryTarget, workspacePath, launchTaskId: task.id });
     if (refused) {
@@ -814,7 +814,7 @@ async function adoptFeatureAgentWorktree(task) {
  * @returns {Promise<object|null>} the new worktree's info, or null to stay put
  */
 async function provisionConflictWorktree({ agentId, task, workspacePath }) {
-  const { getAgents } = await import('../cosAgentLifecycle.js');
+  const { getAgents } = await import('../cos/cosAgentLifecycle.js');
   const runningAgents = (await getAgents()).filter(a => a.status === 'running');
 
   const conflictResult = await detectConflicts(task, workspacePath, runningAgents).catch(err => {

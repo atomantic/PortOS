@@ -4,20 +4,20 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { getAgents } from '../services/cosAgentLifecycle.js';
-import { getAllTasks } from '../services/cosTaskStore.js';
-import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
-import { getPendingAgentFeedbackCount } from '../services/cosAgentFeedback.js';
-import { getRecentTasks, getTodayActivity } from '../services/cosReports.js';
+import { getAgents } from '../services/cos/cosAgentLifecycle.js';
+import { getAllTasks } from '../services/cos/cosTaskStore.js';
+import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
+import { getPendingAgentFeedbackCount } from '../services/cos/cosAgentFeedback.js';
+import { getRecentTasks, getTodayActivity } from '../services/cos/cosReports.js';
 import * as taskLearning from '../services/taskLearning.js';
-import { getActivityCalendar } from '../services/cosActivityCalendar.js';
+import { getActivityCalendar } from '../services/cos/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { parsePagination, validateRequest } from '../lib/validation.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
-import { cosActivityCalendarQuerySchema, cosDecisionsQuerySchema } from '../lib/cosValidation.js';
-import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
+import { cosActivityCalendarQuerySchema, cosDecisionsQuerySchema } from '../lib/cos/cosValidation.js';
+import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cos/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 import { requestHasHostControl } from '../services/authGate.js';
 
@@ -46,7 +46,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
     detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
-    // Settles the pending list against live agents — see lib/cosSpawnWindow.js.
+    // Settles the pending list against live agents — see lib/cos/cosSpawnWindow.js.
     getAgents().catch(err => { console.error(`❌ Failed to load agents: ${err.message}`); return []; })
   ]);
   const runningAgents = runningAgentsByTaskId(agents);
@@ -243,7 +243,7 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
     getAllTasks(),
     // The dashboard widget renders this queue total beside its own "N agents
     // running" line, so a raw pending count showed the one task already being
-    // worked on both — see lib/cosSpawnWindow.js.
+    // worked on both — see lib/cos/cosSpawnWindow.js.
     getAgents().catch(() => [])
   ]);
   const runningAgents = runningAgentsByTaskId(agents);

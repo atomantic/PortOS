@@ -12,7 +12,7 @@ import {
   sunoSongFields,
   sunoSongIdsFromHrefs,
 } from './musicVideoAutonomous.js';
-import { sanitizeTaskMetadata } from '../cosValidation.js';
+import { sanitizeTaskMetadata } from '../cos/cosValidation.js';
 import { musicVideoAutonomousResumeSchema, musicVideoAutonomousStartSchema } from './musicVideoValidation.js';
 
 describe('normalizeAutonomousBrief', () => {

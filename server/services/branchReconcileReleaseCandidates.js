@@ -56,7 +56,7 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   const options = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount ?? null });
   const open = JSON.parse(await execGh(['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number', '--limit', '1'], undefined, options));
   if (!Array.isArray(open) || open.length) return false;
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const { listWorktrees } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');

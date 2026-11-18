@@ -91,23 +91,23 @@ const NARROWED = [
     'probes runtime capability only for a non-default per-stage request'],
   ['routes/mediaJobs.js', 'services/videoGen/prepareParams.js',
     'loads local render preparation only when retrying a local video'],
-  ['services/cosLocalEndpointSlots.js', 'services/promptRunner.js',
+  ['services/cos/cosLocalEndpointSlots.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/cos.js', 'services/promptRunner.js',
+  ['services/cos/cos.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
   ['services/agent/agentFinalization.js', 'services/promptRunner.js',
     'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/agent/agentFinalization.js', 'services/cosTaskGenerator.js',
+  ['services/agent/agentFinalization.js', 'services/cos/cosTaskGenerator.js',
     'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/investigationTaskProducer.js', 'services/cos.js',
+  ['services/investigationTaskProducer.js', 'services/cos/cos.js',
     'queues investigation tasks through the task store, not the CoS daemon'],
-  ['services/repoIntake.js', 'services/cos.js',
+  ['services/repoIntake.js', 'services/cos/cos.js',
     'queues intake tasks through the task store, not the CoS daemon'],
-  ['services/askPromote.js', 'services/cos.js',
+  ['services/askPromote.js', 'services/cos/cos.js',
     'queues promoted tasks through the task store, not the CoS daemon'],
-  ['routes/gsd.js', 'services/cos.js',
+  ['routes/gsd.js', 'services/cos/cos.js',
     'queues GSD tasks through the task store, not the CoS daemon'],
-  ['routes/apps/agents.js', 'services/cos.js',
+  ['routes/apps/agents.js', 'services/cos/cos.js',
     'lists agents from the declaring agent modules, not the CoS daemon'],
   ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
     'reads cleaner request policy without loading execution backends'],
@@ -180,7 +180,7 @@ const NARROWED = [
     'needs inferTuiCommand, which providerVendors.js declares'],
   ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
     'needs only the pure pipelineStages.js identity leaf'],
-  ['services/cosTaskIntake.js', 'lib/validation.js',
+  ['services/cos/cosTaskIntake.js', 'lib/validation.js',
     'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
   ['services/brainStorage.js', 'services/instances.js',
     'needs getInstanceId, which instanceIdentity.js declares'],
@@ -223,9 +223,9 @@ const NARROWED = [
     'loads vocal-stem storage only when picking the alignment audio'],
   ['services/musicVideo/vocalSeparation.js', 'services/musicVideo/vocalStem.js',
     'loads vocal-stem storage only when attaching a separated stem'],
-  ['services/cosAgentHistory.js', 'services/cosAgentLifecycle.js',
+  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentLifecycle.js',
     'loads agent lifecycle storage inside the archived-agent lookup'],
-  ['services/cosAgentHistory.js', 'services/cosAgentIndex.js',
+  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentIndex.js',
     'loads agent index storage inside the archived-agent lookup'],
 ];
 
@@ -256,7 +256,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
     expect(reaches('services/agent/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
-    expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
+    expect(reaches('services/apps.js', 'lib/cos/cosValidation.js')).toBe(true);
     expect(reaches('services/appProcessTypes.js', 'services/appProcessTypes.js')).toBe(true);
     expect(reaches('services/streamingDetect.js', 'services/appProcessTypes.js')).toBe(true);
     expect(reaches('services/appProcessStatus.js', 'services/apps.js')).toBe(true);
@@ -377,9 +377,9 @@ const DEFERRED = [
     'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
   ['services/agent/agentManagement.js', 'lib/privateSecuritySandbox.js',
     'loads sandbox cleanup only for private assessments', '../../lib/privateSecuritySandbox.js'],
-  ['services/cos.js', 'services/persistentMindAdapter.js',
+  ['services/cos/cos.js', 'services/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
-    './persistentMindAdapter.js'],
+    '../persistentMindAdapter.js'],
   ['services/promptRunner.js', 'services/providerExecutionReadiness.js',
     'runs readiness only on the TUI execution branch, not when a run is built or classified',
     './providerExecutionReadiness.js'],
@@ -392,9 +392,9 @@ const DEFERRED = [
   ['services/runner.js', 'services/ollamaAgentContext.js',
     'needs the daemon manager only for an ollama-backed CLI run; the call was already predicate-gated',
     './ollamaAgentContext.js'],
-  ['services/reviewQueue.js', 'services/cosAgentFeedback.js',
+  ['services/reviewQueue.js', 'services/cos/cosAgentFeedback.js',
     'loads feedback persistence only when gathering or rating CoS feedback',
-    './cosAgentFeedback.js'],
+    './cos/cosAgentFeedback.js'],
   ['services/reviewQueue.js', 'services/askPromote.js',
     'loads Ask promotion orchestration only for an explicit promotion action',
     './askPromote.js'],
@@ -433,7 +433,7 @@ describe('deferred imports stay deferred (#6156)', () => {
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
     expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
-    expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
+    expect(reaches('services/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });
 });
@@ -443,13 +443,13 @@ describe('deferred imports stay deferred (#6156)', () => {
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
 const SELECTION_CUTS = [
-  ['services/cosClaimOwnershipState.js', 'services/cosClaimOwnership.js',
+  ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
     'never re-exports boot observers into notification producers'],
-  ['services/memoryConfig.js', 'services/cos.js',
+  ['services/memoryConfig.js', 'services/cos/cos.js',
     'updates memory approval counts through the declaring agent lifecycle module'],
-  ['services/worktreeManager.js', 'services/cosClaimOwnership.js',
+  ['services/worktreeManager.js', 'services/cos/cosClaimOwnership.js',
     'shares the ownership fence and trusted reader without reconciliation dependencies'],
   ['services/promptRunner.js', 'services/compositeProviders.js',
     'uses the toolkit resolver already registered before runners start'],
@@ -494,7 +494,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
  * on macOS, against ~445ms for the same import in a quiet node process:
  *
  *   routes/imageGen.js ......... 29,789ms   (beforeAll -> "Hook timed out in 10000ms")
- *   services/cosToolRegistry.js  34,571ms   (it()      -> "Test timed out in 10000ms")
+ *   services/cos/cosToolRegistry.js  34,571ms   (it()      -> "Test timed out in 10000ms")
  *   routes/settings.js ......... 28,184ms   (it(), then 530-970ms per re-import)
  *
  * Under the flat 10s budget these files failed with zero failing assertions, in
@@ -519,7 +519,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 const HOISTED = [
   ['routes/imageGen.multipart.test.js', './imageGen.js',
     'the route graph costs ~30s to transform cold, which a beforeAll charges to hookTimeout'],
-  ['services/beeperOutboxHumanGate.test.js', './cosToolRegistry.js',
+  ['services/beeperOutboxHumanGate.test.js', './cos/cosToolRegistry.js',
     'the CoS tool registry costs ~35s to transform cold, which an it() charges to testTimeout'],
   ['routes/settings.secretsStrip.test.js', './settings.js',
     'warms the graph once so each vi.resetModules() re-import costs under a second'],

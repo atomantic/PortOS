@@ -3,7 +3,7 @@ import { normalizePersistentMindMaintainer, maintainerInstructionBlock } from '.
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 
 export async function describePersistentMindMaintainerSetup({ config } = {}) {

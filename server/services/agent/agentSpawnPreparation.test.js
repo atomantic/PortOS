@@ -4,10 +4,10 @@ const loadState = vi.hoisted(() => vi.fn());
 const hasActiveTaskOwner = vi.hoisted(() => vi.fn());
 const validCleanupRefillSource = vi.hoisted(() => vi.fn());
 
-vi.mock('../cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('../cosState.js', () => ({ loadState }));
+vi.mock('../cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('../cos/cosState.js', () => ({ loadState }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner }));
-vi.mock('../cosTaskStore.js', () => ({ getTaskById: vi.fn(), updateTask: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({ getTaskById: vi.fn(), updateTask: vi.fn() }));
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn() }));
 vi.mock('../appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
@@ -16,8 +16,8 @@ const removeWorktree = vi.hoisted(() => vi.fn(async () => ({ removed: true })));
 vi.mock('../worktreeManager.js', () => ({ removeWorktree }));
 
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
-import { cosEvents, emitLog } from '../cosEvents.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { newSpawnBudgetEpisode } from '../spawnBudgetProof.js';

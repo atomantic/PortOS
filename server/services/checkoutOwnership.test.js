@@ -15,13 +15,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
 vi.mock('./agent/agentAppWorkspace.js', () => ({ getAppWorkspace: vi.fn() }));
 
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { getAppWorkspace } from './agent/agentAppWorkspace.js';
 import {
   checkoutOwnerHoldReason, describeCheckoutOwnership, __resetCheckoutOwnerGate,

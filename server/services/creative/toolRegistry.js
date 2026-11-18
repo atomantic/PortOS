@@ -20,7 +20,7 @@
 
 import { getCreativeAutonomyMode } from '../../lib/domainAutonomy.js';
 import { getToolMetadata, getToolSpecs as getVoiceToolSpecs } from '../voice/tools.js';
-import { loadState } from '../cosState.js';
+import { loadState } from '../cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { appendCreativeLedgerEntry, argsDigest } from './creativeRunLedger.js';
 import { COST_CLASSES, BUDGETED_COST_CLASSES } from './tools/shared.js';

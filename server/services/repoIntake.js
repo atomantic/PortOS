@@ -23,7 +23,7 @@
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { posix } from 'path';
-import { addTask } from './cosTaskStore.js';
+import { addTask } from './cos/cosTaskStore.js';
 import { getAppById, PORTOS_APP_ID } from './apps.js';
 import { prepareScanReportDirectory, reportPathForId } from './malwareScanReports.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
@@ -74,7 +74,7 @@ Use that path as SCAN_DIR. Adhere to every Operational Invariant in the workflow
     {
       description: `Malware scan: ${repoLabel(link)}`,
       // Multi-line ⇒ the agent PROMPT: `cosTaskStore.addTask` routes it to
-      // `metadata.prompt` on write (#4153, server/lib/cosTaskPrompt.js).
+      // `metadata.prompt` on write (#4153, server/lib/cos/cosTaskPrompt.js).
       context,
       slashdoCommand: 'scan',
       slashdoArgs: `--report-path-allow-anywhere --report-path ${JSON.stringify(reportPath)}`,

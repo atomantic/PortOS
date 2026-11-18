@@ -106,7 +106,7 @@ async function agentDataCleanup() {
   // worktree/transcript is never reaped or rm'd out from under a later resume.
   // Lazy, and the repository rather than cosState, to stay off the
   // subAgentSpawner import path.
-  const storedStatuses = await import('../cosAgentRepository.js')
+  const storedStatuses = await import('../cos/cosAgentRepository.js')
     .then(m => m.listStoredAgentStatuses())
     .catch((err) => {
       console.warn(`⚠️ Sentinel sweep could not read stored agent statuses: ${err.message}`)

@@ -10,7 +10,7 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: async () => {} }));
-vi.mock('./cosRunnerClient.js', () => ({ isRunnerAvailable: async () => false, isRunnerReachable: async () => false,
+vi.mock('./cos/cosRunnerClient.js', () => ({ isRunnerAvailable: async () => false, isRunnerReachable: async () => false,
   initCosRunnerConnection() {}, onCosRunnerEvent() {} }));
 vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: async () => {} }));
 vi.mock('./agent/agentOrchestrator.js', () => ({ spawnAgentForTask: async () => {} }));

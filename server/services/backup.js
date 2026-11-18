@@ -2237,7 +2237,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
     hold: async (inner, { srcDir, scope }) => {
       const snapshotLegacyConfig = await snapshotLegacyCosConfig(srcDir, scope);
-      const { withLiveCosRestore } = await import('./cosState.js');
+      const { withLiveCosRestore } = await import('./cos/cosState.js');
       return withLiveCosRestore(inner, { snapshotLegacyConfig });
     },
   },

@@ -40,7 +40,7 @@ export async function readBranchCompletionPolicies({ repairIndex = true } = {}) 
 }
 
 async function readPolicies(repairIndex) {
-  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  const { readAgentsStateForSafetyCheck } = await import('./cos/cosState.js');
   const snapshot = await readAgentsStateForSafetyCheck();
   if (!snapshot.trusted || !isPlainObject(snapshot.agents)) throw unavailableBecause(new Error('live agent state is untrusted'));
   const agents = new Map(Object.entries(snapshot.agents));
@@ -56,7 +56,7 @@ async function readPolicies(repairIndex) {
   });
   const index = JSON.parse(raw);
   if (!isPlainObject(index)) throw unavailableBecause(new Error('agent index is not an object'));
-  const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, pruneArchivedRecordCache } = await import('./cosAgentIndex.js');
+  const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, pruneArchivedRecordCache } = await import('./cos/cosAgentIndex.js');
   pruneArchivedRecordCache(new Set(Object.keys(index)));
   const entries = Object.entries(index).filter(([id]) => !agents.has(id));
   const dangling = [];
@@ -91,7 +91,7 @@ async function readPolicies(repairIndex) {
 
 // Fire-and-forget repair of the source; the read above already ignores these rows.
 function dropDanglingIndexRows(ids) {
-  import('./cosAgentIndex.js')
+  import('./cos/cosAgentIndex.js')
     .then(({ removeDanglingAgentIndexEntries }) => removeDanglingAgentIndexEntries(ids))
     .then(count => { if (count) console.log(`🧹 Dropped ${count} agent-index row(s) with no archive directory`); })
     .catch(error => console.error(`❌ Failed to drop dangling agent-index rows: ${error.message}`));
@@ -218,7 +218,7 @@ async function isVacuousReviewObligation(input, decision, tip) {
  */
 export async function recordBranchCompletionPolicy({ agentId, task, repoPath, branch, prUrl }) {
   if (!branch || !prUrl || !explicitPrCompletion(task)) return;
-  const { getAgentRecord, updateAgent } = await import('./cosAgentLifecycle.js');
+  const { getAgentRecord, updateAgent } = await import('./cos/cosAgentLifecycle.js');
   const agent = await getAgentRecord(agentId);
   if (!agent) return;
   // The registered launch wins over a task edited during the run. Legacy

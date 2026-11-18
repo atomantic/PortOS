@@ -36,7 +36,7 @@ vi.mock('../lib/detachedSpawn.js', () => ({
   spawnDetached: mock.dashboardOpen,
 }));
 vi.mock('./managedAppRepositories.js', () => ({ syncManagedAppFork: mock.syncFork }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: mock.addTask }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: mock.addTask }));
 
 import { updateApp } from './appUpdater.js';
 

@@ -21,8 +21,8 @@ vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks,
 }));
-vi.mock('./cosAgentLifecycle.js', () => ({ filterLiveAgentIds: vi.fn(async (ids) => ids) }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ filterLiveAgentIds: vi.fn(async (ids) => ids) }));
+vi.mock('./cos/cosState.js', () => ({
   readPersistentMindStateForSafetyCheck: vi.fn(async () => ({
     trusted: true,
     persistentMind: { queuedMessages: [], activeTurn: null },

@@ -41,7 +41,7 @@ import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agent/agentRunEventLog.js';
-import { loadState } from '../services/cosState.js';
+import { loadState } from '../services/cos/cosState.js';
 import {
   appendPersistentMindAnnotation,
   createPersistentMindMemory,
@@ -84,7 +84,7 @@ import {
   persistentMindUsageLimitRetryAt,
 } from '../services/persistentMindSupervisor.js';
 
-import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cosToolRegistry.js';
+import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cos/cosToolRegistry.js';
 import { readPersistentMindManagedApps } from '../services/persistentMindManagedApps.js';
 const router = Router();
 router.use('/mind/recipes', mindToolRecipeRoutes);

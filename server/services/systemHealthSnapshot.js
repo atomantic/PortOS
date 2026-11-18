@@ -2,9 +2,9 @@ import os from 'os';
 import { stat, statfs } from 'fs/promises';
 import { listProcessesStrict } from './pm2.js';
 import { getAppStatusSummary, annotateExpectedExit } from './appProcessStatus.js';
-import { getAgents } from './cosAgentLifecycle.js';
-import { getPendingTaskIds } from './cosTaskStore.js';
-import { getStatus } from './cos.js';
+import { getAgents } from './cos/cosAgentLifecycle.js';
+import { getPendingTaskIds } from './cos/cosTaskStore.js';
+import { getStatus } from './cos/cos.js';
 import { getSelf } from './instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from './updateChecker.js';
@@ -14,7 +14,7 @@ import { parseFilesystemStats } from '../lib/fileCore.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 import { checkGhHealth } from './github.js';
 import { getMediaCapacity } from './mediaCapacity.js';
-import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
+import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cos/cosSpawnWindow.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
@@ -353,7 +353,7 @@ async function pruneStaleDismissals(staleDismissals, dismissedWarnings) {
 // CoS status. Active and queued BOTH come off the one agent read when it is
 // readable — mixing `getStatus()`'s tally with a separately-read queue lets the
 // two skew, which is the defect one layer down (services/activeProcessing.js).
-// A task a live agent already holds is active, not queued (lib/cosSpawnWindow.js).
+// A task a live agent already holds is active, not queued (lib/cos/cosSpawnWindow.js).
 // An unreadable list degrades to null — unknown, which the widget hides —
 // rather than to a manufactured zero.
 function buildCosInfo({ cosStatus, cosPendingTaskIds, cosAgents }) {

@@ -19,7 +19,7 @@ import { readCosStateAgents } from './_cosStateAgents.js';
 
 const BATCH = 100;
 
-// Frozen copy of the projection columns lib/cosAgentRows.js derives.
+// Frozen copy of the projection columns lib/cos/cosAgentRows.js derives.
 function rowColumns(agent) {
   const timestamp = (value) => {
     const ms = typeof value === 'string' || typeof value === 'number' ? Date.parse(value) : NaN;

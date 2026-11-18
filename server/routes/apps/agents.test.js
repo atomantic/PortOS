@@ -6,17 +6,17 @@ import agentRoutes from './agents.js';
 vi.mock('../../services/apps.js', () => ({
   getAppById: vi.fn(),
 }));
-vi.mock('../../services/cosAgentLifecycle.js', () => ({
+vi.mock('../../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(),
 }));
-vi.mock('../../services/cosAgentIndex.js', () => ({
+vi.mock('../../services/cos/cosAgentIndex.js', () => ({
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
 }));
 
 import * as appsService from '../../services/apps.js';
-import { getAgentDates, getAgentsByDate } from '../../services/cosAgentIndex.js';
-import { getAgents } from '../../services/cosAgentLifecycle.js';
+import { getAgentDates, getAgentsByDate } from '../../services/cos/cosAgentIndex.js';
+import { getAgents } from '../../services/cos/cosAgentLifecycle.js';
 
 const APP = { id: 'app-001', name: 'Widget' };
 

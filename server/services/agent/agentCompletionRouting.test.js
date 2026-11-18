@@ -22,21 +22,21 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../cosState.js', () => ({
+vi.mock('../cos/cosState.js', () => ({
   getConfig: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(true),
   getTaskById: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
   getAgentRecord: vi.fn().mockResolvedValue(null),
-  // The recovery path reaches for this via `await import('../cosAgentLifecycle.js')`.
+  // The recovery path reaches for this via `await import('../cos/cosAgentLifecycle.js')`.
   getAgent: vi.fn().mockResolvedValue(null),
 }));
 
@@ -68,8 +68,8 @@ vi.mock('./agentCompletionCleanup.js', () => ({
 
 import { handleAgentCompletion } from './agentLifecycle.js';
 import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
-import { completeAgent, getAgent, getAgentRecord } from '../cosAgentLifecycle.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { completeAgent, getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { retireDeadAgent } from './agentFinalization.js';
 import { handleOrphanedTask } from './agentManagement.js';
 

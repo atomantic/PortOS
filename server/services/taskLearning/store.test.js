@@ -1,4 +1,4 @@
-import { cosEvents } from '../cosEvents.js';
+import { cosEvents } from '../cos/cosEvents.js';
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';

@@ -12,22 +12,22 @@ afterAll(cleanupTempDataRoots);
 const store = vi.hoisted(() => ({ task: null, parent: null, agent: null, app: null, owners: [] }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async id => id === store.app.id ? store.app : null) }));
 vi.mock('./branchReconcileOutcome.js', () => ({ getBranchReconcileOutcome: vi.fn(() => { throw new Error('Receipt store must not be read'); }) }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => id === store.task?.id ? structuredClone(store.task) : null),
   updateTask: vi.fn(async (_id, patch) => {
     store.task = { ...store.task, ...patch, metadata: { ...store.task.metadata, ...patch.metadata } };
     return store.task;
   }),
 }));
-vi.mock('./cosState.js', async original => ({ ...await original(), loadState: vi.fn(async () => ({ agents: {} })), readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosState.js', async original => ({ ...await original(), loadState: vi.fn(async () => ({ agents: {} })), readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-instance') }));
-vi.mock('./cosClaimOwnership.js', async original => ({
+vi.mock('./cos/cosClaimOwnership.js', async original => ({
   ...await original(), readClaimOwnershipAgents: vi.fn(async () => store.owners),
 }));
 vi.mock('./branchCompletionPolicy.js', async original => ({
   ...await original(), readBranchCompletionPolicies: vi.fn(async () => []),
 }));
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => store.agent),
   getAgentRecord: vi.fn(async id => id === store.parent?.id ? store.parent : store.agent),
   updateAgent: vi.fn(async (_id, patch) => {
@@ -41,12 +41,12 @@ vi.mock('./agent/agentCompletion.js', () => ({ processAgentCompletion: vi.fn(asy
 vi.mock('./agent/agentCompletionCleanup.js', () => ({ removeCompletionSentinel: vi.fn(async () => {}) }));
 vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
 vi.mock('./codeReview.js', async original => ({ ...await original(), getGoalFidelityConfig: vi.fn(async () => null) }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 
 import { PATHS } from '../lib/paths.js';
 import { getAppById } from './apps.js';
-import { getTaskById, updateTask } from './cosTaskStore.js';
-import { completeAgent } from './cosAgentLifecycle.js';
+import { getTaskById, updateTask } from './cos/cosTaskStore.js';
+import { completeAgent } from './cos/cosAgentLifecycle.js';
 import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agent/agentFinalization.js';
 import { prepareAgentSpawn } from './agent/agentSpawnPreparation.js';
 import { settleRetirementReviewRun } from './branchReconcileCompletion.js';

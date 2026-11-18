@@ -11,12 +11,12 @@ vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob:
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
 vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models, getActiveModelOperationCount: deps.modelCount }));
 vi.mock('./persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: deps.mindRunning }));
-vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: deps.runnerAgents }));
+vi.mock('./cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: deps.runnerAgents }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: () => null }));
-vi.mock('./cosTaskStore.js', () => ({ getPendingTaskIds: deps.tasks }));
-vi.mock('./cos.js', () => ({ getStatus: deps.status }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: deps.agents }));
-vi.mock('./cosState.js', () => ({ readPersistentMindStateForSafetyCheck: deps.mind }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getPendingTaskIds: deps.tasks }));
+vi.mock('./cos/cos.js', () => ({ getStatus: deps.status }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgents: deps.agents }));
+vi.mock('./cos/cosState.js', () => ({ readPersistentMindStateForSafetyCheck: deps.mind }));
 vi.mock('./appOperations.js', () => ({ listActiveAppOperations: deps.operations }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: deps.updating }));
 vi.mock('./runner.js', () => ({ getActiveRunCount: deps.runCount, getActiveRunSummaries: async () => [] }));
@@ -228,7 +228,7 @@ describe('queued agent count', () => {
   it('does not count a pending task a running agent already holds', async () => {
     deps.tasks.mockResolvedValue(['task-spawning', 'task-waiting']);
     // `startedAt` is what tells a live spawn from a zombie record — registerAgent
-    // always stamps it (see lib/cosSpawnWindow.js's grace window).
+    // always stamps it (see lib/cos/cosSpawnWindow.js's grace window).
     deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'running', taskId: 'task-spawning', startedAt: new Date().toISOString() }]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ trusted: true, active: 1, queued: 1 });

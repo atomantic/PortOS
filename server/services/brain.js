@@ -18,7 +18,7 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';

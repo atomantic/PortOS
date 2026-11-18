@@ -128,13 +128,13 @@ describe('lenient-read stores refuse to write over an untrusted file', () => {
       await rm(agentsDir(), { recursive: true, force: true });
       await mkdir(join(agentsDir(), '2026-10-01', 'agent-a'), { recursive: true });
       await mkdir(join(agentsDir(), '2026-10-02', 'agent-b'), { recursive: true });
-      index = await import('./cosAgentIndex.js');
+      index = await import('./cos/cosAgentIndex.js');
     });
 
     it('rebuilds a malformed index from the date buckets and never saves an empty map', async () => {
       for (const bytes of ['{truncated', '', '[]']) {
         vi.resetModules();
-        index = await import('./cosAgentIndex.js');
+        index = await import('./cos/cosAgentIndex.js');
         await write(indexPath(), bytes);
         const loaded = await index.loadAgentIndex();
         expect([...loaded.entries()].sort()).toEqual([['agent-a', '2026-10-01'], ['agent-b', '2026-10-02']]);
@@ -154,7 +154,7 @@ describe('lenient-read stores refuse to write over an untrusted file', () => {
       expect([...(await index.loadAgentIndex()).keys()].sort()).toEqual(['agent-a', 'agent-b']);
       disk.fault = null;
       vi.resetModules();
-      index = await import('./cosAgentIndex.js');
+      index = await import('./cos/cosAgentIndex.js');
       expect(Object.fromEntries(await index.loadAgentIndex())).toEqual(healthy);
       expect(JSON.parse(await readFile(indexPath(), 'utf8'))).toEqual(healthy);
     });

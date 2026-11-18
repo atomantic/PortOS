@@ -39,7 +39,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getAppById, getAllApps, PORTOS_APP_ID } from './apps.js';
 import { getBranch, getStatus, isRepo } from './git.js';
 import { listAllSessions } from './shell.js';
-import { getAllTasks } from './cosTaskStore.js';
+import { getAllTasks } from './cos/cosTaskStore.js';
 
 const CONTEXTS_FILE = join(PATHS.data, 'workspace-contexts.json');
 

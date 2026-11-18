@@ -89,7 +89,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
     },
   })),
 }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => ({
     user: { grouped: { pending: [{ id: 'task-1' }], in_progress: [] } },
     cos: {
@@ -98,10 +98,10 @@ vi.mock('./cosTaskStore.js', () => ({
     },
   })),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   getStatus: vi.fn(async () => ({ running: true, paused: false, activeAgents: 0, pausedAgents: 0 })),
 }));
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => []),
 }));
 vi.mock('./settings.js', () => ({
@@ -124,9 +124,9 @@ const mediaModelStorage = await import('./mediaModelStorage.js');
 const modelStoreStorage = await import('./modelStoreStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
-const { getAgents } = await import('./cosAgentLifecycle.js');
-const { getAllTasks } = await import('./cosTaskStore.js');
-const { getStatus } = await import('./cos.js');
+const { getAgents } = await import('./cos/cosAgentLifecycle.js');
+const { getAllTasks } = await import('./cos/cosTaskStore.js');
+const { getStatus } = await import('./cos/cos.js');
 const settings = await import('./settings.js');
 const modelManifest = await import('./modelManifest.js');
 const {
@@ -306,7 +306,7 @@ describe('system resource reporting', () => {
 
   it('moves a task its agent already holds from pending to in flight, without changing the total', async () => {
     // An agent is registered as running a beat before its task leaves 'pending'
-    // (lib/cosSpawnWindow.js), so counting the two lists independently reported
+    // (lib/cos/cosSpawnWindow.js), so counting the two lists independently reported
     // the same task as queued AND running — "Agent pending 1 / Agent running 1"
     // for a queue of one. It must move sides, not appear on both and not vanish.
     getAllTasks.mockResolvedValueOnce({

@@ -11,8 +11,8 @@ const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch
 // Applicability is decided by the quota-burn resolver (covered in
 // quotaBurnInvoke.test.js); the invoke double below returns its not-applicable
 // verdict so these cases pin only the run's reaction to it.
-vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
+vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
 vi.mock('./onDemandHandoff.js', () => ({ getOnDemandHandoffs: vi.fn(async () => ({})) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
@@ -371,7 +371,7 @@ describe('manual maintenance run', () => {
 // Regression: queued maintenance must identify its real agent immediately and
 // publish persisted transitions, without waiting for the retry sweep.
 it('publishes queued, running, and completed progress with the active agent link identity', async () => {
-  const { cosEvents } = await import('./cosEvents.js');
+  const { cosEvents } = await import('./cos/cosEvents.js');
   const updates = [];
   const listener = run => updates.push(run);
   cosEvents.on('maintenance:updated', listener);

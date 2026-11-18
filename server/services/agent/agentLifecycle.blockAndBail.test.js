@@ -55,12 +55,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: TEMP_ROOT });
 });
 
-vi.mock('../cosRunnerClient.js', async (importOriginal) => ({
+vi.mock('../cos/cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawnAgentViaRunner: vi.fn(),
   getRunnerHealth: vi.fn().mockResolvedValue({ available: true, uptime: 3600 }),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
@@ -75,16 +75,16 @@ vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
-vi.mock('../cosState.js', async importOriginal => ({
+vi.mock('../cos/cosState.js', async importOriginal => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: proofState.agents })),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
 }));
@@ -145,16 +145,16 @@ import {
 } from '../modelAbuseGuard.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { buildAgentPrompt } from './agentPromptBuilder.js';
-import { registerAgent } from '../cosAgentLifecycle.js';
+import { registerAgent } from '../cos/cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider } from './agentCliSpawning.js';
-import { spawnAgentViaRunner } from '../cosRunnerClient.js';
-import { getConfig } from '../cosState.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { spawnAgentViaRunner } from '../cos/cosRunnerClient.js';
+import { getConfig } from '../cos/cosState.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import {

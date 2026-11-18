@@ -7,7 +7,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { releasePublicationRequestSchema } from '../lib/releasePublication.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
-import { getAgentRecord, recordAgentReleasePublication } from './cosAgentLifecycle.js';
+import { getAgentRecord, recordAgentReleasePublication } from './cos/cosAgentLifecycle.js';
 
 const SHA = /^[a-f0-9]{40}$/;
 const refuse = (message) => { throw new ServerError(message, { status: 409, code: 'RELEASE_PUBLICATION_UNVERIFIED' }); };

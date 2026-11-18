@@ -10,7 +10,7 @@
  * (`investigationRetry.js`) must use `cosTaskStore` directly or it closes a load-time cycle.
  */
 
-import { addTask, getAllTasks } from './cosTaskStore.js';
+import { addTask, getAllTasks } from './cos/cosTaskStore.js';
 import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_CIRCUIT_WINDOW_MS,

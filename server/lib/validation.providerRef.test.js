@@ -15,7 +15,7 @@ import {
   llmSchema,
   runSchema,
 } from './validation.js';
-import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cosValidation.js';
+import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cos/cosValidation.js';
 import { providerActiveSchema, providerCreateSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
 
 const ACCEPTED = ['claude-code', 'pi.tui@nvidia-nim-free', 'claude.cli@anthropic+corp-auth', 'direct.api@ollama'];

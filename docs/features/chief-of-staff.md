@@ -4,9 +4,9 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 
 ## Architecture
 
-- **Task Store** (`server/services/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cosTaskRepository.js` is the persistence layer
-- **Agent Records** (`server/services/cosAgentRepository.js`): The running and recently finished agents as `cos_agents` rows; `cosState.saveState()` writes only the rows whose record changed
-- **CoS Service** (`server/services/cos.js`): State management, health monitoring, task evaluation
+- **Task Store** (`server/services/cos/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cos/cosTaskRepository.js` is the persistence layer
+- **Agent Records** (`server/services/cos/cosAgentRepository.js`): The running and recently finished agents as `cos_agents` rows; `cosState.saveState()` writes only the rows whose record changed
+- **CoS Service** (`server/services/cos/cos.js`): State management, health monitoring, task evaluation
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
 - **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs

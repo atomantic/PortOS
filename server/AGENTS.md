@@ -15,7 +15,7 @@ These apply to Express/service/model code; the root `AGENTS.md` rules always app
 ## Write serialization and throughput
 
 - **Serialize writes that can race on a shared record server-side**, at the file level: every PATCH awaits the previous one before reading state. Client guards are unreliable. A `Map<recordId, Promise>` is not enough when records share one state file; use one tail per file. Example: `queueSeriesIssuesWrite` in `server/services/pipeline/issuesShared.js`.
-- **High-frequency state writes batch.** A per-line `withStateLock → loadState → saveState` mutation (`appendAgentOutput` in `server/services/cosAgentLifecycle.js`) is fine at human pace, not from PTY or tool-call streams: add an array variant (`appendAgentOutputLines`), flush on a ~250ms debounce, and drain the buffer in the producer's cleanup before the final state write.
+- **High-frequency state writes batch.** A per-line `withStateLock → loadState → saveState` mutation (`appendAgentOutput` in `server/services/cos/cosAgentLifecycle.js`) is fine at human pace, not from PTY or tool-call streams: add an array variant (`appendAgentOutputLines`), flush on a ~250ms debounce, and drain the buffer in the producer's cleanup before the final state write.
 
 ## PostgreSQL parameters
 

@@ -8,13 +8,13 @@ import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-reset-') }));
 const ownership = vi.hoisted(() => ({ agents: [], active: [], runner: [], task: null, updates: [], updateResult: null }));
-vi.mock('./cosClaimOwnershipState.js', () => ({
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({
   withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: async () => ownership.agents,
 }));
 vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => ownership.active }));
-vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => ownership.runner }));
+vi.mock('./cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => ownership.runner }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.id === id ? ownership.task : null,
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.id === id ? ownership.task : null,
   updateTask: async (id, patch) => { ownership.updates.push({ id, patch }); if (ownership.updateResult) return ownership.updateResult;
     ownership.task = { ...ownership.task, ...patch }; return ownership.task; },
   addTask: async () => { throw new Error('Unexpected retired continuation registration'); } }));

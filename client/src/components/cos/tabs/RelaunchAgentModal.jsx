@@ -45,7 +45,7 @@ const RELAUNCH_MESSAGES = {
  */
 export default function RelaunchAgentModal({ agent, providers, providersLoaded = true, apps, onDone, onClose }) {
   const currentProvider = agent?.metadata?.providerId || agent?.metadata?.provider || '';
-  // The listing bounds this text (server/lib/cosAgentListProjection.js). The
+  // The listing bounds this text (server/lib/cos/cosAgentListProjection.js). The
   // dialog only DISPLAYS it — the relaunch call sends provider/model/effort/app
   // and a note, never the description — so the rest is fetched only if the reader
   // opens it, instead of blocking this dialog on a request.

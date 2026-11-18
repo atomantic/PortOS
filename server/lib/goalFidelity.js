@@ -14,7 +14,7 @@
  */
 
 import { LOCAL_LLM_REVIEWERS, normalizeReviewerEffort, normalizeReviewerModel } from './reviewerConfig.js';
-import { taskContextBlock } from './cosTaskPrompt.js';
+import { taskContextBlock } from './cos/cosTaskPrompt.js';
 import { isTruthyMeta } from './metadataFlags.js';
 
 /**

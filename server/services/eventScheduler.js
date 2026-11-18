@@ -5,7 +5,7 @@
  * Replaces setInterval with more robust scheduling.
  */
 
-import { cosEvents, emitLog } from './cosEvents.js'
+import { cosEvents, emitLog } from './cos/cosEvents.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { recurrenceRuleSchema } from '../lib/recurrenceValidation.js'
 // Syntax/range validation is shared with every save boundary and the browser

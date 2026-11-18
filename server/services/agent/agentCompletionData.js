@@ -14,7 +14,7 @@ const lease = stat => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs
 const validRun = agent => /^[A-Za-z0-9_-]+$/.test(agent?.id || '') && Number.isFinite(Date.parse(agent.startedAt));
 async function directory(agent) {
   if (!validRun(agent)) throw new Error('completion-data-run-unverified');
-  const { getAgentDir, loadAgentIndex } = await import('../cosAgentIndex.js');
+  const { getAgentDir, loadAgentIndex } = await import('../cos/cosAgentIndex.js');
   // Cold index migration can move flat run directories; settle it before
   // choosing a publication path or looking up a persisted replay reference.
   await loadAgentIndex();

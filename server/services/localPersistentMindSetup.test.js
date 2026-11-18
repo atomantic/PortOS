@@ -16,10 +16,10 @@ vi.mock('./localLlm.js', () => ({
 vi.mock('./ollamaManager.js', () => ({
   getStatus: vi.fn(),
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   getConfig: vi.fn(),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   updateConfig: vi.fn(),
 }));
 
@@ -28,8 +28,8 @@ const { findCommandOnPath } = await import('../lib/processEnv.js');
 const { getProviderById, updateProvider } = await import('./providers.js');
 const { listModels } = await import('./localLlm.js');
 const ollamaManager = await import('./ollamaManager.js');
-const { getConfig } = await import('./cosState.js');
-const { updateConfig } = await import('./cos.js');
+const { getConfig } = await import('./cos/cosState.js');
+const { updateConfig } = await import('./cos/cos.js');
 const {
   applyLocalPersistentMindSetup,
   describeLocalPersistentMindSetup,

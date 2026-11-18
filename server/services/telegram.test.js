@@ -83,7 +83,7 @@ vi.mock('./notifications.js', () => ({
   getNotifications: vi.fn(async () => []),
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   getDomainAutonomyMode: vi.fn(async () => 'execute'),
 }));
 
@@ -358,7 +358,7 @@ describe('telegram service', () => {
     it('does not produce an unhandled rejection when getDomainAutonomyMode rejects', async () => {
       const telegram = await loadTelegramActive();
       await telegram.init(false);
-      const { getDomainAutonomyMode } = await import('./cosState.js');
+      const { getDomainAutonomyMode } = await import('./cos/cosState.js');
       getDomainAutonomyMode.mockRejectedValueOnce(new Error('cos state store down'));
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 

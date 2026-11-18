@@ -18,13 +18,13 @@ import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabi
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { PROCESS_AUDIT_LIMITS as LIMITS, processAuditFingerprint, processAuditSignals, processAuditMetrics, renderProcessAuditFinding,
   processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../lib/persistentMindProcessAudit.js';
-import { loadState, AGENTS_DIR } from './cosState.js';
+import { loadState, AGENTS_DIR } from './cos/cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { isUpstreamFullName } from '../lib/gitRemote.js';
 
 // Access projections must not load the archived-job graph merely to read grants.
-const loadAgentIndex = async () => (await import('./cosAgentIndex.js')).loadAgentIndex();
-const getAgentRecord = async id => (await import('./cosAgentLifecycle.js')).getAgentRecord(id);
+const loadAgentIndex = async () => (await import('./cos/cosAgentIndex.js')).loadAgentIndex();
+const getAgentRecord = async id => (await import('./cos/cosAgentLifecycle.js')).getAgentRecord(id);
 
 const STORE = join(PATHS.cos, 'persistent-mind-process-audit.json');
 const serialize = createFileWriteQueue();

@@ -10,7 +10,7 @@ vi.mock('../services/auth.js', () => ({
   verifyRequestSession: async () => auth.session,
 }));
 vi.mock('../services/settings.js', () => ({ settingsEvents: new EventEmitter(), getSettings: async () => ({}) }));
-vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cos/cos.js', () => ({}));
 vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/agent/agentSecurityScan.js', () => ({ runAgentSecurityScan: vi.fn(async () => ({ evidence: { status: 'running' } })) }));
 

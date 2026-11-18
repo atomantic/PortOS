@@ -24,11 +24,11 @@ import {
   persistentMindJournalDigest,
   renderPersistentMindEventLines,
 } from '../lib/persistentMindJournal.js';
-import { COS_TOOL_CALL_LIMITS, persistentMindToolCallSchema } from '../lib/cosToolContracts.js';
+import { COS_TOOL_CALL_LIMITS, persistentMindToolCallSchema } from '../lib/cos/cosToolContracts.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { resolveScreenshot, sha256Text } from '../lib/fileUtils.js';
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import { applyPersistentMindContinuationNote, createPersistentMindMemoryFromCandidate, readPersistentMindMemories, readPersistentMindRecall, readPersistentMindName, revalidatePersistentMindReflection } from './persistentMindContext.js';
 import { persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
 import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
@@ -64,7 +64,7 @@ import {
   readPersistentMindRecipeCatalog,
   executeCosToolCall,
   isCosTaskToolName,
-} from './cosToolRegistry.js';
+} from './cos/cosToolRegistry.js';
 
 const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;

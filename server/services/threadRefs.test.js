@@ -8,7 +8,7 @@ const getTaskById = vi.fn();
 vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
 vi.mock('./brainStorage.js', () => ({ getById: (...args) => getById(...args) }));
 vi.mock('./apps.js', () => ({ getAppById: (...args) => getAppById(...args) }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getTaskById: (...args) => getTaskById(...args),
   firstLine: (s) => (s || '').split('\n').map((l) => l.trim()).find(Boolean) || '',
 }));

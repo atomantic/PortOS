@@ -48,7 +48,7 @@ function sizeBucketFor(changedLines) {
  * @returns {Promise<{runRecorded: boolean, reason?: string}>}
  */
 export async function recordReviewerVerdict({ agentId, reviewer, verdict, round, changedLines }) {
-  const { withStateLock, loadState, saveState } = await import('./cosState.js');
+  const { withStateLock, loadState, saveState } = await import('./cos/cosState.js');
   return withStateLock(async () => {
     const state = await loadState();
     const agent = state.agents?.[agentId];
@@ -60,7 +60,7 @@ export async function recordReviewerVerdict({ agentId, reviewer, verdict, round,
     const updated = { ...agent, metadata: { ...agent.metadata, reviewVerdicts: [...prior, entry] } };
     state.agents[agentId] = updated;
     await saveState(state, { changedAgentIds: [agentId] });
-    const { cosEvents } = await import('./cosEvents.js');
+    const { cosEvents } = await import('./cos/cosEvents.js');
     cosEvents.emit('agent:updated', updated);
     // The Learning tab re-reads its aggregate on this instead of polling.
     cosEvents.emit('reviewer-verdict:recorded', { agentId, reviewer, verdict });
@@ -119,7 +119,7 @@ function summarizeReviewerVerdicts(agents) {
  */
 export async function getReviewerVerdictStats() {
   // Lazy imports keep the archive and CoS state out of this module's static graph.
-  const [{ loadState }, { scanArchivedAgents }] = await Promise.all([import('./cosState.js'), import('./cosArchivedAgentScan.js')]);
+  const [{ loadState }, { scanArchivedAgents }] = await Promise.all([import('./cos/cosState.js'), import('./cos/cosArchivedAgentScan.js')]);
   const { byId: archived, unreadable } = await scanArchivedAgents();
   const state = await loadState();
   const byId = new Map();

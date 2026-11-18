@@ -18,7 +18,7 @@ export const JOBS_SKILLS_DIR = PATHS.promptSkillsJobs
 // Serializes writes to autonomous-jobs.json so two write paths can't clobber each other.
 export const withLock = createMutex()
 
-// Cadence vocabulary + resolver live in lib so lib/cosValidation.js can validate
+// Cadence vocabulary + resolver live in lib so lib/cos/cosValidation.js can validate
 // against the same list without importing a service. Re-exported here because
 // the submodules (and autonomousJobs.js) have always imported them from this
 // leaf module.

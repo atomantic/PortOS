@@ -19,12 +19,12 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
       catch (error) { return { ok: error.code === 'ENOENT', value: fallback }; }
     } };
 });
-vi.mock('./cosState.js', async () => {
+vi.mock('./cos/cosState.js', async () => {
   await import('../lib/fileUtils.js');
   return { AGENTS_DIR: mocks.dir, loadState: async () => mocks.root, saveState: async () => {}, withStateLock: async fn => fn() };
 });
-vi.mock('./cosAgentIndex.js', () => ({ loadAgentIndex: async () => new Map(Object.values(mocks.records).map(record => [record.id, record.archiveDay || record.completedAt.slice(0, 10)])) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => mocks.records[id] || null }));
+vi.mock('./cos/cosAgentIndex.js', () => ({ loadAgentIndex: async () => new Map(Object.values(mocks.records).map(record => [record.id, record.archiveDay || record.completedAt.slice(0, 10)])) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgentRecord: async id => mocks.records[id] || null }));
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => { if (mocks.rosterError) throw new Error('private roster error'); return mocks.apps; } }));
 vi.mock('./persistentMindIssueCapability.js', () => ({ filePersistentMindIssue: (...args) => mocks.file(...args) }));
 vi.mock('./appIssues.js', () => ({ listAppIssues: (...args) => mocks.list(...args) }));
@@ -38,7 +38,7 @@ vi.mock('./persistentMindOrientation.js', () => ({ readPersistentMindOrientation
 vi.mock('./persistentMindRuntime.js', () => ({ inspectPersistentMindRuntime: async () => ({}) }));
 vi.mock('./persistentMindWorkspacePreflight.js', () => ({ PERSISTENT_MIND_WORKSPACE_PREFLIGHT_TTL_MS: 30000, readPersistentMindWorkspacePreflights: async () => [] }));
 const audit = await import('./persistentMindProcessAudit.js');
-const registry = await import('./cosToolRegistry.js');
+const registry = await import('./cos/cosToolRegistry.js');
 const visibility = await import('./persistentMindVisibility.js');
 const toolRoutes = (await import('../routes/cosToolRoutes.js')).default;
 const turn = { turnId: 'example-turn' };

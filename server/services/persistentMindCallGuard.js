@@ -26,7 +26,7 @@ import { canonicalStringify } from '../lib/objects.js';
 import { normalizePersistentMindState } from '../lib/persistentMind.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { buildPersistentMindCallDenial, buildPersistentMindCallReceipt } from '../lib/persistentMindTrajectory.js';
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';

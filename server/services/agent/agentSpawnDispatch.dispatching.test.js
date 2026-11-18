@@ -9,14 +9,14 @@ const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock('../releasePreflight.js', () => ({ releasePreflight, describeReleasePreflightHold: ({ reason }) => `described ${reason}` }));
 vi.mock('../releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosState.js', () => ({ getConfig: async () => ({}) }));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosState.js', () => ({ getConfig: async () => ({}) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn(async () => { await f.registerGate; return { startedAt: '2026-01-01T00:00:00.000Z' }; }),
   updateAgent: vi.fn(),
 }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(async () => ({ runId: 'run-example' })) }));
 vi.mock('../githubAccounts.js', () => ({ getAccount: vi.fn(), resolveGitHubAccountEnv: vi.fn() }));
 vi.mock('../github.js', () => ({ execGh: vi.fn() }));
@@ -51,7 +51,7 @@ vi.mock('./agentCliSpawning.js', () => ({
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
 const updateClaimOwnership = vi.hoisted(() => vi.fn(async ({ branch }) => ({ bound: true, branch })));
-vi.mock('../cosClaimOwnership.js', () => ({ updateClaimOwnership }));
+vi.mock('../cos/cosClaimOwnership.js', () => ({ updateClaimOwnership }));
 const markAppIssueClaimed = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('../appIssues.js', () => ({ markAppIssueClaimed }));
 vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: () => ({ command: 'codex', args: [] }), spawnTuiAgent: vi.fn(async () => 'agent-x') }));
@@ -64,8 +64,8 @@ import { getAccount, resolveGitHubAccountEnv } from '../githubAccounts.js';
 import { execGh } from '../github.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
-import { updateTask } from '../cosTaskStore.js';
-import { registerAgent, updateAgent } from '../cosAgentLifecycle.js';
+import { updateTask } from '../cos/cosTaskStore.js';
+import { registerAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 
 const task = { id: 'task-example', taskType: 'user', description: 'example', metadata: {} };

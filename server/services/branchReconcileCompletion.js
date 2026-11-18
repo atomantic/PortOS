@@ -1,10 +1,10 @@
 import { observeCleanupTarget, verifyCleanupCompletion, recordCleanupCompletion } from './cleanupOnlyCompletion.js';
 import { getAppById } from './apps.js';
-import { getTaskById } from './cosTaskStore.js';
+import { getTaskById } from './cos/cosTaskStore.js';
 import { getActiveAgentIds } from './agent/agentState.js';
-import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { reconcile, buildActiveOwnerIds, describeIdleReconcilePark } from './branchReconcile.js';
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { isFalsyMeta } from '../lib/metadataFlags.js';
 
 /** Finish deterministic cleanup without requiring another provider dispatch. */
@@ -41,7 +41,7 @@ export async function settleBranchReconcileRun(agent) {
   });
   const { recordBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
   const unverifiedRetirements = [];
-  const { recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+  const { recordRepoCleanupRecovery, recordCleanupOutcome } = await import('./cos/cosAgentLifecycle.js');
   for (const target of task.metadata.reconcileRetirements || []) {
     const verdict = await observeCleanupTarget(app.repoPath, target.release);
     const verified = verdict.status === 'verified';
@@ -83,7 +83,7 @@ export async function settleRetirementReviewRun(agent) {
   const task = await getTaskById(agent.taskId);
   const verdict = await verifyCleanupCompletion(task);
   if (!verdict) {
-    const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+    const { recordCleanupOutcome } = await import('./cos/cosAgentLifecycle.js');
     await recordCleanupOutcome(agent.id, { status: 'blocked', reason: 'cleanup-target-unverified' });
     return { verified: false };
   }

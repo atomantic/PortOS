@@ -12,7 +12,7 @@ import {
   createDefaultPortosSemanticToolGrants,
   normalizePortosSemanticToolGrants,
   portosSemanticToolGrantsSchema,
-} from '../cosToolContracts.js';
+} from '../cos/cosToolContracts.js';
 
 export const AGENT_CONTEXT_SCHEMA_VERSION = 5;
 export const AGENT_CONTEXT_PROTOCOL_VERSION = '2025-11-25';

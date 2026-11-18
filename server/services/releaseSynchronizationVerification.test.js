@@ -25,7 +25,7 @@ vi.mock('node:fs/promises', async original => {
   return { ...actual, realpath: async path => typeof path === 'string' && fixturePath(path).startsWith('/example/')
     ? fixturePath(path) : actual.realpath(path) };
 });
-vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue(),
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue(),
   readAgentsStateForSafetyCheck: async () => ({ trusted: f.liveTrusted,
     agents: Object.fromEntries((f.liveAgents || f.agents).map(agent => [agent.id, agent])) }) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
@@ -37,7 +37,7 @@ vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'git
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async (args, cwd) => ({ exitCode: 0, stdout: `${cwd}/.git` }) }));
 vi.mock('./shell.js', () => ({ listAllSessions: () => [] }));
-vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => f.runner }));
+vi.mock('./cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => f.runner }));
 vi.mock('./github.js', () => ({ execGh: async args => {
   f.forgeCalls++;
   if (f.unavailable) throw new Error('synthetic forge transport failure');
@@ -67,13 +67,13 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   return JSON.stringify(result);
 } }));
 
-import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
+import { addTask, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, verifyInlineReleaseDelivery, recoverReleaseSynchronizationHandoffs,
   releaseTaskDispatchDisposition, verifyIndependentReleaseDelivery, deliveredReleaseTaskIds, observeReleaseDeliveries } from './releaseSynchronization.js';
 import { markAgentDispatching, clearAgentDispatching, setUseRunner } from './agent/agentState.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { PATHS } from '../lib/fileUtils.js';
 
 let restorePlatform;

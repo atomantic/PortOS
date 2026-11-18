@@ -19,6 +19,6 @@ export {
 
 export {
   completeAgent, // running|paused → completed
-} from '../cosAgentLifecycle.js';
+} from '../cos/cosAgentLifecycle.js';
 
 export { spawnAgentForTask } from './agentLifecycle.js'; // (none) → running

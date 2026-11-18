@@ -11,7 +11,7 @@ vi.mock('./brainStorage.js', () => ({
     return row;
   },
 }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => state.tasks.get(id) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: async id => state.tasks.get(id) }));
 import { reconcileCleanupThreads } from './brainTaskThreads.js';
 const fixture = (id, taskPatch = {}, threadPatch = {}) => {
   const title = '[Recovery] Finish incomplete cleanup for branch claim/example';

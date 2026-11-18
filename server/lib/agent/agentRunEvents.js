@@ -159,7 +159,7 @@ export const RUN_EVENT_LIMITS = Object.freeze({
  * because BOTH the service and the route's Zod schema must agree on them. A
  * route capped below the service's ceiling would 400 a request the service
  * would happily serve; a route capped above it would silently clamp instead.
- * `lib/cosValidation.js` imports these — a lib module must not reach into
+ * `lib/cos/cosValidation.js` imports these — a lib module must not reach into
  * `services/`, so the constants live on this side of that edge.
  */
 export const RUN_EVENT_READ_LIMITS = Object.freeze({

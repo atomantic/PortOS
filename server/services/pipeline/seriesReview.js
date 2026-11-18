@@ -49,7 +49,7 @@ import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/crea
 import { promptAddition } from '../../lib/modelInput.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
-import { loadState } from '../cosState.js';
+import { loadState } from '../cos/cosState.js';
 import { getSettings } from '../settings.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { getUniverse } from '../universeBuilder.js';

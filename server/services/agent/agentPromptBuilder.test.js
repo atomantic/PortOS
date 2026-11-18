@@ -109,7 +109,7 @@ import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashd
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
 import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen } from '../promptSections/claimOnDemand.js';
-import { sanitizeTaskMetadata } from '../../lib/cosValidation.js';
+import { sanitizeTaskMetadata } from '../../lib/cos/cosValidation.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
@@ -4017,8 +4017,8 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it.each(['tui', 'cli', 'api'])('preserves UI checkout recovery ownership on %s', async (providerType) => {
     const { readFile } = await import('fs/promises');
     const { parse } = await import('@babel/parser');
-    const { createCosTaskSchema } = await import('../../lib/cosValidation.js');
-    const { buildQueuedTask } = await import('../cosTaskIntake.js');
+    const { createCosTaskSchema } = await import('../../lib/cos/cosValidation.js');
+    const { buildQueuedTask } = await import('../cos/cosTaskIntake.js');
     const source = await readFile(join(PATHS.root, 'client/src/components/apps/tabs/GitRecoveryAction.jsx'), 'utf8');
     const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
     let request;

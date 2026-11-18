@@ -13,7 +13,7 @@ const cosEvents = {
   on: vi.fn((event, handler) => { registeredHandlers[event] = handler; })
 };
 
-vi.mock('./cosEvents.js', () => ({ cosEvents }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents }));
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
