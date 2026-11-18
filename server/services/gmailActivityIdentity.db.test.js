@@ -19,7 +19,7 @@ vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 import { recordMessageActivity } from './messageSync.js';
 import { importGmailMbox, parseMboxText } from './gmailMboxImport.js';
-import { deleteEvents, listEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
+import { deleteEvents, listEvents, recordEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
 import { buildPersonMatchIndex } from '../lib/tribeMatch.js';
 import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
@@ -79,9 +79,9 @@ const liveMessage = (name, over = {}) => ({
 
 // One Takeout message. `thrid` is the decimal X-GM-THRID; omitted, the message
 // carries none (as in the #15308 cases, which predate thread matching).
-const mboxMessage = (name, { thrid, date = 'Sat, 04 Jul 2026 10:00:00 +0000', subject = `Hello ${name}` } = {}) => [
+const mboxMessage = (name, { thrid, date = 'Sat, 04 Jul 2026 10:00:00 +0000', subject = `Hello ${name}`, includeMessageId = true } = {}) => [
   'From 1234@xxx Sat Jul 04 10:00:00 +0000 2026',
-  `Message-ID: <${messageId(name)}>`,
+  ...(includeMessageId ? [`Message-ID: <${messageId(name)}>`] : []),
   `Date: ${date}`,
   'From: Friend <friend@example.com>',
   'To: me@example.com',
@@ -266,6 +266,84 @@ async function gmailRowsForAccountOrIds(acct, names) {
   return rows;
 }
 
+async function fallbackRows(...keys) {
+  const { rows } = await query(
+    `SELECT dedupe_key, metadata->>'threadId' AS thread_id
+       FROM human_activity_events WHERE source = 'gmail' AND dedupe_key = ANY($1::text[]) ORDER BY dedupe_key`,
+    [keys],
+  );
+  return rows;
+}
+
+describe.skipIf(!runDb)('Takeout fallback identity without Message-ID (#16712)', () => {
+  it('stores equal fallback tuples in distinct Gmail threads and replays each thread once', async () => {
+    const first = nextThread();
+    const second = nextThread();
+    const opts = { subject: `Fallback collision ${nonce}`, includeMessageId: false };
+    const archive = [
+      mboxMessage('fallback-first', { ...opts, thrid: first.thrid }),
+      mboxMessage('fallback-second', { ...opts, thrid: second.thrid }),
+    ].join('\n');
+    const [a, b] = parseMboxText(archive);
+    hashKeys.push(a.dedupeKey, b.dedupeKey);
+
+    expect((await importMboxText(archive)).recorded).toBe(2);
+    expect(await fallbackRows(a.dedupeKey, b.dedupeKey)).toEqual(expect.arrayContaining([
+      { dedupe_key: a.dedupeKey, thread_id: first.thrid },
+      { dedupe_key: b.dedupeKey, thread_id: second.thrid },
+    ]));
+    expect((await importMboxText(archive)).recorded).toBe(0);
+    expect((await importMbox('fallback-first', { ...opts, thrid: `0${first.thrid}` })).recorded).toBe(0);
+  });
+
+  it('reuses a matching historical fallback and stores another thread during overlapping imports', async () => {
+    const first = nextThread();
+    const second = nextThread();
+    const opts = { subject: `Historical match ${nonce}`, includeMessageId: false };
+    const [historical] = parseMboxText(mboxMessage('fallback-old', opts));
+    const archive = [
+      mboxMessage('fallback-old', { ...opts, thrid: first.thrid }),
+      mboxMessage('fallback-new', { ...opts, thrid: second.thrid }),
+    ].join('\n');
+    const [a, b] = parseMboxText(archive);
+    hashKeys.push(historical.dedupeKey, a.dedupeKey, b.dedupeKey);
+    await recordEvents([{ ...historical, metadata: { ...historical.metadata, threadId: `0${first.thrid}` } }]);
+
+    const concurrent = await Promise.all([importMboxText(archive), importMboxText(archive)]);
+    expect(concurrent.map((r) => r.recorded).sort()).toEqual([0, 1]);
+    expect(await fallbackRows(historical.dedupeKey, a.dedupeKey, b.dedupeKey)).toEqual([
+      { dedupe_key: historical.dedupeKey, thread_id: `0${first.thrid}` },
+      { dedupe_key: b.dedupeKey, thread_id: second.thrid },
+    ]);
+    expect((await importMbox('fallback-old', { ...opts, thrid: first.thrid })).recorded).toBe(0);
+  });
+
+  it('preserves an unverifiable historical fallback and refuses to retire a live row against it', async () => {
+    const acct = account('fallback-unverifiable');
+    const { thrid, threadKey } = nextThread();
+    const opts = { subject: `Unverifiable fallback ${nonce}`, includeMessageId: false };
+    const [historical] = parseMboxText(mboxMessage('fallback-unverifiable', opts));
+    const archive = mboxMessage('fallback-unverifiable', { ...opts, thrid });
+    const [candidate] = parseMboxText(archive);
+    hashKeys.push(historical.dedupeKey, candidate.dedupeKey);
+    // A malformed Takeout header can contain the live key rather than a decimal THRID.
+    await recordEvents([{ ...historical, metadata: { ...historical.metadata, threadId: threadKey } }]);
+    await recordLegacy(acct, 'fallback-unverifiable', threadKey, { subject: opts.subject });
+
+    expect(await retireLegacyGmailDuplicates([{
+      dedupeKey: historical.dedupeKey, kind: candidate.kind, title: candidate.title, happenedAt: candidate.happenedAt,
+      threadKey, rawThreadId: thrid, fromEmail: 'friend@example.com',
+    }])).toEqual({ retired: 0 });
+    expect((await importMboxText(archive)).recorded).toBe(1);
+    expect(await fallbackRows(historical.dedupeKey, candidate.dedupeKey)).toEqual([
+      { dedupe_key: historical.dedupeKey, thread_id: threadKey },
+      { dedupe_key: candidate.dedupeKey, thread_id: thrid },
+    ]);
+    expect(await listEvents({ accountId: acct.id, threadId: threadKey })).toHaveLength(1);
+    expect((await importMboxText(archive)).recorded).toBe(0);
+  });
+});
+
 describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#15320)', () => {
   it('leaves one row for an email live sync recorded before #15308, and re-importing stays a no-op', async () => {
     const acct = account('retire');
@@ -324,8 +402,7 @@ describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#153
     const { thrid, threadKey } = nextThread();
     const subject = `Hello hash-sibling ${nonce}`;
     await recordLegacy(acct, 'hash-sibling-a', threadKey, { subject, date: '2026-07-04T10:07:30.000Z' });
-    const noId = mboxMessage('hash-sibling-b', { thrid, subject, date: 'Sat, 04 Jul 2026 10:15:00 +0000' })
-      .split('\n').filter((l) => !l.startsWith('Message-ID')).join('\n');
+    const noId = mboxMessage('hash-sibling-b', { thrid, subject, date: 'Sat, 04 Jul 2026 10:15:00 +0000', includeMessageId: false });
 
     hashKeys.push(parseMboxText(noId)[0].dedupeKey);
     await importMboxText([mboxMessage('hash-sibling-a', { thrid, subject }), noId].join('\n'));
