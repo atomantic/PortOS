@@ -11,6 +11,9 @@
  * per-run nonce and is torn down in afterAll; assertions are relative to the
  * rows this suite inserts.
  */
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
@@ -18,6 +21,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 const tzState = vi.hoisted(() => ({ tz: 'UTC' }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => tzState.tz }));
 
+import { importYoutubeHistory } from './youtubeImport.js';
 import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle, eraseEvents, listSourceCounts, listConversations, deleteEvents } from './humanActivity.js';
 
 let dbReady = false;
@@ -138,6 +142,71 @@ describe.skipIf(!runDb)('humanActivity store (#2150)', () => {
     expect(summary.histogram).toHaveLength(24);
     expect(typeof summary.counts.total).toBe('number');
     expect(summary.counts.bySource).toBeTruthy();
+  });
+});
+
+describe.skipIf(!runDb)('YouTube Takeout overlap (#16690)', () => {
+  it('refines the same Timeline row once, in either ingestion order', async () => {
+    const previousTz = tzState.tz;
+    tzState.tz = 'America/Los_Angeles';
+    const date = '2001-02-04';
+    const midnight = `${date}T08:00:00.000Z`;
+    const exact = '2001-02-05T04:30:00.123Z'; // 20:30 on the same local day.
+    const ids = ['a', 'b', 'c'].map((prefix) => `${prefix}${Date.now().toString(36).padStart(10, '0')}`);
+    const keys = ids.map((id) => `yt:${id}:${date}`);
+    const url = (id) => `https://www.youtube.com/watch?v=${id}`;
+    const scrape = (index) => ({
+      source: 'youtube',
+      kind: 'media.watch',
+      happenedAt: midnight,
+      dedupeKey: keys[index],
+      title: 'Scraped title',
+      url: url(ids[index]),
+      metadata: { videoId: ids[index], dayBucket: date, scraped: true },
+    });
+    const takeout = (index, time = exact) => ({
+      title: 'Watched Takeout title',
+      titleUrl: url(ids[index]),
+      subtitles: [{ name: 'Example channel' }],
+      time,
+    });
+    const dir = await mkdtemp(join(tmpdir(), 'portos-youtube-'));
+    const path = join(dir, 'watch-history.json');
+    try {
+      const before = await getDaySummary({ date });
+      expect(await recordEvents([scrape(0), scrape(2)])).toEqual({ recorded: 2, skipped: 0 });
+      const initial = (await getDaySummary({ date })).events.find((e) => e.dedupeKey === keys[0]);
+      expect(initial.happenedAt).toBe(midnight);
+
+      // A second watch of the same video that day shares the key. The first
+      // Takeout candidate wins, matching an import into an empty store.
+      await writeFile(path, JSON.stringify([takeout(0), takeout(0, '2001-02-05T03:30:00Z'), takeout(1)]));
+      expect(await importYoutubeHistory({ path })).toMatchObject({ mapped: 3, recorded: 2, skipped: 1 });
+      expect(await recordEvents([scrape(0), scrape(1), scrape(2)])).toEqual({ recorded: 0, skipped: 3 });
+      expect(await importYoutubeHistory({ path })).toMatchObject({ recorded: 0, skipped: 3 });
+
+      const day = await getDaySummary({ date });
+      const watches = day.events.filter((e) => keys.includes(e.dedupeKey));
+      expect(day.counts.total - before.counts.total).toBe(3);
+      expect(watches).toHaveLength(3);
+      const byKey = new Map(watches.map((event) => [event.dedupeKey, event]));
+      for (const [index, key] of keys.slice(0, 2).entries()) {
+        const actual = byKey.get(key);
+        expect(actual).toMatchObject({
+          happenedAt: exact,
+          title: 'Takeout title',
+          metadata: { videoId: ids[index], channel: 'Example channel', dayBucket: date },
+        });
+        expect(actual.metadata).not.toHaveProperty('scraped');
+      }
+      expect(byKey.get(keys[0]).id).toBe(initial.id);
+      expect(byKey.get(keys[0]).createdAt).toBe(initial.createdAt);
+      expect(byKey.get(keys[2])).toMatchObject({ happenedAt: midnight, metadata: { scraped: true } });
+    } finally {
+      tzState.tz = previousTz;
+      await query('DELETE FROM human_activity_events WHERE source = $1 AND dedupe_key = ANY($2::text[])', ['youtube', keys]);
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 });
 

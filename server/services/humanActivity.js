@@ -8,8 +8,8 @@ import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
  * `human_activity_events` Postgres table via `recordEvents()`. The store is:
  *
  * - **Idempotent.** Every event carries a stable `dedupeKey`; the unique
- *   `(source, dedupe_key)` index + `ON CONFLICT DO NOTHING` make re-syncs no-ops.
- *   Same contract as `tribe_touchpoints.dedupe_key`.
+ *   `(source, dedupe_key)` index makes re-syncs no-ops. A YouTube Takeout import
+ *   can refine a day-only watch with the exact time once.
  * - **Privacy-preserving.** Events store metadata + a SHORT summary line only —
  *   full message bodies stay in the per-source caches (`data/messages/cache/`,
  *   chat.db, …). `metadata` carries pointers (threadId / externalId / account) back
@@ -308,17 +308,24 @@ function rowToEvent(row) {
 }
 
 // Idempotently persist a batch of activity candidates. Returns
-// { recorded, skipped } where `recorded` is the count of newly-inserted rows and
-// `skipped` counts duplicates (already present for this source+dedupeKey) plus
-// any candidate that failed normalization.
+// { recorded, skipped } where `recorded` counts inserts plus any watch refined
+// by a Takeout import, and `skipped` counts duplicates and invalid candidates.
 //
 // A candidate may carry `supersedesDedupeKey`: the key an earlier version of the
 // same ingester wrote for this event (#15308). See `recordRekeyedChunk`.
-export async function recordEvents(candidates = []) {
+export async function recordEvents(candidates = [], { refineYoutubeWatches = false } = {}) {
   const entries = [];
+  // Takeout can contain multiple watches of one video on the same day. Keep
+  // the first candidate for each key: a Postgres upsert may target a row once.
+  const seen = refineYoutubeWatches ? new Set() : null;
   for (const candidate of candidates || []) {
     const row = normalizeCandidate(candidate);
     if (!row) continue;
+    if (seen) {
+      const key = `${row.source}\u0000${row.dedupeKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
     const legacyKey = String(candidate.supersedesDedupeKey ?? '').trim();
     entries.push({ row, legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null });
   }
@@ -335,7 +342,7 @@ export async function recordEvents(candidates = []) {
     const chunk = entries.slice(start, start + CHUNK);
     recorded += chunk.some((e) => e.legacyKey)
       ? await withTransaction((client) => recordRekeyedChunk(client, chunk))
-      : await insertActivityChunk(chunk.map((e) => e.row));
+      : await insertActivityChunk(chunk.map((e) => e.row), query, refineYoutubeWatches);
   }
   const skipped = (candidates || []).length - recorded;
   if (recorded > 0) {
@@ -531,11 +538,11 @@ export async function retireLegacyGmailDuplicates(matches = []) {
   return { retired };
 }
 
-// Insert one chunk of normalized rows; returns the count actually inserted.
+// Write one chunk of normalized rows; returns the count actually changed.
 // 12 bound params per row (created_at is a NOW() literal, not a param);
 // participants and metadata are toPgJson-serialized + ::jsonb-cast (node-pg would
 // otherwise coerce a JS array to a Postgres array literal and fail on jsonb).
-async function insertActivityChunk(rows, execute = query) {
+async function insertActivityChunk(rows, execute, refineYoutubeWatches = false) {
   const paramsPerRow = 12;
   const values = [];
   const placeholders = rows.map((r, i) => {
@@ -547,11 +554,22 @@ async function insertActivityChunk(rows, execute = query) {
     );
     return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}::jsonb, $${b + 11}::jsonb, $${b + 12}, NOW())`;
   });
+  // The conflict predicate and update share the insert's row lock. A scrape
+  // replay or another import cannot overwrite a timestamp already refined.
+  const onConflict = refineYoutubeWatches
+    ? `DO UPDATE SET
+         happened_at = EXCLUDED.happened_at, title = EXCLUDED.title,
+         summary = EXCLUDED.summary, url = EXCLUDED.url, metadata = EXCLUDED.metadata
+       WHERE human_activity_events.source = 'youtube'
+         AND human_activity_events.kind = 'media.watch' AND EXCLUDED.kind = 'media.watch'
+         AND human_activity_events.metadata @> '{"scraped": true}'::jsonb
+         AND NOT (EXCLUDED.metadata @> '{"scraped": true}'::jsonb)`
+    : 'DO NOTHING';
   const result = await execute(
     `INSERT INTO human_activity_events
        (id, source, account_id, kind, happened_at, duration_s, title, summary, url, participants, metadata, dedupe_key, created_at)
      VALUES ${placeholders.join(', ')}
-     ON CONFLICT (source, dedupe_key) DO NOTHING
+     ON CONFLICT (source, dedupe_key) ${onConflict}
      RETURNING id`,
     values,
   );

@@ -17,8 +17,8 @@ export default function YoutubeImportPanel({ onImported }) {
         <>
           Request your <span className="text-gray-300">YouTube and YouTube Music → history</span> from
           <a href="https://takeout.google.com" target="_blank" rel="noreferrer" className="text-port-accent hover:underline"> Google Takeout</a>,
-          then upload the ZIP (or a single <span className="font-mono">watch-history.json</span>) here. Re-imports are
-          safe — already-recorded watches are skipped.
+          then upload the ZIP (or a single <span className="font-mono">watch-history.json</span>) here.
+          Takeout adds exact times to watches recorded by live sync. Re-imports skip watches that already have exact times.
         </>
       )}
       renderPreview={(summary) => (

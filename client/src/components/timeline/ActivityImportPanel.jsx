@@ -8,7 +8,7 @@ import { formatDateNumeric } from '../../utils/formatters';
 // pick a file → preview (parse-only, no write) → confirm import. The import is
 // idempotent server-side, so re-importing the same or overlapping export never
 // double-counts. Collapsed by default so it stays out of the way of the day
-// timeline; `onImported` lets the page refresh once new events land.
+// timeline; `onImported` lets the page refresh once events are added or updated.
 //
 // Source-specific bits are props so each source (Spotify, Takeout location, …)
 // is a thin wrapper around this one seam:
@@ -162,7 +162,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
               <div className="mb-1 flex items-center gap-2 font-medium text-port-success">
                 <CheckCircle2 size={14} /> Import complete
               </div>
-              <div>{result.recorded} new {noun}(s) recorded, {result.skipped} already present.</div>
+              <div>{result.recorded} {noun}(s) imported, {result.skipped} already present.</div>
               <button
                 type="button"
                 onClick={reset}

@@ -25,8 +25,8 @@
  * day-bucketing is the coarsest-common-denominator that keeps a Takeout import and
  * a live scrape of the same watch from double-counting). The `happenedAt` we store
  * from Takeout is the exact timestamp; the scrape can only offer local midnight.
- * `recordEvents`'s `ON CONFLICT DO NOTHING` makes re-imports (and overlap with the
- * scrape) no-ops. No AI-provider calls; parsing is deterministic and LLM-free.
+ * An import refines a scraped watch in place. Re-imports and later scrapes keep
+ * the first exact timestamp. Parsing is deterministic and LLM-free.
  */
 import { readFile } from 'fs/promises';
 import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
@@ -193,7 +193,7 @@ export async function importYoutubeHistory(file, { dryRun = false } = {}) {
     console.log(`📺 YouTube import preview: ${candidates.length} watch(es) from ${records.length} record(s)`);
     return { dryRun: true, parsed: records.length, mapped: candidates.length, recorded: 0, skipped: 0, summary };
   }
-  const { recorded, skipped } = await recordEvents(candidates);
-  console.log(`📺 YouTube import: ${recorded} new watch(es) recorded, ${skipped} duplicate/invalid (from ${records.length} record(s))`);
+  const { recorded, skipped } = await recordEvents(candidates, { refineYoutubeWatches: true });
+  console.log(`📺 YouTube import: ${recorded} watch(es) imported, ${skipped} duplicate/invalid (from ${records.length} record(s))`);
   return { dryRun: false, parsed: records.length, mapped: candidates.length, recorded, skipped, summary };
 }
