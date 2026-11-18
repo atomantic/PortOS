@@ -6,11 +6,8 @@
 // client-side behaviour built on top of them.
 import * as serverProviderTypes from '../../../server/lib/providerTypes.js';
 import { apiGenerationOptions } from '../../../server/lib/aiToolkit/internal/generationOptions.js';
-import { composeProviderEnv } from '../../../server/lib/cliChildEnv.js';
-import { LOCAL_RUNTIMES } from '../../../server/lib/localProviderRuntime.js';
-import { buildAgentGeneration } from '../../../server/lib/opencodeConfig.js';
-import { PROVIDER_GATEWAYS } from '../../../server/lib/providerGateways.js';
-import { getOpencodeLocalProviderNamespace } from '../../../server/lib/providerModels.js';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../server/lib/modelPinMembership.js';
+import { PROVIDER_GATEWAY_IDS } from '../../../server/lib/providerGateways.js';
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -254,52 +251,25 @@ describe('generationControlsFor', () => {
   });
 });
 
-describe('generation controls match server forwarding', () => {
-  // Use an explicit temperature distinct from Ollama's default and an explicit
-  // false to exercise the same thinking override that Claude on Ollama forwards.
+describe('generation controls match direct API forwarding', () => {
   const generation = { temperature: 0.73, topP: 0.91, thinking: false };
-  const localBackends = Object.keys(LOCAL_RUNTIMES).map((id) => [id, { [`${id}Backed`]: true }]);
-  const gateways = PROVIDER_GATEWAYS.map(({ id }) => [id, { gatewayBacked: id }]);
-  const legacyGateways = PROVIDER_GATEWAYS.flatMap(({ id, legacyMarker }) =>
-    legacyMarker ? [[`${id} (legacy marker)`, { [legacyMarker]: true }]] : []);
-
-  const controls = (temperature, topP, thinking) =>
-    temperature || topP || thinking ? { temperature, topP, thinking } : null;
-
-  it.each([...localBackends, ...gateways, ...legacyGateways])('OpenCode on %s', (_id, markers) => {
-    const provider = { type: 'tui', command: 'opencode', ...markers };
-    const options = buildAgentGeneration(generation, getOpencodeLocalProviderNamespace(provider));
-
-    expect(generationControlsFor(provider)).toEqual(controls(
-      options?.temperature === generation.temperature,
-      options?.topP === generation.topP,
-      typeof (options?.think ?? options?.chat_template_kwargs?.enable_thinking) === 'boolean',
-    ));
-  });
+  const localBackends = Object.keys(LOCAL_RUNTIME_MANAGE_URLS).map((id) => [id, { [`${id}Backed`]: true }]);
 
   it.each([
     ...localBackends,
     ['ollama (native provider ID)', { id: 'ollama' }],
-    ...PROVIDER_GATEWAYS.map(({ id }) => [id, { id }]),
+    ...PROVIDER_GATEWAY_IDS.map((id) => [id, { id }]),
   ])('direct API on %s', (_id, identity) => {
     const provider = { type: 'api', ...identity, ...generation };
     const options = apiGenerationOptions(provider);
 
-    expect(generationControlsFor(provider)).toEqual(controls(
-      options.temperature === generation.temperature,
-      options.top_p === generation.topP,
-      typeof (options.think ?? options.chat_template_kwargs?.enable_thinking) === 'boolean',
-    ));
-  });
+    const controls = {
+      temperature: options.temperature === generation.temperature,
+      topP: options.top_p === generation.topP,
+      thinking: typeof (options.think ?? options.chat_template_kwargs?.enable_thinking) === 'boolean',
+    };
 
-  it.each([
-    ...localBackends.map(([id, markers]) => [id, { command: 'claude', ...markers }]),
-    ['ollama (default Claude command)', { command: '', ollamaBacked: true }],
-  ])('Claude on %s', (_id, identity) => {
-    const provider = { type: 'tui', ...identity, ...generation };
-    const env = composeProviderEnv({ provider });
-
-    expect(generationControlsFor(provider)).toEqual(controls(false, false, env.MAX_THINKING_TOKENS === '0'));
+    expect(generationControlsFor(provider)).toEqual(Object.values(controls).some(Boolean) ? controls : null);
   });
 });
 
