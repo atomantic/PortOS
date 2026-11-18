@@ -591,7 +591,6 @@ async function main() {
   // the set here is what lets the memo subtract the files a trusted green
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
-  if (memoDir) clearVitestDependencies(repoRoot, scope);
   const caseFilter = browserProfileArgs();
   const acceptVerdictsFrom = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
     ? browserProfileAcceptedVerdicts(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
@@ -627,8 +626,11 @@ async function main() {
   const passes = guardRun.length > 0 && rest.length > 0
     ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
-  // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
-  if (extraArgs.length && caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
+  if (extraArgs.length) {
+    clearVitestDependencies(repoRoot, scope);
+    // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
+    if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
+  }
   const passed = [];
   const durations = {};
   let interrupted = false;
