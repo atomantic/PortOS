@@ -3,7 +3,7 @@
 // `client/src/lib/textUtils.js` re-exports `escapeRegExp` from here, so keep this pure: no Node built-in, nothing outside `server/lib`.
 
 /**
- * The one string-type predicate under `server/` (and the browser bundle via the client mirror); the "no private string predicate or bounder" guard in `textUtils.guard.test.js` fails on a copy (#6837).
+ * The one string-type predicate under `server/` (and the browser bundle via the client mirror).
  *
  * @param {unknown} v
  * @returns {v is string}
@@ -91,7 +91,7 @@ export function clampToCharLimit(text, max) {
 }
 
 /**
- * Escape a string for literal use inside a RegExp. The ONE copy: import it, never re-inline the class (the `no private escapeRegExp` guard in textUtils.guard.test.js fails the build).
+ * Escape a string for literal use inside a RegExp. Import this helper when interpolating literal text into a pattern.
  * Non-string input is coerced, not thrown: callers escape user tokens (LoRA triggers, aliases, catalog labels) where a TypeError would be an opaque 500 instead of a non-match.
  */
 export function escapeRegExp(value) {
