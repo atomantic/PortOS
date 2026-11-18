@@ -1,7 +1,7 @@
 /**
  * Registration stub for the canon↔catalog reconciliation data repair.
  *
- * The bidirectional projection (server/services/catalogCanonProjection.js)
+ * The bidirectional projection (server/services/catalog/catalogCanonProjection.js)
  * keeps an embedded universe-canon entry and its `catalog_ingredients` row in
  * lockstep going forward. But on the FIRST boot after the upgrade, the two
  * stores can already disagree (they were copy-on-write mirrors before). The

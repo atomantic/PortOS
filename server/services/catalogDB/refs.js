@@ -16,10 +16,10 @@
  */
 
 import { query } from '../../lib/db.js';
-import { resolveRefs } from '../catalogRefResolver.js';
+import { resolveRefs } from '../catalog/catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
 import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient } from './shared.js';
-import { catalogReferenceRole } from '../../lib/catalogTypes.js';
+import { catalogReferenceRole } from '../../lib/catalog/catalogTypes.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 // Canonical detail views omit local-merge originals; original-ID user exports

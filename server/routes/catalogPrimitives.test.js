@@ -72,7 +72,7 @@ vi.mock('../services/catalogDB/refs.js', () => ({
   },
   unlinkIngredientFromRef: async () => {},
 }));
-vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => {
+vi.mock('../services/catalog/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => {
   if (db.failUsage) throw new Error('Usage unavailable');
   return [];
 } }));
@@ -92,7 +92,7 @@ vi.mock('../services/universeBuilder.js', () => ({
 }));
 
 import router from './catalogPrimitives.js';
-import { createOwnedPrimitive } from '../services/catalogPrimitives.js';
+import { createOwnedPrimitive } from '../services/catalog/catalogPrimitives.js';
 import { BIBLE_LIMITS } from '../lib/storyBible.js';
 
 const app = express();

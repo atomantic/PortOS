@@ -10,12 +10,12 @@
 
 import { randomUUID } from 'crypto';
 import { afterTransactionCommit, pgvectorToArray } from '../../lib/db.js';
-import { ingredientIdPrefix } from '../../lib/catalogTypes.js';
+import { ingredientIdPrefix } from '../../lib/catalog/catalogTypes.js';
 import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../../lib/storyBible.js';
 import { greyboxSceneSchema } from '../../lib/greyboxScene.js';
 import { photorealLookSchema } from '../../lib/photorealLook.js';
 import { worldMapSchema } from '../../lib/worldMapValidation.js';
-import { catalogEvents } from '../catalogEvents.js';
+import { catalogEvents } from '../catalog/catalogEvents.js';
 
 export function announceAssetsChanged(ingredientId, client) {
   const notify = () => catalogEvents.emit('assets-changed', { ingredientId });

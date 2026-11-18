@@ -36,7 +36,7 @@ function syncProjectCatalogLinks(projectId) {
   }
   const state = { again: false, promise: null };
   state.promise = (async () => {
-    const [catalogDB, { getProject }] = await Promise.all([import('../catalogDB.js'), import('./projects.js')]);
+    const [catalogDB, { getProject }] = await Promise.all([import('../catalog/catalogDB.js'), import('./projects.js')]);
     let stats = null;
     do {
       state.again = false;

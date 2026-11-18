@@ -7,7 +7,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { listSheetPointers } from '../../lib/sheetPointers.js';
 import { sanitizeBiblePayload } from './shared.js';
-import { catalogMergeSchema } from '../../lib/catalogValidation.js';
+import { catalogMergeSchema } from '../../lib/catalog/catalogValidation.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 const TABLES = Object.freeze({

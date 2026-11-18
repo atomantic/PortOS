@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   musicVideoClipReferences: vi.fn(async () => []),
 }));
 
-vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
+vi.mock('../catalog/catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
 
 vi.mock('fs/promises', async (load) => ({ ...await load(), unlink: mocks.unlink }));
 vi.mock('./modelSelection.js', () => ({ resolveVideoModelSelection: mocks.resolveVideoModelSelection }));

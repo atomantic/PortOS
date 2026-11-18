@@ -52,7 +52,7 @@ vi.mock('./memorySync.js', () => ({
   applyRemoteChanges: vi.fn(),
   getMaxSequence: vi.fn().mockResolvedValue('0')
 }));
-vi.mock('./catalogSync.js', async (importOriginal) => {
+vi.mock('./catalog/catalogSync.js', async (importOriginal) => {
   // Keep the real countAppliedFromStats (pure tally over the stats shape) so
   // the orchestrator's totalApplied assertions exercise the production sum.
   const actual = await importOriginal();
@@ -142,7 +142,7 @@ import { getPeers } from './instances.js';
 import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { applyRemoteChanges as applyMemoryChanges } from './memorySync.js';
-import { applyRemoteChanges as applyCatalogChanges } from './catalogSync.js';
+import { applyRemoteChanges as applyCatalogChanges } from './catalog/catalogSync.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getCurrentSeq, compactLog } from './brainSyncLog.js';
 import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';

@@ -26,6 +26,7 @@ search covers it, and `--dir server/lib/musicVideo` narrows to it.
 | Path | Purpose |
 |---|---|
 | `agent/` | Agent request schemas, execution profiles, run-event helpers, and completion contracts. Orchestration lives in `server/services/agent/`. |
+| `catalog/` | Catalog ingredient types, validation, identity, and projections. Catalog services live in `server/services/catalog/`, `catalogDB/`, and `catalogIdentity/`. |
 | `cos/` | Chief of Staff validation, persistence projections, federation policy, and tool contracts. Orchestration lives in `server/services/cos/`. |
 | `musicVideo/` | Pure Music Video helpers and request schemas (`musicVideo*.js`): shot timing and prompts, cast and conditioning, effects, previz, validation. Orchestration stays in `server/services/musicVideo/`; Music Studio helpers (`musicDuration.js`, `musicDesignerValidation.js`) stay flat. `musicVideo/moduleSummaries.test.js` enforces its headers. |
 | `persistent/` | Persistent Mind capabilities, validation, policy, and runtime data projections. Orchestration lives in `server/services/persistent/`. |

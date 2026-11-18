@@ -33,7 +33,7 @@ import { trainingEvents } from './loraTraining/events.js';
 import { mediaPromptHistoryEvents } from './mediaPromptHistory.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
-import { catalogEvents } from './catalogEvents.js';
+import { catalogEvents } from './catalog/catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 import { fineTuningEvents } from './voice/fineTuningEvents.js';

@@ -19,7 +19,7 @@ import { requireProject } from './requireProject.js';
 import { runPrevizJob } from '../previzJobs.js';
 
 const deps = {
-  getIngredient: async (id) => (await import('../catalogDB.js')).getIngredient(id),
+  getIngredient: async (id) => (await import('../catalog/catalogDB.js')).getIngredient(id),
   resolve: async (args) => (await import('../promptRunner.js')).resolveProviderAndModel(args),
   run: async (args) => (await import('../promptRunner.js')).runPromptThroughProvider(args),
 };

@@ -4,7 +4,7 @@
 // linked to the catalog takes its Cast & Sets height by name.
 
 import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
-import { characterHeightStat } from '../../lib/catalogAppearance.js';
+import { characterHeightStat } from '../../lib/catalog/catalogAppearance.js';
 import { resolveHeight } from '../../lib/characterHeight.js';
 
 const nameKey = (value) => String(value || '').trim().toLowerCase();
@@ -37,7 +37,7 @@ export async function loadMusicVideoSubjectSizes(project, deps = {}) {
   const subjects = activeMusicVideoSubjects(project?.concept);
   if (!subjects.length) return {};
   const linked = subjects.filter((s) => s.ingredientId);
-  const catalog = linked.length ? deps.catalog || await import('../catalogDB.js') : null;
+  const catalog = linked.length ? deps.catalog || await import('../catalog/catalogDB.js') : null;
   const records = new Map();
   const load = (id) => {
     if (!records.has(id)) {

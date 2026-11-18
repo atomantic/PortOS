@@ -11,7 +11,7 @@ import { installLockedRuntime, resolvePatchedUv } from '../../lib/pythonSetup.js
 import { ServerError } from '../../lib/errorHandler.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { PATHS } from '../../lib/paths.js';
-import { chunkRawText } from '../../lib/catalogChunking.js';
+import { chunkRawText } from '../../lib/catalog/catalogChunking.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 
 const run = promisify(execFile);

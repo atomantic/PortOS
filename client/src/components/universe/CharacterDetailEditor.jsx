@@ -16,7 +16,7 @@ import { WandSparkles, Loader2, Palette, Hand, Smile, Package, BookOpen, Eye, Ac
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
 import { formatHeight, typicalHeightCm } from '../../../../server/lib/characterHeight.js';
-import { characterHeightStat } from '../../../../server/lib/catalogAppearance.js';
+import { characterHeightStat } from '../../../../server/lib/catalog/catalogAppearance.js';
 // Shared narrative-framework definitions (#2175, #6417) — one source of truth
 // with the server store/schema and the Writers Room cast editor.
 import { CHARACTER_FRAMEWORK_EDITOR_FIELDS, CHARACTER_MOTIVATIONS_FIELD, CHARACTER_SECRETS_FIELD } from '../../lib/characterFramework';

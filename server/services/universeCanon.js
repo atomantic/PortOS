@@ -840,7 +840,7 @@ export async function removeCanonEntry(universeId, kind, entryId) {
     const list = Array.isArray(cur[field]) ? cur[field] : [];
     removed = list.find((e) => e.id === entryId);
     if (!removed) return null;
-    const { assertCanonRemovable } = await import('./catalogPrimitiveUsage.js');
+    const { assertCanonRemovable } = await import('./catalog/catalogPrimitiveUsage.js');
     await assertCanonRemovable(universeId, kind, entryId);
     if (removed.ingredientId) {
       const { getIngredientIdentityIds } = await import('./catalogDB/ingredients.js');
@@ -865,7 +865,7 @@ export async function removeCanonEntry(universeId, kind, entryId) {
     );
   }
   if (unlink) {
-    const { catalogEvents } = await import('./catalogEvents.js');
+    const { catalogEvents } = await import('./catalog/catalogEvents.js');
     catalogEvents.emit('primitive-changed', { ingredientId: removed.ingredientId });
   }
   console.log(`🗑️ Removed canon ${kind} "${removed.name}" from universe ${shortId(universeId)} (assets + catalog untouched)`);

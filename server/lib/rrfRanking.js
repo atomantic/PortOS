@@ -1,7 +1,7 @@
 /**
  * Reciprocal Rank Fusion (RRF) scoring helper (Cormack, Clarke, Buettcher 2009, "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods").
  *
- * `reciprocalRankFusion(textResults, vectorResults, options)` merges two ranked lists (e.g. FTS + vector similarity) into one score, `score += weight / (K + rank)` per list the item appears in (default K=60 per the paper). Pure; extracted from `server/services/catalogDB.js` `hybridSearchIngredients`.
+ * `reciprocalRankFusion(textResults, vectorResults, options)` merges two ranked lists (e.g. FTS + vector similarity) into one score, `score += weight / (K + rank)` per list the item appears in (default K=60 per the paper). Pure; extracted from `server/services/catalog/catalogDB.js` `hybridSearchIngredients`.
  */
 
 /**

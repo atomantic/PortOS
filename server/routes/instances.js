@@ -22,7 +22,7 @@ import { federatedMediaPeerSettingsSchema } from '../lib/federatedMediaValidatio
 import { validateRequest } from '../lib/validateRequest.js';
 import { optionalBooleanMap } from '../lib/validation.js';
 import { tailcatDeviceApprovalSchema, tailcatDeviceEnforcementSchema } from '../lib/tailcatValidation.js';
-import { isBlockedIngestHost } from '../lib/catalogValidation.js';
+import { isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
 import { requestHasHostControl } from '../services/authGate.js';

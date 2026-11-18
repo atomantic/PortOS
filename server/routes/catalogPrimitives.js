@@ -1,25 +1,25 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema, catalogDesignSpreadSchema, catalogDesignRenderSchema } from '../lib/catalogValidation.js';
+import { catalogPrimitiveOwnerSchema, catalogPrimitiveForkSchema, catalogRefinementSchema, catalogMediaRefineSchema, catalogDesignSpreadSchema, catalogDesignRenderSchema } from '../lib/catalog/catalogValidation.js';
 import { getIngredient } from '../services/catalogDB/ingredients.js';
-import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalogPrimitives.js';
+import { getPrimitiveContext, setPrimitiveOwner, forkPrimitive } from '../services/catalog/catalogPrimitives.js';
 
 const router = Router({ mergeParams: true });
 
 router.post('/media/refine/compose', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaRefineSchema, req.body);
-  const { refineCatalogMedia } = await import('../services/catalogMediaRefinement.js');
+  const { refineCatalogMedia } = await import('../services/catalog/catalogMediaRefinement.js');
   res.json(await refineCatalogMedia(req.params.id, body, { preview: true }));
 }));
 router.post('/media/refine', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaRefineSchema, req.body);
-  const { refineCatalogMedia } = await import('../services/catalogMediaRefinement.js');
+  const { refineCatalogMedia } = await import('../services/catalog/catalogMediaRefinement.js');
   res.json(await refineCatalogMedia(req.params.id, body));
 }));
 
 // Casting > Design rounds: a provider writes face lines, then a round renders.
-const design = () => import('../services/catalogDesign.js');
+const design = () => import('../services/catalog/catalogDesign.js');
 router.post('/design/spread/compose', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogDesignSpreadSchema, req.body);
   res.json(await (await design()).spreadCatalogDesign(req.params.id, body, { preview: true }));
@@ -54,12 +54,12 @@ router.post('/fork', asyncHandler(async (req, res) => {
 
 router.post('/refine/compose', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogRefinementSchema, req.body);
-  const { refineCatalogDraft } = await import('../services/catalogRefinement.js');
+  const { refineCatalogDraft } = await import('../services/catalog/catalogRefinement.js');
   res.json(await refineCatalogDraft(req.params.id, body, { preview: true }));
 }));
 router.post('/refine', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogRefinementSchema, req.body);
-  const { refineCatalogDraft } = await import('../services/catalogRefinement.js');
+  const { refineCatalogDraft } = await import('../services/catalog/catalogRefinement.js');
   res.json(await refineCatalogDraft(req.params.id, body));
 }));
 export default router;

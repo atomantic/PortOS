@@ -13,7 +13,7 @@ import { formatCount } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import CatalogForkSeedPicker from './CatalogForkSeedPicker';
 import Modal from '../ui/Modal';
-import { CATALOG_REDESIGN_FIELDS } from '../../../../server/lib/catalogRedesign.js';
+import { CATALOG_REDESIGN_FIELDS } from '../../../../server/lib/catalog/catalogRedesign.js';
 
 const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character': 'Character canon', 'canon-place': 'Environment canon',
   'canon-object': 'Object canon', cast: 'Cast', set: 'Set', prop: 'Prop', reference: 'Reference', mentioned: 'Mentioned' }[role] || role.replaceAll('-', ' '));

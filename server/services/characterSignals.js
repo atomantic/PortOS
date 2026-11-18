@@ -8,7 +8,7 @@
 
 import { countUniverses } from './universeBuilder.js';
 import { countWorks } from './writersRoom/local.js';
-import { getCatalogStats } from './catalogDB.js';
+import { getCatalogStats } from './catalog/catalogDB.js';
 import { getPostSessions } from './meatspacePost.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getLoggingStats } from './meatspaceLoggingStats.js';

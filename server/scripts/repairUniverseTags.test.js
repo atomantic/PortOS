@@ -3,7 +3,7 @@
  *
  * catalogDB + universeBuilder + the marker file are mocked, so this exercises
  * the walk/rewrite orchestration (the pure transform is unit-tested in
- * server/lib/catalogUniverseTags.test.js):
+ * server/lib/catalog/catalogUniverseTags.test.js):
  *   - rewrites rows carrying legacy machine tags to the friendly name;
  *   - leaves clean rows untouched (no PATCH);
  *   - paginates through more than one page;
@@ -29,7 +29,7 @@ vi.mock('../services/universeBuilder.js', () => ({
   ]),
 }));
 
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   // Mirror the REAL contract: listIngredients returns `{ items, nextOffset }`,
   // not a bare array. (A bare-array mock is what let the original no-op bug pass.)
   listIngredients: vi.fn(async ({ limit, offset }) => {

@@ -51,7 +51,7 @@ vi.mock('../services/writersRoom/liveDirector.js', () => ({
 vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({
   promoteWorkToPipeline: vi.fn(), ERR_NO_DRAFT_BODY: 'WR_PROMOTE_NO_DRAFT_BODY',
 }));
-vi.mock('../services/catalogExtraction.js', () => ({
+vi.mock('../services/catalog/catalogExtraction.js', () => ({
   scanProseForIngredientRefs: vi.fn(async () => []),
 }));
 

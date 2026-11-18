@@ -23,15 +23,15 @@ vi.mock('../services/settings.js', async () => ({
 
 // listIngredients drives the delete-in-use guard. Default: no ingredients.
 let ingredientsForType = [];
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   listIngredients: vi.fn(async () => ({ items: ingredientsForType, nextOffset: 0 })),
 }));
 // catalogSync is imported by the route module's `import * as catalogSync`.
-vi.mock('../services/catalogSync.js', () => ({}));
+vi.mock('../services/catalog/catalogSync.js', () => ({}));
 
 const router = (await import('./catalog.js')).default;
 // Reset the in-process registry between tests via the real module.
-const { setUserCatalogTypes, getActiveCatalogType } = await import('../lib/catalogTypes.js');
+const { setUserCatalogTypes, getActiveCatalogType } = await import('../lib/catalog/catalogTypes.js');
 
 function makeApp() {
   const app = express();

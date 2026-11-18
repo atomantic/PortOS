@@ -11,7 +11,7 @@
  */
 
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
-import { chunkRawText } from '../../lib/catalogChunking.js';
+import { chunkRawText } from '../../lib/catalog/catalogChunking.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { newScrapId, rowToScrap } from './shared.js';
 import { toPgJson } from '../../lib/pgJson.js';

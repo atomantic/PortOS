@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
-import { listPickableImages, pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
+import { listPickableImages, pickGuideMedia } from '../../lib/catalog/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { shotNumbers } from '../../lib/musicVideo/musicVideoColdOpen.js';
@@ -96,7 +96,7 @@ export async function resolveCatalogCheckin(project, {
   const items = [];
   const problems = [];
   const shotMedia = Object.create(null);
-  const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalogDB.js') : null);
+  const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalog/catalogDB.js') : null);
   // Keyed by the catalog that answered, so a test double never serves another catalog's rows.
   const records = reads ? (reads.get(db) || reads.set(db, new Map()).get(db)) : new Map();
   const mediaKey = allowsImages ? 'media' : 'none';

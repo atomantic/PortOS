@@ -13,7 +13,7 @@ export async function resolveProjectCatalogDescriptions(project, { client, catal
 export async function resolveProjectsCatalogDescriptions(projects, { client, catalogDB } = {}) {
   const ids = projects.flatMap((project) => Array.isArray(project?.concept?.subjects) ? project.concept.subjects.map((subject) => subject?.ingredientId) : []).filter(Boolean);
   if (!ids.length) return projects;
-  const catalog = catalogDB || await import('../catalogDB.js');
+  const catalog = catalogDB || await import('../catalog/catalogDB.js');
   const records = await catalog.getIngredientDescriptionsByRequestedIds(ids, { client });
   return projects.map((project) => {
     const subjects = project?.concept?.subjects;
@@ -84,7 +84,7 @@ export async function syncEditedSubjectDescriptions(before, after, { client, cat
     edits.set(formId, edit);
   }
   if (!groups.size) return { project: after, records: [] };
-  const catalog = catalogDB || await import('../catalogDB.js');
+  const catalog = catalogDB || await import('../catalog/catalogDB.js');
   const changed = [];
   for (const [ingredientId, edits] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     const record = await catalog.getIngredient(ingredientId, { client });
@@ -118,7 +118,7 @@ export async function syncEditedSubjectDescriptions(before, after, { client, cat
 
 export async function announceDescriptionEdits(records) {
   if (!records.length) return;
-  const [{ catalogEvents }, { projectToCanon }] = await Promise.all([import('../catalogEvents.js'), import('../catalogCanonProjection.js')]);
+  const [{ catalogEvents }, { projectToCanon }] = await Promise.all([import('../catalog/catalogEvents.js'), import('../catalog/catalogCanonProjection.js')]);
   for (const record of records) {
     catalogEvents.emit('primitive-changed', { ingredientId: record.id });
     await projectToCanon(record.id, record).catch((err) => console.error(`🔁 catalog→canon projection failed for ${record.id}: ${err.message}`));

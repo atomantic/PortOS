@@ -32,7 +32,7 @@ vi.mock('../lib/migrationMarker.js', () => ({
 // Inject a synthetic registry with a v1→v2 upgrader (character) plus an all-v1
 // upgrader-less type (idea). Defined inside the factory because vi.mock hoists
 // above top-level consts.
-vi.mock('../lib/catalogTypes.js', () => {
+vi.mock('../lib/catalog/catalogTypes.js', () => {
   const SYNTH_TYPES = [
     {
       id: 'character',

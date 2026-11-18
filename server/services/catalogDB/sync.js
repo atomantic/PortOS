@@ -22,7 +22,7 @@
  * not expire. Covered by PostgreSQL backup; installed empty without a seed.
  */
 
-import { normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
+import { normalizeLibrary } from '../../lib/catalog/catalogMediaLibrary.js';
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import {
   rowToScrap,

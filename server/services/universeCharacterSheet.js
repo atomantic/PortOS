@@ -23,9 +23,9 @@ import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { promptAddition } from '../lib/modelInput.js';
-import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from './catalog/catalogFamily.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
-import { characterHeightStat } from '../lib/catalogAppearance.js';
+import { characterHeightStat } from '../lib/catalog/catalogAppearance.js';
 import { formatHeight, resolveHeight } from '../lib/characterHeight.js';
 import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
@@ -740,7 +740,7 @@ async function prepareCharacterSheet(universeId, entryId, options) {
   }
   const built = variantConfig.build(universe, character);
   const media = character.ingredientId
-    ? await import('./catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
+    ? await import('./catalog/catalogDB.js').then(({ listMediaForIngredient }) => listMediaForIngredient(character.ingredientId))
     : [];
   const universeStyle = universeAestheticLine(universe);
   const sheet = await buildSheetRenderParams({

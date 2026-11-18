@@ -24,7 +24,7 @@ vi.mock('../../lib/imageCleanDefaults.js', () => ({
 vi.mock('../imageGen/prepareParams.js', () => ({
   resolveLocalImageModel: (...args) => resolveLocalImageModel(...args),
 }));
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   getIngredient: vi.fn(),
   listMediaForIngredient: vi.fn(),
 }));
@@ -32,7 +32,7 @@ vi.mock('../catalogDB.js', () => ({
 import { buildPortraitPrompt, enqueueFirstPassPortraits, enqueueFirstPassSceneFrames } from './firstPassGen.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
-import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
+import { getIngredient, listMediaForIngredient } from '../catalog/catalogDB.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 let jobSeq = 0;

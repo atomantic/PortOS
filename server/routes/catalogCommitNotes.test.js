@@ -30,7 +30,7 @@ const { getScrap, getScrapCommitReceipt, commitScrap, markInboxSentToCatalog, em
   embedBatch: vi.fn(),
 }));
 
-vi.mock('../services/catalogDB.js', async (importOriginal) => ({
+vi.mock('../services/catalog/catalogDB.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getScrap, getScrapCommitReceipt, commitScrap,
 }));

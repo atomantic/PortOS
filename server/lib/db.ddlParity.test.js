@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { REQUIRED_DB_EXTENSIONS } from './db/extensions.js';
-import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
+import { FTS_PAYLOAD_FIELDS } from './catalog/catalogTypes.js';
 import {
   INIT_DB_BASE_PATH, INIT_DB_SQL_PATH, SCHEMA_MODULES_MARKER, generateInitDbSql,
 } from '../../scripts/generate-init-db-sql.js';

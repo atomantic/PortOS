@@ -3,7 +3,7 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
  * One-time boot reconciliation: collapse any pre-existing divergence between an
  * embedded universe-canon entry and its `catalog_ingredients` row.
  *
- * Before the bidirectional projection (server/services/catalogCanonProjection.js)
+ * Before the bidirectional projection (server/services/catalog/catalogCanonProjection.js)
  * landed, the Catalog detail page and the Universe Builder canon surface were
  * copy-on-write mirrors — an edit on either side went stale on the other. On
  * the first boot after the upgrade, those two stores can already disagree. This
@@ -37,11 +37,11 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_FIELD } from '../lib/storyBible.js';
 import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
-import * as catalogDB from '../services/catalogDB.js';
+import * as catalogDB from '../services/catalog/catalogDB.js';
 // Reuse the live projection's canon-entry→payload strip so a reconcile and a
 // live projection produce byte-identical catalog payloads (a divergent rule
 // would re-introduce the very drift this repair exists to collapse).
-import { entryToPayload } from '../services/catalogCanonProjection.js';
+import { entryToPayload } from '../services/catalog/catalogCanonProjection.js';
 
 const MARKER_VERSION = 1;
 const MARKER_FILENAME = 'catalog-canon-reconcile.applied.json';

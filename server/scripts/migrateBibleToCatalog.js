@@ -24,7 +24,7 @@ import { createHash } from 'crypto';
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
 import { listUniverses, getUniverse, updateUniverse, ERR_NOT_FOUND } from '../services/universeBuilder.js';
-import * as catalogDB from '../services/catalogDB.js';
+import * as catalogDB from '../services/catalog/catalogDB.js';
 
 // v2 re-walks every install once: before canon entries were promoted on save,
 // an entry added after the first walk stayed out of the catalog.

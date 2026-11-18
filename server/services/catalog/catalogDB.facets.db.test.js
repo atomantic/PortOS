@@ -1,0 +1,296 @@
+/**
+ * Postgres-backed tests for the Catalog facet + album filters (#1762):
+ *   - listIngredients({ refKind, refId })  — universe/series membership
+ *   - listIngredients({ unlinked: true })  — the "Raw" album (no u/s ref)
+ *   - listIngredients({ orphaned: true })  — refs whose target is gone
+ *   - getCatalogFacets()                    — type/universe/series/tag facets +
+ *                                             unlinked / orphaned bucket counts
+ *
+ * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`, never
+ * the real `portos` DB (the db.js runner guard + the suite skip below enforce
+ * this). The DB is shared across worktrees, so assertions are RELATIVE
+ * (membership + `>=`) and every row created here is torn down in afterAll.
+ */
+
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { checkHealth, ensureSchema, close, query } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import * as catalogDB from './catalogDB.js';
+
+let dbReady = false;
+let skipReason = '';
+{
+  const health = await checkHealth().catch((e) => ({ connected: false, error: e?.message }));
+  if (!health.connected) {
+    skipReason = `Postgres not reachable (${health.error || 'no connection'})`;
+  } else {
+    await ensureSchema().catch(() => {});
+    const recheck = await checkHealth().catch(() => ({ hasCatalogSchema: false }));
+    if (recheck.hasCatalogSchema) dbReady = true;
+    else skipReason = 'catalog schema not present';
+  }
+}
+const runDb = requireDbOrSkip('services/catalog/catalogDB.facets.db.test', dbReady, skipReason);
+
+const nonce = `f${Date.now()}`;
+const UNI_ID = `uni-${nonce}`;
+const SER_ID = `ser-${nonce}`;
+const DEAD_UNI_ID = `dead-uni-${nonce}`; // never inserted → orphaned target
+const TAG = `tag-${nonce}`;
+const createdIngredientIds = new Set();
+
+beforeAll(async () => {
+  if (!dbReady) return;
+  await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [UNI_ID, `Universe ${nonce}`]);
+  await query('INSERT INTO pipeline_series (id, name, universe_id) VALUES ($1, $2, $3)', [SER_ID, `Series ${nonce}`, UNI_ID]);
+});
+
+afterAll(async () => {
+  if (!dbReady) return;
+  for (const id of createdIngredientIds) {
+    await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
+  }
+  await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = ANY($1)', [[UNI_ID, SER_ID, DEAD_UNI_ID]]).catch(() => {});
+  await query('DELETE FROM pipeline_series WHERE id = $1', [SER_ID]).catch(() => {});
+  await query('DELETE FROM universes WHERE id = $1', [UNI_ID]).catch(() => {});
+  await close();
+});
+
+describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
+  it('lists ingredients by universe ref (membership), composing with type', async () => {
+    const linked = await catalogDB.createIngredient({ type: 'character', name: `Linked ${nonce}`, tags: [TAG] });
+    const other = await catalogDB.createIngredient({ type: 'place', name: `Other ${nonce}` });
+    createdIngredientIds.add(linked.id);
+    createdIngredientIds.add(other.id);
+    await catalogDB.linkIngredientToRef(linked.id, 'universe', UNI_ID, 'cast-character');
+
+    const { items } = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, limit: 200 });
+    const ids = items.map((i) => i.id);
+    expect(ids).toContain(linked.id);
+    expect(ids).not.toContain(other.id);
+
+    // Composes with a type filter (still matches, since linked is a character).
+    const typed = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, type: 'character', limit: 200 });
+    expect(typed.items.map((i) => i.id)).toContain(linked.id);
+    // …and excludes when the type doesn't match.
+    const typedMiss = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, type: 'object', limit: 200 });
+    expect(typedMiss.items.map((i) => i.id)).not.toContain(linked.id);
+  });
+
+  it('rolls a series-only ingredient up under its parent universe (decision #1)', async () => {
+    const seriesOnly = await catalogDB.createIngredient({ type: 'character', name: `SeriesOnly ${nonce}` });
+    createdIngredientIds.add(seriesOnly.id);
+    // Linked ONLY to the series (which belongs to UNI) — no direct universe ref.
+    await catalogDB.linkIngredientToRef(seriesOnly.id, 'series', SER_ID, 'cast-character');
+
+    const { items } = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, limit: 200 });
+    expect(items.map((i) => i.id)).toContain(seriesOnly.id);
+
+    // And the universe facet count reflects the rolled-up series member.
+    const facets = await catalogDB.getCatalogFacets();
+    const uni = facets.universes.find((u) => u.refId === UNI_ID);
+    expect(uni.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not duplicate a row linked under multiple roles', async () => {
+    const multi = await catalogDB.createIngredient({ type: 'character', name: `Multi ${nonce}` });
+    createdIngredientIds.add(multi.id);
+    await catalogDB.linkIngredientToRef(multi.id, 'universe', UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(multi.id, 'universe', UNI_ID, 'reference');
+
+    const { items } = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, limit: 200 });
+    const occurrences = items.filter((i) => i.id === multi.id).length;
+    expect(occurrences).toBe(1);
+  });
+
+  it('lists unlinked ("Raw") ingredients and excludes linked ones', async () => {
+    const raw = await catalogDB.createIngredient({ type: 'idea', name: `Raw ${nonce}` });
+    const linked = await catalogDB.createIngredient({ type: 'character', name: `RawLinked ${nonce}` });
+    createdIngredientIds.add(raw.id);
+    createdIngredientIds.add(linked.id);
+    await catalogDB.linkIngredientToRef(linked.id, 'series', SER_ID, 'cast-character');
+
+    const { items } = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    const ids = items.map((i) => i.id);
+    expect(ids).toContain(raw.id);
+    expect(ids).not.toContain(linked.id);
+  });
+
+  it('lists orphaned ingredients (ref present, target gone) and excludes live-linked', async () => {
+    const orphan = await catalogDB.createIngredient({ type: 'object', name: `Orphan ${nonce}` });
+    const live = await catalogDB.createIngredient({ type: 'object', name: `Live ${nonce}` });
+    createdIngredientIds.add(orphan.id);
+    createdIngredientIds.add(live.id);
+    // orphan → points at a universe id that has no row; live → the real universe.
+    await catalogDB.linkIngredientToRef(orphan.id, 'universe', DEAD_UNI_ID, 'reference');
+    await catalogDB.linkIngredientToRef(live.id, 'universe', UNI_ID, 'reference');
+
+    const { items } = await catalogDB.listIngredients({ orphaned: true, limit: 1000 });
+    const ids = items.map((i) => i.id);
+    expect(ids).toContain(orphan.id);
+    expect(ids).not.toContain(live.id);
+    // An orphan is, by definition, NOT in the unlinked set (it has a ref).
+    const raw = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    expect(raw.items.map((i) => i.id)).not.toContain(orphan.id);
+  });
+
+  it('classifies creative-director refs as homing: live → linked, soft-deleted → orphaned (#1812)', async () => {
+    const cdId = `cd-${nonce}`;
+    await query('INSERT INTO creative_director_projects (id, data) VALUES ($1, $2::jsonb)', [cdId, '{}']);
+    const cdLinked = await catalogDB.createIngredient({ type: 'object', name: `CDLinked ${nonce}` });
+    createdIngredientIds.add(cdLinked.id);
+    await catalogDB.linkIngredientToRef(cdLinked.id, 'creative-director', cdId, 'reference');
+
+    // While the CD project is live, the ingredient is LINKED — not unlinked (it
+    // has a homing ref) and not orphaned (the target resolves).
+    let unlinked = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    expect(unlinked.items.map((i) => i.id)).not.toContain(cdLinked.id);
+    let orphaned = await catalogDB.listIngredients({ orphaned: true, limit: 1000 });
+    expect(orphaned.items.map((i) => i.id)).not.toContain(cdLinked.id);
+
+    // Soft-delete the CD project → the ref dangles → the ingredient is ORPHANED
+    // (surfaces in the Orphaned album for re-linking), still not unlinked.
+    await query('UPDATE creative_director_projects SET deleted = TRUE, deleted_at = NOW() WHERE id = $1', [cdId]);
+    orphaned = await catalogDB.listIngredients({ orphaned: true, limit: 1000 });
+    expect(orphaned.items.map((i) => i.id)).toContain(cdLinked.id);
+    unlinked = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    expect(unlinked.items.map((i) => i.id)).not.toContain(cdLinked.id);
+
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [cdId]).catch(() => {});
+    await query('DELETE FROM creative_director_projects WHERE id = $1', [cdId]).catch(() => {});
+  });
+
+  it('counts usage per kind from live targets only, so a deleted universe stops counting', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'character', name: `Usage ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'mentioned');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', DEAD_UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'series', SER_ID, 'cast');
+
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].usage).toEqual({ universe: 1, series: 1 });
+  });
+
+  // Uniquely catches a newer reference sheet / look / plate becoming the card
+  // cover over an older plain reference image.
+  it('prefers plain references, falls back to sheets and excludes looks and plates', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'place', name: `Thumb ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.attachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    await catalogDB.attachMedia(ing.id, `sheet-${nonce}.png`, 'reference', { role: 'sheet:environment' });
+    await catalogDB.attachMedia(ing.id, `look-${nonce}.png`, 'reference', { role: 'look:night' });
+    await catalogDB.attachMedia(ing.id, `plate-${nonce}.png`, 'reference', { role: 'plate' });
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].thumbnailKey).toBe(`plain-${nonce}.png`);
+
+    await catalogDB.detachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    const after = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(after.items[0].thumbnailKey).toBe(`sheet-${nonce}.png`);
+    await catalogDB.detachMedia(ing.id, `sheet-${nonce}.png`, 'reference');
+    expect((await catalogDB.listIngredients({ ids: [ing.id], limit: 5 })).items[0].thumbnailKey).toBeNull();
+  });
+
+  it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {
+    const linked = await catalogDB.createIngredient({ type: 'character', name: `FacetLinked ${nonce}`, tags: [TAG] });
+    const seriesLinked = await catalogDB.createIngredient({ type: 'character', name: `FacetSeries ${nonce}` });
+    const raw = await catalogDB.createIngredient({ type: 'idea', name: `FacetRaw ${nonce}` });
+    const orphan = await catalogDB.createIngredient({ type: 'object', name: `FacetOrphan ${nonce}` });
+    [linked, seriesLinked, raw, orphan].forEach((i) => createdIngredientIds.add(i.id));
+    await catalogDB.linkIngredientToRef(linked.id, 'universe', UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(seriesLinked.id, 'series', SER_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(orphan.id, 'universe', DEAD_UNI_ID, 'reference');
+
+    const facets = await catalogDB.getCatalogFacets();
+
+    // Live universe + series appear with their resolved names + counts.
+    const uni = facets.universes.find((u) => u.refId === UNI_ID);
+    expect(uni).toBeTruthy();
+    expect(uni.name).toBe(`Universe ${nonce}`);
+    expect(uni.count).toBeGreaterThanOrEqual(1);
+
+    const ser = facets.series.find((s) => s.refId === SER_ID);
+    expect(ser).toBeTruthy();
+    expect(ser.name).toBe(`Series ${nonce}`);
+    expect(ser.universeId).toBe(UNI_ID);
+    expect(ser.count).toBeGreaterThanOrEqual(1);
+
+    // A dangling-target universe never appears in the live facet array.
+    expect(facets.universes.find((u) => u.refId === DEAD_UNI_ID)).toBeUndefined();
+
+    // Tag + type facets surface our nonce tag and the character type.
+    expect(facets.tags.find((t) => t.tag === TAG)?.count).toBeGreaterThanOrEqual(1);
+    expect(facets.types.find((t) => t.type === 'character')?.count).toBeGreaterThanOrEqual(2);
+
+    // Bucket counts: our raw + orphan each push their bucket up by >=1.
+    expect(facets.unlinkedCount).toBeGreaterThanOrEqual(1);
+    expect(facets.orphanedCount).toBeGreaterThanOrEqual(1);
+    expect(facets.total).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe.skipIf(!runDb)('catalogDB.findIngredientsByName', () => {
+  it('matches a live record of the type by trimmed, case-insensitive name or alias, oldest first', async () => {
+    const make = async (type, name, payload = {}) => {
+      const row = await catalogDB.createIngredient({ type, name, payload });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const first = await make('character', `  Juno Example ${nonce} `);
+    const aliased = await make('character', `The Drummer ${nonce}`, { aliases: [`juno example ${nonce}`] });
+    const otherType = await make('place', `Juno Example ${nonce}`);
+    const gone = await make('character', `Juno Example ${nonce}`);
+    await catalogDB.deleteIngredient(gone.id);
+
+    const found = await catalogDB.findIngredientsByName('character', [`JUNO EXAMPLE ${nonce}`]);
+    expect(found.map((r) => r.id)).toEqual([first.id, aliased.id]);
+    expect(found.map((r) => r.id)).not.toContain(otherType.id);
+    expect(await catalogDB.findIngredientsByName('character', ['  '])).toEqual([]);
+  });
+
+  it('matches by the first word of a live name or alias when asked', async () => {
+    const make = async (type, name, payload = {}) => {
+      const row = await catalogDB.createIngredient({ type, name, payload });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const first = `ada${nonce}`;
+    const full = await make('character', ` ${first} Example `);
+    const aliased = await make('character', `The Pilot ${nonce}`, { aliases: [`${first} Other`] });
+    const exact = await make('character', first);
+    await make('place', `${first} Diner`);
+    const gone = await make('character', `${first} Gone`);
+    await catalogDB.deleteIngredient(gone.id);
+
+    const found = await catalogDB.findIngredientsByName('character', [first.toUpperCase()], { firstWord: true });
+    expect(found.map((r) => r.id)).toEqual([full.id, aliased.id, exact.id]);
+    expect((await catalogDB.findIngredientsByName('character', [first])).map((r) => r.id)).toEqual([exact.id]);
+  });
+
+  it('reports which ingredients exist locally and which already carry a live or tombstoned ref to a record (#12466)', async () => {
+    const make = async (name) => {
+      const row = await catalogDB.createIngredient({ type: 'character', name: `${name} ${nonce}` });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const live = await make('Ownership live');
+    const tombstoned = await make('Ownership tombstoned');
+    const foreign = await make('Ownership foreign');
+    const absentId = `absent-${nonce}`;
+    const insertRef = (ingredientId, refId, deleted = false) => query(
+      `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role, deleted, deleted_at)
+       VALUES ($1, 'universe', $2, 'cast', $3, CASE WHEN $3 THEN NOW() END)`,
+      [ingredientId, refId, deleted],
+    );
+    await insertRef(live.id, UNI_ID);
+    await insertRef(tombstoned.id, UNI_ID, true);
+    await insertRef(foreign.id, DEAD_UNI_ID);
+
+    const { existing, linked } = await catalogDB.getLocalIngredientRefOwnership(
+      [live.id, tombstoned.id, foreign.id, absentId], 'universe', UNI_ID,
+    );
+    expect([...existing].sort()).toEqual([live.id, tombstoned.id, foreign.id].sort());
+    expect([...linked].sort()).toEqual([live.id, tombstoned.id].sort());
+    expect((await catalogDB.getLocalIngredientRefOwnership([], 'universe', UNI_ID)).existing.size).toBe(0);
+  });
+});

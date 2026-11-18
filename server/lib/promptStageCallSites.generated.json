@@ -13,7 +13,7 @@
   ],
   "catalog-extract": [
     "server/lib/creativeLatitude.js",
-    "server/services/catalogExtractionPlan.js"
+    "server/services/catalog/catalogExtractionPlan.js"
   ],
   "catalog-ideas-scenes-concepts": [
     "server/lib/creativeLatitude.js"

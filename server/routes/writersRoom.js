@@ -69,7 +69,7 @@ import {
   listObjects, createObject, updateObject, deleteObject,
 } from '../services/writersRoom/objects.js';
 import { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } from '../services/writersRoom/promoteToPipeline.js';
-import { scanProseForIngredientRefs } from '../services/catalogExtraction.js';
+import { scanProseForIngredientRefs } from '../services/catalog/catalogExtraction.js';
 
 const router = Router();
 

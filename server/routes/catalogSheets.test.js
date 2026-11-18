@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../lib/imageCleanDefaults.js', () => ({
   resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
 }));
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   getIngredient: (...args) => mocks.getIngredient(...args),
   getIngredientIdentityIds: async id => [id],
   listLiveRefsForIngredient: (...args) => mocks.listLiveRefsForIngredient(...args),
@@ -53,7 +53,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
 // Canon follows the catalog row through the normal projection (own suite).
-vi.mock('../services/catalogCanonProjection.js', async (importOriginal) => ({
+vi.mock('../services/catalog/catalogCanonProjection.js', async (importOriginal) => ({
   ...(await importOriginal()),
   projectToCanon: (...args) => mocks.projectToCanon(...args),
 }));

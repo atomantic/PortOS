@@ -88,7 +88,7 @@ import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES,
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { MUSIC_VIDEO_MAX_SUBJECTS, MUSIC_VIDEO_MAX_VISUAL_REFERENCES } from './musicVideoLimits.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from '../cameraMovements.js';
-import { CAST_ERAS } from '../catalogMediaLibrary.js';
+import { CAST_ERAS } from '../catalog/catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from '../storyboardVocabulary.js';
 import {
   MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES,

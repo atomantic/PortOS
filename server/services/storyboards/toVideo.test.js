@@ -14,7 +14,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
-vi.mock('../catalogDB.js', async (importOriginal) => ({
+vi.mock('../catalog/catalogDB.js', async (importOriginal) => ({
   ...await importOriginal(),
   // Only `ing-hero` still exists in the catalog.
   resolveIngredientsByIds: vi.fn(async (ids = []) => ids.filter((id) => id === 'ing-hero')

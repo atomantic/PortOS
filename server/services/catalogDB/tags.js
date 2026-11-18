@@ -9,7 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
-import { canonicalTagKey, tagIdForKey } from '../../lib/catalogTypes.js';
+import { canonicalTagKey, tagIdForKey } from '../../lib/catalog/catalogTypes.js';
 import { rowToTag } from './shared.js';
 
 /**

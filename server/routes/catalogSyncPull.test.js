@@ -19,11 +19,11 @@ vi.mock('../services/settings.js', async () => ({
   ...(await vi.importActual('../services/settings.js')),
   getSettings: async () => settings,
 }));
-vi.mock('../services/catalogSync.js', () => ({
+vi.mock('../services/catalog/catalogSync.js', () => ({
   getChangesSince: vi.fn(async () => ({ changes: {}, maxSequences: {}, hasMore: false })),
 }));
 
-import * as catalogSync from '../services/catalogSync.js';
+import * as catalogSync from '../services/catalog/catalogSync.js';
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
 import catalogRoutes from './catalog.js';
 

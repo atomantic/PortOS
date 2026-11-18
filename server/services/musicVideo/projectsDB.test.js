@@ -98,7 +98,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   });
 
   it('commits a linked description with the project and rolls both back on a later failure', async () => {
-    const catalog = await import('../catalogDB.js');
+    const catalog = await import('../catalog/catalogDB.js');
     const { syncEditedSubjectDescriptions } = await import('./subjectDescriptionSync.js');
     const id = `cat-obj-test-${randomUUID()}`;
     catalogFixtures.push(id);
@@ -130,7 +130,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       ) };
     });
     const service = await import('./projects.js');
-    const catalog = await import('../catalogDB.js');
+    const catalog = await import('../catalog/catalogDB.js');
     const id = `cat-obj-test-${randomUUID()}`;
     catalogFixtures.push(id);
     await catalog.createIngredient({ id, type: 'object', name: 'Example prop', payload: { description: 'Original' } });
@@ -283,7 +283,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
 
   it('reads affected completion only after committed catalog media changes', async () => {
     const [catalog, { catalogEvents }, { withCatalogCheckin }, { readProjectCompletion }] = await Promise.all([
-      import('../catalogDB.js'), import('../catalogEvents.js'), import('./catalogCheckin.js'), import('./projectPresentation.js'),
+      import('../catalog/catalogDB.js'), import('../catalog/catalogEvents.js'), import('./catalogCheckin.js'), import('./projectPresentation.js'),
     ]);
     const id = `cat-obj-test-${randomUUID()}`;
     catalogFixtures.push(id);

@@ -1,4 +1,4 @@
-import { CATALOG_REDESIGN_FIELDS } from '../../../../server/lib/catalogRedesign.js';
+import { CATALOG_REDESIGN_FIELDS } from '../../../../server/lib/catalog/catalogRedesign.js';
 import { lazy, Suspense } from 'react';
 import { Wand2 } from 'lucide-react';
 import { refineCatalogDraft } from '../../services/apiCatalog';

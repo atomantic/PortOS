@@ -5,9 +5,9 @@
 
 import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
-import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
+import { pickGuideMedia } from '../../lib/catalog/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
-import { characterHeightStat } from '../../lib/catalogAppearance.js';
+import { characterHeightStat } from '../../lib/catalog/catalogAppearance.js';
 import { fixedCasting, leadingAge } from './castAndSetsDirection.js';
 
 // The same likeness pick a Casting sheet render makes (guides, else portrait,
@@ -37,7 +37,7 @@ function subjectImages(payload, media, formId) {
 export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
   const fixed = fixedCasting(project);
   if (!fixed.length) return {};
-  const catalog = deps.catalog || await import('../catalogDB.js');
+  const catalog = deps.catalog || await import('../catalog/catalogDB.js');
   const records = new Map();
   // One read per record, however many subjects (ages) link to it.
   const load = (id) => {

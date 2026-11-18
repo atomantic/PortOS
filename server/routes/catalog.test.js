@@ -11,7 +11,7 @@
  *     records the restore as a new (auditable) revision.
  *
  * Needs a live Postgres with the catalog schema (same probe as
- * services/catalogDB.test.js); SKIPS cleanly when unreachable. Embeddings are
+ * services/catalog/catalogDB.test.js); SKIPS cleanly when unreachable. Embeddings are
  * mocked so the route never reaches an AI provider.
  */
 
@@ -50,7 +50,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
     ? `/example/images/${key}` : actual.resolveImageInputPath(key, ...rest)) };
 });
 
-const catalogDB = await import('../services/catalogDB.js');
+const catalogDB = await import('../services/catalog/catalogDB.js');
 const router = (await import('./catalog.js')).default;
 
 // Probe the DB ONCE at module load (top-level await) so describe.skipIf reports

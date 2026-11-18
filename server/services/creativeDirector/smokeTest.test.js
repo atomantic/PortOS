@@ -30,7 +30,7 @@ vi.mock('../catalogDB/identityAccess.js', () => ({
   assertCatalogIdentityWritable: vi.fn(async id => id),
 }));
 
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   resolveIngredientsByIds: vi.fn(async () => []),
   linkIngredientsToCreativeDirector: vi.fn(async () => []),
   cdRefRoleForType: (type) => type,

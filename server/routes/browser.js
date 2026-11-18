@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, logsQuerySchema } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
-import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
 import { requestHasHostControl } from '../services/authGate.js';

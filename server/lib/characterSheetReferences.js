@@ -6,7 +6,7 @@
 import { basename, join, relative } from 'node:path';
 import { PATHS } from './paths.js';
 import { isSafeFilename, resolveImageInputPath } from './pathSafety.js';
-import { MAX_CAST_GUIDES, isLeftOutOfLikeness, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, isLeftOutOfLikeness, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalog/catalogMediaLibrary.js';
 import { maxInputImages } from './imageGenCapabilities.js';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from './generationModes.js';
 import { RUNNER_FAMILIES } from './runners.js';

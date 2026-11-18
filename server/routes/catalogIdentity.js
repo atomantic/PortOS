@@ -3,7 +3,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { requireHostControl } from '../services/authGate.js';
 import { identityPreviewSchema, identityCreateSchema, identityImportSchema, identityAcceptSchema,
-  identityEmptySchema, identitySnapshotQuerySchema, identityStatusQuerySchema, identityListQuerySchema } from '../lib/catalogIdentityValidation.js';
+  identityEmptySchema, identitySnapshotQuerySchema, identityStatusQuerySchema, identityListQuerySchema } from '../lib/catalog/catalogIdentityValidation.js';
 import * as identity from '../services/catalogIdentity/index.js';
 import { authenticateIdentityPeer, signEvidence, localIdentity } from '../services/catalogIdentity/transport.js';
 import { catalogIdentityEvents } from '../services/catalogIdentity/events.js';

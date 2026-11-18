@@ -68,8 +68,8 @@ import { attachNodeImage } from '../services/fableLoom/records.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
-import { attachGeneratedMedia } from '../services/catalogDB.js';
-import { catalogEvents } from '../services/catalogEvents.js';
+import { attachGeneratedMedia } from '../services/catalog/catalogDB.js';
+import { catalogEvents } from '../services/catalog/catalogEvents.js';
 const router = Router();
 
 router.get('/runway-models', asyncHandler(async (_req, res) => {

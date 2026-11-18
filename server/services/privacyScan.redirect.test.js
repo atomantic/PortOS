@@ -11,7 +11,7 @@ vi.mock('dns/promises', () => ({
 }));
 const fetchMock = vi.fn();
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: (...a) => fetchMock(...a) }));
-vi.mock('./catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
+vi.mock('./catalog/catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
 vi.mock('./privacyVault.js', () => ({ listScanEligibleValues: vi.fn(async () => []) }));
 vi.mock('./privacyBrokers.js', () => ({ listBrokers: vi.fn(), listBrokerCases: vi.fn(), recordScanVerdict: vi.fn() }));
 vi.mock('./privacySubjects.js', () => ({ resolveSubjectId: (id) => id, assertSubjectConsent: vi.fn() }));

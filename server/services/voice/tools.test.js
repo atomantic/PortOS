@@ -191,7 +191,7 @@ vi.mock('../appProcessStatus.js', () => ({
 }));
 const catalogItemsRef = { value: [] };
 const catalogRefsRef = { value: [] };
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   listIngredients: vi.fn(async () => ({ items: catalogItemsRef.value, nextOffset: catalogItemsRef.value.length })),
   listRefsForIngredient: vi.fn(async () => catalogRefsRef.value),
 }));
@@ -225,7 +225,7 @@ describe('getToolSpecs', () => {
   });
 
   it('catalog_lookup advertises user-defined catalog types in its type enum', async () => {
-    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    const { setUserCatalogTypes } = await import('../../lib/catalog/catalogTypes.js');
     try {
       setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
       const lookup = getToolSpecs().find((s) => s.function.name === 'catalog_lookup');
@@ -238,7 +238,7 @@ describe('getToolSpecs', () => {
   });
 
   it('intent gating surfaces catalog_lookup for an utterance naming a user-defined type', async () => {
-    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    const { setUserCatalogTypes } = await import('../../lib/catalog/catalogTypes.js');
     try {
       // Before the type exists, "search my wardrobes" must NOT trip the catalog
       // group (proves the static regex doesn't already cover the word).

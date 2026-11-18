@@ -28,7 +28,7 @@ import { PORTS } from '../server/lib/ports.js';
 
 import { navigateToUrlPinned, cdpRequest } from '../server/services/browserService.js';
 import { assertPublicHttpUrl } from '../server/lib/safeUrlFetch.js';
-import { isBlockedIngestHost } from '../server/lib/catalogValidation.js';
+import { isBlockedIngestHost } from '../server/lib/catalog/catalogValidation.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const { dir: CERT_DIR } = certPaths(join(ROOT, 'data'));

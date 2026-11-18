@@ -99,7 +99,7 @@ describe.skipIf(!runDb)('commit-ordered sync feed (#8315)', () => {
 
   beforeAll(async () => {
     memorySync = await import('../../../services/memorySync.js');
-    catalogDB = await import('../../../services/catalogDB.js');
+    catalogDB = await import('../../../services/catalog/catalogDB.js');
     ({ up: backfillSyncFeed } = await import('../../../scripts/db-migrations/009-commit-ordered-sync-feed.js'));
   });
 

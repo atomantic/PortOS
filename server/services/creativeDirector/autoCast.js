@@ -21,7 +21,7 @@
 import {
   hybridSearchIngredients,
   linkIngredientsToCreativeDirector,
-} from '../catalogDB.js';
+} from '../catalog/catalogDB.js';
 import { generateQueryEmbedding } from '../memoryEmbeddings.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
 import { getProject, updateProject } from './local.js';
