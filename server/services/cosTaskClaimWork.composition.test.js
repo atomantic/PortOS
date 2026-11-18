@@ -8,7 +8,7 @@ vi.mock('./taskSchedule.js', async (importActual) => ({
 vi.mock('./apps.js', async (importActual) => ({
   ...(await importActual()),
   getAppTaskTypeOverrides: vi.fn(async () => ({})),
-  getAppById: vi.fn(async () => ({ useAutoMerge: true, mergeHandoffMinQueuedRuns: 3 })),
+  getAppById: vi.fn(async (id) => id === 'fixture' ? { useAutoMerge: true, mergeHandoffMinQueuedRuns: 3 } : null),
 }));
 vi.mock('../lib/workTracker.js', async (importActual) => ({
   ...(await importActual()),
@@ -19,6 +19,15 @@ vi.mock('./codeReview.js', async (importActual) => ({
   getCodeReviewDefaults: vi.fn(async () => ({ reviewers: ['codex'], usernames: ['alice'] })),
 }));
 vi.mock('./claimReviewerPreflight.js', () => ({ preflightClaimReviewers: vi.fn(async () => '') }));
+vi.mock('./memoryRetriever.js', () => ({
+  getMemorySection: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./digital-twin.js', () => ({
+  getDigitalTwinForPrompt: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./tools.js', () => ({
+  getToolsSummaryForPrompt: vi.fn().mockResolvedValue(''),
+}));
 
 import { buildClaimWorkTask } from './cosTaskClaimWork.js';
 import { buildAgentPrompt, buildLightContextPrompt } from './agentPromptBuilder.js';
