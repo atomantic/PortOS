@@ -18,6 +18,10 @@ import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 import { blenderShotsReady } from './musicVideoBlender.js';
 import { projectSpend } from './musicVideoSpend.js';
 
+/** A verified stale export returns to In Progress; legacy exports keep their stored status. */
+export const isMusicVideoCompleted = (project) => project?.isCompleted
+  ?? (project?.status === 'complete' && project.renderDependencyState?.status !== 'stale');
+
 /**
  * True when the project's word timings came from the full mix but a vocal
  * stem has since been attached: they are provisional until re-aligned.
@@ -163,6 +167,7 @@ export function summarizeMusicVideoProject(project, readiness) {
     parentProjectId: project.parentProjectId || null,
     mode: project.mode || 'director',
     status: project.status || 'draft',
+    isCompleted: isMusicVideoCompleted(project),
     stage: currentStage(project, readiness, run),
     runStatus: project.autonomousRun?.status || run?.status || null,
     runInterrupted: Boolean(project.autonomousRun?.interrupted || project.castAndSets?.interrupted || run?.interrupted),

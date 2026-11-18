@@ -10,11 +10,10 @@
 
 import { query, withTransaction } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
-import { rowToMedia } from './shared.js';
+import { announceAssetsChanged, rowToMedia } from './shared.js';
 import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { catalogEvents } from '../catalogEvents.js';
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
@@ -31,10 +30,6 @@ const lockIngredient = async (client, ingredientId) => {
   await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_resolve_ingredient_id($1) FOR UPDATE', [ingredientId]);
 };
 const inTransaction = (options, fn) => (options.client ? fn(options.client) : withTransaction(fn));
-// Image attaches file into the record's universe collections
-// (catalogUniverseFiling.js), which reads after a short delay so a caller's
-// enclosing transaction has committed.
-const announceImage = (ingredientId) => catalogEvents.emit('assets-changed', { ingredientId });
 
 export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
   // Every local portrait entry point shares the replacement transaction,
@@ -48,7 +43,7 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
     await lockIngredient(client, ingredientId);
     return insertMedia(client.query.bind(client), ingredientId, mediaKey, kind, options);
   });
-  announceImage(ingredientId);
+  announceAssetsChanged(ingredientId, options.client);
   return media;
 }
 
@@ -82,11 +77,11 @@ export async function attachGeneratedMedia(ingredientId, mediaKey, { kind = 'aut
     const target = kind === 'auto' ? (rows.some((row) => row.kind === 'portrait') ? 'reference' : 'portrait')
       : kind === 'portrait' && newerPortrait ? 'reference' : kind;
     const media = target === 'portrait'
-      ? await setPortraitMedia(ingredientId, mediaKey, { ...options, client })
+      ? await replacePortrait(client, ingredientId, mediaKey, options)
       : await insertMedia(client.query.bind(client), ingredientId, mediaKey, target, options);
     return { media, kind: target, attached: true };
   });
-  if (result.attached) announceImage(ingredientId);
+  if (result.attached) announceAssetsChanged(ingredientId, options.client);
   return result;
 }
 
@@ -126,13 +121,25 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
   // Soft-delete (mirrors unlinkIngredientRelation): keep the row as a tombstone
   // so the sync_sequence bump propagates the detach to peers. `AND deleted =
   // false` keeps a re-detach from re-bumping the sequence needlessly.
-  await query(
+  const result = await query(
     `UPDATE catalog_ingredient_media
         SET deleted = true, deleted_at = NOW()
       WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND media_key = $2 AND kind = $3
         AND deleted = false`,
     [ingredientId, mediaKey, kind],
   );
+  if (result.rowCount && IMAGE_KINDS.has(kind)) announceAssetsChanged(ingredientId);
+}
+
+async function replacePortrait(client, ingredientId, mediaKey, options) {
+  await client.query(
+    `UPDATE catalog_ingredient_media
+        SET deleted = true, deleted_at = NOW()
+      WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND kind = 'portrait'
+        AND media_key <> $2 AND deleted = false`,
+    [ingredientId, mediaKey],
+  );
+  return insertMedia(client.query.bind(client), ingredientId, mediaKey, 'portrait', options);
 }
 
 // Lock the owning row even when there is no media yet. Both demotion and
@@ -142,16 +149,9 @@ export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId, options);
   const media = await inTransaction(options, async (client) => {
     await lockIngredient(client, ingredientId);
-    await client.query(
-      `UPDATE catalog_ingredient_media
-          SET deleted = true, deleted_at = NOW()
-        WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND kind = 'portrait'
-          AND media_key <> $2 AND deleted = false`,
-      [ingredientId, mediaKey],
-    );
-    return insertMedia(client.query.bind(client), ingredientId, mediaKey, 'portrait', options);
+    return replacePortrait(client, ingredientId, mediaKey, options);
   });
-  announceImage(ingredientId);
+  announceAssetsChanged(ingredientId, options.client);
   return media;
 }
 
@@ -224,7 +224,7 @@ export async function getMissingMediaForIngredient(ingredientId, { media } = {})
 // refused (409) past MAX_CAST_GUIDES so the render picker's cap holds.
 export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {}, { preserveExisting = false } = {}) {
   ingredientId = await assertCatalogIdentityWritable(ingredientId);
-  return withTransaction(async (client) => {
+  const media = await withTransaction(async (client) => {
     await lockIngredient(client, ingredientId);
     const cur = await client.query(
       `SELECT *, (updated_at IS DISTINCT FROM created_at OR updated_at IS NULL OR created_at IS NULL) AS changed_since_creation
@@ -296,6 +296,8 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
     );
     return rowToMedia(result.rows[0]);
   });
+  if (IMAGE_KINDS.has(kind)) announceAssetsChanged(ingredientId);
+  return media;
 }
 
 // The live records holding one image under one role, with each row's library,

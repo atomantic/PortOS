@@ -2668,6 +2668,11 @@ export const musicVideoProjectListQuerySchema = z.object({
   cursor: z.string().max(64).optional(),
 });
 
+export const musicVideoCatalogCompletionSchema = z.object({
+  ingredientId: z.preprocess(value => typeof value === 'string' ? [value] : value,
+    z.array(z.string().min(1).max(128)).min(1).max(50)),
+}).strict();
+
 /**
  * A manual spend adjustment (#16506): `actualUsd` states what the lane really cost (the
  * adjustment is the difference from what the project shows), `usd` adds a signed amount.

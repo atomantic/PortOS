@@ -126,7 +126,7 @@ export default function SetupStage({ board }) {
           />
         </SongStep>
         <SongStep id="mv-lyric-timing" number={4} title="Time and verify" done={lyrics.verified || lyrics.ok}>
-          <LyricOverlaySetting key={project.id} project={project} onUpdated={board.replaceProject} />
+          <LyricOverlaySetting key={`overlay-${project.id}`} project={project} onUpdated={board.replaceProject} />
           {!lyrics.instrumental && (
             <AlignWords
               disabled={cues.length === 0 || !projectHasAudio(project)}
@@ -136,7 +136,7 @@ export default function SetupStage({ board }) {
               onAlign={board.onAlignLyrics}
             />
           )}
-          {!lyrics.instrumental && <LyricSheetCheck key={project.id} project={project} audioFilename={audioFilename} aligning={aligningLyrics} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
+          {!lyrics.instrumental && <LyricSheetCheck key={`sheet-${project.id}`} project={project} audioFilename={audioFilename} aligning={aligningLyrics} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
           {board.productionReview && (
             <LyricTimingCheck project={project} review={board.productionReview} planning={board.planningDraft} disabled={locked}
               audioUrl={board.audioUrl} aligning={aligningLyrics} onAlign={board.onAlignLyrics} />

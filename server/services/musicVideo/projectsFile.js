@@ -22,6 +22,17 @@ export const {
   loadAll, saveAll, loadAllAndIndex, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
 
+export async function listCompletionCandidateIds(ingredientIds) {
+  const wanted = ingredientIds && new Set(ingredientIds);
+  return (await listProjects()).filter((project) => {
+    if (project.status !== 'complete' || !(project.renderHistoryId && project.renderDependencies) && project.composition?.mode !== 'blender') return false;
+    return !wanted || (project.castAndSets?.source === 'catalog'
+      && Array.isArray(project.renderDependencies?.references)
+      && project.renderDependencies.references.some(({ role }) => role === 'clipReferences')
+      && project.concept?.subjects?.some(({ ingredientId }) => wanted.has(ingredientId)));
+  }).map(({ id }) => id);
+}
+
 // Every mutator below is a load → modify → save of the ONE projects file, so
 // they all share a single write tail: a render-completion hook appending a take
 // can't interleave with a director's select/reject (or any other edit) and

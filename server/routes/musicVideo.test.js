@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { captureMusicVideoEvidence } from '../lib/musicVideo/musicVideoDependencies.js';
 import { mkdtemp, open, rename, rm, symlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -21,6 +22,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectPage: vi.fn(),
+  listProjectCompletion: vi.fn(async () => []),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   cloneProject: vi.fn(async (id, options) => ({
@@ -293,6 +295,29 @@ describe('musicVideo routes', () => {
     const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
     expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'done' }] });
     expect((await request(app).get('/api/music-video?summary=1&statusFilter=unknown')).status).toBe(400);
+  });
+
+  it('classifies stale render evidence before pagination, preserving legacy completed projects', async () => {
+    const rendered = { status: 'complete', renderHistoryId: 'render-example', uploadedAudioFilename: 'original.wav', scenes: [] };
+    const renderDependencies = captureMusicVideoEvidence(rendered);
+    const stale = { ...rendered, id: 'stale', uploadedAudioFilename: 'new.wav', renderDependencies, createdAt: '2026-03-01' };
+    svc.listProjects.mockResolvedValue([
+      stale, { ...rendered, id: 'legacy', createdAt: '2026-02-01' }, { id: 'draft', createdAt: '2026-01-01' },
+    ]);
+    svc.listProjectCompletion.mockResolvedValue([{ id: 'stale', isCompleted: false }]);
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1');
+    expect(progress.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'stale', isCompleted: false }] });
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'legacy', isCompleted: true }] });
+    svc.listProjectCompletion.mockReset();
+  });
+
+  it('looks up catalog completion by deduplicated ingredient IDs and rejects an empty lookup', async () => {
+    svc.listProjectCompletion.mockResolvedValueOnce([{ id: 'mv-linked', name: 'Linked', isCompleted: true }]);
+    const response = await request(app).get('/api/music-video/catalog-completion?ingredientId=cat-linked&ingredientId=cat-linked');
+    expect(response.body).toEqual([{ id: 'mv-linked', name: 'Linked', isCompleted: true }]);
+    expect(svc.listProjectCompletion).toHaveBeenCalledWith({ ingredientIds: ['cat-linked'] });
+    expect((await request(app).get('/api/music-video/catalog-completion')).status).toBe(400);
   });
 
   it('searches names across every project before paging, combined with the status filter', async () => {

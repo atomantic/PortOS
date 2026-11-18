@@ -11,7 +11,7 @@ import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideo/m
  * root is held by the page so it survives opening a project and coming back.
  */
 export default function ProjectIndex({
-  projects, statusFilter, nameQuery, onNameQueryChange, summaries, pickedVersion, onPickVersion, trackName,
+  projects, statusFilter, nameQuery, onNameQueryChange, summaries, catalogSync, pickedVersion, onPickVersion, trackName,
   onSelect, onClone, deletion, cloningId, onRename,
 }) {
   const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
@@ -86,8 +86,8 @@ export default function ProjectIndex({
       <InfiniteScrollFooter
         hasMore={summaries.hasMore}
         loading={summaries.loading}
-        error={summaries.error}
-        onLoadMore={summaries.loadMore}
+        error={catalogSync?.catalogError || summaries.error}
+        onLoadMore={catalogSync?.catalogError ? catalogSync.retryCatalog : summaries.loadMore}
         label="Load more projects"
       />
     </div>

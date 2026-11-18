@@ -91,6 +91,29 @@ export async function listProjectPage(options = {}) {
   return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
 }
 
+export async function listProjectCompletion({ ingredientIds, matchesName } = {}) {
+  const backend = await selectBackend();
+  const ids = await backend.listCompletionCandidateIds(ingredientIds);
+  if (!ids.length) return [];
+  const [{ readProjectCompletion }, { createCatalogReads }] = await Promise.all([
+    import('./projectPresentation.js'),
+    import('./catalogCheckin.js'),
+  ]);
+  const reads = createCatalogReads();
+  const states = [];
+  const batchSize = 30;
+  for (let offset = 0; offset < ids.length; offset += batchSize) {
+    const records = await backend.getProjectsByIds(ids.slice(offset, offset + batchSize));
+    const candidates = records.filter(project => project.status === 'complete' && (!matchesName || matchesName(project)));
+    states.push(...await Promise.all(candidates.map(async (project) => ({
+      id: project.id,
+      name: project.name,
+      isCompleted: await readProjectCompletion(project, { reads, requireCatalog: !!ingredientIds }),
+    }))));
+  }
+  return states;
+}
+
 /** The stored snapshots, used when offering a legacy difference for review. */
 export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));

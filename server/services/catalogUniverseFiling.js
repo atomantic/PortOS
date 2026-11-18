@@ -130,8 +130,7 @@ export async function fileCatalogImagesIntoUniverses({ ingredientIds = null, dry
 // Live filing: catalog media/ref writes announce `assets-changed`, record-level
 // changes (completion hook, universe membership) `primitive-changed`. Bursts
 // for one record coalesce, and one pass runs at a time, so a batch of renders
-// files with one collection write per universe. The delay also lets a caller's
-// own transaction commit before the read.
+// files with one collection write per universe.
 const FILING_DELAY_MS = 1000;
 const pending = new Set();
 let timer = null;

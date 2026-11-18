@@ -477,6 +477,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Refresh creative primitive ownership, membership and usage views after a durable change.',
     payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' } }, required: ['ingredientId'], additionalProperties: false },
   },
+  'catalog:assets-changed': {
+    direction: 'server-to-client',
+    summary: 'A catalog record’s media or references changed after the owning write committed.',
+    payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' } }, required: ['ingredientId'], additionalProperties: false },
+  },
   'github:notifications:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate the GitHub notifications inbox, thread drawer and Automations tab after a sync, triage or action changed stored rows.',
