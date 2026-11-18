@@ -164,6 +164,17 @@ describe('rollupListen / rollupWatch', () => {
 });
 
 describe('chronotypeHistogram — timezone bucketing', () => {
+  it('keeps day-only watches in taste evidence and counts exact watches by local hour', () => {
+    const events = [
+      { kind: 'media.watch', happenedAt: '2001-02-04T08:00:00Z', metadata: { scraped: true, channel: 'Example channel' } },
+      { kind: 'media.watch', happenedAt: '2001-02-05T04:30:00Z', metadata: { channel: 'Example channel' } },
+    ];
+    const histogram = chronotypeHistogram(events, 'America/Los_Angeles');
+    expect(histogram[0]).toMatchObject({ media: 0, total: 0 });
+    expect(histogram[20]).toMatchObject({ media: 1, total: 1 });
+    expect(rollupWatch(events)).toMatchObject({ total: 2, topChannels: [{ name: 'Example channel', count: 2 }] });
+  });
+
   it('buckets by LOCAL hour, not UTC', () => {
     // 2026-07-04T02:30:00Z = 19:30 the previous day in America/Los_Angeles (-07).
     const events = [{ kind: 'message.sent', happenedAt: '2026-07-04T02:30:00Z' }];

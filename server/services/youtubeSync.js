@@ -15,8 +15,8 @@
  *   scraper.
  * - **Day-bucket dedupe, shared with Takeout.** `dedupeKey = yt:<videoId>:<localDay>`
  *   so a scrape and a Takeout import of the same watch reconcile via
- *   `recordEvents`'s `ON CONFLICT DO NOTHING`. `happenedAt` is the day's local
- *   midnight (the finest the page offers); Takeout supplies the exact instant.
+ *   `recordEvents`. `happenedAt` is the day's local midnight (the finest the page
+ *   offers). Takeout can refine that timestamp, which later scrapes keep.
  * - **Machine-local.** The scrape runs against the local browser profile; the
  *   cursor/last-status lives in `data/youtube/` (per-machine, unsynced). Events
  *   land in the machine-local `human_activity_events` table.
