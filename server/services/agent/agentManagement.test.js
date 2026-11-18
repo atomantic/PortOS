@@ -2111,7 +2111,7 @@ describe('close-handler skip-finalization — source contract', () => {
   // would fail for the wrong reason. Spelled out per row rather than matched
   // loosely, so a seam RENAME surfaces here instead of going quietly vacuous.
   for (const [label, src, signature, bodyAnchor, sequenceCall, finalizeCall] of [
-    ['CLI close handler', AGENT_CLI_SRC, 'handleClose = async (code)', null, 'finalizeAgentRunCommon(', 'finalizeAgent('],
+    ['CLI close handler', AGENT_CLI_SRC, 'async function handleDirectCliClose(ctx, code)', null, 'finalizeAgentRunCommon(', 'finalizeAgent('],
     ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> ', 'finalization.finalizeRunCommon(', 'finalization.finalizeAgent('],
   ]) {
     it(`${label} routes through the shared finalize sequence and returns on its paused verdict before finalizeAgent`, () => {
