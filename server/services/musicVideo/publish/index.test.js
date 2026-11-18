@@ -23,7 +23,7 @@ const platforms = { stackerNews: { enabled: true, account: null }, youtube: { en
 
 afterAll(() => cleanupTempDataRoots());
 
-function fakeBrowser() {
+function fakeBrowser({ pageError } = {}) {
   const pages = [];
   const browsers = [];
   const connect = vi.fn(async () => {
@@ -34,6 +34,7 @@ function fakeBrowser() {
       context: {
         pages: () => pages.filter((page) => !page.closed),
         newPage: async () => {
+          if (pageError) throw pageError;
           const handlers = [];
           const navigated = [];
           const frame = {};
@@ -248,6 +249,67 @@ describe('publish drafts (#9282)', () => {
     expect(await discardPublishDraft(id, second.draftId)).toBe(false);
   });
 
+  it('replaces the earlier draft when fills overlap for the same project and target', async () => {
+    const id = await readyProject();
+    const { connect, pages, browsers } = fakeBrowser();
+    const held = Promise.withResolvers();
+    const queued = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    const stackerNews = adapter();
+    stackerNews.prepare.mockImplementationOnce(async () => {
+      entered.resolve();
+      await held.promise;
+      return {};
+    });
+    const deps = { connect, adapters: { stackerNews }, platforms };
+    const onDraft = (event) => {
+      if (event.projectId === id && event.state === 'queued') queued.resolve();
+    };
+    musicVideoEvents.on('publish-draft', onDraft);
+    const first = preparePublishDraft(id, 'stackerNews', {}, deps);
+    let second;
+    try {
+      await entered.promise;
+      second = preparePublishDraft(id, 'stackerNews', {}, deps);
+      await queued.promise;
+      expect(connect).toHaveBeenCalledTimes(1);
+      held.resolve();
+      const [original, replacement] = await Promise.all([first, second]);
+
+      expect(await listPublishDrafts(id, { connect })).toEqual([replacement]);
+      expect(await discardPublishDraft(id, original.draftId)).toBe(false);
+      expect(pages.map((page) => page.closed)).toEqual([true, false]);
+      expect(browsers[0].close).toHaveBeenCalledOnce();
+    } finally {
+      held.resolve();
+      musicVideoEvents.off('publish-draft', onDraft);
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  it.each(['connect', 'newPage', 'prepare'])('preserves the previous draft if replacement fails at %s', async (stage) => {
+    const id = await readyProject();
+    const original = fakeBrowser();
+    const draft = await preparePublishDraft(id, 'stackerNews', {}, {
+      connect: original.connect, adapters: { stackerNews: adapter() }, platforms,
+    });
+    const err = new Error('Replacement failed');
+    const failed = fakeBrowser({ pageError: stage === 'newPage' ? err : undefined });
+    const stackerNews = adapter();
+    if (stage === 'connect') failed.connect.mockRejectedValueOnce(err);
+    if (stage === 'prepare') stackerNews.prepare.mockRejectedValueOnce(err);
+
+    await expect(preparePublishDraft(id, 'stackerNews', {}, {
+      connect: failed.connect, adapters: { stackerNews }, platforms,
+    })).rejects.toBe(err);
+
+    expect(await listPublishDrafts(id)).toEqual([draft]);
+    expect(original.pages[0].closed).toBe(false);
+    expect(original.browsers[0].close).not.toHaveBeenCalled();
+    if (stage !== 'connect') expect(failed.browsers[0].close).toHaveBeenCalledOnce();
+    if (stage === 'prepare') expect(failed.pages[0].closed).toBe(true);
+  });
+
   it('keeps the filled tab open past the TTL, lists it for a reloaded card, and reports a hand-closed tab', async () => {
     vi.useFakeTimers();
     try {
@@ -270,6 +332,30 @@ describe('publish drafts (#9282)', () => {
       expect(await discardPublishDraft(id, draft.draftId, { connect })).toBe(true);
       expect(events.at(-1)).toMatchObject({ state: 'discarded' });
       musicVideoEvents.off('publish-draft', onEvent);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the replacement open when a closed detached draft had the same composer URL', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages, browsers } = fakeBrowser();
+      const stackerNews = adapter({ prepare: vi.fn(async (page) => {
+        page.href = 'https://example.com/composer';
+        return {};
+      }) });
+      const deps = { connect, adapters: { stackerNews }, platforms };
+      await preparePublishDraft(id, 'stackerNews', {}, deps);
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      pages[0].closed = true;
+
+      const replacement = await preparePublishDraft(id, 'stackerNews', {}, deps);
+
+      expect(pages[1].closed).toBe(false);
+      expect(browsers[1].close).not.toHaveBeenCalled();
+      expect(await listPublishDrafts(id)).toEqual([replacement]);
     } finally {
       vi.useRealTimers();
     }
@@ -451,6 +537,20 @@ describe('publish drafts (#9282)', () => {
     expect(post.links).toEqual(['youtube', 'stackerNews']);
     await expect(prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });
     await expect(prepareCrossLinkEdit(id, 'suno', { connect, crossLinkAdapters: { suno: x } })).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('disconnects the cross-link browser session when opening its tab fails', async () => {
+    const id = await readyProject();
+    await recordPublishPost(id, 'x', { url: 'https://x.com/example/status/42' });
+    await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/abc' });
+    const pageError = new Error('Could not open a tab');
+    const { connect, browsers } = fakeBrowser({ pageError });
+    const x = adapter({ label: 'X' });
+
+    await expect(prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } })).rejects.toBe(pageError);
+
+    expect(browsers[0].close).toHaveBeenCalledOnce();
+    expect(x.prepare).not.toHaveBeenCalled();
   });
 
   it('turns cross-links in new drafts off and on', async () => {
