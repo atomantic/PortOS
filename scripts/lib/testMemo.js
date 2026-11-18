@@ -935,7 +935,9 @@ function createScopes(ctx) {
         while (of < m[open] && !isWord(arr[of], 'of', 'in')) of = OPENERS[arr[of].v] && arr[of].t === 'p' && m[of] !== undefined ? m[of] + 1 : of + 1;
         if (of >= m[open]) continue; // `for (;;)`: its `let i = 0` is an ordinary binding
         const from = isWord(arr[open + 1], 'const', 'let', 'var') ? open + 2 : open + 1;
-        const plain = of === from + 1 && arr[from].t === 'id' && arr[of].v === 'of';
+        // `const` or `let`: one binding per turn. A `var` (or a name declared elsewhere) outlives the loop,
+        // and a callback registered in it reads whatever the name is assigned afterwards.
+        const plain = of === from + 1 && arr[from].t === 'id' && arr[of].v === 'of' && isWord(arr[open + 1], 'const', 'let');
         const extent = bodyExtent(arr, m, arr[open].i, m[open] + 1);
         for (const name of boundNames(arr, m, from, of)) {
           loopVariables.add(name);
@@ -1094,7 +1096,7 @@ function createScopes(ctx) {
         if (arr.slice(open + 1, m[open]).some((token) => isWord(token, 'withFileTypes'))) return null;
         domain = LISTED;
         i = m[open] + 1;
-      } else if (calls && callee === i + 2 && head.v === 'Object' && arr[callee].v === 'freeze') {
+      } else if (calls && callee === i + 2 && head.v === 'Object' && arr[callee].v === 'freeze' && !shadowed('Object')) {
         domain = elementsOf(arr, m, open + 1, m[open], depth + 1);
         i = m[open] + 1;
       } else {
@@ -1266,11 +1268,17 @@ function createScopes(ctx) {
     return parts.every((part) => part === LISTED) ? LISTED : null;
   };
 
-  /** What argument `index` of the call opened at `open` can be. */
-  const argumentDomain = (arr, m, open, index) => {
+  /** The `[from, to)` of argument `index` of the call opened at `open`, or null: too few arguments, or a spread before it. */
+  const argumentRange = (arr, m, open, index) => {
     const ranges = listRanges(arr, m, open);
     if (index >= ranges.length || ranges.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...'))) return null;
-    const [from, to] = ranges[index];
+    return ranges[index];
+  };
+  /** What argument `index` of the call opened at `open` can be. */
+  const argumentDomain = (arr, m, open, index) => {
+    const range = argumentRange(arr, m, open, index);
+    if (range === null) return null;
+    const [from, to] = range;
     const { value, end } = evaluate(arr, m, from, ctx);
     if (end !== to) return null;
     if (value.k === 'str') return [value.v];
@@ -1281,29 +1289,57 @@ function createScopes(ctx) {
     return texts?.every((text) => text.k === 'str') ? texts.map((text) => text.v) : null;
   };
 
-  /** Every value parameter `index` of the function named by `nameToken` is called with, or null when a use is not a plain call. */
-  const callSiteDomain = (nameToken, index) => {
+  /** Every use of the function named by `nameToken` but its declaration, or null when the name can mean something else. */
+  const usesOf = (nameToken) => {
     const name = nameToken.v;
     if ((declared.get(name) ?? []).length !== 1 || binders.has(name) || hiddenUse(name, '[(`.]|\\?\\.') || hiddenCall(name)) return null;
-    const parts = [];
+    const uses = [];
     for (const { arr, m } of arrays) {
       for (let at = 0; at < arr.length; at += 1) {
         const use = arr[at];
         if (use.t !== 'id' || use.v !== name || use === nameToken) continue;
-        const prev = arr[at - 1];
-        const next = arr[at + 1];
-        if (isPunct(prev, '.', '?.') || (isPunct(next, ':') && isPunct(prev, '{', ','))) continue; // another object's property
-        if (isPunct(next, '(') && m[at + 1] !== undefined) parts.push(argumentDomain(arr, m, at + 1, index));
-        else if (index === 0 && isPunct(prev, '(') && isPunct(next, ')') && arr[at - 2]?.t === 'id' && ELEMENT_CALLBACKS.has(arr[at - 2].v) && isPunct(arr[at - 3], '.', '?.')) {
-          // `NAMES.map(read)`: called with each element, and with the array, which it must not be able to take.
-          if (!callbackIsBlind(arr, m, at)) return null;
-          const start = operandStart(arr, m, at - 3);
-          parts.push(start === null ? null : elementsOf(arr, m, start, at - 3));
-        } else return null; // exported, aliased, stored or handed on: its callers are not all in view
-        if (parts.at(-1) === null) return null;
+        if (isPunct(arr[at - 1], '.', '?.') || (isPunct(arr[at + 1], ':') && isPunct(arr[at - 1], '{', ','))) continue; // another object's property
+        uses.push({ arr, m, at });
       }
     }
+    return uses;
+  };
+
+  /** Every value parameter `index` of the function named by `nameToken` is called with, or null when a use is not a plain call. */
+  const callSiteDomain = (nameToken, index) => {
+    const uses = usesOf(nameToken);
+    if (uses === null) return null;
+    const parts = [];
+    for (const { arr, m, at } of uses) {
+      const prev = arr[at - 1];
+      const next = arr[at + 1];
+      if (isPunct(next, '(') && m[at + 1] !== undefined) parts.push(argumentDomain(arr, m, at + 1, index));
+      else if (index === 0 && isPunct(prev, '(') && isPunct(next, ')') && arr[at - 2]?.t === 'id' && ELEMENT_CALLBACKS.has(arr[at - 2].v) && isPunct(arr[at - 3], '.', '?.')) {
+        // `NAMES.map(read)`: called with each element, and with the array, which it must not be able to take.
+        if (!callbackIsBlind(arr, m, at)) return null;
+        const start = operandStart(arr, m, at - 3);
+        parts.push(start === null ? null : elementsOf(arr, m, start, at - 3));
+      } else return null; // exported, aliased, stored or handed on: its callers are not all in view
+      if (parts.at(-1) === null) return null;
+    }
     return unionOf(parts);
+  };
+
+  /** The one complete path every call passes as parameter `index` of the function named by `nameToken`, or null. */
+  const callSitePath = (nameToken, index) => {
+    const uses = usesOf(nameToken);
+    if (uses === null) return null;
+    let passed = null;
+    for (const { arr, m, at } of uses) {
+      if (!isPunct(arr[at + 1], '(') || m[at + 1] === undefined) return null; // not every caller is in view
+      const range = argumentRange(arr, m, at + 1, index);
+      if (range === null) return null;
+      const { value, end } = evaluate(arr, m, range[0], ctx);
+      if (end !== range[1] || value.k !== 'path' || value.partial) return null;
+      if (passed !== null && JSON.stringify(passed) !== JSON.stringify(value)) return null;
+      passed = value;
+    }
+    return passed;
   };
 
   /** The first parameter of a callback handed to an array method or to `it.each(table)`. */
@@ -1325,9 +1361,8 @@ function createScopes(ctx) {
     return null;
   };
 
-  const domainOf = (binder) => {
-    if (binder.domain !== undefined) return binder.domain;
-    binder.domain = null; // a value that flows back into itself resolves to nothing
+  /** True when the binder holds what it was given wherever its name is used inside its extent. */
+  const settled = (binder) => {
     // Two binders of one name where one is inside the other, or a declaration of the name inside
     // the body: which one a use means depends on scoping this pass does not model.
     const inside = (offset) => binder.from <= offset && offset < binder.to;
@@ -1337,14 +1372,29 @@ function createScopes(ctx) {
     // `arguments[0] = x` rebinds a parameter in a sloppy-mode script, and `eval` can do anything.
     const rewritten = writtenIn(binder.name, inside) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
       || hiddenWrite(binder.name);
-    if (ambiguous || rewritten) return null;
+    return !ambiguous && !rewritten;
+  };
+  /**
+   * The path a helper's parameter holds when every call passes the same complete one (`read(FIXTURES)`),
+   * or null. Asked only for a parameter named like a module-level path (`identifierValue`).
+   */
+  const pathOf = (binder) => {
+    if (binder.path !== undefined) return binder.path;
+    binder.path = null; // a value that flows back into itself resolves to nothing
+    if (binder.kind === 'param' && binder.role.kind === 'named' && settled(binder)) binder.path = callSitePath(binder.role.nameToken, binder.index);
+    return binder.path;
+  };
+  const domainOf = (binder) => {
+    if (binder.domain !== undefined) return binder.domain;
+    binder.domain = null; // a value that flows back into itself resolves to nothing
+    if (!settled(binder)) return null;
     if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
     else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
     else if (binder.kind === 'param' && binder.role.kind === 'callback') binder.domain = callbackDomain(binder.role, binder.index);
     return binder.domain;
   };
 
-  return { binderAt, domainOf, writtenIn, shadowed, hiddenWrite, declaredTwice: (name) => (declared.get(name) ?? []).length > 1, hasBinder: (name) => binders.has(name) };
+  return { binderAt, domainOf, pathOf, writtenIn, shadowed, hiddenWrite, declaredTwice: (name) => (declared.get(name) ?? []).length > 1, hasBinder: (name) => binders.has(name) };
 }
 
 /**
@@ -1362,7 +1412,13 @@ function identifierValue(token, ctx, depth) {
   const domain = ctx.shared.scopes.domainOf(binder);
   if (domain === LISTED) return LISTED_NAME;
   if (domain !== null) return variableValue({ open: true, vars: [binder] });
-  return binder.role?.kind === 'named' ? variableValue({ open: true, via: binder.role.nameToken.v }) : UNKNOWN;
+  const via = binder.role?.kind === 'named' ? binder.role.nameToken.v : null;
+  // Named like a module-level path (`function read(ROOT)` beside `const ROOT = …`): the constant when
+  // every call passes one path, which is then that path; otherwise somewhere the source does not say,
+  // starting from the constant the name was read as before binders were modelled. Never nothing.
+  const outer = bindingValue(token.v, ctx, depth);
+  if (outer.k === 'path') return ctx.shared.scopes.pathOf(binder) ?? partialPath(outer, outer.v, { open: true, via });
+  return via === null ? UNKNOWN : variableValue({ open: true, via });
 }
 
 /** The evaluated initializer of a `const`/`let`/`var` binding, memoized per file. */
