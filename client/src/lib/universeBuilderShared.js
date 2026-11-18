@@ -101,6 +101,15 @@ export const getCategoryKeys = (categories = {}) => {
   return keys;
 };
 
+// Mirror the batchPerVariation schema in server/routes/universeBuilder/render.js.
+export const RENDERS_PER_PROMPT_MIN = 1;
+export const RENDERS_PER_PROMPT_MAX = 20;
+export const RENDERS_PER_PROMPT_ERROR =
+  `Enter a whole number from ${RENDERS_PER_PROMPT_MIN} to ${RENDERS_PER_PROMPT_MAX}.`;
+
+export const isValidRendersPerPrompt = (value) =>
+  Number.isInteger(value) && value >= RENDERS_PER_PROMPT_MIN && value <= RENDERS_PER_PROMPT_MAX;
+
 // Default per-render knobs. Mirrors the Image Gen page's default chip.
 export const DEFAULT_RENDER_OPTS = {
   width: 1024,
@@ -112,7 +121,7 @@ export const DEFAULT_RENDER_OPTS = {
   modelId: '',
   mode: '',
   promptMode: 'variations',
-  batchPerVariation: 1,
+  batchPerVariation: RENDERS_PER_PROMPT_MIN,
   // Extended Image Gen surface used by the batch render form. Server accepts
   // these as optional patches on top of the universe's stored influences.
   seed: '',

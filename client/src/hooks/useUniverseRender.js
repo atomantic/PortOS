@@ -13,7 +13,12 @@ import { listWorldRuns, renderWorld } from '../services/api';
 import { useLocalStoragePersisted } from './useLocalStorageBool';
 import { useRenderJobQueue } from './useRenderJobQueue';
 import { renderPromptCount, scopedPromptCount } from '../lib/universeBuilderCounts';
-import { DEFAULT_RENDER_OPTS, TRUNK_TABS } from '../lib/universeBuilderShared';
+import {
+  DEFAULT_RENDER_OPTS,
+  RENDERS_PER_PROMPT_ERROR,
+  TRUNK_TABS,
+  isValidRendersPerPrompt,
+} from '../lib/universeBuilderShared';
 import { pluralize } from '../lib/textUtils';
 
 /**
@@ -57,6 +62,10 @@ export default function useUniverseRender({
   const runRender = async (scope = null) => {
     if (!selectedId) {
       toast.error('Save the world first');
+      return;
+    }
+    if (!isValidRendersPerPrompt(renderOpts.batchPerVariation)) {
+      toast.error(`Check Renders per prompt on the Render tab. ${RENDERS_PER_PROMPT_ERROR}`);
       return;
     }
     const promptMode = scope?.promptMode || renderOpts.promptMode || 'variations';

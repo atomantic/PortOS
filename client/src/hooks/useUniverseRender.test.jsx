@@ -93,6 +93,31 @@ describe('useUniverseRender', () => {
       .toBeLessThan(apiMocks.renderWorld.mock.invocationCallOrder[0]);
   });
 
+  it.each([21, 1.5, 0, '', null])('blocks a saved count of %s before an inline render can preflight', async (count) => {
+    localStorage.setItem('universeBuilder.renderOpts', JSON.stringify({ batchPerVariation: count }));
+    const preflight = vi.fn().mockResolvedValue(true);
+    const { result } = renderUniverseRender([{ id: 'local' }], preflight);
+    await act(async () => {
+      await result.current.runRender({ promptMode: 'variations', selection: { heroes: ['Scout'] } });
+    });
+
+    expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('whole number from 1 to 20'));
+    expect(preflight).not.toHaveBeenCalled();
+    expect(apiMocks.renderWorld).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 20])('requests exactly %i render(s) per prompt at the boundary', async (count) => {
+    localStorage.setItem('universeBuilder.renderOpts', JSON.stringify({ batchPerVariation: count }));
+    const { result } = renderUniverseRender();
+    await act(async () => { await result.current.handleRender(); });
+
+    expect(apiMocks.renderWorld).toHaveBeenCalledExactlyOnceWith(
+      'u1',
+      expect.objectContaining({ batchPerVariation: count }),
+      { silent: true },
+    );
+  });
+
   it('aborts the render when the preflight fails', async () => {
     const preflight = vi.fn().mockResolvedValue(false);
     const { result } = renderUniverseRender([{ id: 'local' }], preflight);

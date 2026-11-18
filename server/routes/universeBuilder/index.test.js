@@ -762,7 +762,7 @@ describe('universe-builder routes', () => {
     expect(res.body.llm.provider).toBe('anthropic');
   });
 
-  it('POST /:id/render queues image jobs and records run', async () => {
+  it.each([1, 2, 20])('POST /:id/render queues %i image jobs per prompt and records the run', async (count) => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Render Test',
@@ -777,15 +777,16 @@ describe('universe-builder routes', () => {
     });
     const res = await request(app)
       .post(`/api/universe-builder/${created.body.id}/render`)
-      .send({ batchPerVariation: 2, mode: 'local' });
+      .send({ batchPerVariation: count, mode: 'local' });
+    const expectedCount = 3 * count;
     expect(res.status).toBe(200);
-    expect(res.body.promptCount).toBe(6); // 3 variations × 2 batch
-    expect(res.body.jobIds).toHaveLength(6);
+    expect(res.body.promptCount).toBe(expectedCount);
+    expect(res.body.jobIds).toHaveLength(expectedCount);
     expect(res.body.collectionId).toBe('col-1');
     // Run is recorded.
     const runs = await request(app).get(`/api/universe-builder/${created.body.id}/runs`);
     expect(runs.body).toHaveLength(1);
-    expect(runs.body[0].promptCount).toBe(6);
+    expect(runs.body[0].promptCount).toBe(expectedCount);
   });
 
   it('POST /:id/render queues custom category prompts', async () => {
