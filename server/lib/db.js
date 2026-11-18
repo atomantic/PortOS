@@ -18,6 +18,8 @@ import { normalizePgParams } from './pgJson.js';
 import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from './databaseMaintenanceSchema.js';
 
 const { Pool } = pg;
+// The snapshot cut stays closed during these probes, even on a stalled pooled connection.
+const DATABASE_PROBE_TIMEOUT_MS = 10_000;
 
 // DATE (OID 1082) ships from node-pg as a JS `Date` at LOCAL midnight, so a caller
 // that reads it back with `toISOString().slice(0, 10)` (the ubiquitous `isoDate()`
@@ -353,7 +355,10 @@ export async function query(text, params) {
  * @returns {Promise<number|null>} major version, or null if unreachable/unparseable
  */
 export async function getServerMajorVersion() {
-  const result = await query('SHOW server_version_num').catch(() => null);
+  const result = await databaseOperation(() => pool.query({
+    text: 'SHOW server_version_num',
+    query_timeout: DATABASE_PROBE_TIMEOUT_MS,
+  })).catch(() => null);
   const num = parseInt(result?.rows?.[0]?.server_version_num, 10);
   if (!Number.isFinite(num)) return null;
   return Math.floor(num / 10000);
@@ -425,14 +430,17 @@ export async function checkHealth() {
     };
   }
   try {
-    const result = await databaseOperation(() => pool.query(`
-      SELECT
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
-        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
-    `));
+    const result = await databaseOperation(() => pool.query({
+      text: `
+        SELECT
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
+          EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
+      `,
+      query_timeout: DATABASE_PROBE_TIMEOUT_MS,
+    }));
     const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
     return {
       connected: true,

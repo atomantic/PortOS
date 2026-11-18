@@ -1209,6 +1209,48 @@ describe('runBackup lifecycle', () => {
       }
     });
 
+    it('publishes a degraded file snapshot and releases waiting asset work after a database probe timeout', async () => {
+      const fsp = await actualFs();
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+      process.env.MEMORY_BACKEND = 'postgres';
+      const health = Promise.withResolvers();
+      checkHealth.mockReturnValueOnce(health.promise);
+      const rsync = fakeProc();
+      spawn.mockReturnValueOnce(rsync);
+      const { errorEvents } = await import('../lib/errorHandler.js');
+      const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+      const warning = vi.fn();
+      errorEvents.once('error', warning);
+      const io = { emit: vi.fn() };
+      const pending = runBackup(destRoot, io, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+      const snapshotDir = joinPath(destRoot, 'snapshots', machineHost, snapshotId);
+      await fsp.writeFile(joinPath(snapshotDir, 'data', 'settings.json'), '{}');
+      rsync.emit('close', 0);
+      await waitFor(() => checkHealth.mock.calls.length === 1, 'database health probe');
+
+      const publish = vi.fn();
+      const waiting = withBackupAssetPublication(publish, { timeoutMs: 3000 });
+      await Promise.resolve();
+      expect(publish).not.toHaveBeenCalled();
+      health.resolve({ connected: false, hasSchema: false, error: 'Query read timeout' });
+      const [result] = await Promise.all([pending, waiting]);
+
+      expect(publish).toHaveBeenCalledOnce();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        status: 'degraded', prunedSnapshots: 0,
+        pgBackup: { status: 'failed', reason: 'pg_unreachable', error: 'Query read timeout' },
+        manifest: { files: { 'settings.json': expect.stringMatching(/^[a-f0-9]{64}$/) } },
+      });
+      expect(warning).toHaveBeenCalledWith(
+        expect.objectContaining({ code: 'BACKUP_DB_DUMP_FAILED' }), expect.any(Object));
+      await expect(fsp.access(old1)).resolves.toBeUndefined();
+      await expect(fsp.access(old2)).resolves.toBeUndefined();
+    });
+
     it.each([
       ['non-zero exit', 1, COMPLETE_DUMP, 'dump_error', ''],
       ['missing completion marker', 0, DUMP_HEADER + DUMP_TABLES, 'dump_incomplete', 'the pg_dump completion marker'],
