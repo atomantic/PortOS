@@ -42,6 +42,7 @@ import { ServerError } from '../lib/errorHandler.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { getCatalog, isBackend, mapModelToBackend, getOllamaImportSpec, catalogSizeBytes } from '../lib/localLlmCatalog.js'
+import { LOCAL_LLM_PROVIDER_ID_BY_BACKEND } from '../lib/localLlmCapabilityBackends.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
 import { captureSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js'
@@ -94,9 +95,6 @@ function canAutoUpgrade(backend) {
   if (backend !== 'ollama') return false
   return process.platform === 'darwin' || process.platform === 'linux'
 }
-
-// aiToolkit provider id that pairs with each backend.
-const PROVIDER_ID = { ollama: 'ollama', lmstudio: 'lmstudio' }
 
 // Possible places `brew` registers each backend. Ollama has both a CLI-only
 // formula and a separate macOS .app cask (`ollama-app`); LM Studio is cask-only.
@@ -170,7 +168,7 @@ async function writeBackend(backend) {
  * store must not crash a boot-time or migrate call.
  */
 export async function ensureBackendProvider(backend) {
-  const id = PROVIDER_ID[backend]
+  const id = LOCAL_LLM_PROVIDER_ID_BY_BACKEND[backend]
   if (!id) return
   const provider = await getProviderById(id).catch(() => null)
   if (!provider) return
@@ -958,7 +956,7 @@ export async function getModelVisionSupport(providerId, model) {
 }
 
 async function listVisionBackendModels(backend) {
-  const provider = await getProviderById(PROVIDER_ID[backend]).catch(() => null)
+  const provider = await getProviderById(LOCAL_LLM_PROVIDER_ID_BY_BACKEND[backend]).catch(() => null)
   if (!providerUsesBackend(provider, backend)) return []
   return listModels(backend).catch(() => [])
 }
@@ -986,7 +984,7 @@ export async function listVisionModels() {
   }))
   const tag = (backend, models) => models
     .filter((m) => m.vision)
-    .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, vision: true }))
+    .map((m) => ({ providerId: LOCAL_LLM_PROVIDER_ID_BY_BACKEND[backend], backend, id: m.id, name: m.name || m.id, vision: true }))
   return [
     ...tag('ollama', ollamaVision),
     ...tag('lmstudio', lmstudio),
@@ -1043,7 +1041,7 @@ export async function listToolUseModels() {
   }))
   const tag = (backend, models) => models
     .filter((m) => m.toolUse)
-    .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, toolUse: true }))
+    .map((m) => ({ providerId: LOCAL_LLM_PROVIDER_ID_BY_BACKEND[backend], backend, id: m.id, name: m.name || m.id, toolUse: true }))
   return [
     ...tag('ollama', ollamaToolUse),
     ...tag('lmstudio', lmStudioToolUse),

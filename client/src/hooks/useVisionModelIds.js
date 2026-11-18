@@ -5,16 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { getVisionModels } from '../services/apiLocalLlm';
-
-/**
- * Local backends whose `/vision-models` entries are per-MODEL capability facts (MIRROR of `LOCAL_VISION_BACKENDS` in server/services/creativeDirector/sceneEvaluator.js). `backend: 'cli'` entries are dropped: `isVisionCapableCliProvider` tags EVERY model of a claude/codex CLI provider vision-capable, and folding text-only ids into a flat set would hand them to a vision picker on `ollama`, where sceneEvaluator honors a pinned model verbatim.
- */
-const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
-
-/**
- * Provider ids the server tags local rows with (`PROVIDER_ID[backend]` in server/services/localLlm.js), seeded so "none installed" differs from an absent key. A CUSTOM provider on another host is never enumerated, so it stays regex-only.
- */
-const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
+import { LOCAL_LLM_PROVIDER_IDS, LOCAL_VISION_BACKENDS } from '../../../server/lib/localLlmCapabilityBackends.js';
 
 /**
  * Model ids the SERVER reports as vision-capable, keyed BY PROVIDER ID (`{ ollama: Set, lmstudio: Set }`), fetched once: the client's `isVisionModel` regex goes stale as families ship (`gemma4`), and vision pickers union this in via `visionLocalModelFilter` / `assignmentModelOptions`.
@@ -41,7 +32,7 @@ export default function useVisionModelIds(enabled = true) {
           (idsByProvider[m.providerId] ||= new Set());
           if (m.id) idsByProvider[m.providerId].add(m.id);
         }
-        for (const providerId of LOCAL_PROVIDER_IDS) idsByProvider[providerId] ||= new Set();
+        for (const providerId of LOCAL_LLM_PROVIDER_IDS) idsByProvider[providerId] ||= new Set();
         setState({ idsByProvider, loaded: true });
       })
       .catch(() => { if (!canceled) setState({ idsByProvider: null, loaded: true }); });

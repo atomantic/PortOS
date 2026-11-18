@@ -5,11 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { getToolUseModels } from '../services/apiLocalLlm';
-
-/**
- * Provider ids the server tags local rows with (`PROVIDER_ID[backend]` in server/services/localLlm.js), seeded so "none installed" differs from an absent key; a CUSTOM provider on another host stays regex-only.
- */
-const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
+import { LOCAL_LLM_PROVIDER_IDS } from '../../../server/lib/localLlmCapabilityBackends.js';
 
 /**
  * Module-level fetch cache: `null` = never fetched (or failed and cleared for retry), else a Promise: agent pickers render one per row, so N mounts must join ONE capability scan.
@@ -30,7 +26,7 @@ function fetchToolUseIds() {
         (idsByProvider[m.providerId] ||= new Set());
         if (m.id) idsByProvider[m.providerId].add(m.id);
       }
-      for (const providerId of LOCAL_PROVIDER_IDS) idsByProvider[providerId] ||= new Set();
+      for (const providerId of LOCAL_LLM_PROVIDER_IDS) idsByProvider[providerId] ||= new Set();
       return idsByProvider;
     })
     .catch(() => { inFlight = null; return null; });
