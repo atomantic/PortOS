@@ -95,7 +95,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No non-strict write-back: loadFileTraining defaults strict=true and all mutation callers retain that default; tolerant reads cannot feed persistence."
   },
   {
-    "key": "providerQuotaShare.js :: PROVIDER_QUOTAS_FILE",
+    "key": "provider/providerQuotaShare.js :: PROVIDER_QUOTAS_FILE",
     "reason": "No non-strict write-back: readLocalQuotaCards only projects UI cards; the quota merge writer reads strictly."
   },
   {
