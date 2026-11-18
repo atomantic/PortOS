@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { LayoutGrid, Check } from 'lucide-react';
+import { isValidKey } from '../../../../server/lib/mediaItemKey.js';
 import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
 import { tokenizeQuery, matchHaystack } from '../../lib/mediaSearch.js';
@@ -36,12 +37,6 @@ const SIZES = {
   fill: { button: 'h-full w-full min-w-0 min-h-[44px] px-0 py-1 text-[10px]', icon: 'w-3.5 h-3.5' },
 };
 
-// Minimal mirror of the server's media-key vocabulary (server/lib/mediaItemKey
-// — only `image:`/`video:` kinds, non-empty single-segment ref). Kept inline
-// (one predicate) rather than mirroring the whole module: the board item schema
-// rejects anything else, so we must not send a non-media key as `mediaKey`.
-const isValidMediaKey = (key) => /^(image|video):[^:]+$/.test(key || '');
-
 // Row search for the board list. The shell's default (#3312) is the media-
 // COLLECTION view, whose bucket ordering sinks auto-generated empties — that
 // classification reads collection provenance a board record simply doesn't
@@ -71,7 +66,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
 
   // A real media-key only when it matches the server vocabulary; a synthetic
   // key (canon-sheet:) falls through to an imageUrl-only pin.
-  const mediaKey = isValidMediaKey(item.key) ? item.key : null;
+  const mediaKey = isValidKey(item.key) ? item.key : null;
   // Only http(s) / absolute app paths are valid imageUrls (mirror the board
   // item schema, which rejects a protocol-relative `//host` path even though it
   // starts with `/`); a missing/blob/protocol-relative preview is dropped.
