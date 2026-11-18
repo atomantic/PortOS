@@ -24,10 +24,10 @@
  * run under a browser profile's name pattern is seeded so Vitest records it
  * at all (`seedVitestDependencies`).
  *
- * Sharding: a matrix shard takes its slice of the FULL selected list with
- * the runner's selected algorithm (Vitest by default) before the memo subtracts
- * anything, so every file lands in exactly one shard whatever each shard's
- * store holds. Vitest itself is never given `--shard`.
+ * Sharding: the runner partitions the memo-independent candidate inventory
+ * (using Vitest's algorithm by default), then evaluates related reach and
+ * memo hits within the owned slice. Each file has one owner across shards
+ * even when their memo records differ. Vitest itself never receives `--shard`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -62,7 +62,9 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
 };
 
 /**
- * The runner's selection and memo verdicts for one workspace.
+ * The runner's selection and memo verdicts for one workspace. Verdicts cover
+ * only owned candidates. For related plans, selection is also local to the
+ * shard because reach is determined from those verdicts.
  *
  * @param {object} options
  * @param {'server'|'client'|'db'} options.scope
@@ -78,9 +80,12 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
-  // Files mode only: the other modes need every closure to resolve their selection.
+  // Related reach can differ between sibling shards with different memo records.
+  // Partition the complete inventory first so this cannot move a test's owner.
+  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
+  // Files mode can bypass closure analysis for tests known to be never memoized.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const unmemoizable = new Set(mode === 'files' ? candidates.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
+  const unmemoizable = new Set(mode === 'files' ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
@@ -110,7 +115,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   // least of all for a launcher the browser supervisor holds to a deadline.
   const verdicts = new Map();
   if (memoDir || mode === 'related') {
-    for (const test of candidates) {
+    for (const test of owned) {
       if (unmemoizable.has(test)) continue;
       const record = memoDir ? readRecord(memoDir, scope, test) : null;
       // Digests only matter to related selection; other modes skip the narrowed walk.
@@ -118,21 +123,13 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     }
   }
 
-  const selected = mode === 'related'
-    ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
-    : candidates;
-  // A related selection depends on each shard's restored memo records, which
-  // can differ between sibling shards (a trusted save landing between their
-  // restores). Slicing that list by rank could then hand a test to neither
-  // shard, so a related plan slices the memo-independent candidate set and
-  // keeps the selected tests that fall in it: ownership never moves.
-  let slice = selected;
-  if (shard && mode === 'related') {
-    const owned = new Set(shardSlice(candidates, { repoRoot, scope, ...shard }));
-    slice = selected.filter((test) => owned.has(test));
-  } else if (shard) {
-    slice = shardSlice(selected, { repoRoot, scope, ...shard });
+  let selected = candidates;
+  if (mode === 'related') {
+    const ownedTests = new Set(owned);
+    const explicit = repoFiles.filter((test) => ownedTests.has(test));
+    selected = uniqueSorted([...relatedTests(verdicts, repoSources), ...explicit]);
   }
+  const slice = mode === 'related' ? selected : owned;
 
   const skipped = [];
   const run = [];

@@ -350,11 +350,13 @@ skip `(recorded key, full profile verdict)`.
 
 ## Shards
 
-A matrix shard takes its slice of the FULL selected list with
-Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
-against a real `vitest run --shard`) before the memo subtracts anything, so
-every file lands in exactly one shard whatever each shard's store holds;
-Vitest itself is never given `--shard`.
+The runner determines shard ownership from the complete memo-independent
+candidate inventory, including explicit files. Unit jobs use Vitest's
+hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
+`vitest run --shard`), and browser jobs use the browser suite registry order.
+The runner then evaluates related reach and subtracts memo hits within each
+shard's own candidates. Each file has one owner even when sibling shards
+restore different memo records. Vitest receives the final selection directly.
 
 ## Related selection
 
