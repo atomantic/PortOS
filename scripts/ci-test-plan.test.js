@@ -394,7 +394,7 @@ describe('real shared-source import chains', () => {
   });
 });
 
-// The nine gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
+// The eight gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
 // narrowing record and `related` selection used to fail closed into every plan (#16798).
 describe('gate-tooling tests in a related plan', () => {
   const inputs = realTree();
@@ -405,8 +405,8 @@ describe('gate-tooling tests in a related plan', () => {
     return plan;
   };
 
-  it('lists nine existing suites, each under an owner path', () => {
-    expect(TOOLING_TESTS).toHaveLength(9);
+  it('lists eight existing suites, each under an owner path', () => {
+    expect(TOOLING_TESTS).toHaveLength(8);
     for (const test of TOOLING_TESTS) {
       expect(existsSync(join(REPO_ROOT, test)), test).toBe(true);
       expect(TOOLING_OWNER_RE.test(test), test).toBe(true);
@@ -419,7 +419,7 @@ describe('gate-tooling tests in a related plan', () => {
   });
 
   it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
-    'selects all nine for a diff of %s, an owner path', (path) => {
+    'selects all eight for a diff of %s, an owner path', (path) => {
       const plan = relatedPlan(path);
       expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
     });

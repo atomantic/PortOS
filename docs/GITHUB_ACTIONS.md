@@ -188,7 +188,7 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
-**Gate-tooling suites ride owner paths (#16798).** The nine tests of the CI and
+**Gate-tooling suites ride owner paths (#16798).** The eight tests of the CI and
 pregate machinery (`TOOLING_TESTS`) can never earn a memo record, so `related`
 selection used to pick them for every diff. The planner now adds them only when a
 changed path matches `TOOLING_OWNER_RE`, and `planTestMemo` keeps one from the walk

@@ -415,7 +415,6 @@ export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
 // other tracked files stays out (runCiTestsClientFixture.test.js is that half of
 // run-ci-tests.test.js, split off so the rest can be listed).
 export const TOOLING_TESTS = [
-  'scripts/ciTestPolicy.test.js',
   'scripts/lib/testMemo.test.js',
   'scripts/lib/testMemoRunner.test.js',
   'scripts/pregate.test.js',
