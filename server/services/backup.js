@@ -451,8 +451,11 @@ class BackupProcessTimeoutError extends Error {
  * emits no output until it finishes (#7302). Callers that can produce regular
  * output leave the tight default so a genuinely wedged child is still caught
  * quickly.
+ * `wallOnly` disables the idle timer and progress polling so a streaming download
+ * subject to browser backpressure is not killed as stalled, while still
+ * enforcing the 4-hour wall-time ceiling.
  */
-function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } = {}) {
+function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs, wallOnly = false } = {}) {
   // Internal callers only, but a non-positive or non-numeric override would
   // silently disarm (0, NaN) or tighten (-1) the deadline — fall back instead.
   const idleDeadlineMs = Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0
@@ -483,6 +486,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
   };
 
   const armIdleTimer = () => {
+    if (wallOnly) return;
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => startTermination('idle'), idleDeadlineMs);
     idleTimer.unref?.();
@@ -496,7 +500,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
   const wallTimer = setTimeout(() => startTermination('wall'), BACKUP_PROCESS_WALL_TIMEOUT_MS);
   wallTimer.unref?.();
 
-  if (progressPath) {
+  if (!wallOnly && progressPath) {
     progressPoll = setInterval(() => {
       if (finished || timeoutError || progressPollInFlight) return;
       progressPollInFlight = true;
@@ -521,7 +525,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
     finish: () => {
       if (finished) return false;
       finished = true;
-      clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       clearTimeout(wallTimer);
       if (progressPoll) clearInterval(progressPoll);
       if (escalationTimer) clearTimeout(escalationTimer);
@@ -1479,10 +1483,19 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   let stderrTail = '';
   proc.stderr?.on('data', (chunk) => { stderrTail = (stderrTail + chunk).slice(-500); });
 
+  // Arm only the wall-time ceiling: a slow browser backpressuring stdout must
+  // not trigger an idle kill, while a tar wedged on a stalled mount still hits
+  // the 4-hour backstop even when the client stays connected.
+  const watchdog = watchBackupProcess(proc, {
+    label: `snapshot download ${snapshotId}`,
+    wallOnly: true,
+  });
+
   let finished = false;
   const finish = (error = null) => {
     if (finished) return;
     finished = true;
+    watchdog.finish();
     if (error) archive.destroy(error);
     else archive.end();
   };
@@ -1494,6 +1507,12 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   proc.stdout.pipe(archive, { end: false });
   proc.on('error', finish);
   proc.on('close', (code, signal) => {
+    watchdog.finish();
+    const timeoutError = watchdog.getTimeoutError();
+    if (timeoutError) {
+      finish(timeoutError);
+      return;
+    }
     if (code === 0) {
       finish();
       return;
