@@ -104,7 +104,7 @@ The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the c
 
 Read the nested `AGENTS.md` (each with a bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (the last is an override-consistency contract: no imports out to other PortOS modules); scope list: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
-**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.guard.test.js` caps every instruction file's size. Splice details and where procedure moves: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
+**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.guard.test.js` caps file sizes. Nested files arrive as pointers if the runner reads files: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
 ### Command Palette & Voice Nav
 

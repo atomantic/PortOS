@@ -6,6 +6,14 @@ import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 
 export const LIGHT_CONTEXT_PROVIDER_TYPES = new Set([PROVIDER_TYPES.TUI, PROVIDER_TYPES.CLI]);
 
+/**
+ * Whether the runner for this provider type exposes a file-read tool, so nested
+ * agent-instruction files can be pointed at instead of spliced (#16819). The
+ * `api` runner is a tool-free chat completion, so it keeps the full splice; a
+ * type is added here only once its runner registers a file-read tool.
+ */
+export const providerTypeCanReadFiles = (providerType) => LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType);
+
 export const SIMPLIFY_INLINE_REVIEW = 'review your changed code for reuse, quality, and efficiency (DRY, dead code, naming, simpler equivalents, missed edge cases)';
 
 export const INLINE_REVIEW_LOOP_STEP = 4;

@@ -30,7 +30,7 @@ import { PORTOS_API_URL_TOKEN } from '../../lib/portosUrls.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { isClaimFlowDispatch, resolveTaskHookType } from '../taskTypeHooks.js';
 import { getCodeReviewDefaults } from '../codeReview.js';
-import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from '../promptSections/constants.js';
+import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW, providerTypeCanReadFiles } from '../promptSections/constants.js';
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from '../promptSections/instructions.js';
 import { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from '../promptSections/taskContext.js';
 import { applySlashdoInvocation } from '../promptSections/slashdo.js';
@@ -529,7 +529,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
   const { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
-    task, config, workspaceDir, skipDevContext,
+    task, config, workspaceDir, skipDevContext, providerTypeCanReadFiles(providerType),
   );
   // Hand the memory lineage to the caller that creates the run record (#10495).
   if (options.promptTrace) options.promptTrace.injectedMemories = injectedMemories;
@@ -783,7 +783,7 @@ function worktreeBranchSuffix(worktreeInfo, isWorktreeOnExistingBranch) {
 }
 
 /** Load independent developer context concurrently, unless this is a content-only task. */
-async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
+async function loadDeveloperContext(task, config, workspaceDir, skipDevContext, nestedAsPointers) {
   if (skipDevContext) {
     return { memorySection: null, injectedMemories: [], agentInstructionsSection: null, digitalTwinSection: null };
   }
@@ -794,7 +794,7 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
       onInjected: (injected) => { injectedMemories = injected; },
     })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
-    getAgentInstructionsContext(workspaceDir)
+    getAgentInstructionsContext(workspaceDir, { nestedAsPointers })
       .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
     // Empty when the Digital Twin 'auto-inject into CoS' setting is off.
     getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })

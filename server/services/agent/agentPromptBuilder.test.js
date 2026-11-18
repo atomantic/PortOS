@@ -5,8 +5,8 @@ import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.j
 import { buildMergeAdmissionSection } from '../promptSections/completion.js';
 import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from '../promptSections/reviewerOutcome.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-import { join } from 'path';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { join, dirname } from 'path';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -98,6 +98,7 @@ import { resolveCompletionMode } from '../../lib/agent/agentCompletionMode.js';
 import { buildLightContextPrompt, buildAgentPrompt, getAppWorkspace, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 
 import { getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates } from '../promptSections/instructions.js';
+import { providerTypeCanReadFiles } from '../promptSections/constants.js';
 import { reconcileSplitContext } from '../promptSections/taskContext.js';
 import { buildCompletionGuidelineBullet } from '../promptSections/completion.js';
 import { buildReviewLoopFollowUpSection } from '../promptSections/reviewLifecycle.js';
@@ -4784,6 +4785,78 @@ describe('getAgentInstructionsContext — AGENTS.md / CLAUDE.md resolution (#485
     expect(section).toContain('NOT_A_BRIDGE_SENTINEL');
     expect(section).toContain('### Project Instructions (other/CLAUDE.md)');
     rmSync(ws, { recursive: true, force: true });
+  });
+});
+
+// #16819 — a runner that can read files gets a pointer per nested instruction
+// file instead of the body; a runner that cannot keeps the full splice.
+describe('getAgentInstructionsContext — nested pointers (#16819)', () => {
+  const write = (root, rel, body) => {
+    const path = join(root, rel);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, body);
+  };
+
+  it('replaces each nested body with a path + heading + directory pointer and keeps root in full', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'portos-nested-pointer-'));
+    write(ws, 'AGENTS.md', '# Root\nROOT_POINTER_SENTINEL');
+    write(ws, 'server/AGENTS.md', '# Server Conventions\nSERVER_BODY_SENTINEL');
+    write(ws, 'client/src/CLAUDE.md', 'no heading here\nCLIENT_BODY_SENTINEL');
+    write(ws, 'bridge/CLAUDE.md', '@AGENTS.md\n');
+
+    const section = await getAgentInstructionsContext(ws, { nestedAsPointers: true });
+    expect(section).toContain('ROOT_POINTER_SENTINEL');
+    expect(section).not.toContain('SERVER_BODY_SENTINEL');
+    expect(section).not.toContain('CLIENT_BODY_SENTINEL');
+    expect(section).not.toContain('### Project Instructions (');
+    expect(section).toContain('- `server/AGENTS.md` ("Server Conventions"): read this file before editing anything under `server/`.');
+    // A managed app carrying only a nested CLAUDE.md still gets a pointer; a heading-less file just omits the title.
+    expect(section).toContain('- `client/src/CLAUDE.md`: read this file before editing anything under `client/src/`.');
+    // An import-only bridge still produces no entry.
+    expect(section).not.toContain('bridge/');
+    expect(section.match(/^- `/gm)).toHaveLength(2);
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it('still emits pointers when the workspace has no root instruction file', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'portos-nested-pointer-noroot-'));
+    write(ws, 'server/AGENTS.md', '# Server\nBODY');
+    const section = await getAgentInstructionsContext(ws, { nestedAsPointers: true });
+    expect(section).toContain('server/AGENTS.md');
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it("shrinks this repository's section by the nested bodies it no longer carries", async () => {
+    const repoRoot = join(import.meta.dirname, '..', '..', '..');
+    const nestedFiles = ['client/src', 'client/src/components/dashboard', 'server', 'server/lib/aiToolkit']
+      .map((dir) => join(dir, 'AGENTS.md'));
+    const nestedBytes = nestedFiles.reduce((sum, rel) => sum + readFileSync(join(repoRoot, rel), 'utf8').trim().length, 0);
+
+    const full = await getAgentInstructionsContext(repoRoot);
+    const pointed = await getAgentInstructionsContext(repoRoot, { nestedAsPointers: true });
+    for (const rel of nestedFiles) {
+      expect(full).toContain(`### Project Instructions (${rel})`);
+      expect(pointed).toContain(`- \`${rel}\``);
+      expect(pointed).toContain(`read this file before editing anything under \`${dirname(rel)}/\``);
+    }
+    expect(Buffer.byteLength(full) - Buffer.byteLength(pointed)).toBeGreaterThan(nestedBytes - 2000);
+    expect(pointed).toContain(readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8').trim());
+  });
+
+  it('an api-type prompt (a runner with no file-read tool) keeps the nested bodies in full', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'portos-nested-pointer-api-'));
+    write(ws, 'AGENTS.md', '# Root');
+    write(ws, 'server/AGENTS.md', '# Server\nAPI_NESTED_BODY_SENTINEL');
+    const prompt = await buildAgentPrompt({ id: 't-ptr', description: 'x', metadata: {} }, {}, ws, null, { providerType: 'api' });
+    expect(prompt).toContain('API_NESTED_BODY_SENTINEL');
+    expect(prompt).toContain('### Project Instructions (server/AGENTS.md)');
+    rmSync(ws, { recursive: true, force: true });
+  });
+
+  it('only provider types whose runner exposes file tools get pointers', () => {
+    expect(providerTypeCanReadFiles('api')).toBe(false);
+    expect(providerTypeCanReadFiles('cli')).toBe(true);
+    expect(providerTypeCanReadFiles('tui')).toBe(true);
   });
 });
 

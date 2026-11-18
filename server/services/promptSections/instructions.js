@@ -2,7 +2,7 @@
  * Skill-template routing and bounded AGENTS.md / CLAUDE.md discovery.
  */
 
-import { join, basename } from 'path';
+import { join, basename, dirname } from 'path';
 import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
@@ -304,13 +304,32 @@ async function findNestedAgentInstructionFiles(workspaceDir) {
 }
 
 /**
+ * One-line pointer for a nested instruction file: repo-relative path, its first
+ * heading when it has one, and the directory it governs. The body stays on disk
+ * for an agent whose runner can read files (#16819).
+ * @param {{ rel: string, content: string }} nested
+ */
+const formatNestedPointer = ({ rel, content }) => {
+  const dir = dirname(rel);
+  const heading = content.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1];
+  return `- \`${rel}\`${heading ? ` ("${heading}")` : ''}: read this file before editing anything under \`${dir}/\`.`;
+};
+
+/**
  * Read agent-instruction files for agent context.
  * Reads the global (`~/.claude/CLAUDE.md`), the workspace-root `AGENTS.md` (or
  * `CLAUDE.md`), and every nested instruction file under the workspace (#3866) —
- * nested last, each as its own labeled section, so precedence still reads
- * root-then-specific.
+ * nested last, so precedence still reads root-then-specific.
+ *
+ * Nested files are spliced in full, each as its own labeled section, because an
+ * agent that cannot read files has no other way to see them. With
+ * `nestedAsPointers` (the caller's runner exposes a file-read tool) each nested
+ * file collapses to a one-line pointer, matching what CLI agents do natively;
+ * root still carries every rule that must reach an agent unconditionally.
+ * @param {string} workspaceDir
+ * @param {{ nestedAsPointers?: boolean }} [options]
  */
-export async function getAgentInstructionsContext(workspaceDir) {
+export async function getAgentInstructionsContext(workspaceDir, { nestedAsPointers = false } = {}) {
   const contexts = [];
 
   // Claude Code's own global memory location — a user-level path, not a repo
@@ -332,11 +351,15 @@ export async function getAgentInstructionsContext(workspaceDir) {
   }
 
   // Nested per-directory instructions, appended after the root file.
-  for (const { rel, content } of await findNestedAgentInstructionFiles(workspaceDir)) {
-    contexts.push({ type: `Project Instructions (${rel})`, path: join(workspaceDir, rel), content });
+  const nested = await findNestedAgentInstructionFiles(workspaceDir);
+  if (!nestedAsPointers) {
+    for (const { rel, content } of nested) {
+      contexts.push({ type: `Project Instructions (${rel})`, path: join(workspaceDir, rel), content });
+    }
   }
 
-  if (contexts.length === 0) {
+  const pointers = nestedAsPointers ? nested : [];
+  if (contexts.length === 0 && pointers.length === 0) {
     return null;
   }
 
@@ -347,6 +370,12 @@ export async function getAgentInstructionsContext(workspaceDir) {
     section += `### ${ctx.type}\n`;
     section += `Source: \`${ctx.path}\`\n\n`;
     section += ctx.content + '\n\n';
+  }
+
+  if (pointers.length > 0) {
+    section += '### Nested Project Instructions\n';
+    section += 'These directories carry their own instructions. Open the named file before you edit anything under its directory:\n\n';
+    section += pointers.map(formatNestedPointer).join('\n') + '\n\n';
   }
 
   return section;
