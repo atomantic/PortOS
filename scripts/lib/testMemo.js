@@ -752,9 +752,10 @@ function evaluatePostfix(tokens, match, start, ctx, depth) {
   let { value, end } = evaluatePrimary(tokens, match, start, ctx, depth);
   for (;;) {
     const token = tokens[end];
-    if (value.k === 'path' && isPunct(token, '[')) {
+    const memberOpen = isPunct(token, '?.') ? end + 1 : end;
+    if (value.k === 'path' && isPunct(tokens[memberOpen], '[')) {
       value = unfollowedPath(value, '[]');
-      end = closeOf(match, end);
+      end = closeOf(match, memberOpen);
       continue;
     }
     if (!isPunct(token, '.', '?.') || tokens[end + 1]?.t !== 'id') break;
@@ -1685,6 +1686,8 @@ function widestPathExpression(tokens, match, index, guarded = false) {
     }
     const parent = enclosingOpen(tokens, match, start);
     if (parent === null || tokens[parent].v !== '(') break;
+    // A group does not consume the path. Look for the call or option around it.
+    if (groupsAt(tokens, parent) && parent + 1 === start) { start = parent; continue; }
     const callee = calleeStart(tokens, parent);
     const name = calleeName(tokens, parent);
     const isNew = tokens[callee]?.t === 'id' && tokens[callee].v === 'new';
@@ -1713,7 +1716,15 @@ function widestPathExpression(tokens, match, index, guarded = false) {
   const punct = (token, ...values) => token?.t === 'p' && values.includes(token.v);
   const keyed = punct(before, ':') && (tokens[start - 2]?.t === 'id' || tokens[start - 2]?.t === 's') && punct(tokens[start - 3], '{', ',');
   const shorthand = start === index && punct(before, '{', ',');
-  return { index: start, consumer, walk, bare: start === index, option: null, member: parent !== null && tokens[parent].v === '{' && (keyed || shorthand) };
+  const member = parent !== null && tokens[parent].v === '{' && (keyed || shorthand);
+  let recipient = consumer;
+  // Unsupported path values can be passed inside an options object or array.
+  if (recipient === null && parent !== null && (member || tokens[parent].v === '[')) {
+    let outer = enclosingOpen(tokens, match, parent);
+    while (outer !== null && punct(tokens[outer], '{', '[')) outer = enclosingOpen(tokens, match, outer);
+    if (outer !== null && punct(tokens[outer], '(')) recipient = calleeName(tokens, outer);
+  }
+  return { index: start, consumer, walk, bare: start === index, option: null, member, recipient };
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,7 +1847,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   /** Only a value that is keyed depends on the modules it came through (`valueTrusts`): note them for `gather`. */
   const trusted = () => { for (const spec of valueTrusts) facts.trusts.add(spec); };
 
-  const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
+  const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false, recipient = consumer } = {}) => {
     // A search-path entry is where a program the string is handed to is found and run: a directory
     // handed to a spawn (its whole tree is an input), whatever the string is then given to.
     if (value.k === 'search') {
@@ -1864,7 +1875,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
     if (value.unfollowed) {
       // An unsupported operation may produce ordinary text. Refuse only when a
       // sink or an unmodelled call could read through the result.
-      if (consumer !== null && (!NON_READ_CALLEES.has(consumer) || SPAWN_CALLEES.has(consumer) || READ_CALLEES.has(consumer))) {
+      if (recipient !== null && (!NON_READ_CALLEES.has(recipient) || SPAWN_CALLEES.has(recipient) || READ_CALLEES.has(recipient))) {
         facts.unresolvedInputs.push(unfollowedReason(value));
       }
       return true;

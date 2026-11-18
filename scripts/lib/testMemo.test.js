@@ -305,7 +305,7 @@ describe('floor key', () => {
 
     it.each(['root', 'dir', '"base"'])('keys a bounded variable %s and rejects an unbounded one only for browsers', (option) => {
       const optionPath = (path) => `createServer({ ${option}: ${path} });`;
-      const open = optionPath('join(client, pick())');
+      const open = optionPath('(join(client, pick()))');
       expect(floorOf(open)).toMatchObject({ memoizable: false, reason: `${test}: reads a path with a variable segment that can leave client` });
       expect(keyOf({ ...SERVED, [test]: nodeTest(open) }, test).floor.memoizable).toBe(true);
       const contained = "import { pathWithin } from '../../scripts/lib/pathWithin.js';\n" + optionPath('pathWithin(client, pick())');
@@ -461,11 +461,14 @@ describe('a read whose variable segment can leave the directory the source names
     const changed = `${path}.replace('.json', '.txt')`;
     const reason = 'reads a path the analyzer cannot follow through .replace()';
     for (const body of [`readFileSync(${changed});`, `execFileSync('bash', [${changed}]);`,
-      `const target = ${changed}; load(normalize(target));`, `load(join(HERE, ${changed}));`]) {
+      `const target = ${changed}; load(normalize(target));`, `load(join(HERE, ${changed}));`,
+      `load((${changed}));`, `load({ options: [${changed}] });`]) {
       expect(refusal(body), body).toBe(`${test}: ${reason}`);
     }
-    expect(refusal(`readFileSync(${path}[key]);`)).toBe(`${test}: reads a path the analyzer cannot follow through []`);
-    expect(floorOf(`expect(${changed}).toContain('.txt');`).memoizable).toBe(true);
+    for (const suffix of ['[key]', '?.[key]']) {
+      expect(refusal(`readFileSync(${path}${suffix});`)).toBe(`${test}: reads a path the analyzer cannot follow through []`);
+    }
+    expect(floorOf(`expect({ paths: [${changed}] }).toContain('.txt');`).memoizable).toBe(true);
     const script = 'scripts/load-fixture.js';
     const scriptBody = `export const load = () => readFileSync(join(import.meta.dirname, 'f0.json').replace('.json', '.txt'));`;
     expect(floorOf("import '../../scripts/load-fixture.js';", { [script]: scriptBody }).reason).toBe(`${script}: ${reason}`);
