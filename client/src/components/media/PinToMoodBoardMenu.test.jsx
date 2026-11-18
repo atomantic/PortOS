@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { REF_MAX_LENGTH } from '../../../../server/lib/mediaItemKey.js';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 
 // Mock the api surface the menu (and the shared shell) reach for.
@@ -108,18 +109,20 @@ describe('PinToMoodBoardMenu', () => {
     );
   });
 
-  it('pins imageUrl-only (no mediaKey) for a synthetic non-media key like canon-sheet:', async () => {
+  it.each([
+    { reason: 'a synthetic non-media key', key: 'canon-sheet:hero:sheet.png' },
+    { reason: 'an overlong media reference', key: `image:${'x'.repeat(REF_MAX_LENGTH + 1)}` },
+  ])('pins imageUrl-only for $reason', async ({ key }) => {
     api.listMoodBoards.mockResolvedValue([{ id: 'b1', name: 'Refs', items: [] }]);
     api.addMoodBoardItem.mockResolvedValue({ id: 'mbi-3', type: 'image', imageUrl: '/data/image-refs/sheet.png' });
 
     render(<PinToMoodBoardMenu item={{
-      kind: 'image', key: 'canon-sheet:hero:sheet.png', previewUrl: '/data/image-refs/sheet.png',
+      kind: 'image', key, previewUrl: '/data/image-refs/sheet.png',
     }} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
     const row = await screen.findByRole('button', { name: /Refs/ });
     await act(async () => { fireEvent.click(row); });
 
-    // The server rejects `canon-sheet:` as a mediaKey, so we send imageUrl only.
     expect(api.addMoodBoardItem).toHaveBeenCalledWith(
       'b1',
       { type: 'image', imageUrl: '/data/image-refs/sheet.png' },
