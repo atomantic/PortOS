@@ -790,6 +790,24 @@ describe('a read whose variable segment can leave the directory the source names
     }
   });
 
+  it('never drops a read the scope rules took the constant away from', () => {
+    // A text constant is unknown where a parameter or a loop variable has its name. Read as a whole
+    // path, unknown text is runtime data and no input, so the file the constant names stays keyed.
+    const text = "const FILE = 'lib/fixtures/f0.json';\n";
+    for (const body of [
+      `${text}items.forEach((FILE) => FILE);\nreadFileSync(FILE);`,
+      `${text}const read = (FILE) => readFileSync(FILE);\nread(FILE);`,
+      `${text}const read = (FILE) => readFileSync(resolve(FILE));\nread(FILE);`,
+      `${text}for (const FILE of items) readFileSync(FILE);`,
+      "const STEM = 'lib/fixtures/f0';\nitems.forEach((STEM) => STEM);\nreadFileSync(`${STEM}.json`);",
+    ]) {
+      expect(keyedOn(body, 'server/lib/fixtures/f0.json'), body).toBe(true);
+    }
+    // Machine-local state stays what it was read as, too.
+    const home = "const STATE = join(homedir(), '.state');\nconst read = (STATE) => readFileSync(join(STATE, 'a.json'));\nread(STATE);";
+    expect(floorOf(home).memoizable).toBe(false);
+  });
+
   it('counts a mock only against a read that relies on it, from a member that runs', () => {
     const generated = "const probe = existsSync(join(FIXTURES, `${randomUUID()}.json`));";
     const mock = "vi.mock('node:crypto', () => ({ randomUUID: () => '../../a' }));\n";
