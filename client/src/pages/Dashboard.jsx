@@ -11,7 +11,14 @@ import FirstRunCard from '../components/onboarding/FirstRunCard.jsx';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import PageHeader from '../components/PageHeader';
 import { ChevronsDownUp, GripHorizontal, Monitor, Move, Save, X } from 'lucide-react';
-import * as api from '../services/api';
+import { getApps } from '../services/apiApps.js';
+import { getBrainOnThisDay } from '../services/apiBrain.js';
+import { getCalendarAgenda } from '../services/apiCalendar.js';
+import { deleteDashboardLayout, getDailyDriverState, getDashboardLayouts, saveDashboardLayout, setActiveDashboardLayout } from '../services/apiDashboard.js';
+import { getMeatspaceLoggingStats } from '../services/apiMeatspace.js';
+import { getFeedStats } from '../services/apiMessages.js';
+import { getSystemHealth } from '../services/apiSystem.js';
+import { getTribeCareSummary } from '../services/apiTribe.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { pickActiveLayoutId, recordManualLayoutPick } from '../utils/timeWindow.js';
@@ -25,11 +32,11 @@ export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
 // first-visit-of-day signal, #2666) are always fetched; apps has its own error
 // and settled tracking below.
 const OPTIONAL_STREAMS = {
-  tribeCare: () => api.getTribeCareSummary({ silent: true }),
-  feeds: () => api.getFeedStats({ silent: true }),
-  meatspaceLogging: () => api.getMeatspaceLoggingStats({ silent: true }),
-  calendarAgenda: () => api.getCalendarAgenda({ silent: true }),
-  brainOnThisDay: () => api.getBrainOnThisDay({ silent: true }),
+  tribeCare: () => getTribeCareSummary({ silent: true }),
+  feeds: () => getFeedStats({ silent: true }),
+  meatspaceLogging: () => getMeatspaceLoggingStats({ silent: true }),
+  calendarAgenda: () => getCalendarAgenda({ silent: true }),
+  brainOnThisDay: () => getBrainOnThisDay({ silent: true }),
 };
 
 // Renders one widget body. Memoized so a widget that declares no `needs`
@@ -93,7 +100,7 @@ export default function Dashboard() {
   const refreshHealth = useCallback(async () => {
     // Keep the last good snapshot visible when a manual refresh hits a
     // transient failure; only a failed FIRST read marks the server offline.
-    const data = await api.getSystemHealth({ silent: true }).catch(() => undefined);
+    const data = await getSystemHealth({ silent: true }).catch(() => undefined);
     if (data) setHealth(data);
     else setHealth((prev) => (prev === undefined ? null : prev));
     return data;
@@ -107,7 +114,7 @@ export default function Dashboard() {
       .catch(() => null)
       .then((value) => setStreams((prev) => ({ ...prev, [name]: value }))))), []);
 
-  const fetchApps = useCallback(() => api.getApps({ includeQuality: true })
+  const fetchApps = useCallback(() => getApps({ includeQuality: true })
     .then((appsData) => {
       setDataError(null);
       if (Array.isArray(appsData)) setApps(appsData);
@@ -126,7 +133,7 @@ export default function Dashboard() {
     // fetch resolves, or while a DASHBOARD_LAYOUT_CHANGED fetch is in
     // flight at unmount time.
     let cancelled = false;
-    const fetchLayouts = () => api.getDashboardLayouts()
+    const fetchLayouts = () => getDashboardLayouts()
       .then((data) => {
         if (cancelled) return;
         setLayouts(data.layouts);
@@ -144,7 +151,7 @@ export default function Dashboard() {
           // gets retried on the next mount.
           layoutSwitcher.switchTo(
             desiredActiveId,
-            api.setActiveDashboardLayout(desiredActiveId).then(() => { autoSwitchedRef.current = true; }),
+            setActiveDashboardLayout(desiredActiveId).then(() => { autoSwitchedRef.current = true; }),
             { isCancelled: () => cancelled },
           );
         }
@@ -223,7 +230,7 @@ export default function Dashboard() {
       refreshHealth(),
       // GET records the first-visit-of-day signal (issue #2666); a failure just
       // hides the Daily Driver card via its gate. No LLM calls here.
-      api.getDailyDriverState().catch(() => null).then(setDailyDriver),
+      getDailyDriverState().catch(() => null).then(setDailyDriver),
       needed.includes('apps') ? fetchApps() : null,
       fetchStreams(needed),
     ]);
@@ -324,8 +331,7 @@ export default function Dashboard() {
       ...orderedIds,
       ...activeLayout.widgets.filter((id) => !orderedIds.includes(id)),
     ];
-    const ok = await api
-      .saveDashboardLayout(activeLayout.id, { name: activeLayout.name, widgets, grid: draftGrid })
+    const ok = await saveDashboardLayout(activeLayout.id, { name: activeLayout.name, widgets, grid: draftGrid })
       .then((result) => { setLayouts(result.layouts); return true; }, () => false);
     setSavingGrid(false);
     if (!ok) return;
@@ -336,7 +342,7 @@ export default function Dashboard() {
 
   const selectLayout = async (id) => {
     recordManualLayoutPick(id);
-    await layoutSwitcher.switchTo(id, api.setActiveDashboardLayout(id));
+    await layoutSwitcher.switchTo(id, setActiveDashboardLayout(id));
   };
 
   // Preserve the existing grid on widget add/remove so positional edits
@@ -354,7 +360,7 @@ export default function Dashboard() {
       ? existing.grid
       : synthesizeGrid(existing?.widgets ?? widgets);
     const nextGrid = reconcileGrid(baseGrid, widgets, { reorder: reordered });
-    const result = await api.saveDashboardLayout(id, { name, widgets, grid: nextGrid, activateWindow });
+    const result = await saveDashboardLayout(id, { name, widgets, grid: nextGrid, activateWindow });
     setLayouts(result.layouts);
   };
 
@@ -363,7 +369,7 @@ export default function Dashboard() {
     // visually-arranged dashboard captures what the user actually sees.
     const sourceGrid = renderGrid && renderGrid.length > 0 ? renderGrid : synthesizeGrid(widgets);
     const grid = reconcileGrid(sourceGrid, widgets, { reorder: reordered });
-    const result = await api.saveDashboardLayout(id, { name, widgets, grid, activateWindow });
+    const result = await saveDashboardLayout(id, { name, widgets, grid, activateWindow });
     setLayouts(result.layouts);
     // switchTo bumps the switch generation only now — AFTER the save resolved.
     // Bumping at function entry would let a still-in-flight save prematurely
@@ -372,11 +378,11 @@ export default function Dashboard() {
     // Lock in for the day so a window-driven auto-switch on the next mount
     // doesn't bump the user off the brand-new layout they just created.
     recordManualLayoutPick(id);
-    await layoutSwitcher.switchTo(id, api.setActiveDashboardLayout(id));
+    await layoutSwitcher.switchTo(id, setActiveDashboardLayout(id));
   };
 
   const deleteLayoutById = async (id) => {
-    const result = await api.deleteDashboardLayout(id);
+    const result = await deleteDashboardLayout(id);
     setLayouts(result.layouts);
     setActiveLayoutId(result.activeLayoutId);
     // The server chose the post-delete active layout — it's now the
