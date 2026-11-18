@@ -73,6 +73,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
       <SongSourcePicker idPrefix="mv-ap" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />
 
       <ToggleChip id="mv-ap-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
+      <ToggleChip id="mv-ap-transcribe-midi" label="Transcribe the song to MIDI for planning" checked={draft.transcribeMidi} onToggle={() => patch({ transcribeMidi: !draft.transcribeMidi })} />
 
       <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
       <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} disabled={updating} />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMidiFile } from './midiNotes.js';
+import { parseMidiFile } from './midiFile.js';
 
 // Hand-built SMF fixtures — tiny byte arrays, no real transcriptions
 // (Sensitive Data rule: never commit personal project data as fixtures).
@@ -127,6 +127,20 @@ describe('parseMidiFile', () => {
     expect(vm.tracks.map((t) => t.name)).toEqual(['Piano', 'Bass']);
     expect(vm.tracks.every((t) => t.noteCount === 1)).toBe(true);
     expect(new Set(vm.notes.map((n) => n.track)).size).toBe(2);
+  });
+
+  it('keeps each track\'s General MIDI program and marks a channel-10 kit as drums', () => {
+    const program = (delta, value, ch = 0) => [...varLen(delta), 0xc0 | ch, value];
+    const bytes = smf([
+      track([trackNameEv(0, 'Strings'), program(0, 48), noteOn(0, 60), noteOff(PPQ, 60), endOfTrack()]),
+      track([noteOn(0, 36, 100, 9), noteOff(PPQ, 36, 9), endOfTrack()]),
+    ]);
+    const vm = parseMidiFile(bytes);
+    expect(vm.tracks).toEqual([
+      expect.objectContaining({ name: 'Strings', program: 48, drums: false }),
+      expect.objectContaining({ name: null, program: null, drums: true }),
+    ]);
+    expect(vm.notes.map((n) => n.midi).sort()).toEqual([36, 60]);
   });
 
   it('pairs note-off per channel — one channel cannot truncate another channel\'s same pitch', () => {

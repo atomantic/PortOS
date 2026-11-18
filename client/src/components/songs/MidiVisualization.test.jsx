@@ -38,7 +38,7 @@ vi.mock('../../hooks/useMidiPlayer.js', async () => {
 });
 
 // Tiny hand-built SMF fixture: a sustained C-major triad (C4 E4 G4) for one
-// quarter at the default 120 BPM. Same builder approach as midiNotes.test.js.
+// quarter at the default 120 BPM. Same builder approach as server/lib/midiFile.test.js.
 const buildTriadMidi = () => {
   const str = (s) => [...s].map((c) => c.charCodeAt(0));
   const u32 = (v) => [(v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];

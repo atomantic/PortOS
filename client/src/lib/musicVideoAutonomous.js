@@ -76,6 +76,8 @@ export const emptyAutonomousDraft = () => ({
   llmStages: {},
   // Review & revise the lyric draft with a second pass.
   lyricsReview: false,
+  // Transcribe the song to MIDI after analysis so planning reads its parts, hits and chords.
+  transcribeMidi: false,
   // Make (and, when orchestrated, check) every still, then wait for me before any video.
   stopBeforeVideo: false,
   runMode: 'checkpoints',
@@ -150,6 +152,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     ...(draft.characterStyleId ? { characterStyleId: draft.characterStyleId } : {}),
     ...(llmStages ? { llmStages } : {}),
     ...(draft.lyricsReview === true ? { lyricsReview: true } : {}),
+    ...(draft.transcribeMidi === true ? { transcribeMidi: true } : {}),
     ...(draft.stopBeforeVideo === true ? { stopBeforeVideo: true } : {}),
     ...(providerId ? { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) } : {}),
   };
@@ -285,6 +288,7 @@ export function autopilotDraftFromParams(params) {
     moodBoardId: p.moodBoardId || '',
     llmStages: llmStagesDraftFrom(p.llmStages),
     lyricsReview: p.lyricsReview === true,
+    transcribeMidi: p.transcribeMidi === true,
     ideaTags: (p.ideaTags || []).join(', '),
   };
 }
@@ -306,6 +310,7 @@ export function autopilotParamsFromDraft(draft, saved, { providerId, model, effo
     // The params are replaced whole on save, so an unpinned map and an off toggle are explicit.
     llmStages: request.llmStages || null,
     lyricsReview: request.lyricsReview === true,
+    transcribeMidi: request.transcribeMidi === true,
     limits: { ...(kept.limits || {}), ...(request.limits || {}) },
     moodBoardId: draft.moodBoardId || null,
     ideaTags: String(draft.ideaTags || '').split(',').map((t) => t.trim()).filter(Boolean),

@@ -8,12 +8,12 @@
 // `chordNoteNames(midis)` for tooltips. Pure — no canvas/React.
 //
 // Chord detection for the MIDI visualization UI. Pure helpers: given the
-// normalized note list from midiNotes.js, find time windows where ≥2 distinct
+// normalized note list from midiFile.js, find time windows where ≥2 distinct
 // pitch classes sound simultaneously and label each window with a compact
 // chord symbol (Cmaj7, Am, G/B, …) — or, when no dictionary shape matches,
 // the sorted pitch-class names (never a wrong guess). No canvas/React.
 
-import { midiNoteName, pitchClass as pc, PITCH_CLASS_NAMES } from './pianoKeyboard.js';
+import { midiNoteName, pitchClass as pc, PITCH_CLASS_NAMES } from './pitchNames.js';
 
 // Minimum overlap for a window to count as an intentional chord rather than a
 // passing-note smear (see issue #2477 — 40–80ms band; midpoint chosen).

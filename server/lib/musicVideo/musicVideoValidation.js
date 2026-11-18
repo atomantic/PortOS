@@ -1635,6 +1635,8 @@ export const musicVideoAutonomousStartSchema = z.object({
   // Review and revise the lyric draft with a second pass (the `lyricsReview` stage
   // pin when set, else the direction LLM). Pinning `llmStages.lyricsReview` implies it.
   lyricsReview: z.boolean().optional(),
+  // Transcribe the song to MIDI after analysis so planning reads its parts, hits and chords.
+  transcribeMidi: z.boolean().optional(),
   // Orchestrated mode: this provider/model/effort clears every review point a
   // director would (no checkpoints). Approval authority — the route requires a
   // signed-in session for it.

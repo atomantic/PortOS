@@ -1,4 +1,5 @@
 import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { midiSongSummary, midiWindowFacts } from '../../lib/musicVideo/musicVideoMidiDigest.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video — Cast & Sets creative direction (pure): the LLM prompt, the
@@ -376,7 +377,7 @@ function storyBlock(project, guides = {}) {
  * `medium` defaults to the previous direction's, else the project's.
  * `guides` are the director's own art-direction guides (see storyBlock).
  */
-export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [], guides = {} } = {}) {
+export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [], guides = {}, midi = null } = {}) {
   // A saved direction without a medium predates the procedural one: photographic.
   const procedural = (medium || (previous ? (previous.medium || 'photographic') : castAndSetsMedium(project))) === 'procedural';
   const concept = project?.concept || {};
@@ -391,7 +392,11 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const boardStyle = withoutPeople(trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500));
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
-  const sectionLines = sections.map((s) => `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}`);
+  // The audio→MIDI transcription (songMidiDigest.js), when the director made one: what plays in each section.
+  const sectionLines = sections.map((s) => {
+    const music = midiWindowFacts(midi, s.startSec, s.endSec);
+    return `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}${music ? ` — ${music}` : ''}`;
+  });
   // The character style is given in full below, so the bible leaves it out.
   const bible = musicVideoCreativeContext({ ...concept, characterStyle: undefined });
 
@@ -410,6 +415,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 
   const facts = [
     `Duration: ${fmtTime(analysis.durationSec)}${analysis.bpm ? ` · ${Math.round(analysis.bpm)} BPM` : ''}`,
+    midi && `${midiSongSummary(midi)}. Let the instrumentation and each section's arc (where parts enter, hits land and the top line climbs) shape which set each section plays in.`,
     concept.prompt && `Concept: ${trimTo(concept.prompt, 2000)}`,
     visualStyle && `Director's visual style: ${visualStyle}`,
     guidance && `Director guidance: ${guidance}`,
@@ -490,7 +496,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     storyBlock(project, guides),
     songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
-    sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
+    sectionLines.length ? `Song sections (index. label start–end${midi ? ' — what the transcription shows' : ''}):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,
     rules,
     standingBlock,

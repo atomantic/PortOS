@@ -145,7 +145,7 @@ export function cancelMidiTranscription(jobId) {
  * `extra` is whatever the optional `onComplete` callback returns — the music
  * video route uses it to persist the pointer on the project and hand the
  * updated record to the client), `{ type: 'error', error }`, or
- * `{ type: 'canceled' }`. Throws (before returning a jobId) when the
+ * `{ type: 'canceled' }`; `onSettled(frame)` receives whichever one ends the job. Throws (before returning a jobId) when the
  * MuScriptor venv isn't provisioned, so that surfaces as a real 503 with the
  * install hint.
  *
@@ -156,7 +156,7 @@ export function cancelMidiTranscription(jobId) {
  * `PATHS.music` so the file federates to peers alongside the project's other
  * audio (the peer-sync asset manifest only ships known directories).
  */
-export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads, ownerKey = null }) {
+export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, onSettled, destDir = PATHS.uploads, ownerKey = null }) {
   // Gate on the actual import, not just the binary — a partial venv (binary
   // present, `muscriptor` not importable) must still 503 so the in-app
   // installer re-opens to repair it instead of failing later in the sidecar.
@@ -175,6 +175,9 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
   if (ownerKey) activeByOwner.set(ownerKey, jobId);
   console.log(`🎹 MIDI transcription ${shortId(jobId)} [${resolvedModel}] — ${audioPath}`);
 
+  // The terminal frame, also handed to `onSettled` for a server-side caller that waits on the job.
+  let outcome = { type: 'error', error: 'MIDI transcription ended without a result' };
+  const settle = (frame) => { outcome = frame; broadcastSse(job, frame); };
   (async () => {
     try {
       const { bin, args } = buildMuscriptorArgs({ pythonPath, audioPath, outputPath: tempOut, model: resolvedModel });
@@ -188,7 +191,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // — honor the flag before spawning anything.
       if (job.cancelRequested) {
         console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled before spawn`);
-        broadcastSse(job, { type: 'canceled' });
+        settle({ type: 'canceled' });
         return;
       }
       // STAGE: lines become SSE progress frames (and pm2 log lines, so a stuck
@@ -207,7 +210,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // exited cleanly but before the result landed — don't persist it.
       if (result.canceled || job.cancelRequested) {
         console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled`);
-        broadcastSse(job, { type: 'canceled' });
+        settle({ type: 'canceled' });
         return;
       }
       // A clean exit isn't enough — require a parsed RESULT line AND a
@@ -241,12 +244,12 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // orphaned file and tell the client it was discarded, not "ready".
       if (extra.discarded) {
         console.log(`🗑️ MIDI transcription ${shortId(jobId)} discarded — ${extra.reason || 'stale result'}`);
-        broadcastSse(job, { type: 'complete', discarded: true, model: resolvedModel });
+        settle({ type: 'complete', discarded: true, model: resolvedModel });
         return;
       }
 
       console.log(`🎹 MIDI transcription ${shortId(jobId)} complete — ${filename}`);
-      broadcastSse(job, { type: 'complete', filename, model: resolvedModel, ...extra });
+      settle({ type: 'complete', filename, model: resolvedModel, ...extra });
     } catch (err) {
       console.error(`❌ MIDI transcription ${shortId(jobId)} failed: ${err?.message || err}`);
       // Carry the typed gated-repo fields (code/repo) through to the client so
@@ -254,9 +257,10 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       const frame = { type: 'error', error: err?.message || String(err) };
       if (err?.code) frame.code = err.code;
       if (err?.repo) frame.repo = err.repo;
-      broadcastSse(job, frame);
+      settle(frame);
     } finally {
       job.settled = true;
+      try { onSettled?.(outcome); } catch (err) { console.error(`❌ MIDI transcription ${shortId(jobId)} settle callback failed: ${err.message}`); }
       if (ownerKey && activeByOwner.get(ownerKey) === jobId) activeByOwner.delete(ownerKey);
       await unlink(tempOut).catch(() => {});
       closeJobAfterDelay(transcriptionJobs, jobId);

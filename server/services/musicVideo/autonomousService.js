@@ -133,6 +133,7 @@ const defaults = {
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
   analyzeSong: async (projectId) => (await import('./projectAudio.js')).analyzeProjectSong(projectId),
+  transcribeMidi: async (project) => (await import('./projectMidi.js')).transcribeProjectMidi(project),
   designCoverArt: async (projectId, input) => (await import('./coverArt.js')).designCoverArt(projectId, input),
   startProduction: async (...args) => (await import('./productionService.js')).startProduction(...args),
   resumeProduction: async (...args) => (await import('./productionService.js')).resumeProduction(...args),
@@ -436,6 +437,19 @@ function repairLyricWordTimings(cues, durationSec) {
  * will not verify guessed timings; the repair still runs so a failed
  * alignment leaves what it can.
  */
+// The brief's optional audio→MIDI step: the transcription's parts, hits and
+// chords then reach the Cast & Sets direction and the shot plan
+// (songMidiDigest.js). Best-effort: a missing MuScriptor runtime or a failed
+// transcription leaves the run planning from the beat analysis alone.
+async function transcribeRunMidi(projectId, run) {
+  const project = await getProject(projectId);
+  if (!project || project.midiTranscription?.filename) return;
+  console.log(`🎹 Autonomous music video ${short(run.id)}: transcribing the song to MIDI for planning`);
+  const frame = await deps.transcribeMidi(project).catch((err) => ({ type: 'error', error: err.message }));
+  if (frame?.type === 'complete' && frame.midiTranscription) return;
+  console.warn(`⚠️ Autonomous music video ${short(run.id)}: MIDI transcription skipped (${trimTo(frame?.error || (frame?.discarded ? 'the song changed' : frame?.type) || 'no result', 200)}); planning from the beat analysis`);
+}
+
 async function alignRunLyrics(projectId, run) {
   if (run.brief.instrumental || !(await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) return null;
   let alignError = null;
@@ -1181,6 +1195,7 @@ const STAGES = {
         return { output: reset, goto: 'song', unlinkTrack: run.output.trackId || null };
       }
     }
+    if (run.brief.transcribeMidi) await transcribeRunMidi(project.id, run);
     // The single's own cover design, drafted from the song just made, ready
     // for the publishing kit. Best-effort: a failed draft never stops the video.
     if (!project.publishKit?.coverArt?.design) {

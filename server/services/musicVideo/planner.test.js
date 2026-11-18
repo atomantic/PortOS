@@ -246,6 +246,22 @@ describe('buildScenePlanPrompt', () => {
     expect(prompt).toContain('motivated holds and long takes are valid');
   });
 
+  it('quotes the MIDI transcription per shot only when the project has one', async () => {
+    const { buildMidiDigest } = await import('../../lib/musicVideo/musicVideoMidiDigest.js');
+    const project = makeProject();
+    const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
+    const notes = shots.flatMap((shot, i) => [0, 1, 2, 3].map((k) => ({ track: 0, midi: 30 + (i % 3), startSec: shot.startSec + k * 0.1, durationSec: 0.1, velocity: 1 })));
+    const midi = buildMidiDigest({ notes, tracks: [{ index: 0, name: 'Sub bass', program: 38, drums: false }] });
+    const withMidi = buildScenePlanPrompt(project, shots, { midi });
+    expect(withMidi).toContain('Audio-to-MIDI transcription of the song (a machine estimate');
+    expect(withMidi).toContain('what the transcription shows in the shot');
+    expect(withMidi).toContain('; transcription: ');
+    expect(withMidi).toContain('strong low hits at');
+    expect(withMidi).toContain('land an impact or cut on a strong low hit');
+    const without = buildScenePlanPrompt(project, shots);
+    expect(without).not.toContain('transcription');
+  });
+
   it('carries the automation brief guidance into the plan prompt', () => {
     const base = makeProject({ concept: {} });
     expect(buildScenePlanPrompt(base, [])).not.toContain('Director guidance');

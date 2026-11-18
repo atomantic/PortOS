@@ -63,7 +63,7 @@ export function MidiAction({ project, midi, midiBound }) {
             disabled={midi.active || noAudio}
             title={noAudio
               ? 'Link a track first'
-              : `Transcribe the track to MIDI with MuScriptor (${midi.model} model, local — installs automatically on first use)`}
+              : `Transcribe the track to MIDI with MuScriptor (${midi.model} model, local — installs automatically on first use). Shot planning and Cast & Sets then read its parts, low hits, melody and chords.`}
             className={buttonCls}>
             <Music size={15} /> MIDI
           </button>

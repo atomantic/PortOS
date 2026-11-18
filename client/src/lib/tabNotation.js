@@ -12,7 +12,7 @@ import { decodeXmlEntities } from '../../../server/lib/xmlEntities.js';
 // pure (no React, no browser APIs — these tests also run in node env in CI).
 //
 // NOT the lead-sheet parser (scoreNotation.js) and NOT the SMF parser
-// (midiNotes.js) — this module understands the loose text formats people paste
+// (server/lib/midiFile.js) — this module understands the loose text formats people paste
 // from tab sites: chords-over-lyrics, monospace tab staffs, and ChordPro.
 //
 // API (contract the SongBook UI builds against):
