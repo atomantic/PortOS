@@ -16,9 +16,9 @@
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
 #                (provisions the PGHOST/PGPORT you select; never another cluster)
-#   use-docker   Unavailable pending coordinated offline cutover
-#   use-native   Unavailable pending coordinated offline cutover
-#   migrate      Unavailable pending coordinated offline cutover
+#   use-docker   Legacy command. Use Settings → Database
+#   use-native   Legacy command. Use Settings → Database
+#   migrate      Legacy command. Use Settings → Database
 #   export       Export database to a SQL dump file
 #   import       Import a SQL dump file into the database
 #   logs         Show database logs
@@ -705,7 +705,7 @@ cmd_setup_native() {
   info "Using system PostgreSQL on port $PGPORT"
   info "Database: $PGDATABASE (user: $PGUSER)"
   info "Provisioning only: the selected mode is unchanged; Docker data has not been migrated."
-  info "Coordinated backend migration is not yet available. Keep using the current backend."
+  info "To move existing data, use Settings → Database for a coordinated cutover."
 }
 
 # Scope inherited libpq settings out of explicit transfers. PGHOSTADDR takes
@@ -837,11 +837,10 @@ cmd_import() (
 )
 
 # Do not snapshot and change mode while PortOS can still accept writes.
-# A process-list probe is not a writer fence. The recoverable coordinator in
-# #8805 must own admission, explicit endpoints and verified restart first.
+# The coordinator behind Settings → Database fences writers and verifies restart.
 cmd_migrate() {
-  err "Database migration and switching are temporarily unavailable: coordinated shutdown and restart are required to preserve writes." >&2
-  echo "Keep using the current backend. Backups remain available via scripts/db.sh export." >&2
+  err "This command refuses direct database migration or switching. Use Settings → Database for a coordinated cutover." >&2
+  echo "Backups remain available via scripts/db.sh export." >&2
   return 1
 }
 
@@ -883,10 +882,10 @@ Commands:
   logs           Tail database logs
 
   setup-native   Detect/install PostgreSQL, create portos database
-  use-docker     Unavailable pending coordinated offline cutover
-  use-native     Unavailable pending coordinated offline cutover
+  use-docker     Legacy command. Use Settings → Database
+  use-native     Legacy command. Use Settings → Database
 
-  migrate        Unavailable pending coordinated offline cutover
+  migrate        Legacy command. Use Settings → Database
   export [label] Export database to data/db-dumps/
   import <file>  Import a SQL dump file
   export --endpoint <host> <port> <user> <database> [label]
