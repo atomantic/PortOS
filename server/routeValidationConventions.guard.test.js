@@ -6,7 +6,7 @@
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -14,6 +14,14 @@ import { fileURLToPath } from 'url';
 import { blankLiterals, matchBracket } from './lib/sourceScan.js';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
+
+let trackedFilesCache;
+let scanCache;
+
+afterAll(() => {
+  trackedFilesCache = undefined;
+  scanCache = undefined;
+});
 
 // Key: `<file> <VERB> <path>` — the declaring file plus the handler's semantic
 // identity, never a line number, so unrelated edits above it do not churn the list.
@@ -114,14 +122,29 @@ export function findUnvalidatedQueryHandlers(src) {
 // routers and the CoS runner's standalone Express app.
 const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
 
-const trackedRouteSources = () => trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.'));
+const trackedRouteSources = () => (trackedFilesCache ??= trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.')));
 
-const scanWith = (finder) => trackedRouteSources().flatMap((file) => (
-  finder(readFileSync(join(SERVER_ROOT, file), 'utf8')).map((hit) => `${file} ${hit}`)
-));
+function runScan() {
+  if (scanCache) return scanCache;
+  const bodyOffenders = [];
+  const queryOffenders = [];
 
-const scanTree = () => scanWith(findUnvalidatedBodyHandlers);
-const scanQueries = () => scanWith(findUnvalidatedQueryHandlers);
+  for (const file of trackedRouteSources()) {
+    const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+    for (const hit of findUnvalidatedBodyHandlers(src)) {
+      bodyOffenders.push(`${file} ${hit}`);
+    }
+    for (const hit of findUnvalidatedQueryHandlers(src)) {
+      queryOffenders.push(`${file} ${hit}`);
+    }
+  }
+
+  scanCache = { bodyOffenders, queryOffenders };
+  return scanCache;
+}
+
+const scanTree = () => runScan().bodyOffenders;
+const scanQueries = () => runScan().queryOffenders;
 
 describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
