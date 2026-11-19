@@ -1,7 +1,6 @@
 /**
  * Shared test scaffolding for `makeBrainSeedMigration`-based seed migrations.
- * Companion to `./_lib.js`'s brain seed-record family, and the sibling of
- * `./_seedStageTestHelpers.js` (the prompt-stage seed family). The runner skips
+ * Companion to `./_lib.js`'s brain seed-record family,. The runner skips
  * `_`-prefixed files, so this is never imported as a migration.
  *
  * Every member of the family shares the same contract — write the per-record

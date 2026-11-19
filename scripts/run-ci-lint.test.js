@@ -70,7 +70,7 @@ describe('CI client lint runner', () => {
     expect(touchesServer(['server/biome.jsonc'])).toBe(true);
     expect(touchesServer(['biome.jsonc'])).toBe(true);
     expect(touchesServer(['scripts/ci-test-plan.js'])).toBe(true);
-    expect(touchesServer(['scripts/migrations/091-seed-image-prompt-stages.test.js'])).toBe(true);
+    expect(touchesServer(['scripts/migrations/shippedPromptHashes.test.js'])).toBe(true);
     expect(touchesServer(['lib/portosAuthCore.js'])).toBe(true);
     expect(touchesServer(['lib/certMeta.test.js'])).toBe(true);
     expect(touchesServer(['autofixer/server.js'])).toBe(true);

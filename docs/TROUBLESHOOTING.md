@@ -538,7 +538,7 @@ The split never overwrites a record directory that already exists. If a later Po
 
 ### Collection images or pinned covers lost after migration 428
 
-Migration 428 inferred deletion from missing local image bytes. That is invalid for peer-hosted media, whose bytes intentionally remain on the hosting peer, and for temporarily unavailable files. The migration runner now records pending `428-prune-dangling-collection-images.js` without executing its frozen transform, including when the ledger is missing or rebuilt. This policy is persisted before any other pending migration runs, so an interrupted upgrade cannot re-arm it. Explicit gallery deletion still removes the references for the image being deleted.
+Migration 428 inferred deletion from missing local image bytes. That is invalid for peer-hosted media, whose bytes intentionally remain on the hosting peer, and for temporarily unavailable files. The `428-prune-dangling-collection-images.js` transform has been deleted (#16916), so it can no longer run on any install; the runner had already stopped executing it after #12398. Explicit gallery deletion still removes the references for the image being deleted.
 
 If 428 already ran, preserve the current collection and recover membership from an unaffected peer or retained backup. Union synchronization may re-add the image items, but the migration also stamped a newer null `coverKey`; scalar last-write-wins synchronization cannot automatically restore that pinned cover. Select the intended cover explicitly after recovery. The peer-hosted media index does not record collection ownership and cannot reconstruct memberships. Do not rerun absence-based cleanup or overwrite newer edits with reconstructed guesses.
 

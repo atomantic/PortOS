@@ -112,22 +112,72 @@ describe('reconcileShippedPrompts', () => {
     expect(read('data/prompts/stages/a.md')).toBe(NEW);
   });
 
-  it('skips a prompt missing from data/ or no longer shipped', async () => {
+  it('leaves a prompt that no longer ships alone', async () => {
     writeTable({
       'stages/a.md': { current: md5(NEW), retired: [md5(OLD)] },
       'stages/gone.md': { retired: [md5(OLD)] },
     });
+    write('data/prompts/stages/a.md', NEW);
     write('data/prompts/stages/gone.md', OLD);
     const result = await reconcileShippedPrompts({ rootDir });
-    expect(result).toEqual({ updated: [], customized: [] });
-    expect(existsSync(join(rootDir, 'data/prompts/stages/a.md'))).toBe(false);
+    expect(result).toEqual({ updated: [], seeded: [], configAdded: [], customized: [] });
     expect(read('data/prompts/stages/gone.md')).toBe(OLD);
+  });
+
+  it('seeds a shipped prompt missing from an existing data/prompts, never creating data/prompts itself', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect((await reconcileShippedPrompts({ rootDir })).seeded).toEqual([]);
+    expect(existsSync(join(rootDir, 'data/prompts'))).toBe(false);
+
+    write('data.reference/prompts/_partials/p.md', NEW);
+    writeTable({
+      'stages/a.md': { current: md5(NEW), retired: [md5(OLD)] },
+      '_partials/p.md': { current: md5(NEW), retired: [] },
+    });
+    write('data/prompts/stages/other.md', CUSTOM);
+    const result = await reconcileShippedPrompts({ rootDir });
+    expect(result.seeded).toEqual(['_partials/p.md', 'stages/a.md']);
+    expect(read('data/prompts/stages/a.md')).toBe(NEW);
+    expect(read('data/prompts/_partials/p.md')).toBe(NEW);
+    expect(read('data/prompts/stages/other.md')).toBe(CUSTOM);
+  });
+
+  describe('stage-config.json seeding', () => {
+    const entry = (model) => ({ name: model, model });
+    const config = (stages, extra = {}) => `${JSON.stringify({ ...extra, stages }, null, 2)}\n`;
+    const installedConfig = () => JSON.parse(read('data/prompts/stage-config.json'));
+
+    beforeEach(() => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      write('data/prompts/stages/a.md', NEW);
+      write('data.reference/prompts/stage-config.json', config({ a: entry('heavy'), b: entry('light') }));
+    });
+
+    it('adds only absent entries and keeps an existing one untouched', async () => {
+      write('data/prompts/stage-config.json', config({ a: entry('custom') }, { note: 'kept' }));
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual(['b']);
+      expect(installedConfig()).toEqual({ note: 'kept', stages: { a: entry('custom'), b: entry('light') } });
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual([]);
+    });
+
+    it('creates the config when data/prompts has none', async () => {
+      await reconcileShippedPrompts({ rootDir });
+      expect(installedConfig().stages).toEqual({ a: entry('heavy'), b: entry('light') });
+    });
+
+    it('does not overwrite an unreadable installed config', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      write('data/prompts/stage-config.json', '{broken');
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual([]);
+      expect(read('data/prompts/stage-config.json')).toBe('{broken');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
+    });
   });
 
   it('is a no-op without a hash table', async () => {
     rmSync(join(rootDir, 'data.reference/prompts/shipped-hashes.json'));
     write('data/prompts/stages/a.md', OLD);
-    expect(await reconcileShippedPrompts({ rootDir })).toEqual({ updated: [], customized: [] });
+    expect(await reconcileShippedPrompts({ rootDir })).toEqual({ updated: [], seeded: [], configAdded: [], customized: [] });
     expect(read('data/prompts/stages/a.md')).toBe(OLD);
   });
 });

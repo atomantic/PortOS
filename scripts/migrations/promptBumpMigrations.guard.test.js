@@ -21,16 +21,9 @@ import { fileURLToPath } from 'node:url';
 const HERE = resolve(fileURLToPath(import.meta.url), '..');
 const REPO_ROOT = resolve(HERE, '..', '..');
 
-// Frozen: the closed precedent this migration shape is not allowed to repeat.
+// Empty: #16916 deleted the last six, superseded by readSchedule().
 // Never add to this list — a new prompt bump needs no migration at all.
-const ALLOWED_PROMPT_BUMP_MIGRATIONS = new Set([
-  'scripts/migrations/281-reconcile-missing-releases-prompt.js',
-  'scripts/migrations/293-agents-md-prompt-rename.js',
-  'scripts/migrations/297-release-check-slashdo-review-prompt.js',
-  'scripts/migrations/308-release-check-advisory-review-prompt.js',
-  'scripts/migrations/332-release-check-fix-blockers-prompt.js',
-  'scripts/migrations/338-claim-issue-volunteer-claim-contract.js',
-]);
+const ALLOWED_PROMPT_BUMP_MIGRATIONS = new Set([]);
 
 const IMPORTS_PROMPT_DEFAULTS = /from\s+['"][^'"]*taskPromptDefaults\.js['"]/;
 const WRITES_TASK_SCHEDULE = /task-schedule\.json/;
@@ -42,7 +35,7 @@ describe('prompt-bump migrations stay closed', () => {
   it('finds the migrations it is meant to guard', () => {
     // A regression here means the pathspec stopped matching and every
     // assertion below started passing vacuously.
-    expect(trackedMigrations()).toEqual(expect.arrayContaining([...ALLOWED_PROMPT_BUMP_MIGRATIONS]));
+    expect(trackedMigrations().length).toBeGreaterThan(100);
   });
 
   it('rejects a new migration that re-implements the schedule loader\'s prompt upgrade', () => {
