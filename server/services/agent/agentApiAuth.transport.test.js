@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { extractToken } from '../../../lib/portosAuthCore.js';
 import { mockPathsDataRoot } from '../../lib/mockPathsDataRoot.js';
 import * as pty from 'node-pty';
@@ -32,7 +33,9 @@ describe('agent API credential transport', () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
     const provider = { id: 'codex-tui', command: 'codex' };
-    const cwd = resolve('..');
+    // The repository root, from this file: the fixture runs `scripts/portos-api.js`
+    // there whatever directory Vitest was started in.
+    const cwd = fileURLToPath(new URL('../../..', import.meta.url));
     // The server sends a delta; the durable runner bases it on its own env.
     const delta = composeProviderEnv({ before: agentEnv, provider });
     const env = buildCliChildEnv({ before: delta, provider: cliProviderAuthDescriptor(provider), cwd });
