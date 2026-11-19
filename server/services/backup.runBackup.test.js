@@ -1,7 +1,8 @@
 /** Backup service suite: runBackup lifecycle, snapshot cut failures and retention pruning. Shared mocks and helpers live in backup.test.fixture.js (#16215). */
 import { maintenanceFence, snapshotCutSeam, machineHost, fakeProc, DUMP_HEADER, DUMP_TABLES, DUMP_TRAILER, COMPLETE_DUMP } from './backup.test.fixture.js';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { rmSync } from 'fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'os';
 import { basename, dirname, join as joinPath } from 'path';
 import { spawn } from '../lib/childProcess.js';
@@ -1100,13 +1101,15 @@ describe('runBackup lifecycle', () => {
   // snapshots older than the newest completed one are always pruned (#12618).
   // -----------------------------------------------------------------------
   describe('retention pruning', () => {
-    async function seedSnapshot(source, id, { generatedAt, marker, markerContent = '' } = {}) {
+    async function seedSnapshot(source, id, { generatedAt, marker, markerContent = '', dump = false } = {}) {
       const fsp = await actualFs();
       const dir = joinPath(destRoot, 'snapshots', source, id);
       await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
       if (generatedAt) {
-        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0, files: {} }));
+        const files = dump ? { '../portos-db.sql': createHash('sha256').update(COMPLETE_DUMP).digest('hex') } : {};
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: Object.keys(files).length, files }));
       }
+      if (dump) await fsp.writeFile(joinPath(dir, 'portos-db.sql'), COMPLETE_DUMP);
       if (marker) await fsp.writeFile(joinPath(dir, marker), markerContent);
       return dir;
     }
@@ -1119,6 +1122,67 @@ describe('runBackup lifecycle', () => {
       rsync.emit('close', 0);
       return pending;
     }
+
+    it.each(['missing database dump', 'legacy database metadata'])(
+      'keeps two healthy database snapshots alongside a degraded snapshot with %s', async (degradation) => {
+        const fsp = await actualFs();
+        const { restorePostgres } = await import('./backup.js');
+        const root = joinPath(destRoot, 'snapshots', machineHost);
+        delete process.env.MEMORY_BACKEND;
+        getBackendName.mockReturnValue('postgres');
+        vi.useFakeTimers({ toFake: ['Date'] });
+        onTestFinished(() => vi.useRealTimers());
+        const { errorEvents } = await import('../lib/errorHandler.js');
+
+        async function runPostgresBackup(day, { failDump = false, legacyMetadata = false } = {}) {
+          vi.setSystemTime(new Date(`2026-01-0${day}T00:00:00Z`));
+          if (failDump) errorEvents.once('error', () => {});
+          checkHealth.mockResolvedValue({ connected: !failDump, hasSchema: !failDump });
+          const rsync = fakeProc();
+          const dump = fakeProc();
+          spawn.mockClear().mockReturnValueOnce(rsync);
+          if (!failDump) spawn.mockReturnValueOnce(dump);
+          const io = { emit: vi.fn() };
+          const pending = runBackup(destRoot, io, { retentionCount: 2 });
+          await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+          const id = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+          const dir = joinPath(root, id);
+          if (legacyMetadata) await fsp.writeFile(joinPath(dir, 'data', 'creative-director-projects.json'), '[]');
+          await fsp.writeFile(joinPath(dir, 'data', 'settings.json'), '{}');
+          rsync.emit('close', 0);
+          if (!failDump) {
+            await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+            await fsp.writeFile(joinPath(dir, 'portos-db.sql'), COMPLETE_DUMP);
+            dump.emit('close', 0);
+          }
+          return pending;
+        }
+
+        const first = await runPostgresBackup(1);
+        const degraded = await runPostgresBackup(2, {
+          failDump: degradation === 'missing database dump',
+          legacyMetadata: degradation === 'legacy database metadata',
+        });
+        const latest = await runPostgresBackup(3);
+
+        expect(degraded).toMatchObject({ status: 'degraded', prunedSnapshots: 0 });
+        if (degradation === 'missing database dump') {
+          await expect(restorePostgres(destRoot, degraded.snapshotId, { dryRun: true }))
+            .resolves.toEqual({ status: 'skipped', reason: 'no_dump' });
+        } else {
+          expect(degraded.restoreWarning).toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA' });
+          expect(degraded.pgBackup.status).toBe('ok');
+        }
+        expect(latest).toMatchObject({ status: 'ok', prunedSnapshots: 0 });
+        for (const healthy of [first, latest]) {
+          expect(healthy.status).toBe('ok');
+          getServerMajorVersion.mockResolvedValueOnce(17);
+          await expect(restorePostgres(destRoot, healthy.snapshotId, { dryRun: true }))
+            .resolves.toMatchObject({ status: 'ok', tableCount: 2 });
+        }
+        await expect(fsp.readFile(joinPath(root, degraded.snapshotId, 'data', 'settings.json'), 'utf8')).resolves.toBe('{}');
+      },
+    );
 
     it('prunes interrupted snapshots older than the new completed one even under unlimited retention', async () => {
       const fsp = await actualFs();
@@ -1136,14 +1200,26 @@ describe('runBackup lifecycle', () => {
 
     it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/other-source snapshots', async () => {
       const fsp = await actualFs();
-      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
-      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
-      const old3 = await seedSnapshot(machineHost, '2020-01-03T00-00-00', { generatedAt: '2020-01-03T00:00:00.000Z' });
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { dump: true });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z', dump: true });
+      const old3 = await seedSnapshot(machineHost, '2020-01-03T00-00-00', { generatedAt: '2020-01-03T00:00:00.000Z', dump: true });
       const interrupted = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
       const failed = await seedSnapshot(machineHost, '2020-01-05T00-00-00', { generatedAt: '2020-01-05T00:00:00.000Z', marker: '.failed' });
+      const noManifestOrDump = await seedSnapshot(machineHost, '2020-01-06T00-00-00');
+      const generatedAt = '2020-01-07T00:00:00.000Z';
+      const unlistedDump = await seedSnapshot(machineHost, '2020-01-07T00-00-00', { generatedAt });
+      await fsp.writeFile(joinPath(unlistedDump, 'portos-db.sql'), COMPLETE_DUMP);
+      const deletedDump = await seedSnapshot(machineHost, '2020-01-08T00-00-00', { generatedAt, dump: true });
+      await fsp.unlink(joinPath(deletedDump, 'portos-db.sql'));
+      const emptyDump = await seedSnapshot(machineHost, '2020-01-09T00-00-00', { generatedAt, dump: true });
+      await fsp.truncate(joinPath(emptyDump, 'portos-db.sql'), 0);
+      const directoryDump = await seedSnapshot(machineHost, '2020-01-10T00-00-00', { generatedAt, dump: true });
+      await fsp.unlink(joinPath(directoryDump, 'portos-db.sql'));
+      await fsp.mkdir(joinPath(directoryDump, 'portos-db.sql'));
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
       const io = { emit: vi.fn() };
+      delete process.env.MEMORY_BACKEND;
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       getBackendName.mockReturnValue('postgres');
       const rsync = fakeProc();
@@ -1176,9 +1252,10 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(newSnapshotDir)).resolves.toBeDefined();
 
       await expect(fsp.stat(interrupted)).rejects.toThrow();
-      // Never touched: failed, and another machine's namespace.
-      await expect(fsp.stat(failed)).resolves.toBeDefined();
-      await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+      // Unusable database snapshots, failed snapshots and other namespaces are preserved.
+      for (const dir of [noManifestOrDump, unlistedDump, deletedDump, emptyDump, directoryDump, failed, otherMachine]) {
+        await expect(fsp.stat(dir)).resolves.toBeDefined();
+      }
     });
 
     it('reports an unreadable retention inventory without failing the completed backup or deleting snapshots', async () => {
@@ -1443,8 +1520,9 @@ describe('runBackup lifecycle', () => {
         await expect(restoreSnapshot(destRoot, id, { dryRun: true }))
           .rejects.toMatchObject({ code: 'BACKUP_MANIFEST_INVALID' });
       }
-      const legacy = await seedSnapshot(machineHost, '2019-01-01T00-00-00');
-      const healthy = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: valid.generatedAt });
+      const legacy = await seedSnapshot(machineHost, '2019-01-01T00-00-00', { dump: true });
+      const healthy = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: valid.generatedAt, dump: true });
+      delete process.env.MEMORY_BACKEND;
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       getBackendName.mockReturnValue('postgres');
       const rsync = fakeProc();
