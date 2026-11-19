@@ -704,7 +704,7 @@ describe('deferred update admission', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('direct update script offline boundary', () => {
-  const start = root => {
+  const start = (root, observe = () => {}) => {
     installUpdateTestSupervisor(root, { standalone: true });
     installAdmittedUpdateFixture(root, "writeFileSync('applied', '');");
     // This is a standalone process in a copied disposable install, not a Vitest
@@ -712,8 +712,31 @@ describe.skipIf(process.platform === 'win32')('direct update script offline boun
     const env = { ...process.env, PORTOS_DATA_ROOT: root };
     delete env.VITEST;
     const child = spawn('bash', [join(root, 'update.sh'), '--automatic'], { cwd: root, env, stdio: 'ignore' });
+    observe(child);
     return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   };
+
+  it('cancels a waiting shell launch on a PID-only signal without starting the admitted worker', async () => {
+    const { root, admission } = fixture();
+    const release = admission.admit('agent', 'release-example');
+    let launcher;
+    const done = start(root, child => { launcher = child; });
+    try {
+      await vi.waitFor(() => expect(admission.deferredUpdate.get().operation?.phase).toBe('waiting'), { timeout: 10000 });
+      expect(admission.deferredUpdate.get().operation.ownerPid).toBe(launcher.pid);
+      expect(launcher.kill('SIGTERM')).toBe(true);
+      // Keep the release active until the exact PID exits. If the shim added
+      // an intermediate Node parent, the real supervisor would still wait.
+      expect(await done).toBe(1);
+      expect(admission.deferredUpdate.get().operation).toBeNull();
+      expect(admission.held()).toBe(false);
+    } finally {
+      if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill('SIGTERM');
+      await release.finish();
+      await done;
+    }
+    expect(existsSync(join(root, 'applied'))).toBe(false);
+  }, 20000);
 
   it('does not mutate before a release and its children finish, without requiring a running API', async () => {
     const { root, admission } = fixture();

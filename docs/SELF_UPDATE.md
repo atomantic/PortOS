@@ -321,6 +321,24 @@ When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with 
 
 Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
 
+### Interruption on Windows
+
+A terminal `Ctrl+C` can deliver `SIGINT` to the attached Node updater. Closing
+the console can deliver `SIGHUP`, but Windows may then terminate Node after
+about 10 seconds even when a handler is installed. The updater stops advancing
+the pipeline after the in-flight command settles and tries to restart any PM2
+apps it removed. It cannot promise to finish recovery before a console-close
+deadline, and a forced kill does not run the handler at all. If settlement was
+not recorded, keep the update hold until the normal reconciliation can prove
+the operation is no longer running. Do not close the terminal as a way to
+cancel a live update. See [Node's Windows signal behavior](https://nodejs.org/api/process.html#signal-events).
+
+The Windows sandbox tests inject both control-signal events into the real
+Node updater during a fake PM2 delete and check restart, health and failure
+status. They do not close or terminate a native console. The macOS/Linux
+fixture also sends a real PID-only signal to the shell-launched supervisor
+while it waits for admission and checks that no update starts.
+
 ## Verifying a change to the updater itself
 
 Do not test a candidate on a primary install. A worktree by itself does not isolate

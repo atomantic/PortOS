@@ -332,7 +332,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
     expect(results.pm2Wiped.status).not.toBe(0);
   });
 
-  it('restarts the apps when the update receives a signal during the delete itself', async () => {
+  const interruptCases = WINDOWS ? [['SIGINT', 130], ['SIGHUP', 129]] : [['SIGTERM', 143]];
+  it.each(interruptCases)('restarts the apps when the updater receives %s during the delete itself', async (signal, status) => {
     const box = await makeSandbox({ stallDelete: true });
     if (WINDOWS) {
       // Win32 TerminateProcess cannot run signal handlers. Inject the console
@@ -344,7 +345,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
           const path = ${JSON.stringify(box.releaseFile)};
           const timer = setInterval(() => {
             if (!existsSync(path)) return;
-            process.emit('SIGINT');
+            process.emit(${JSON.stringify(signal)});
             rmSync(path, { force: true });
             clearInterval(timer);
           }, 20);
@@ -358,7 +359,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
         onStart: WINDOWS ? undefined : (child) => {
           waitForFile(box.releaseFile)
             .then(() => {
-              child.kill('SIGTERM');
+              child.kill(signal);
               rmSync(box.releaseFile, { force: true });
             })
             .catch(() => child.kill('SIGKILL'));
@@ -368,7 +369,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       const deleteAt = calls.findIndex(c => c.startsWith('delete ecosystem.config.cjs'));
       const startAt = calls.findIndex(c => c.startsWith('start ecosystem.config.cjs'));
       expect(startAt, `pm2 calls were: ${JSON.stringify(calls)}`).toBeGreaterThan(deleteAt);
-      expect(result.status).toBe(WINDOWS ? 130 : 143);
+      expect(result.status).toBe(status);
+      expect(result.stdout).toContain('STEP:restart:warning:');
     } finally {
       await destroyGitSandbox(box.scratch);
     }
