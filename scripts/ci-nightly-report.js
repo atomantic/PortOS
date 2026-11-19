@@ -154,7 +154,7 @@ export function buildMainRedIssueBody({ failedJobs, base, head, runUrl, compareB
   return lines.join('\n');
 }
 
-/** The open "main is red" issue number, `null` when none, `undefined` when the listing failed. */
+/** The open "main is red" issue record, `null` when none, `undefined` when the listing failed. */
 async function findOpenMainRedIssue(target, fetchImpl, logger) {
   for (let page = 1; page <= MAX_ISSUE_PAGES; page += 1) {
     const issues = await githubJson(
@@ -166,7 +166,7 @@ async function findOpenMainRedIssue(target, fetchImpl, logger) {
     if (!Array.isArray(issues)) return undefined;
     // The issues endpoint also lists pull requests.
     const hit = issues.find((issue) => !issue?.pull_request && issue?.title === MAIN_RED_TITLE);
-    if (hit) return hit.number;
+    if (hit) return hit;
     if (issues.length < ISSUES_PER_PAGE) return null;
   }
   return null;
@@ -201,13 +201,17 @@ async function syncMainRedIssue({ red, target, fetchImpl, logger, body, runUrl, 
       const ok = await writeIssue(fetchImpl, target, logger, 'POST', '/issues', { title: MAIN_RED_TITLE, body, labels: MAIN_RED_LABELS });
       return { action: 'created', ok };
     }
-    const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing}`, { body })
-      && await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing}/comments`, { body: `Still red at \`${head.slice(0, 9)}\`: ${runUrl}` });
+    const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing.number}`, { body })
+      && await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing.number}/comments`, { body: `Still red at \`${head.slice(0, 9)}\`: ${runUrl}` });
     return { action: 'updated', ok };
   }
   if (existing === null) return { action: 'none', ok: true };
-  const ok = await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing}/comments`, { body: `Green again at \`${head.slice(0, 9)}\`: ${runUrl}` })
-    && await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing}`, { state: 'closed', state_reason: 'completed' });
+  const recovery = `Green again at \`${head.slice(0, 9)}\`: ${runUrl}`;
+  const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing.number}`, {
+    state: 'closed',
+    state_reason: 'completed',
+    body: existing.body ? `${existing.body}\n\n${recovery}` : recovery,
+  });
   return { action: 'closed', ok };
 }
 

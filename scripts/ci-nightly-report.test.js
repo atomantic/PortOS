@@ -26,11 +26,13 @@ const mergeCommit = (sha, number, title) => commit(sha, `Merge pull request #${n
  * A fetch stub that answers GETs by URL fragment and records every request,
  * writes included. A `null` route is a failing endpoint.
  */
-function stubFetch(routes) {
+function stubFetch(routes, { writeStatus = 201 } = {}) {
   const calls = [];
   const fetchImpl = vi.fn(async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : undefined });
-    if (init.method && init.method !== 'GET') return { ok: true, status: 201, json: async () => ({}) };
+    if (init.method && init.method !== 'GET') {
+      return { ok: writeStatus < 300, status: writeStatus, json: async () => ({}) };
+    }
     const hit = Object.entries(routes).find(([fragment]) => url.includes(fragment));
     if (!hit || hit[1] === null) return { ok: false, status: 500, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => hit[1] };
@@ -232,15 +234,32 @@ describe('reportMainHealth', () => {
     expect(writes()[0].method).toBe('POST');
   });
 
-  it('closes the open issue on a green run', async () => {
-    const { fetchImpl, writes } = stubFetch({ '/issues?': [OPEN_ISSUE] });
+  it('closes the open issue and records recovery in one update', async () => {
+    const redBody = 'Failed jobs: Windows server unit tests\n\nCommit range: unknown';
+    const { fetchImpl, writes } = stubFetch({ '/issues?': [{ ...OPEN_ISSUE, body: redBody }] });
     const result = await reportMainHealth({
       env: { ...ENV, CI_RUN_CONCLUSION: 'success' }, logger, writeSummary: vi.fn(), fetchImpl,
     });
     expect(result).toMatchObject({ action: 'closed', syncFailed: false });
-    expect(writes().map(({ method, url }) => `${method} ${url.split('/repos/example/repo')[1]}`))
-      .toEqual(['POST /issues/77/comments', 'PATCH /issues/77']);
-    expect(writes()[1].body).toEqual({ state: 'closed', state_reason: 'completed' });
+    expect(writes()).toEqual([{
+      method: 'PATCH',
+      url: 'https://api.github.com/repos/example/repo/issues/77',
+      body: {
+        state: 'closed',
+        state_reason: 'completed',
+        body: `${redBody}\n\nGreen again at \`${HEAD.slice(0, 9)}\`: https://github.com/example/repo/actions/runs/500`,
+      },
+    }]);
+  });
+
+  it('reports a sync failure when the green close update fails', async () => {
+    const { fetchImpl, writes } = stubFetch({ '/issues?': [{ ...OPEN_ISSUE, body: null }] }, { writeStatus: 503 });
+    const result = await reportMainHealth({
+      env: { ...ENV, CI_RUN_CONCLUSION: 'success' }, logger, writeSummary: vi.fn(), fetchImpl,
+    });
+    expect(result).toMatchObject({ action: 'closed', syncFailed: true });
+    expect(writes().map(({ method }) => method)).toEqual(['PATCH']);
+    expect(writes()[0].body.body).toBe(`Green again at \`${HEAD.slice(0, 9)}\`: https://github.com/example/repo/actions/runs/500`);
   });
 
   it('does nothing on a green run when no issue is open', async () => {

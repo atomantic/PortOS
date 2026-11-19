@@ -899,7 +899,8 @@ on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
   is already open. The issue carries only job names, the commit range and the run
   URL. An unreadable range or a missing earlier green run is reported as such, never
   as "no suspects".
-- **green**: the open issue is closed with a comment.
+- **green**: closes the open issue and adds the green run link to its body in
+  the same update.
 - **cancelled** (superseded by a newer push): nothing changes.
 
 A failure to read or write the issue fails the `main-health` job so a stale or
