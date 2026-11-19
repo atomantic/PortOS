@@ -72,7 +72,7 @@ export function prepareCodeRender(project, { windowStart = null, windowEnd = nul
 }
 
 export async function encodeCodeComposition({
-  html, song, width, height, fps, durationSec, audioPath, outputPath, directory, signal, onProgress, audioStartSec = 0, fade = false, initScripts = [],
+  html, song, width, height, fps, durationSec, audioPath, outputPath, directory, signal, onProgress, audioStartSec = 0, fade = false, initScripts = [], videoArgs,
 }) {
   const { findFfmpeg, runFfmpegProcess, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
@@ -89,7 +89,7 @@ export async function encodeCodeComposition({
     // `initScripts` (the project's film look runtime) run before the page's own code.
     page = await openComposition(directory, { signal, initScripts });
     await encodeComposition(page, { durationSec, fps, width, height }, silent, {
-      signal, onProgress: (fraction) => onProgress?.(fraction * 0.9),
+      signal, videoArgs, onProgress: (fraction) => onProgress?.(fraction * 0.9),
     });
     signal?.throwIfAborted();
     const mux = await runFfmpegProcess({

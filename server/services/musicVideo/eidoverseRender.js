@@ -59,7 +59,7 @@ async function outputOverLimit(directory) {
 }
 
 /** Render full song time before trimming: simulations preserve their pre-roll. */
-export async function encodeEidoverseComposition({ plan, project, audioPath, outputPath, signal, onProgress, windowStart = 0, windowEnd = plan.durationSec, fade = false }) {
+export async function encodeEidoverseComposition({ plan, project, audioPath, outputPath, signal, onProgress, windowStart = 0, windowEnd = plan.durationSec, fade = false, videoArgs = ['-c:v', 'libx264', '-pix_fmt', 'yuv420p'] }) {
   const { findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
@@ -112,7 +112,7 @@ export async function encodeEidoverseComposition({ plan, project, audioPath, out
     const mux = await runFfmpegProcess({ bin: ffmpeg, signal, args: [
       '-hide_banner', '-loglevel', 'error', '-ss', String(windowStart), '-i', silent,
       '-ss', String(windowStart), '-i', audioPath, '-map', '0:v:0', '-map', '1:a:0',
-      '-t', String(span), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k',
+      '-t', String(span), ...videoArgs, '-c:a', 'aac', '-b:a', '192k',
       '-af', `atrim=duration=${span},apad=whole_dur=${span},asetpts=PTS-STARTPTS${fade ? edgeFadeFilter(span) : ''}`,
       '-movflags', '+faststart', '-y', outputPath,
     ] });

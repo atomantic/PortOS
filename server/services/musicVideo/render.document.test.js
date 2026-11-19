@@ -132,7 +132,10 @@ describe('composition-document render plan', () => {
     expect(status).toBe('complete');
     expect((await projects.getProject(id)).excerpts.find((e) => e.id === excerptId).status).toBe('complete');
     const call = encodeDocumentComposition.mock.calls.at(-1)[0];
-    expect(call).toMatchObject({ fade: true, collectFootageVisibility: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 } });
+    expect(call).toMatchObject({
+      fade: true, collectFootageVisibility: true, windowStart: 1, windowEnd: 4, plan: { width: 1080, height: 1920 },
+      videoArgs: expect.arrayContaining(['-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M']),
+    });
     expect(call.project.treatment.brief.aspectRatio).toBe('9:16');
     const stored = await projects.getProject(id);
     expect(stored.treatment?.brief?.aspectRatio ?? '16:9').toBe('16:9');

@@ -18,6 +18,7 @@ describe('encodeCompositionSegments', () => {
     const progress = [];
     const joins = [];
     const first = page('first');
+    const videoArgs = ['-maxrate', '12M', '-bufsize', '24M'];
     // The join writes `<output>.parts.txt` beside the output. `/tmp` is not a
     // directory on Windows (it becomes `<drive>:\tmp`), so the parent must be
     // a real temp directory or writeFile fails with ENOENT.
@@ -25,10 +26,11 @@ describe('encodeCompositionSegments', () => {
     const output = join(dir, 'out.mp4');
     try {
       const result = await encodeCompositionSegments(first, contract, output, {
-        workers: 3, offsetSec: 30,
+        workers: 3, offsetSec: 30, videoArgs,
         openPage: async () => { const p = page(`extra${opened.length}`); opened.push(p); return p; },
         videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
         encode: async (p, c, path, options) => {
+          expect(options.videoArgs).toBe(videoArgs);
           calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, followed: options.followed, filter: options.videoFilter });
           options.onProgress(1, { frame: Math.round(c.durationSec * c.fps) });
           return { timing: { frames: 480, seekMs: 960, drawMs: 0, captureMs: 1920, encodeMs: 240, gpuFrames: 0, svgFrames: 480 } };
@@ -59,12 +61,13 @@ describe('encodeCompositionSegments', () => {
 
   it('renders a short window in one pass on the caller\'s page', async () => {
     const calls = [];
+    const videoArgs = ['-maxrate', '12M', '-bufsize', '24M'];
     await encodeCompositionSegments(page('only'), { ...contract, durationSec: 15 }, '/tmp/short.mp4', {
-      workers: 4, offsetSec: 5, videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
+      workers: 4, offsetSec: 5, videoArgs, videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
       openPage: async () => { throw new Error('no extra page for a short window'); },
-      encode: async (p, c, path, options) => { calls.push([p.name, path, options.offsetSec, options.videoFilter]); return {}; },
+      encode: async (p, c, path, options) => { calls.push([p.name, path, options.offsetSec, options.videoFilter, options.videoArgs]); return {}; },
     });
-    expect(calls).toEqual([['only', '/tmp/short.mp4', 5, 'grade@5']]);
+    expect(calls).toEqual([['only', '/tmp/short.mp4', 5, 'grade@5', videoArgs]]);
   });
 
   it('stops the other segments and reports the one that failed first', async () => {

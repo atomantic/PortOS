@@ -24,7 +24,7 @@ import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDura
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { kitCutWindows } from './socialCuts.js';
+import { kitCutWindows, SOCIAL_VIDEO_ARGS } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
@@ -36,11 +36,8 @@ import { resolveRenderVideoFile } from './finalRenderFile.js';
 
 const jobs = new Map();
 const projectBuilds = admittedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
-// X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
-// keeps the analog grain without the upload being re-crushed.
 // 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
 export const VERTICAL_FIT_FILTER = 'split[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[b];[fg]scale=1080:1920:force_original_aspect_ratio=decrease[f];[b][f]overlay=(W-w)/2:(H-h)/2,setsar=1';
-const X_VIDEO_ARGS = ['-c:v', 'libx264', '-profile:v', 'high', '-preset', 'medium', '-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M', '-pix_fmt', 'yuv420p'];
 const AUDIO_ARGS = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
 
 export const attachPublishKitSseClient = (jobId, res) => attachSse(jobs, jobId, res);
@@ -129,11 +126,11 @@ async function beginPublishKitBuild(projectId, jobId) {
     const { teaser, vertical } = kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
     const encodes = [
       { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
-        args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...X_VIDEO_ARGS, ...AUDIO_ARGS] },
+        args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...SOCIAL_VIDEO_ARGS, ...AUDIO_ARGS] },
       { kind: 'preview-720p', label: '720p preview', filename: `${stem}-preview-720p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=-2:'min(720,ih)'", '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', ...AUDIO_ARGS] },
       ...(teaser ? [{ kind: 'teaser', label: `Teaser ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-teaser.mp4`, window: teaser,
-        args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...X_VIDEO_ARGS,
+        args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath, ...SOCIAL_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
       // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
       // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
@@ -141,10 +138,10 @@ async function beginPublishKitBuild(projectId, jobId) {
       ...(vertical && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
         layout: 'fit',
         native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
-          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
+          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, videoArgs: SOCIAL_VIDEO_ARGS, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
         }),
         args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
-          '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
+          '-vf', VERTICAL_FIT_FILTER, ...SOCIAL_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(vertical.endSec - vertical.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const candidates = thumbnailCandidates(project, durationSec);
