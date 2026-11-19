@@ -186,7 +186,8 @@ export const speedProfilesForModel = videoSpeedProfiles;
 // accepts it. Matching that here is what stops the picker from offering a
 // speed-up the chain then declines wholesale.
 export const speedProfilesForMode = (model, mode) => {
-  const wanted = Array.isArray(mode) && mode.length > 0 ? mode : [mode];
+  // An empty list is the default text render, as on the server (`resolveVideoSpeedProfileForModes`).
+  const wanted = Array.isArray(mode) ? (mode.length > 0 ? mode : [null]) : [mode];
   return speedProfilesForModel(model).filter((p) => wanted.every((m) => speedProfileAcceptsMode(p, m)));
 };
 

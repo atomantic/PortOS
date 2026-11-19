@@ -297,6 +297,8 @@ describe('speed profiles', () => {
     expect(speedProfilesForMode(model, 'extend')).toEqual([]);
     // An absent mode is the default text render.
     expect(speedProfilesForMode(model, null)).toEqual([FAST]);
+    // So is an empty mode list (a chain that declared no chunks).
+    expect(speedProfilesForMode(model, [])).toEqual([FAST]);
     // A profile with no declared modes falls back to the two-stage set, NOT to
     // "unrestricted" — the server's decline check applies exactly that
     // fallback, and reading it permissively here would offer a profile on fflf
