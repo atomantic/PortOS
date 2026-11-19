@@ -2,103 +2,30 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
   ClipboardList,
-  AlertTriangle,
-  CheckCircle2,
-  X,
   Plus,
-  Trash2,
-  Crown,
-  FileText,
-  Pencil,
-  Check,
-  XCircle,
-  Maximize2,
-  Minimize2,
-  Eye,
   Clock3,
-  BellRing,
   Inbox,
-  ArrowRight,
-  Brain as BrainIcon,
-  MessageCircle,
-  Mail,
-  Activity,
-  DatabaseBackup,
   CalendarDays,
   ListTodo,
   Hourglass,
   Sparkles,
-  History as HistoryIcon,
-  ExternalLink,
-  Save
+  History as HistoryIcon
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
-import QueueInvestigationButton from '../components/ui/QueueInvestigationButton';
-import CollapsibleText from '../components/ui/CollapsibleText';
-import MarkdownOutput from '../components/cos/MarkdownOutput';
-import Drawer from '../components/Drawer';
-import AgentCard from '../components/cos/tabs/AgentCard';
-import HarnessUpdateControl from '../components/review/HarnessUpdateControl';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
-import GitHubNotificationCard from '../components/github/GitHubNotificationCard';
+import ActionQueueRow from '../components/review/ActionQueueRow';
+import ActionDetailDrawer from '../components/review/ActionDetailDrawer';
+import LegacyReviewSection, { ReviewHistoryDisclosure } from '../components/review/LegacyReviewSection';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
-import useAsyncAction from '../hooks/useAsyncAction';
-import Modal from '../components/ui/Modal';
-import { timeAgo, formatDateTime, formatCount, formatDateShort, localDateKey } from '../utils/formatters';
-import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
+import { formatCount } from '../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
 
-// Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
-const QUEUE_SOURCE_CONFIG = {
-  brain: { icon: BrainIcon, color: 'text-port-accent-2' },
-  ask: { icon: MessageCircle, color: 'text-port-accent' },
-  cos: { icon: Crown, color: 'text-port-accent' },
-  drafts: { icon: Mail, color: 'text-port-accent' },
-  feedback: { icon: MessageCircle, color: 'text-port-warning' },
-  health: { icon: Activity, color: 'text-port-warning' },
-  updates: { icon: AlertTriangle, color: 'text-port-warning' },
-  backup: { icon: DatabaseBackup, color: 'text-port-error' },
-  threads: { icon: BrainIcon, color: 'text-port-accent-2' },
-  todo: { icon: ListTodo, color: 'text-port-success' },
-  history: { icon: HistoryIcon, color: 'text-gray-400' },
-};
-
-const QUEUE_SEVERITY_STYLE = {
-  critical: 'border-port-error/40',
-  high: 'border-port-warning/40',
-  normal: 'border-port-border'
-};
-
-const INLINE_RESOLUTION_OPERATIONS = new Set(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']);
 const HARNESS_WARNING_KEY = 'portos-harness-release-warning-days';
 const WARNING_DAYS = [0, 1, 3, 7];
-const isInlineResolution = (operation) => operation?.available !== false && INLINE_RESOLUTION_OPERATIONS.has(operation?.id);
-
-const safeExternalHttpUrl = (value) => {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  try {
-    const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
-  } catch {
-    return null;
-  }
-};
-
-const TYPE_CONFIG = {
-  alert: { label: 'Alerts', icon: AlertTriangle, color: 'text-port-warning' },
-  cos: { label: 'CoS Actions', icon: Crown, color: 'text-port-accent' },
-  todo: { label: 'Todos', icon: ClipboardList, color: 'text-port-success' },
-  briefing: { label: 'Briefing', icon: FileText, color: 'text-gray-400' }
-};
-
-// A briefing generated within a day is news; older ones are history context.
-const BRIEFING_FRESH_MS = 24 * 60 * 60 * 1000;
-
-const TYPE_PRIORITY = { alert: 0, cos: 1, todo: 2, briefing: 3 };
 
 const ACTION_VIEWS = [
   { id: 'today', label: 'Today', icon: CalendarDays },
@@ -110,49 +37,12 @@ const ACTION_VIEWS = [
 ];
 const ACTION_VIEW_IDS = new Set(ACTION_VIEWS.map(({ id }) => id));
 
-const QUEUE_SNOOZE_OPTIONS = [
-  { value: 60 * 60 * 1000, label: '1 hour' },
-  { value: 24 * 60 * 60 * 1000, label: '1 day' },
-  { value: 7 * 24 * 60 * 60 * 1000, label: '1 week' },
-];
-
 const queueItemKey = (itemOrId) => {
   if (itemOrId && typeof itemOrId === 'object') {
     return JSON.stringify([itemOrId.id || '', itemOrId.occurrence ?? '', itemOrId.revision ?? '']);
   }
   return JSON.stringify([itemOrId || '', '', '']);
 };
-
-const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
-  'content-review',
-  'goal-fidelity',
-  'memory-approval',
-  'plan-question',
-  'task-approval',
-  'autopilot-paused',
-]);
-
-function isSourceOwnedReviewItem(item) {
-  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
-  const hasReference = (value) => (typeof value === 'string' && value.trim())
-    || (typeof value === 'number' && Number.isFinite(value));
-  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
-  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(metadata.category)) return true;
-  if (item?.type === 'cos' && (hasReference(metadata.taskId) || hasReference(metadata.referenceId))) return true;
-  return item?.type === 'alert';
-}
-
-function isGenericCompletableItem(item) {
-  return !isSourceOwnedReviewItem(item);
-}
-
-function isActionableItem(item) {
-  if (item.type === 'alert' || item.type === 'todo') return true;
-  if (item.type === 'cos') {
-    return item.metadata?.requiresAction === true || item.metadata?.approvalRequired === true;
-  }
-  return false;
-}
 
 const REVIEW_ITEM_EVENTS = ['review:item:created', 'review:item:updated', 'review:item:deleted', 'review:items:bulk-updated'];
 const EMPTY_ITEMS = [];
@@ -165,9 +55,7 @@ export default function Review() {
   const actionView = ACTION_VIEW_IDS.has(requestedActionView) ? requestedActionView : 'today';
   const [briefing, setBriefing] = useState(null);
   const [newTodo, setNewTodo] = useState('');
-  const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
-  const [briefingFullscreen, setBriefingFullscreen] = useState(false);
 
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
@@ -188,10 +76,28 @@ export default function Review() {
     safeWriteStorage(HARNESS_WARNING_KEY, String(days));
   };
 
+  const queueItems = useMemo(
+    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(queueItemKey(i))),
+    [queue, dismissedQueueIds]);
+  const queueSourceErrors = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
+    [queue]);
+  const queueSourceIncomplete = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.incomplete),
+    [queue]);
+  const selectedAction = useMemo(
+    () => (queue?.items || []).find((item) => item.id === actionId) || null,
+    [queue, actionId]);
+  // Keep old stored Review records rendered only as a compatibility fallback
+  // while the live Actions projection is empty. Once a canonical row exists,
+  // rendering the old lists as well would show the same obligation twice.
+  const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
+
   // The stored list is keyed by the status filter; global counts are one read independent of it.
+  // Gate legacy item fetching and socket subscriptions on the fallback surface being active.
   const { data: itemsData, loading, error: itemsError, refetch: fetchItems } = useSocketResource(
     () => api.getReviewItems(filter === 'all' ? {} : { status: filter }, { silent: true }),
-    { events: REVIEW_ITEM_EVENTS, resourceKey: filter }
+    { events: REVIEW_ITEM_EVENTS, resourceKey: filter, enabled: Boolean(showLegacyReviewSurface) }
   );
   const items = itemsData ?? EMPTY_ITEMS;
   const { data: counts } = useSocketResource(() => api.getReviewCounts({ silent: true }), { events: REVIEW_ITEM_EVENTS });
@@ -213,26 +119,6 @@ export default function Review() {
       navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }
   };
-
-  const handleComplete = async (id) => {
-    await api.completeReviewItem(id).catch(() => null);
-  };
-
-  const handleDismiss = async (id) => {
-    await api.dismissReviewItem(id).catch(() => null);
-  };
-
-  const handleDelete = async (id) => {
-    await api.deleteReviewItem(id).catch(() => null);
-  };
-
-  const handleSaveEdit = async (id, title, description) => {
-    await api.updateReviewItem(id, { title, description }).catch(() => null);
-    setEditingId(null);
-  };
-
-  const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
-  const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
   const handleQueueDismiss = (itemOrId) => {
     const key = queueItemKey(itemOrId);
@@ -325,114 +211,7 @@ export default function Review() {
     updateParams({ view });
   };
 
-  // Derived review state. Memoized because this page subscribes to
-  // review:item:created/updated/deleted socket events and re-renders on each —
-  // without memoization every one of these filter/sort passes over `items` reruns
-  // on unrelated re-renders (typing, hover state).
-  // Keep the detailed list aligned with the active status tab while socket
-  // events update the cached items from every status.
-  const visibleItems = useMemo(() => {
-    if (filter === 'all') return items;
-    return items.filter(item => item.status === filter);
-  }, [items, filter]);
-
-  const grouped = useMemo(() => visibleItems.reduce((acc, item) => {
-    if (!acc[item.type]) acc[item.type] = [];
-    acc[item.type].push(item);
-    return acc;
-  }, {}), [visibleItems]);
-
-  const queueItems = useMemo(
-    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(queueItemKey(i))),
-    [queue, dismissedQueueIds]);
-  const queueSourceErrors = useMemo(
-    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
-    [queue]);
-  const queueSourceIncomplete = useMemo(
-    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.incomplete),
-    [queue]);
-  const selectedAction = useMemo(
-    () => (queue?.items || []).find((item) => item.id === actionId) || null,
-    [queue, actionId]);
-  // Keep old stored Review records rendered only as a compatibility fallback
-  // while the live Actions projection is empty. Once a canonical row exists,
-  // rendering the old lists as well would show the same obligation twice.
-  const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
-
-  const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
-  const showBriefing = showLegacyReviewSurface && briefing && briefing.source !== 'none';
-  const briefingIsFresh = Boolean(showBriefing) && Date.now() - new Date(briefing.generatedAt).getTime() < BRIEFING_FRESH_MS;
-  const historySummary = showBriefing
-    ? `Daily briefing · ${formatDateShort(briefing.generatedAt)} · history counts`
-    : 'Stored review history counts';
-  const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
-
-  const actionableItems = useMemo(() => pendingItems
-    .filter(isActionableItem)
-    .sort((a, b) => {
-      const priority = TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type];
-      if (priority !== 0) return priority;
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    }), [pendingItems]);
-
-  // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain
-  // consts, not memos: the action list is an O(8) slice with no consumer that
-  // needs referential stability, so a hook here would be pure ceremony.
-  const topActionItems = actionableItems.slice(0, 8);
-
-  // This count controls actions for the currently loaded filter; the global
-  // triage summary below comes from the unfiltered counts endpoint.
-  const pendingCount = pendingItems.length;
-  const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
-
-  const renderBriefing = (fullscreen) => (
-        <section
-          className={`bg-port-card border border-port-border rounded-xl p-4 ${fullscreen ? 'h-full overflow-y-auto m-0 rounded-none' : 'mt-2'}`}>
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <FileText size={16} className="text-gray-400" />
-              Daily Briefing
-            </h2>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-gray-400">
-                {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
-              </span>
-              <button
-                onClick={() => setBriefingFullscreen(prev => !prev)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
-                title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-              >
-                {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
-            </div>
-          </div>
-          <div className={`text-gray-400 text-sm overflow-y-auto ${fullscreen ? '' : 'max-h-[32rem]'}`}>
-            <MarkdownOutput content={briefing.content} />
-          </div>
-        </section>
-  );
-
-  // One named disclosure for history: stored counts plus the daily briefing. A
-  // briefing older than a day is context, not news, so it starts closed. Rendered
-  // below stored items on the all-clear surface so pending work leads.
-  const historyDisclosure = (
-    <details open={briefingIsFresh}>
-      <summary className="text-xs text-port-text-muted">{historySummary}</summary>
-      <section className="flex flex-wrap gap-2 mt-2">
-        <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
-        <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
-        <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
-        <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
-      </section>
-      {/* Stays mounted (hidden) in fullscreen so the Modal can return focus to this toggle. */}
-      {showBriefing && <div hidden={briefingFullscreen}>{renderBriefing(false)}</div>}
-      {/* Fullscreen is a <Modal>: portaled to <body>, focus-trapped, Esc-layered. */}
-      <Modal open={showBriefing && briefingFullscreen} onClose={() => setBriefingFullscreen(false)} usePortal size="none" align="none"
-        backdropClassName="bg-port-bg" panelClassName="w-full h-dvh" ariaLabel="Daily Briefing">
-        {showBriefing && renderBriefing(true)}
-      </Modal>
-    </details>
-  );
+  const pendingCount = useMemo(() => items.filter(i => i.status === 'pending').length, [items]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -452,239 +231,118 @@ export default function Review() {
           controlsIdPrefix="actions-view"
         />
         <div role="tabpanel" id={`actions-view-${actionView}`} aria-labelledby={`tab-${actionView}`} className="space-y-3">
-        {/* Triage summary */}
-        <section className="flex flex-wrap gap-2">
-          {queue && showLegacyReviewSurface && (
-            <span className="text-sm text-port-text">
-              <span className="font-medium text-port-success">Nothing needs you today</span>
-              {' · '}0 required
-              {pendingCount > 0 && <> · {formatCount(pendingCount)} stored item{pendingCount !== 1 ? 's' : ''} still pending</>}
-            </span>
-          )}
-          {queue && !showLegacyReviewSurface && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
-          {queueLoading && !queue && <span role="status">Loading actions…</span>}
-          {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
-        </section>
-        {!showLegacyReviewSurface && historyDisclosure}
-
-        {/* Canonical Actions queue — live-pulled from Brain commitments, manual
-            todos, Ask, CoS, GitHub, Messages, Health, and Backups. Shown whenever there
-            are items OR a source failed to load (so the degraded-source notice
-            isn't hidden behind an otherwise-empty queue). */}
-        {(queueItems.length > 0 || queueSourceErrors.length > 0 || queue?.partial) && (
-          <section className="@container/page bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Inbox size={16} className="text-port-accent" />
-                Actions
-              </h2>
-              {queueItems.length > 0 && (
-                <span className="text-xs rounded-full px-2 py-0.5 bg-port-accent/10 text-port-accent border border-port-accent/20">
-                  {formatCount(queueItems.length)} across domains
-                </span>
-              )}
-            </div>
-            {queueItems.length > 0 && (
-              <div className="space-y-2">
-                {queueItems.map(item => (
-                  <QueueRow
-                    key={item.id}
-                    item={item}
-                    onSelect={handleQueueSelect}
-                    onDrill={handleQueueDrill}
-                    onResolve={handleQueueResolve}
-                    onPromoteAsk={handleQueuePromoteAsk}
-                    onTriage={handleQueueTriage}
-                    onFeedbackSaved={fetchQueue}
-                    onGitHubUpdated={handleGitHubUpdated}
-                    onHarnessUpdate={setPendingHarnessUpdate}
-                    harnessUpdatePending={Boolean(pendingHarnessUpdate)}
-                    harnessWarningDays={harnessWarningDays}
-                    onHarnessWarningDays={saveHarnessWarningDays}
-                    actionLink={`/review/${encodeURIComponent(item.id)}?view=${actionView}`}
-                    detailOpen={item.id === actionId}
-                    resolving={resolvingQueueIds.has(item.id)}
-                  />
-                ))}
-              </div>
+          {/* Triage summary */}
+          <section className="flex flex-wrap gap-2">
+            {queue && showLegacyReviewSurface && (
+              <span className="text-sm text-port-text">
+                <span className="font-medium text-port-success">Nothing needs you today</span>
+                {' · '}0 required
+                {pendingCount > 0 && <> · {formatCount(pendingCount)} stored item{pendingCount !== 1 ? 's' : ''} still pending</>}
+              </span>
             )}
-            {queueSourceErrors.length > 0 && (
-              <p role="status" className="text-xs text-gray-600">
-                Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
-              </p>
-            )}
-            {queueSourceIncomplete.length > 0 && (
-              <p role="status" className="text-xs text-gray-500">
-                Some checks for {queueSourceIncomplete.map(([, s]) => s.label).join(', ')} are unverified; automatic checks will retry.
-              </p>
-            )}
-            {queue?.partial && (queueSourceIncomplete.length === 0 || Object.values(queue.sources || {}).some(source => source.truncation)) && (
-              <p role="status" className="text-xs text-gray-500">
-                This bounded view may omit additional actions; open a source to see its complete list.
-              </p>
-            )}
+            {queue && !showLegacyReviewSurface && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
+            {queueLoading && !queue && <span role="status">Loading actions…</span>}
+            {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
           </section>
-        )}
+          {!showLegacyReviewSurface && <ReviewHistoryDisclosure briefing={briefing} counts={counts} showBriefing={false} />}
 
-        {/* Quick Add */}
-        <form onSubmit={handleCreateTodo} className="flex gap-2">
-          <input
-            type="text"
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            aria-label="Quick add action"
-            placeholder="Quick add action..."
-            className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-          />
-          <button
-            type="submit"
-            disabled={!newTodo.trim()}
-            className="px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
-          >
-            <Plus size={16} />
-            Add
-          </button>
-        </form>
-
-        {/* Legacy Review list — only shown when the canonical projection is
-            empty, so old stored records remain usable without duplicating the
-            Actions rows. */}
-        {showLegacyReviewSurface && (
-          <section aria-labelledby="stored-review-items-heading" className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 id="stored-review-items-heading" className="text-sm font-semibold text-white">Stored review items</h2>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  aria-label="Filter review items by status"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  className="bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-gray-300"
-                >
-                  <option value="pending">Pending</option>
-                  <option value="completed">Completed</option>
-                  <option value="dismissed">Dismissed</option>
-                  <option value="all">All</option>
-                </select>
-                {pendingCount > 0 && (
-                  <>
-                    {genericCompletableCount > 0 && (
-                      <button
-                        onClick={handleCompleteAll}
-                        className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                        title={`Mark ${genericCompletableCount} general pending item${genericCompletableCount !== 1 ? 's' : ''} as completed`}
-                      >
-                        Complete all {formatCount(genericCompletableCount)}
-                      </button>
-                    )}
-                    <button
-                      onClick={handleMarkAllRead}
-                      className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
-                      title={`Dismiss ${pendingCount} pending item${pendingCount !== 1 ? 's' : ''}`}
-                    >
-                      Dismiss all {formatCount(pendingCount)} pending
-                    </button>
-                  </>
+          {/* Canonical Actions queue — live-pulled from Brain commitments, manual
+              todos, Ask, CoS, GitHub, Messages, Health, and Backups. Shown whenever there
+              are items OR a source failed to load (so the degraded-source notice
+              isn't hidden behind an otherwise-empty queue). */}
+          {(queueItems.length > 0 || queueSourceErrors.length > 0 || queue?.partial) && (
+            <section className="@container/page bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Inbox size={16} className="text-port-accent" />
+                  Actions
+                </h2>
+                {queueItems.length > 0 && (
+                  <span className="text-xs rounded-full px-2 py-0.5 bg-port-accent/10 text-port-accent border border-port-accent/20">
+                    {formatCount(queueItems.length)} across domains
+                  </span>
                 )}
               </div>
-            </div>
-          </section>
-        )}
-        {showLegacyReviewSurface && topActionItems.length > 0 && (
-          <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Eye size={16} className="text-port-warning" />
-                Action Queue
-              </h2>
-              <span className="text-xs rounded-full px-2 py-0.5 bg-port-warning/10 text-port-warning border border-port-warning/20">
-                {formatCount(actionableItems.length)} actionable
-              </span>
-            </div>
-            <div className="space-y-2">
-              {topActionItems.map(item => (
-                <ReviewItem
-                  key={item.id}
-                  item={item}
-                  config={TYPE_CONFIG[item.type]}
-                  idScope="action-queue"
-                  isEditing={editingId === item.id}
-                  onComplete={handleComplete}
-                  onDismiss={handleDismiss}
-                  onDelete={handleDelete}
-                  onStartEdit={() => setEditingId(item.id)}
-                  onSaveEdit={handleSaveEdit}
-                  onCancelEdit={() => setEditingId(null)}
-                  compact={false}
-                />
-              ))}
-            </div>
-            {remainingActionCount > 0 && (
-              <p className="text-xs text-gray-500">
-                {formatCount(remainingActionCount)} more actionable item{remainingActionCount !== 1 ? 's' : ''} below.
-              </p>
-            )}
-          </section>
-        )}
-
-        {showLegacyReviewSurface && loading && (
-          <p role="status" className="text-sm text-port-text-muted">Loading stored review items…</p>
-        )}
-        {showLegacyReviewSurface && itemsError && (
-          <p role="alert" className="text-sm text-port-warning">
-            Stored review items are unavailable. <button onClick={fetchItems} className="underline">Retry</button>
-          </p>
-        )}
-
-        {/* Detailed sections — tiled two-up on wide screens so the per-type
-            queues use the full width instead of stacking in one column. */}
-        {showLegacyReviewSurface && <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
-        {['alert', 'cos', 'todo', 'briefing'].map(type => {
-          const typeItems = grouped[type];
-          if (!typeItems?.length) return null;
-          const config = TYPE_CONFIG[type];
-          const TypeIcon = config.icon;
-
-          return (
-            <section key={type} className="space-y-2">
-              <h2 className={`text-sm font-semibold uppercase tracking-wide ${config.color} flex items-center gap-2`}>
-                <TypeIcon size={16} />
-                {config.label}
-                <span className="text-gray-600">({formatCount(typeItems.length)})</span>
-              </h2>
-              <div className="space-y-1">
-                {typeItems.map(item => (
-                  <ReviewItem
-                    key={item.id}
-                    item={item}
-                    config={config}
-                    idScope={`section-${type}`}
-                    isEditing={editingId === item.id}
-                    onComplete={handleComplete}
-                    onDismiss={handleDismiss}
-                    onDelete={handleDelete}
-                    onStartEdit={() => setEditingId(item.id)}
-                    onSaveEdit={handleSaveEdit}
-                    onCancelEdit={() => setEditingId(null)}
-                    compact={topActionItems.some(topItem => topItem.id === item.id)}
-                  />
-                ))}
-              </div>
+              {queueItems.length > 0 && (
+                <div className="space-y-2">
+                  {queueItems.map(item => (
+                    <ActionQueueRow
+                      key={item.id}
+                      item={item}
+                      onSelect={handleQueueSelect}
+                      onDrill={handleQueueDrill}
+                      onResolve={handleQueueResolve}
+                      onPromoteAsk={handleQueuePromoteAsk}
+                      onTriage={handleQueueTriage}
+                      onFeedbackSaved={fetchQueue}
+                      onGitHubUpdated={handleGitHubUpdated}
+                      onHarnessUpdate={setPendingHarnessUpdate}
+                      harnessUpdatePending={Boolean(pendingHarnessUpdate)}
+                      harnessWarningDays={harnessWarningDays}
+                      onHarnessWarningDays={saveHarnessWarningDays}
+                      actionLink={`/review/${encodeURIComponent(item.id)}?view=${actionView}`}
+                      detailOpen={item.id === actionId}
+                      resolving={resolvingQueueIds.has(item.id)}
+                    />
+                  ))}
+                </div>
+              )}
+              {queueSourceErrors.length > 0 && (
+                <p role="status" className="text-xs text-gray-600">
+                  Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
+                </p>
+              )}
+              {queueSourceIncomplete.length > 0 && (
+                <p role="status" className="text-xs text-gray-500">
+                  Some checks for {queueSourceIncomplete.map(([, s]) => s.label).join(', ')} are unverified; automatic checks will retry.
+                </p>
+              )}
+              {queue?.partial && (queueSourceIncomplete.length === 0 || Object.values(queue.sources || {}).some(source => source.truncation)) && (
+                <p role="status" className="text-xs text-gray-500">
+                  This bounded view may omit additional actions; open a source to see its complete list.
+                </p>
+              )}
             </section>
-          );
-        })}
-        </div>}
+          )}
 
-        {showLegacyReviewSurface && !loading && !itemsError && visibleItems.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            <ClipboardList size={48} className="mx-auto mb-3 opacity-30" />
-            <p className="text-lg">No review items in this view</p>
-            <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
-          </div>
-        )}
-        {showLegacyReviewSurface && historyDisclosure}
+          {/* Quick Add */}
+          <form onSubmit={handleCreateTodo} className="flex gap-2">
+            <input
+              type="text"
+              value={newTodo}
+              onChange={(e) => setNewTodo(e.target.value)}
+              aria-label="Quick add action"
+              placeholder="Quick add action..."
+              className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+            />
+            <button
+              type="submit"
+              disabled={!newTodo.trim()}
+              className="px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
+            >
+              <Plus size={16} />
+              Add
+            </button>
+          </form>
+
+          {/* Legacy Review list — only shown when the canonical projection is
+              empty, so old stored records remain usable without duplicating the
+              Actions rows. */}
+          {showLegacyReviewSurface && (
+            <LegacyReviewSection
+              items={items}
+              counts={counts}
+              briefing={briefing}
+              filter={filter}
+              onFilterChange={setFilter}
+              loading={loading}
+              error={itemsError}
+              onRetry={fetchItems}
+            />
+          )}
         </div>
       </div>
-      <ActionDetail
+      <ActionDetailDrawer
         item={selectedAction}
         onClose={() => navigate(`/review?view=${actionView}`, { replace: true })}
         onResolve={handleQueueResolve}
@@ -694,767 +352,23 @@ export default function Review() {
         onGitHubUpdated={handleGitHubUpdated}
         onDrill={handleQueueDrill}
       />
-      <RuntimeInstallModal open={Boolean(pendingHarnessUpdate)} runtime={pendingHarnessUpdate?.id} label={pendingHarnessUpdate?.label}
-        title={`Updating ${pendingHarnessUpdate?.label || 'harness'}`} description="Running the harness updater."
-        doneText="The updater finished." installUrlBase="/api/harnesses/review-update"
-        params={pendingHarnessUpdate ? { expectedVersion: pendingHarnessUpdate.installedVersion,
-          candidateVersion: pendingHarnessUpdate.candidateVersion, ticket: pendingHarnessUpdate.ticket } : undefined}
-        streamMethod="POST" onClose={() => setPendingHarnessUpdate(null)} onComplete={() => { void fetchQueue(); }} />
+      <RuntimeInstallModal
+        open={Boolean(pendingHarnessUpdate)}
+        runtime={pendingHarnessUpdate?.id}
+        label={pendingHarnessUpdate?.label}
+        title={`Updating ${pendingHarnessUpdate?.label || 'harness'}`}
+        description="Running the harness updater."
+        doneText="The updater finished."
+        installUrlBase="/api/harnesses/review-update"
+        params={pendingHarnessUpdate ? {
+          expectedVersion: pendingHarnessUpdate.installedVersion,
+          candidateVersion: pendingHarnessUpdate.candidateVersion,
+          ticket: pendingHarnessUpdate.ticket,
+        } : undefined}
+        streamMethod="POST"
+        onClose={() => setPendingHarnessUpdate(null)}
+        onComplete={() => { void fetchQueue(); }}
+      />
     </div>
-  );
-}
-
-// Priority badge tint for CoS rows so HIGH/MEDIUM/LOW read at a glance.
-const QUEUE_PRIORITY_STYLE = {
-  HIGH: 'text-port-error border-port-error/30 bg-port-error/10',
-  MEDIUM: 'text-port-warning border-port-warning/30 bg-port-warning/10',
-  LOW: 'text-gray-400 border-gray-500/30 bg-gray-500/10'
-};
-
-// Render the source-appropriate triage chips from item.meta. Each field is
-// optional — the server omits it when the underlying record lacks it, so we
-// only render the chips that are present (no fabricated values).
-function QueueMetaChips({ meta }) {
-  if (!meta) return null;
-  const chips = [];
-  if (meta.priority) {
-    chips.push(
-      <span key="priority" className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${QUEUE_PRIORITY_STYLE[meta.priority] || QUEUE_PRIORITY_STYLE.LOW}`}>
-        {meta.priority}
-      </span>
-    );
-  }
-  if (typeof meta.turnCount === 'number') {
-    chips.push(
-      <span key="turns" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        {formatCount(meta.turnCount)} turn{meta.turnCount === 1 ? '' : 's'}
-      </span>
-    );
-  }
-  if (meta.recipient) {
-    chips.push(
-      <span key="recipient" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400 max-w-[12rem] truncate" title={meta.recipient}>
-        → {meta.recipient}
-      </span>
-    );
-  }
-  if (meta.channel) {
-    chips.push(
-      <span key="channel" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        {meta.channel}
-      </span>
-    );
-  }
-  if (meta.captureSource) {
-    chips.push(
-      <span key="capture" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        {meta.captureSource}
-      </span>
-    );
-  }
-  if (typeof meta.appLabel === 'string' && meta.appLabel) {
-    chips.push(
-      <span key="app" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400 max-w-[14rem] truncate" title={meta.appLabel}>
-        App: {meta.appLabel}
-      </span>
-    );
-  }
-  if (typeof meta.taskStatus === 'string' && meta.taskStatus) {
-    const blocked = meta.taskStatus === 'blocked';
-    chips.push(
-      <span key="task-status" className={`text-[10px] px-1.5 py-0.5 rounded border ${blocked ? 'border-port-warning/30 bg-port-warning/10 text-port-warning' : 'border-port-border text-gray-400'}`}>
-        Task: {meta.taskStatus}
-      </span>
-    );
-  }
-  if (typeof meta.blockedCategory === 'string' && meta.blockedCategory) {
-    chips.push(
-      <span key="blocked-category" className="text-[10px] px-1.5 py-0.5 rounded border border-port-warning/30 text-port-warning">
-        Block: {meta.blockedCategory}
-      </span>
-    );
-  }
-  if (meta.alertType) {
-    chips.push(
-      <span key="alert" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        {meta.alertType}
-      </span>
-    );
-  }
-  if (meta.localStatus) {
-    chips.push(
-      <span key="local-status" className="text-[10px] px-1.5 py-0.5 rounded border border-port-accent/30 text-port-accent">
-        local: {meta.localStatus}
-      </span>
-    );
-  }
-  if (meta.externalState) {
-    chips.push(
-      <span key="external-state" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        external: {meta.externalState}
-      </span>
-    );
-  }
-  if (!chips.length) return null;
-  return <div className="flex items-center gap-1.5 flex-wrap mt-1">{chips}</div>;
-}
-
-// Promote-target label for the Ask picker buttons.
-const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
-
-function AgentFeedbackReview({ item, onSaved }) {
-  const [agent, setAgent] = useState(null);
-  const [error, setError] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let active = true;
-    setAgent(null);
-    setError(false);
-    api.getCosAgent(item.sourceRef, { lines: 1, silent: true })
-      .then((record) => { if (active) setAgent(record); })
-      .catch(() => { if (active) setError(true); });
-    return () => { active = false; };
-  }, [item.sourceRef, attempt]);
-
-  if (error) return <p role="alert">Could not load this agent run. <button type="button" className="underline min-h-[44px]" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>;
-  if (!agent) return <p role="status">Loading agent run…</p>;
-  return <AgentCard agent={agent} completed initiallyExpanded onFeedbackChange={onSaved} />;
-}
-
-function QueueTriageControls({ item, onTriage, disabled = false }) {
-  const operations = Array.isArray(item?.triageOperations)
-    ? item.triageOperations.filter((operation) => operation?.available !== false)
-    : [];
-  if (!onTriage || operations.length === 0) return null;
-
-  const hasOperation = (id) => operations.some((operation) => operation.id === id);
-  const snooze = (event) => {
-    const duration = Number(event.target.value);
-    event.target.value = '';
-    if (!Number.isFinite(duration) || duration <= 0) return;
-    onTriage(item, 'snooze', { snoozedUntil: new Date(Date.now() + duration).toISOString() });
-  };
-
-  return (
-    <div className="inline-flex items-center gap-2 flex-wrap">
-      {hasOperation('snooze') && (
-        <label className="inline-flex items-center">
-          <span className="sr-only">Snooze {item.title}</span>
-          <select
-            defaultValue=""
-            aria-label={`Snooze ${item.title}`}
-            onChange={snooze}
-            disabled={disabled}
-            className="min-h-[36px] rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:cursor-not-allowed disabled:opacity-40"
-            title="Snooze this action"
-          >
-            <option value="">Snooze…</option>
-            {QUEUE_SNOOZE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-      )}
-      {hasOperation('unsnooze') && (
-        <button
-          type="button"
-          onClick={() => onTriage(item, 'unsnooze')}
-          disabled={disabled}
-          className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Show this action again"
-        >
-          <Clock3 size={13} />
-          Unsnooze
-        </button>
-      )}
-      {hasOperation('dismiss') && (
-        <button
-          type="button"
-          onClick={() => onTriage(item, 'dismiss')}
-          disabled={disabled}
-          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
-          title="Dismiss this recommendation"
-          aria-label="Dismiss this recommendation"
-        >
-          <X size={15} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated,
-  onHarnessUpdate, harnessUpdatePending, harnessWarningDays, onHarnessWarningDays, actionLink, detailOpen = false, resolving = false }) {
-  const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
-  if (item.source === 'github' && item.githubNotification) {
-    return (
-      <div className={`min-w-0 rounded-lg border bg-port-card ${borderTone}`}>
-        <p className="px-3 pt-2 text-xs font-medium text-port-warning">{item.sourceLabel}</p>
-        {detailOpen ? (
-          <button type="button" onClick={() => onSelect?.(item)} className="min-h-[44px] px-3 py-2 text-left text-sm text-white break-words">{item.title}</button>
-        ) : (
-          <GitHubNotificationCard
-            notification={item.githubNotification}
-            accountLabel={item.githubNotification.accountLabel}
-            detailTo={actionLink}
-            onUpdated={(_row, updated) => onGitHubUpdated(item, updated)}
-          />
-        )}
-        {!detailOpen && item.triageOperations?.length > 0 && (
-          <div className="flex flex-wrap gap-2 border-t border-port-border px-3 py-2">
-            <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
-  const Icon = config.icon;
-  const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
-  const promoteTargets = Array.isArray(item.promoteTargets) ? item.promoteTargets : [];
-  const goalOptions = Array.isArray(item.goalOptions) ? item.goalOptions : [];
-  // The goal target needs a goalId, so it's rendered as a picker rather than a
-  // one-click button — split it out from the simple brain/task targets.
-  const simpleTargets = promoteTargets.filter(t => t !== 'goal');
-  const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
-  const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
-    ? item.operations.filter(isInlineResolution)
-    : [];
-  const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
-  // Agent-run feedback renders the shared agent card right in the queue so the
-  // rating can be submitted without opening the detail drawer. While that drawer
-  // is open it hosts the card, so the row defers to it (one live card at a time).
-  const feedbackRun = item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable';
-  const inlineFeedback = feedbackRun && !detailOpen;
-  const inlineActions = item.action
-    ? [{ id: 'resolve', label: item.action }]
-    : sourceOperations.filter((operation) => operation.id !== 'rate');
-  return (
-    <div className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
-      <div className={`mt-0.5 shrink-0 ${config.color}`}>
-        <Icon size={18} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => onSelect?.(item)}
-            className="min-w-0 break-words text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
-            aria-label={`Open action ${item.title}`}
-          >
-            {item.title}
-          </button>
-          <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border border-current/20 ${config.color}`}>
-            {item.sourceLabel}
-          </span>
-        </div>
-        {item.summary && (
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2 break-words">{item.summary}</p>
-        )}
-        <QueueMetaChips meta={item.meta} />
-        {pullRequestUrl && (
-          <a
-            href={pullRequestUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-1 inline-flex min-h-[32px] items-center gap-1 text-xs text-port-accent hover:underline"
-          >
-            <ExternalLink size={12} /> Open pull request
-          </a>
-        )}
-        {item.timestamp && (
-          <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
-            <Clock3 size={12} />
-            {timeAgo(item.timestamp)}
-          </p>
-        )}
-      </div>
-      {inlineFeedback && (
-        <div className="col-span-2 min-w-0 border-t border-port-border/50 pt-2">
-          <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={onFeedbackSaved} />
-        </div>
-      )}
-      <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
-        {item.source === 'updates' && item.harnessUpdate?.updatable && !item.unverified && onHarnessUpdate && <HarnessUpdateControl
-          harness={item.harnessUpdate} warningDays={harnessWarningDays} onWarningDays={onHarnessWarningDays} onUpdate={onHarnessUpdate} disabled={resolving || harnessUpdatePending} />}
-        <QueueInvestigation item={item} />
-        {onResolve && rateOperation && !feedbackRun && (
-          <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">
-            <Eye size={14} /> Review run and give feedback
-          </button>
-        )}
-        {onResolve && inlineActions.map(action => (
-          <button
-            key={action.id}
-            onClick={() => onResolve(item, action.id === 'resolve' ? undefined : action.id)}
-            disabled={resolving}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-success bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`${action.label} this item in place`}
-          >
-            <Check size={14} />
-            {action.label}
-          </button>
-        ))}
-        {onPromoteAsk && simpleTargets.map(target => (
-          <button
-            key={target}
-            onClick={() => onPromoteAsk(item, target)}
-            disabled={resolving}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-accent bg-port-accent/10 hover:bg-port-accent/20 border border-port-accent/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`Promote the latest answer to ${PROMOTE_TARGET_LABEL[target] || target}`}
-          >
-            <ArrowRight size={12} />
-            {PROMOTE_TARGET_LABEL[target] || target}
-          </button>
-        ))}
-        {showGoalPicker && onPromoteAsk && (
-          <label className="inline-flex items-center gap-1 text-xs">
-            <span className="sr-only">Promote the latest answer to a goal</span>
-            <select
-              defaultValue=""
-              disabled={resolving}
-              onChange={(e) => {
-                const goalId = e.target.value;
-                if (!goalId) return;
-                onPromoteAsk(item, 'goal', goalId);
-                e.target.value = '';
-              }}
-              className="px-2 py-1 rounded-md text-xs font-medium text-port-accent bg-port-accent/10 hover:bg-port-accent/20 border border-port-accent/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
-              title="Promote the latest answer into a goal's progress"
-            >
-              <option value="">→ Goal…</option>
-              {goalOptions.map(g => (
-                <option key={g.id} value={g.id}>{g.title}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
-        {item.drillTo && (
-          <button
-            type="button"
-            onClick={() => onDrill(item)}
-            className="min-h-[44px] inline-flex items-center gap-1 rounded-md border border-port-accent/30 px-2 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/10 transition-colors"
-          >
-            <ArrowRight size={16} /> {item.drillLabel || 'Open source'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function QueueInvestigation({ item }) {
-  if (item.investigation) {
-    return <QueueInvestigationButton key={item.id} task={item.investigation} className="min-h-[44px] max-w-full" />;
-  }
-  return item.investigationUnavailable
-    ? <p className="w-full text-xs text-port-text-muted">{item.investigationUnavailable}</p>
-    : null;
-}
-
-function SummaryPill({ icon: Icon, label, value, tone = 'text-white', urgent = false }) {
-  return (
-    <div className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 bg-port-card ${urgent ? 'border-port-warning/40' : 'border-port-border'}`}>
-      <Icon size={14} className={urgent ? 'text-port-warning' : tone} />
-      <span className="text-xs text-gray-500">{label}</span>
-      <span className={`text-sm font-bold ${tone}`}>{formatCount(value, { fallback: '0' })}</span>
-    </div>
-  );
-}
-
-// `idScope` namespaces the body's DOM id. An actionable item renders twice —
-// once in the Action Queue and again (dimmed) in its per-type section — so
-// without a scope both copies would share one id and the disclosure's
-// aria-controls would be ambiguous.
-function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, onDelete, onStartEdit, onSaveEdit, onCancelEdit, compact = false }) {
-  const [editTitle, setEditTitle] = useState(item.title);
-  const [editDescription, setEditDescription] = useState(item.description || '');
-  const isPending = item.status === 'pending';
-  // The page re-renders on every socket event and on every keystroke in the
-  // quick-add input, and a body can be a multi-thousand-word agent prompt —
-  // flatten once per description rather than once per render, per card.
-  const body = useMemo(() => ({
-    preview: markdownToPlainText(item.description),
-    lossy: dropsMarkupWhenFlattened(item.description)
-  }), [item.description]);
-
-  useEffect(() => {
-    if (isEditing) {
-      setEditTitle(item.title);
-      setEditDescription(item.description || '');
-    }
-  }, [isEditing, item.title, item.description]);
-
-  return (
-    <div className={`flex items-start gap-3 p-3 rounded-lg border ${compact ? 'border-port-border/60 bg-port-card/40 opacity-70' : 'border-port-border'} ${
-      isPending ? 'bg-port-card' : 'bg-port-card/50 opacity-60'
-    }`}>
-      <div className={`mt-0.5 shrink-0 ${config.color}`}>
-        {item.status === 'completed' ? (
-          <CheckCircle2 size={18} className="text-port-success" />
-        ) : item.status === 'dismissed' ? (
-          <XCircle size={18} className="text-gray-500" />
-        ) : (
-          <config.icon size={18} />
-        )}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        {isEditing ? (
-          <div className="space-y-2">
-            <input
-              type="text"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              aria-label="Title"
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-port-accent"
-              autoFocus
-            />
-            <textarea
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-              aria-label="Description"
-              placeholder="Description (optional)"
-              rows={2}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-300 focus:outline-none focus:border-port-accent resize-none"
-            />
-            <div className="flex gap-2">
-              <button onClick={() => onSaveEdit(item.id, editTitle.trim(), editDescription.trim())} aria-label="Save" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-success hover:text-port-success/80" title="Save">
-                <Check size={16} />
-              </button>
-              <button onClick={onCancelEdit} aria-label="Cancel" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white" title="Cancel">
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                {/* Titles clamp to two lines so cards scan as a uniform list.
-                    They get a real disclosure rather than a `title` tooltip:
-                    an alert title runs to 120 characters and overflows two
-                    lines on a phone, where a hover tooltip never fires. */}
-                <CollapsibleText
-                  id={`review-item-title-${idScope}-${item.id}`}
-                  lines={2}
-                  text={item.title}
-                  className={`text-sm font-medium ${isPending ? 'text-white' : 'text-gray-400 line-through'}`}
-                />
-                {/* Triage is a scanning task, so the body is a fixed 3-line
-                    plain-text preview: the raw markdown for a CoS task prompt
-                    or a stack trace runs thousands of words, and rendering it
-                    through MarkdownOutput both defeated the clamp (line-clamp
-                    doesn't apply across block children) and injected the
-                    prompt's own headings into this page's outline. The real
-                    markdown renders — height-capped — behind Show more. */}
-                {item.description && (
-                  <CollapsibleText
-                    id={`review-item-body-${idScope}-${item.id}`}
-                    lines={3}
-                    text={body.preview}
-                    className="text-xs text-gray-500 mt-0.5"
-                    expandedContent={<MarkdownOutput content={item.description} />}
-                    expandedClassName="max-h-80 overflow-y-auto pr-1"
-                    // Flattening drops links, images and tables, so a body that
-                    // fits in three lines still needs a route to its rendered
-                    // form — otherwise a short description holding a scan-report
-                    // link becomes permanently inert text. Markup loss only:
-                    // a body that merely lost a trailing newline gets no toggle.
-                    forceToggle={body.lossy}
-                  />
-                )}
-                {item.metadata?.reportUrl && (
-                  <a
-                    href={api.normalizeBrainScanReportPath(item.metadata.reportUrl)}
-                    className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${item.metadata.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
-                  >
-                    <FileText size={13} />
-                    View scan report{item.metadata.verdict ? ` (${item.metadata.verdict})` : ''}
-                  </a>
-                )}
-              </div>
-              {isPending && (
-                <span className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border border-current/20 ${config.color}`}>
-                  {config.label}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-gray-600 mt-2 flex items-center gap-1">
-              <Clock3 size={12} />
-              {formatDateTime(item.createdAt)}
-            </p>
-          </>
-        )}
-      </div>
-
-      {isPending && !isEditing && (
-        <div className="flex items-center gap-2 shrink-0">
-          {item.type === 'todo' && (
-            <button
-              onClick={onStartEdit}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
-              title="Edit" aria-label="Edit"
-            >
-              <Pencil size={14} />
-            </button>
-          )}
-          {isGenericCompletableItem(item) && (
-            <button
-              onClick={() => onComplete(item.id)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
-              title="Complete" aria-label="Complete"
-            >
-              <CheckCircle2 size={16} />
-            </button>
-          )}
-          <button
-            onClick={() => onDismiss(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
-            title={item.type === 'alert' ? 'Reject' : 'Dismiss'} aria-label={item.type === 'alert' ? 'Reject' : 'Dismiss'}
-          >
-            <X size={16} />
-          </button>
-          {isGenericCompletableItem(item) && (
-            <button
-              onClick={() => onDelete(item.id)}
-              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
-              title="Delete" aria-label="Delete"
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const threadDraft = (record) => ({
-  title: record?.title || '',
-  status: record?.status || 'open',
-  priority: record?.priority || 'normal',
-  nextAction: record?.nextAction || '',
-  dueAt: typeof record?.dueAt === 'string' ? localDateKey(new Date(record.dueAt)) : '',
-  notes: record?.notes || '',
-});
-
-function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = false, onSaved, onGitHubUpdated, onDrill }) {
-  const isThread = item?.source === 'threads';
-  const isTodo = item?.source === 'todo';
-  const [record, setRecord] = useState(item);
-  const [draft, setDraft] = useState(() => (isThread ? threadDraft(item) : {
-    title: item?.title || '',
-    description: item?.summary || '',
-  }));
-
-  useEffect(() => {
-    if (!item) return;
-    let cancelled = false;
-    setRecord(item);
-    setDraft(isThread ? threadDraft(item) : {
-      title: item.title || '',
-      description: item.summary || '',
-    });
-    if (isThread && item.sourceRef) {
-      api.getThread(item.sourceRef, { silent: true })
-        .then((full) => {
-          if (cancelled) return;
-          setRecord(full);
-          setDraft(threadDraft(full));
-        })
-        .catch(() => null);
-    }
-    return () => { cancelled = true; };
-  }, [item?.id, item?.sourceRef, isThread]);
-
-  const [save, saving] = useAsyncAction(async () => {
-    if (!item || !draft || (!isThread && !isTodo)) return null;
-    const updated = isThread
-      ? await api.updateThread(item.sourceRef, {
-        title: draft.title.trim(),
-        status: draft.status,
-        priority: draft.priority,
-        nextAction: draft.nextAction.trim(),
-        dueAt: draft.dueAt ? new Date(`${draft.dueAt}T00:00:00`).toISOString() : null,
-        notes: draft.notes,
-      }, { silent: true })
-      : await api.updateReviewItem(item.sourceRef, {
-        title: draft.title.trim(),
-        description: draft.description.trim(),
-      }, { silent: true });
-    setRecord((previous) => ({ ...previous, ...updated }));
-    setDraft(isThread ? threadDraft({ ...record, ...updated }) : {
-      title: updated.title || '',
-      description: updated.description || '',
-    });
-    await onSaved?.(updated);
-    return updated;
-  }, { errorMessage: 'Failed to save action' });
-
-  if (!item) return null;
-
-  const operations = Array.isArray(item.operations)
-    ? item.operations.filter(isInlineResolution)
-    : [];
-  const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
-  const externalState = item.meta?.externalState;
-  const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
-  const updateDraft = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
-  const resolve = async (operation, input = {}) => {
-    const ok = await onResolve(item, operation, input);
-    if (ok) onClose();
-  };
-
-  return (
-    <Drawer
-      open
-      onClose={onClose}
-      title={item.title}
-      subtitle={item.sourceLabel}
-      size={item.source === 'feedback' ? 'lg' : 'md'}
-      closeLabel="Close action"
-    >
-      <div className="space-y-5">
-        {item.source === 'github' && item.githubNotification ? (
-          <GitHubNotificationCard
-            key={item.id}
-            notification={item.githubNotification}
-            accountLabel={item.githubNotification.accountLabel}
-            onUpdated={(_row, updated) => onGitHubUpdated(item, updated)}
-          />
-        ) : (
-          <div className="space-y-2">
-            <p className="text-sm text-gray-300">{item.summary || 'No additional context.'}</p>
-            <div className="flex flex-wrap gap-2 text-xs">
-              {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Commitment: {localStatus}</span>}
-              {item.meta?.taskStatus && <span className={`rounded border px-2 py-1 ${item.meta.taskStatus === 'blocked' ? 'border-port-warning/30 text-port-warning' : 'border-port-border text-gray-400'}`}>Task: {item.meta.taskStatus}</span>}
-              {item.meta?.blockedCategory && <span className="rounded border border-port-warning/30 px-2 py-1 text-port-warning">Block: {item.meta.blockedCategory}</span>}
-              {externalState && <span className="rounded border border-port-border px-2 py-1 text-gray-400">External: {externalState}</span>}
-              {item.meta?.externalSource && <span className="rounded border border-port-border px-2 py-1 text-gray-400">Source: {item.meta.externalSource}</span>}
-              {item.meta?.appLabel && <span className="rounded border border-port-border px-2 py-1 text-gray-400">App: {item.meta.appLabel}</span>}
-            </div>
-            {pullRequestUrl && <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:underline"><ExternalLink size={14} /> Open pull request</a>}
-          </div>
-        )}
-
-        {(isThread || isTodo) && (
-          <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-white">Edit commitment</h3>
-            <label className="block text-xs text-gray-400" htmlFor="action-detail-title">
-              Title
-              <input
-                id="action-detail-title"
-                value={draft?.title || ''}
-                onChange={(e) => updateDraft({ title: e.target.value })}
-                className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white"
-              />
-            </label>
-            {isThread ? (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-status">
-                    Local status
-                    <select id="action-detail-status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
-                      <option value="open">Open</option>
-                      <option value="waiting">Waiting</option>
-                      <option value="someday">Someday</option>
-                      <option value="done">Done</option>
-                      <option value="archived">Archived</option>
-                    </select>
-                  </label>
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-priority">
-                    Priority
-                    <select id="action-detail-priority" value={draft.priority} onChange={(e) => updateDraft({ priority: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
-                      <option value="urgent">Urgent</option>
-                      <option value="high">High</option>
-                      <option value="normal">Normal</option>
-                      <option value="low">Low</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-next-action">
-                    Next action
-                    <input id="action-detail-next-action" value={draft.nextAction} onChange={(e) => updateDraft({ nextAction: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
-                  </label>
-                  <label className="block text-xs text-gray-400" htmlFor="action-detail-due">
-                    Due date
-                    <input id="action-detail-due" type="date" value={draft.dueAt} onChange={(e) => updateDraft({ dueAt: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
-                  </label>
-                </div>
-                <label className="block text-xs text-gray-400" htmlFor="action-detail-notes">
-                  Notes
-                  <textarea id="action-detail-notes" rows={5} value={draft.notes} onChange={(e) => updateDraft({ notes: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
-                </label>
-              </>
-            ) : (
-              <label className="block text-xs text-gray-400" htmlFor="action-detail-description">
-                Notes
-                <textarea id="action-detail-description" rows={5} value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
-              </label>
-            )}
-            <button type="button" onClick={save} disabled={saving || !draft?.title?.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
-              <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
-            </button>
-          </section>
-        )}
-
-        <QueueInvestigation item={item} />
-        {item.source === 'health' && (
-          <div className="bg-port-card border border-port-border/60 rounded-lg p-3 text-xs text-gray-400 leading-relaxed">
-            Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.
-          </div>
-        )}
-        {item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable' && (
-          <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={async () => {
-            await onSaved?.();
-            onClose();
-          }} />
-        )}
-        {item.source !== 'feedback' && (operations.length > 0 || item.drillTo || item.triageOperations?.length > 0) && (
-          <footer className="pt-4 border-t border-port-border space-y-3">
-            {operations.length > 0 && (
-              <section className="flex flex-wrap gap-2">
-                {operations.map((operation) => (
-                  <button
-                    key={operation.id}
-                    type="button"
-                    onClick={() => resolve(operation.id)}
-                    className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3.5 py-2 text-sm font-medium text-port-success hover:bg-port-success/20 transition-colors"
-                  >
-                    <Check size={14} /> {operation.label}
-                  </button>
-                ))}
-              </section>
-            )}
-
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <QueueTriageControls
-                item={item}
-                onTriage={async (...args) => {
-                  const ok = await onTriage?.(...args);
-                  if (ok) onClose();
-                  return ok;
-                }}
-                disabled={triagePending}
-              />
-
-              {item.drillTo && (
-                <button
-                  type="button"
-                  onClick={() => { onClose(); onDrill(item); }}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-port-accent hover:text-port-accent/80 hover:underline py-1.5 px-2.5 rounded border border-port-accent/30 hover:bg-port-accent/10 transition-colors"
-                >
-                  <ExternalLink size={13} /> {item.drillLabel || (item.source === 'health' ? (item.drillTo?.startsWith('/cos/learning') ? 'Open Learning' : 'View details') : 'Open source')}
-                </button>
-              )}
-            </div>
-          </footer>
-        )}
-      </div>
-    </Drawer>
   );
 }
