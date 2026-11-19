@@ -112,7 +112,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
     uncovered.push({ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative });
   }
   for (const { source, count, hop = 1 } of plan.relatedOverflow ?? []) {
-    const reason = hop === 2
+    const reason = hop === 'text'
+      ? `${count} suite(s) reading ${source} as text beyond the ${RELATED_SUITE_CAP}-per-file cap`
+      : hop === 2
       ? `${count} suite(s) two imports away from ${source} beyond the ${RELATED_SUITE_CAP}-per-source and ${SECOND_HOP_RUN_CAP}-per-run caps`
       : `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`;
     uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
@@ -397,17 +399,55 @@ function referrersOf(targets, files, readText) {
 }
 
 /**
+ * Which of `files` spell each changed non-module file as a quoted string literal, which is how a
+ * test reads it (`readFileSync(join(ROOT, 'package.json'))`) without importing it. A test that
+ * spells the full repo-relative path matches. A bare base name matches only when it cannot be
+ * confused with another file: always for a repo-root file (its base name is its path), otherwise
+ * only while at most RELATED_SUITE_CAP suites spell it, so a nested `server/package.json`
+ * edit is not answered by every suite that mentions `'package.json'`. Tests that spell the
+ * full path or more of the changed files come first when the cap bites.
+ *
+ * @returns {Map<string, string[]>} changed file -> ranked, de-duplicated readers
+ */
+function textReaders(changed, files, readText) {
+  const quoted = name => new RegExp(`['"\`](?:\\.{0,2}/)?${escapeRegExp(name)}['"\`]`);
+  const spells = new Map();
+  for (const path of changed) {
+    const byPath = quoted(path);
+    const byName = quoted(path.slice(path.lastIndexOf('/') + 1));
+    spells.set(path, { byPath, byName, root: !path.includes('/'), full: new Set(), name: new Set() });
+  }
+  for (const file of files) {
+    const text = readText(file);
+    if (text == null) continue;
+    for (const entry of spells.values()) {
+      if (entry.byPath.test(text)) entry.full.add(file);
+      else if (entry.byName.test(text)) entry.name.add(file);
+    }
+  }
+  const weight = new Map();
+  for (const { full, name } of spells.values()) for (const file of [...full, ...name]) weight.set(file, (weight.get(file) ?? 0) + 1);
+  const order = (a, b) => (weight.get(b) - weight.get(a)) || (a < b ? -1 : a > b ? 1 : 0);
+  return new Map([...spells].map(([path, { root, full, name }]) => {
+    const byName = root || name.size <= RELATED_SUITE_CAP ? [...name] : [];
+    return [path, [...[...full].sort(order), ...byName.sort(order)]];
+  }));
+}
+
+/**
  * Local selection owns the edited tests, same-stem siblings, and tests within
  * two import hops of a changed source (#16863). Hop one is a test whose
  * relative import, `import()` or `vi.mock` specifier resolves to the source (a
  * route suite mocking the service it fronts); hop two is a test that references
  * a non-test module that does (a prompt-assembly suite reaching a prompt
- * section through the builder that imports it). Deeper reach, text reads of
- * non-module files and broader integration coverage remain with hosted CI,
- * which walks the whole graph.
+ * section through the builder that imports it). A changed non-module file
+ * (JSON, a shell or PowerShell script, a doc) has no import edge, so a third
+ * selector adds suites that spell its path, or an unambiguous name, as a quoted
+ * string literal (`textReaders`). Deeper reach and broader integration coverage
+ * remain with hosted CI, which walks the whole graph.
  *
  * Caps keep the local gate short: each hop adds at most RELATED_SUITE_CAP
- * suites per changed source, and the second hop at most SECOND_HOP_RUN_CAP per
+ * suites per changed source (the text selector per changed file), and the second hop at most SECOND_HOP_RUN_CAP per
  * run, nearest hop first (hop one is never displaced) and never a HEAVY_SUITES
  * member. Whatever a cap leaves out is recorded in `relatedOverflow` and
  * reported as skipped.
@@ -420,9 +460,14 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
     && !/(?:\.(?:db|browser|live)\.test\.|\/db\.test\.)/.test(path);
   const focused = new Set();
   const changedSources = [];
+  const changedData = [];
   for (const path of changedFiles) {
     if (unitTest(path) && tracked.has(path)) focused.add(path);
-    if (!MODULE_FILE.test(path) || /\.test\./.test(path)) continue;
+    if (!MODULE_FILE.test(path)) {
+      if (tracked.has(path)) changedData.push(path);
+      continue;
+    }
+    if (/\.test\./.test(path)) continue;
     if (tracked.has(path)) changedSources.push(path);
     const stem = path.replace(MODULE_FILE, '');
     for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
@@ -431,20 +476,20 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
     }
   }
   const relatedOverflow = [];
+  const texts = new Map();
+  const memoRead = path => {
+    if (!texts.has(path)) texts.set(path, readText(path));
+    return texts.get(path);
+  };
+  const addCapped = (source, tests, hop, budget = RELATED_SUITE_CAP) => {
+    const fresh = tests.filter(test => !focused.has(test));
+    const take = fresh.slice(0, Math.min(RELATED_SUITE_CAP, budget));
+    take.forEach(test => { focused.add(test); });
+    if (fresh.length > take.length) relatedOverflow.push({ source, count: fresh.length - take.length, hop });
+    return take.length;
+  };
+  const candidateTests = () => trackedFiles.filter(path => unitTest(path) && !focused.has(path));
   if (changedSources.length) {
-    const texts = new Map();
-    const memoRead = path => {
-      if (!texts.has(path)) texts.set(path, readText(path));
-      return texts.get(path);
-    };
-    const addCapped = (source, tests, hop, budget) => {
-      const fresh = tests.filter(test => !focused.has(test));
-      const take = fresh.slice(0, Math.min(RELATED_SUITE_CAP, budget));
-      take.forEach(test => { focused.add(test); });
-      if (fresh.length > take.length) relatedOverflow.push({ source, count: fresh.length - take.length, hop });
-      return take.length;
-    };
-    const candidateTests = () => trackedFiles.filter(path => unitTest(path) && !focused.has(path));
     const hopOne = referrersOf(changedSources, candidateTests(), memoRead);
     for (const [source, tests] of hopOne) addCapped(source, tests, 1, RELATED_SUITE_CAP);
 
@@ -470,6 +515,14 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
       const ordered = [...ranked].sort(([a, rankA], [b, rankB]) => rankA - rankB || (a < b ? -1 : a > b ? 1 : 0)).map(([test]) => test);
       budget -= addCapped(source, ordered, 2, budget);
     }
+  }
+  // Text selector: tests that read a changed non-module file leave no import edge, so they are
+  // found by the file's spelled path or name instead (#16866). Runs after the import hops, so a
+  // suite selected for an import never counts against it.
+  if (changedData.length) {
+    const candidates = candidateTests().filter(test => !HEAVY_SUITES.has(test));
+    const found = textReaders(changedData, candidates, memoRead);
+    for (const [source, tests] of found) addCapped(source, tests, 'text');
   }
   for (const scope of ['server', 'client']) {
     const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
