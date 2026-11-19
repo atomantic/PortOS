@@ -3422,7 +3422,7 @@ function claimServerCheckout(forge, target) {
   const unlabel = github ? '`gh issue edit "${NUM}" --remove-label in-progress`' : '`glab issue update "${NUM}" --unlabel in-progress`';
   return `## Phase 2 — Claim (already provisioned by PortOS)
 
-PortOS ran this phase before this run started: it fetched the default branch, created the worktree \`{worktreesRoot}/claim-{appSlug}-issue-${target}\` on \`claim/issue-${target}\` from it, bound that branch to this run, linked the source checkout's dependencies, set this account as assignee and applied \`in-progress\`. The contributor-invitation labels were retired when the claim was queued. **Your current directory IS that worktree.** Do all editing here, never in the source repo's working tree. Do not create, bind or check out another worktree for this issue, and do not delegate to the bundled slashdo \`/do:next\` skill.
+PortOS ran this phase before this run started: it fetched the default branch, created the worktree \`{worktreesRoot}/claim-{appSlug}-issue-${target}\` on \`claim/issue-${target}\` from it, bound that branch to this run, set this account as assignee and applied \`in-progress\`. The contributor-invitation labels were retired when the claim was queued. CLAIM_DEPENDENCY_PROVISIONING_STATUS **Your current directory IS that worktree.** Do all editing here, never in the source repo's working tree. Do not create, bind or check out another worktree for this issue, and do not delegate to the bundled slashdo \`/do:next\` skill.
 
 Confirm it before editing:
 \`\`\`bash

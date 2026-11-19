@@ -71,8 +71,9 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
 
   // Without the links the agent cannot run tests, but the checkout is still
   // the right place to work, so a link failure is reported rather than fatal.
-  await linkWorktreeDependencies(sourceWorkspace, worktreePath).catch(error => {
+  const dependencies = await linkWorktreeDependencies(sourceWorkspace, worktreePath).catch(error => {
     console.error(`❌ Linking dependencies into ${worktreePath} failed: ${error.message}`);
+    return null;
   });
-  return { claimCheckout: { repoPath: sourceWorkspace, worktreePath, branchName: branch, baseBranch } };
+  return { claimCheckout: { repoPath: sourceWorkspace, worktreePath, branchName: branch, baseBranch, dependencies } };
 }
