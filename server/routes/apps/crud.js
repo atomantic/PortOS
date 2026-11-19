@@ -57,6 +57,20 @@ router.get('/quality-federation', asyncHandler(async (req, res) => {
   res.json(payload);
 }));
 
+// Keep the dashboard's optional scores independent of PM2 and Git status reads.
+router.get('/quality/summaries', asyncHandler(async (_req, res) => {
+  const apps = await enrichAppsWithQuality(await appsService.getAllApps());
+  res.json(apps.map(({ id, quality }) => ({
+    id,
+    quality: {
+      score: quality.score,
+      ratedCategories: quality.ratedCategories,
+      hasAssessments: quality.categories?.some(category => category.assessedAt) ?? false,
+      unavailable: quality.unavailable,
+    },
+  })));
+}));
+
 // GET /api/apps - List all apps. The bare response is the frozen PM2-enriched
 // peer-probe contract. `view=nav` is the cheap sidebar projection; `view=probe`
 // keeps PM2 enrichment but returns only the fields the peer UI consumes.
