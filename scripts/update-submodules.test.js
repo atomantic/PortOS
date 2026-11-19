@@ -25,20 +25,23 @@ function sandbox() {
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
   env[pathKey] = [bin, env[pathKey]].filter(Boolean).join(delimiter);
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const commit = (repo, message) => {
+  const commit = (repo, message, modulePin) => {
     git(repo, 'add', '-A');
+    if (modulePin) git(repo, 'update-index', '--add', '--cacheinfo', `160000,${modulePin},module`);
     git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', message);
     return git(repo, 'rev-parse', 'HEAD');
   };
   const init = name => { const repo = join(dir, name); git(dir, 'init', '-b', 'main', repo); return repo; };
-  const run = repo => {
+  const run = (repo, timeout = 30_000) => {
     const childEnv = { ...env, PORTOS_DATA_ROOT: repo };
     delete childEnv.VITEST; // isolate the standalone install from Vitest's fixture write guard
     const result = spawnSync(windows ? 'powershell' : 'bash', windows
       ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'update.ps1'), '--automatic']
       : [join(repo, 'update.sh'), '--automatic'],
-    { cwd: repo, encoding: 'utf8', timeout: 30_000, env: childEnv });
-    if (result.error) throw result.error;
+    { cwd: repo, encoding: 'utf8', timeout, env: childEnv });
+    if (result.error) {
+      throw new Error(`${result.error.message}\n${result.stdout}${result.stderr}${readUpdateLog(repo)}`, { cause: result.error });
+    }
     return result;
   };
   return { dir, git, commit, init, run };
@@ -48,18 +51,27 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
   it('repairs a stale gitlink and lock before checking a clean tree, then syncs the new URL and pins the reviewed commit', () => {
     const { dir, git, commit, init, run } = sandbox();
     const module = init('module');
-    const moduleFile = join(module, 'module.txt');
-    const advanceModule = contents => { writeFileSync(moduleFile, contents); return commit(module, contents); };
-    const stale = advanceModule('stale');
-    const originalPin = advanceModule('old parent pin');
+    const advanceModule = (repo, contents) => {
+      writeFileSync(join(repo, 'module.txt'), contents);
+      return commit(repo, contents);
+    };
+    const stale = advanceModule(module, 'stale');
+    const originalPin = advanceModule(module, 'old parent pin');
 
     const parent = init('parent');
     installUpdateContract(parent);
-    git(parent, 'submodule', 'add', module, 'module');
-    commit(parent, 'Initial parent');
+    const gitmodules = join(parent, '.gitmodules');
+    writeFileSync(gitmodules, '[submodule "module"]\n\tpath = module\n\turl = ../module\n');
+    commit(parent, 'Initial parent', originalPin);
     const checkout = join(dir, 'checkout');
-    git(dir, 'clone', '--recurse-submodules', parent, checkout);
+    git(dir, 'clone', parent, checkout);
     const localModule = join(checkout, 'module');
+    // Set up the initialized gitlink directly so Windows only runs Git's
+    // recursive submodule shell scripts during the updater under test.
+    const moduleGitDir = join(checkout, '.git', 'modules', 'module');
+    mkdirSync(join(checkout, '.git', 'modules'));
+    git(checkout, 'clone', '--separate-git-dir', moduleGitDir, module, localModule);
+    git(checkout, 'config', 'submodule.module.url', module);
     expect(git(localModule, 'rev-parse', 'HEAD')).toBe(originalPin);
     git(localModule, 'checkout', '--detach', stale);
     expect(git(checkout, 'status', '--porcelain')).not.toBe('');
@@ -68,16 +80,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
     const old = new Date(Date.now() - 3_600_000);
     utimesSync(staleLock, old, old);
 
-    const newPin = advanceModule('new parent pin');
-    const unreviewed = advanceModule('remote tip not pinned');
-    const replacement = join(dir, 'replacement.git');
-    git(dir, 'clone', '--bare', module, replacement);
-    git(join(parent, 'module'), 'fetch');
-    git(join(parent, 'module'), 'checkout', '--detach', newPin);
-    git(parent, 'config', '-f', '.gitmodules', 'submodule.module.url', replacement);
-    const target = commit(parent, 'Switch module URL and pin');
+    const replacement = join(dir, 'replacement');
+    git(dir, 'clone', module, replacement);
+    const newPin = advanceModule(replacement, 'new parent pin');
+    const unreviewed = advanceModule(replacement, 'remote tip not pinned');
+    writeFileSync(gitmodules, '[submodule "module"]\n\tpath = module\n\turl = ../replacement\n');
+    const target = commit(parent, 'Switch module URL and pin', newPin);
 
-    const result = run(checkout);
+    // Git for Windows fans out into several processes per submodule operation.
+    const result = run(checkout, windows ? 60_000 : 30_000);
     expect(result.status, result.stdout + result.stderr + readUpdateLog(checkout)).toBe(19);
     expect(recordedSteps(result).filter(step => step !== 'waiting:running')).toEqual([
       'waiting:done', 'git-pull:running', 'git-pull:done',
@@ -89,7 +100,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout be
     expect(git(localModule, 'rev-parse', 'HEAD')).toBe(newPin);
     expect(git(localModule, 'rev-parse', 'HEAD')).not.toBe(unreviewed);
     expect(normalize(git(localModule, 'remote', 'get-url', 'origin'))).toBe(normalize(replacement));
-  }, 45_000);
+  }, windows ? 90_000 : 45_000);
 
   it('refuses a dirty working tree without stashing or advancing it', () => {
     const { dir, git, commit, init, run } = sandbox();
