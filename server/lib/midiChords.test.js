@@ -1,4 +1,3 @@
-// @vitest-environment node
 
 import { describe, expect, it } from 'vitest';
 import { detectChordWindows, nameChord, chordNoteNames } from './midiChords.js';

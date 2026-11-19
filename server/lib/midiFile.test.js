@@ -185,4 +185,3 @@ describe('parseMidiFile', () => {
     expect(Number.isFinite(vm.maxMidi)).toBe(true);
   });
 });
-// @vitest-environment node
