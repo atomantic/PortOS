@@ -3,9 +3,6 @@
  * cached lookup after a package change so it takes effect without a restart.
  */
 
-import job; `resetYtDlpCache()` drops the cache after an in-place update or fresh install so neither needs a restart.
- */
-
 import { existsSync } from 'fs';
 import { whichFirst } from './processEnv.js';
 
