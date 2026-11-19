@@ -391,7 +391,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     const result = run(['--help'], 'ok');
     expect(result.status).toBe(0);
     for (const command of ['migrate', 'use-native', 'use-docker']) {
-      expect(result.stdout).toMatch(new RegExp(`^  ${command} +Legacy command; use Settings → Database$`, 'm'));
+      expect(result.stdout).toMatch(new RegExp(`^  ${command} +Legacy command\\. Use Settings → Database$`, 'm'));
     }
   });
 

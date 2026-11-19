@@ -16,9 +16,9 @@
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
 #                (provisions the PGHOST/PGPORT you select; never another cluster)
-#   use-docker   Legacy command; use Settings → Database
-#   use-native   Legacy command; use Settings → Database
-#   migrate      Legacy command; use Settings → Database
+#   use-docker   Legacy command. Use Settings → Database
+#   use-native   Legacy command. Use Settings → Database
+#   migrate      Legacy command. Use Settings → Database
 #   export       Export database to a SQL dump file
 #   import       Import a SQL dump file into the database
 #   logs         Show database logs
@@ -882,10 +882,10 @@ Commands:
   logs           Tail database logs
 
   setup-native   Detect/install PostgreSQL, create portos database
-  use-docker     Legacy command; use Settings → Database
-  use-native     Legacy command; use Settings → Database
+  use-docker     Legacy command. Use Settings → Database
+  use-native     Legacy command. Use Settings → Database
 
-  migrate        Legacy command; use Settings → Database
+  migrate        Legacy command. Use Settings → Database
   export [label] Export database to data/db-dumps/
   import <file>  Import a SQL dump file
   export --endpoint <host> <port> <user> <database> [label]
