@@ -1536,36 +1536,43 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
  *   run, forever. ONLY the discard path may pass this.
  */
 export async function removeWorktree(agentId, sourceWorkspace, branchName, options = {}) {
-  if (typeof branchName === 'object' && branchName !== null) {
-    const repoPath = agentId;
-    const worktreePath = sourceWorkspace;
-    const directOptions = branchName;
-    const entries = await listWorktrees(repoPath).catch(() => []);
-    const holder = worktreePath ? entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null : null;
-    const resolvedBranch = holder?.branch ? holder.branch.replace(/^refs\/heads\//, '') : directOptions.branchName || null;
-    if (directOptions.force && worktreePath) {
-      await execGit(['worktree', 'unlock', worktreePath], repoPath, { ignoreExitCode: true }).catch(() => null);
-    }
-    const removal = worktreePath
-      ? await forceRemoveWorktreeDir(repoPath, worktreePath, { label: `Direct worktree cleanup for ${worktreePath}` })
-      : { removed: true };
-    if (directOptions.deleteBranch && resolvedBranch && !PROTECTED_BRANCHES.includes(resolvedBranch)) {
-      await execGit(['branch', directOptions.force ? '-D' : '-d', resolvedBranch], repoPath, { ignoreExitCode: true }).catch(() => null);
-    }
-    return {
-      merged: false,
-      removed: removal.removed !== false,
-      cleanupIncomplete: removal.removed === false,
-      uncommittedSaved: false,
-      warnings: removal.warning ? [removal.warning] : [],
-    };
-  }
   const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const ownershipHold = async () => claimCheckoutOwnerReason({
     branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
     agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
   });
   return withGitMutationLifetime(() => removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold));
+}
+
+/**
+ * Removes a worktree directory the CoS ledger does not track (a claim checkout):
+ * no ownership lock, merge or inspection, only an optional branch delete.
+ * `force` unlocks the worktree first and deletes the branch with `-D`.
+ *
+ * @param {string} repoPath - repository that registers the worktree
+ * @param {string} worktreePath - checkout directory to remove
+ * @param {{ branchName?: string, deleteBranch?: boolean, force?: boolean }} [directOptions]
+ */
+export async function removeWorktreeAtPath(repoPath, worktreePath, directOptions = {}) {
+  const entries = await listWorktrees(repoPath).catch(() => []);
+  const holder = worktreePath ? entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null : null;
+  const resolvedBranch = holder?.branch ? holder.branch.replace(/^refs\/heads\//, '') : directOptions.branchName || null;
+  if (directOptions.force && worktreePath) {
+    await execGit(['worktree', 'unlock', worktreePath], repoPath, { ignoreExitCode: true }).catch(() => null);
+  }
+  const removal = worktreePath
+    ? await forceRemoveWorktreeDir(repoPath, worktreePath, { label: `Direct worktree cleanup for ${worktreePath}` })
+    : { removed: true };
+  if (directOptions.deleteBranch && resolvedBranch && !PROTECTED_BRANCHES.includes(resolvedBranch)) {
+    await execGit(['branch', directOptions.force ? '-D' : '-d', resolvedBranch], repoPath, { ignoreExitCode: true }).catch(() => null);
+  }
+  return {
+    merged: false,
+    removed: removal.removed !== false,
+    cleanupIncomplete: removal.removed === false,
+    uncommittedSaved: false,
+    warnings: removal.warning ? [removal.warning] : [],
+  };
 }
 
 /**
@@ -1596,60 +1603,24 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     const base = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
     if (base) mergeTarget = await resolveMergeTarget(sourceWorkspace, base);
   };
-  const completionHold = async (expectedHead) => {
-    const owner = await ownershipHold();
-    if (owner) return owner;
-    const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-    const policy = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
-    if (policy) return policy;
-    const { hasBranchMergeEvidence } = await import('./git.js');
-    const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
-    if (!defaultBranch || !mergeTarget) return 'default-branch-unavailable';
-    if (PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) return 'protected-branch';
-    const head = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
-    if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';
-    return await hasBranchMergeEvidence(sourceWorkspace, head, mergeTarget).catch(() => false) ? null : 'merge-evidence-unavailable';
-  };
+  const completionHold = expectedHead => removalCompletionHold({ ownershipHold, sourceWorkspace, branchName, mergeTarget, expectedHead });
   // A follow-up on a branch the primary checkout owns runs DETACHED (createWorktree):
   // there is no branch to protect, merge or delete, so only its commits matter.
   // Probed lazily: every early refusal above the removal step is a pure-status exit.
   let detachedProbe = null;
   const detachedCheckout = () => detachedProbe ||= listWorktrees(sourceWorkspace)
     .then(trees => trees.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath) && wt.detached && !wt.branch) || null, () => null);
-  const detachedHold = async (head) => {
-    const owner = await ownershipHold();
-    if (owner) return owner;
-    const contained = await execGit(['branch', '-r', '--contains', head], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-    return contained?.exitCode === 0 && contained.stdout.trim() ? null : 'detached-head-unpublished';
-  };
+  const detachedHold = head => removalDetachedHold({ ownershipHold, sourceWorkspace, head });
   const ignoredPaths = [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)];
   // Set once the forge reports the branch's PR merged at this commit: removal
   // skips the dirt check only while the observed head is still that commit.
   let deliveredHead = null;
-  // Observe the checkout, refuse on a hold, and return the gate removal re-runs at
-  // Git's mutation boundary (owners can register without the ownership lock).
   const observeCheckout = async () => {
-    const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
     const detached = Boolean(await detachedCheckout());
-    if (!tree || (detached ? !tree.detached || tree.branch : tree.branch !== `refs/heads/${branchName}`)) throw new Error('worktree-holder-changed');
-    const checkHold = detached ? detachedHold : completionHold;
-    const hold = await checkHold(tree.head);
-    if (hold) throw new Error(hold);
-    return {
-      head: tree.head, path: tree.path, branch: detached ? null : branchName,
-      verify: async holder => {
-        if (!holder || holder.head !== tree.head || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
-        if (!detached && holder.branch !== tree.branch) return 'worktree-holder-changed';
-        const hold = await checkHold(tree.head);
-        if (hold) return hold;
-        if ((deliveredHead && tree.head.toLowerCase() === deliveredHead) || !existsSync(tree.path)) return null;
-        const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
-        if (status === null) return 'worktree-status-unavailable';
-        const dirt = classifyWorktreeDirt(status, { ignoredPaths, preserveLockfiles: options.preserveLockfiles === true });
-        if (!dirt.clean && !options.discardDirt) return 'worktree-dirty';
-        return null;
-      },
-    };
+    return observeWorktreeForRemoval({
+      sourceWorkspace, worktreePath, branchName, options, ignoredPaths, deliveredHead, detached,
+      checkHold: detached ? detachedHold : completionHold,
+    });
   };
   // One mutation as a single critical section: owners first, then `admit` (which
   // may stop with a result), then the observation `finish` acts on.
@@ -1681,91 +1652,13 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
 
   // The already-gone path deletes the branch inside the inspection section.
   if (!existsSync(worktreePath)) await resolveTarget();
-  const inspected = await withClaimOwnershipLock(async () => {
-    const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
-    const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
-      ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
-    if (protectedReason && !await detachedCheckout()) return { result: held(protectedReason) };
-    const owner = await ownershipHold();
-    if (owner) return { result: held(owner) };
-
-    if (!existsSync(worktreePath)) {
-      // The directory is gone, but git may still register it (a stale entry pins the
-      // branch). Verify rather than assume; prune when the registration survives.
-      const gone = removalOutcome(worktreePath, await probeWorktreeRemoval(sourceWorkspace, worktreePath));
-      if (!gone.removed) return { missing: true };
-      console.log(`🌳 Worktree already removed for ${agentId}, cleaning up branch`);
-      await cleanupBranch(undefined);
-      return { result: { merged: false, removed: true, uncommittedSaved: false, warnings } };
-    }
-
-    // Verify the worktree still points to the correct repo before trusting git status.
-    // If the .git file is missing (e.g., worktree was partially cleaned up), git walks up
-    // the directory tree and may find a parent repo (e.g., PortOS) instead of the app repo.
-    // In that case, even a successful git status describes the wrong checkout and
-    // cannot prove this directory has no unique work.
-    const detectedToplevel = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
-      .then(r => r.stdout.trim())
-      .catch(() => null);
-    // Compare realpath-resolved forms so symlinks (e.g. macOS /var → /private/var)
-    // or normalization differences don't false-positive as a broken worktree.
-    if (detectedToplevel && !pathsEqual(detectedToplevel, worktreePath)) {
-      warnings.push('Worktree preserved — broken checkout identity prevents verifying its contents');
-      console.warn(`⚠️ Worktree ${agentId} has a broken checkout identity; preserving its directory and branch`);
-      return { result: { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings } };
-    }
-
-    // Safety check: abort removal when uncommitted changes are detected.
-    // Also fail closed if git status itself fails — treat unknown state as dirty.
-    let dirtyFiles;
-    try {
-      dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath)).stdout.trim();
-    } catch (err) {
-      console.log(`⚠️ git status failed for worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
-      warnings.push(`Worktree preserved — git status failed: ${err.message}`);
-      return { result: { merged: false, removed: false, uncommittedSaved: false, warnings } };
-    }
-    // The completion sentinel is not authored work: it has already been consumed
-    // by finalizeAgent before this cleanup runs. Ignore it for the preservation
-    // decision, while still preserving the tree if any real change remains; the
-    // eventual forced worktree removal discards it with the rest of the completed
-    // checkout. The run's canonical name and its bounded truncation-recovery
-    // name, plus the legacy shared one a pre-upgrade run may have left — and no
-    // other agent's.
-    const dirt = classifyWorktreeDirt(dirtyFiles, {
-      ignoredPaths,
-      preserveLockfiles: options.preserveLockfiles === true
-    });
-    if (!dirt.clean && options.discardDirt) {
-      // Throwaway posture: the caller has already established that nothing in this
-      // tree is wanted. Log what is being dropped so a surprising loss is at least
-      // traceable, then fall through to removal.
-      const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
-      if (shown.length) console.log(`🌳 Discarding uncommitted changes in throwaway worktree ${agentId}: ${shown.join(', ')}`);
-    } else if (!dirt.clean) {
-      // Auto-generated lockfile changes agents don't intend to commit (e.g. npm
-      // install resolving ^version to an exact version) are discarded below.
-      if (dirt.lockfileOnly) return { lockfile: { dirt, dirtyFiles } };
-      // NAME the dirty paths. The bare message reads as "your work was left
-      // behind" with no way to tell real uncommitted work from a transient
-      // observation, and the worktree is usually gone by the time anyone looks —
-      // which is exactly what made the duplicate-cleanup race in
-      // `agentWorktreeCleanup.js` undiagnosable from the card alone.
-      const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
-      const more = dirt.realChangePaths.length - shown.length;
-      return { dirty: `${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}` };
-    }
-    return {};
-  });
+  const inspected = await withClaimOwnershipLock(() => inspectWorktreeForRemoval({
+    agentId, sourceWorkspace, worktreePath, branchName, options, warnings, ignoredPaths, ownershipHold, detachedCheckout, cleanupBranch, held,
+  }));
   if (inspected.result) return inspected.result;
 
   if (inspected.dirty) {
-    // A merged PR at this exact tip makes the checkout disposable: its uncommitted
-    // and untracked files go with it. Asked outside the lock (a forge call), and
-    // never for a detached follow-up, which does not own its primary's branch.
-    const { readMergedPrTip } = await import('./prProbe.js');
-    const mergedTip = await readMergedPrTip(sourceWorkspace, branchName).catch(() => null);
-    deliveredHead = mergedTip && !await detachedCheckout() ? mergedTip : null;
+    deliveredHead = await readDeliveredHead({ sourceWorkspace, branchName, detachedCheckout });
     if (!deliveredHead) {
       console.log(`⚠️ Preserving worktree for ${agentId} — uncommitted changes detected (${inspected.dirty}), aborting cleanup to avoid data loss`);
       warnings.push(`Worktree preserved — uncommitted changes detected in ${worktreePath}: ${inspected.dirty}`);
@@ -1795,20 +1688,7 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
     // re-checks the tree it then removes.
     const discardFailure = await retire({
       onObservationFailure: () => ({ merged: false, removed: false, uncommittedSaved: false, warnings }),
-      finish: async () => {
-        const current = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout.trim(), () => null);
-        if (current !== dirtyFiles) {
-          warnings.push(`Worktree preserved — ${worktreePath} changed after its lockfile cleanup was admitted`);
-          return { merged: false, removed: false, uncommittedSaved: false, warnings };
-        }
-        console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
-        // Never throws past removeWorktree: an undiscardable lockfile keeps the tree.
-        return discardLockfileChanges(worktreePath, dirt).then(() => null, err => {
-          console.log(`⚠️ Lockfile discard failed in worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
-          warnings.push(`Worktree preserved — lockfile discard failed in ${worktreePath}: ${err.message}`);
-          return { merged: false, removed: false, uncommittedSaved: false, warnings };
-        });
-      },
+      finish: () => discardAdmittedLockfileChurn({ agentId, worktreePath, dirt, dirtyFiles, warnings }),
     });
     if (discardFailure) return discardFailure;
   }
@@ -1816,88 +1696,276 @@ async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, 
   return retire({
     admit: async () => {
       if (!options.merge || await detachedCheckout()) return null;
-      const currentBranch = (await execGit(
-        ['rev-parse', '--abbrev-ref', 'HEAD'],
-        sourceWorkspace
-      )).stdout.trim();
-
-      // Defense-in-depth: NEVER merge the agent branch into a non-default branch.
-      // See shouldRefuseDefaultBranchMerge for the rationale.
-      const { getDefaultBranch } = await import('./git.js');
-      const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
-      if (shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch)) {
-        console.log(`🌳 Refusing auto-merge of ${branchName} into '${currentBranch}' (default branch is '${defaultBranch || 'unknown'}'). Use \`gh pr merge\` for non-default targets.`);
-        warnings.push(`Auto-merge skipped — source repo HEAD is on '${currentBranch}', not default '${defaultBranch || 'unknown'}'. Branch ${branchName} preserved for manual review.`);
-        mergeRefused = true;
-        return null;
-      }
-      const countResult = await execGit(
-        ['rev-list', '--count', `${currentBranch}..${branchName}`],
-        sourceWorkspace,
-        { ignoreExitCode: true },
-      ).catch(() => null);
-      const countText = countResult?.stdout?.trim();
-      const parsedCount = typeof countText === 'string' && /^\d+$/.test(countText)
-        ? Number(countText)
-        : NaN;
-
-      // A failed or malformed preflight cannot prove that the branch is empty.
-      // Keep both refs in place so retry can safely decide whether to merge.
-      if (countResult?.exitCode !== 0 || !Number.isSafeInteger(parsedCount)) {
-        console.warn(`⚠️ Could not determine commits ahead for ${branchName}; preserving its worktree and branch for retry`);
-        warnings.push(`Worktree and branch ${branchName} preserved — could not read a valid commit count; retry cleanup when Git refs are available`);
-        return { merged: false, removed: false, uncommittedSaved: false, warnings };
-      }
-
-      commitsAhead = parsedCount;
-
-      if (commitsAhead > 0) {
-        await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
-          .then(() => { merged = true; })
-          .catch(async (err) => {
-            console.log(`⚠️ Could not auto-merge ${branchName}: ${err.message}`);
-            await execGit(['merge', '--abort'], sourceWorkspace).catch(() => {});
-            warnings.push(`Auto-merge failed for branch ${branchName} — branch preserved for manual recovery`);
-          });
-      }
-      return null;
+      const attempt = await mergeAgentBranchIntoDefault({ sourceWorkspace, branchName, warnings });
+      ({ merged, commitsAhead, mergeRefused } = attempt);
+      return attempt.stop;
     },
     onObservationFailure: () => ({ merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings }),
-    finish: async (observed) => {
-      const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
-        verifyRemoval: observed.verify,
-        label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
-        log: 'all',
-        subject: agentId,
-      });
-      if (!removal.removed) {
-        // The checkout (or its registration) survived: the branch is still held, so
-        // deleting it would fail, and `removed: true` would tell the caller it may
-        // queue work onto a branch the old worktree still owns. Report the truth with
-        // a retryable warning; `merged` stays accurate for the publication outcome.
-        // `forceRemoveWorktreeDir` above already reported why on the right stream.
-        console.log(`⏸️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
-        warnings.push(removal.warning);
-        return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
-      }
-
-      // Merge evidence and completion policy were checked before removal; the
-      // branch helper checks them again before its leased local deletion.
-      const branchCleaned = await detachedCheckout() || await cleanupBranch(observed.head);
-      if (branchCleaned) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
-      const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
-      // A completed cleanup attempt may retain a moved or newly held branch.
-      const ref = observed.branch && await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${observed.branch}`],
-        sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-      await recordWorkspaceCheckoutRetirement(sourceWorkspace, {
-        path: observed.path, branch: observed.branch, head: observed.head,
-        branchDeleted: ref?.exitCode === 1,
-        // A detached checkout has no branch to delete; its receipt says so instead of claiming one.
-        ...(!observed.branch && { checkoutOnly: true }),
-      }).catch(error => { warnings.push(`Retirement receipt not recorded: ${error.message}`); });
-      return { merged, removed: true, uncommittedSaved: false, warnings };
-    },
+    finish: observed => completeWorktreeRemoval({ agentId, sourceWorkspace, worktreePath, branchName, observed, warnings, merged, detachedCheckout, cleanupBranch }),
   });
+}
+
+/**
+ * The inspection critical section of removeWorktreeNow (runs under the claim-ownership
+ * lock). Resolves to `{ result }` (final outcome), `{ missing }` (directory gone, git
+ * still registers it), `{ lockfile }` (lockfile-only churn to discard), `{ dirty }`
+ * (real changes to preserve), or `{}` (ready for removal).
+ */
+async function inspectWorktreeForRemoval({ agentId, sourceWorkspace, worktreePath, branchName, options, warnings, ignoredPaths, ownershipHold, detachedCheckout, cleanupBranch, held }) {
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+  const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
+    ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
+  if (protectedReason && !await detachedCheckout()) return { result: held(protectedReason) };
+  const owner = await ownershipHold();
+  if (owner) return { result: held(owner) };
+
+  if (!existsSync(worktreePath)) {
+    // The directory is gone, but git may still register it (a stale entry pins the
+    // branch). Verify rather than assume; prune when the registration survives.
+    const gone = removalOutcome(worktreePath, await probeWorktreeRemoval(sourceWorkspace, worktreePath));
+    if (!gone.removed) return { missing: true };
+    console.log(`🌳 Worktree already removed for ${agentId}, cleaning up branch`);
+    await cleanupBranch(undefined);
+    return { result: { merged: false, removed: true, uncommittedSaved: false, warnings } };
+  }
+
+  // Verify the worktree still points to the correct repo before trusting git status.
+  // If the .git file is missing (e.g., worktree was partially cleaned up), git walks up
+  // the directory tree and may find a parent repo (e.g., PortOS) instead of the app repo.
+  // In that case, even a successful git status describes the wrong checkout and
+  // cannot prove this directory has no unique work.
+  const detectedToplevel = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
+    .then(r => r.stdout.trim())
+    .catch(() => null);
+  // Compare realpath-resolved forms so symlinks (e.g. macOS /var → /private/var)
+  // or normalization differences don't false-positive as a broken worktree.
+  if (detectedToplevel && !pathsEqual(detectedToplevel, worktreePath)) {
+    warnings.push('Worktree preserved — broken checkout identity prevents verifying its contents');
+    console.warn(`⚠️ Worktree ${agentId} has a broken checkout identity; preserving its directory and branch`);
+    return { result: { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings } };
+  }
+
+  // Safety check: abort removal when uncommitted changes are detected.
+  // Also fail closed if git status itself fails — treat unknown state as dirty.
+  let dirtyFiles;
+  try {
+    dirtyFiles = (await execGit(['status', '--porcelain'], worktreePath)).stdout.trim();
+  } catch (err) {
+    console.log(`⚠️ git status failed for worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
+    warnings.push(`Worktree preserved — git status failed: ${err.message}`);
+    return { result: { merged: false, removed: false, uncommittedSaved: false, warnings } };
+  }
+  // The completion sentinel is not authored work: it has already been consumed
+  // by finalizeAgent before this cleanup runs. Ignore it for the preservation
+  // decision, while still preserving the tree if any real change remains; the
+  // eventual forced worktree removal discards it with the rest of the completed
+  // checkout. The run's canonical name and its bounded truncation-recovery
+  // name, plus the legacy shared one a pre-upgrade run may have left — and no
+  // other agent's.
+  const dirt = classifyWorktreeDirt(dirtyFiles, {
+    ignoredPaths,
+    preserveLockfiles: options.preserveLockfiles === true
+  });
+  if (!dirt.clean && options.discardDirt) {
+    // Throwaway posture: the caller has already established that nothing in this
+    // tree is wanted. Log what is being dropped so a surprising loss is at least
+    // traceable, then fall through to removal.
+    const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
+    if (shown.length) console.log(`🌳 Discarding uncommitted changes in throwaway worktree ${agentId}: ${shown.join(', ')}`);
+  } else if (!dirt.clean) {
+    // Auto-generated lockfile changes agents don't intend to commit (e.g. npm
+    // install resolving ^version to an exact version) are discarded below.
+    if (dirt.lockfileOnly) return { lockfile: { dirt, dirtyFiles } };
+    // NAME the dirty paths. The bare message reads as "your work was left
+    // behind" with no way to tell real uncommitted work from a transient
+    // observation, and the worktree is usually gone by the time anyone looks —
+    // which is exactly what made the duplicate-cleanup race in
+    // `agentWorktreeCleanup.js` undiagnosable from the card alone.
+    const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
+    const more = dirt.realChangePaths.length - shown.length;
+    return { dirty: `${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}` };
+  }
+  return {};
+}
+
+/**
+ * Discards the lockfile churn the inspection admitted, after re-reading the tree it
+ * inspected. Resolves null on success, else the preserved-worktree result.
+ */
+async function discardAdmittedLockfileChurn({ agentId, worktreePath, dirt, dirtyFiles, warnings }) {
+  const current = await execGit(['status', '--porcelain'], worktreePath).then(r => r.stdout.trim(), () => null);
+  if (current !== dirtyFiles) {
+    warnings.push(`Worktree preserved — ${worktreePath} changed after its lockfile cleanup was admitted`);
+    return { merged: false, removed: false, uncommittedSaved: false, warnings };
+  }
+  console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
+  // Never throws past removeWorktree: an undiscardable lockfile keeps the tree.
+  return discardLockfileChanges(worktreePath, dirt).then(() => null, err => {
+    console.log(`⚠️ Lockfile discard failed in worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
+    warnings.push(`Worktree preserved — lockfile discard failed in ${worktreePath}: ${err.message}`);
+    return { merged: false, removed: false, uncommittedSaved: false, warnings };
+  });
+}
+
+/**
+ * The optional local auto-merge of an agent branch into the default branch (runs in the
+ * removal critical section, after the owners are re-read). `stop` is a final result when
+ * the commit count cannot be trusted; otherwise null.
+ *
+ * @returns {Promise<{ stop: object|null, merged: boolean, commitsAhead: number, mergeRefused: boolean }>}
+ */
+async function mergeAgentBranchIntoDefault({ sourceWorkspace, branchName, warnings }) {
+  let merged = false;
+  let commitsAhead = 0;
+  let mergeRefused = false;
+  const currentBranch = (await execGit(
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    sourceWorkspace
+  )).stdout.trim();
+
+  // Defense-in-depth: NEVER merge the agent branch into a non-default branch.
+  // See shouldRefuseDefaultBranchMerge for the rationale.
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
+  if (shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch)) {
+    console.log(`🌳 Refusing auto-merge of ${branchName} into '${currentBranch}' (default branch is '${defaultBranch || 'unknown'}'). Use \`gh pr merge\` for non-default targets.`);
+    warnings.push(`Auto-merge skipped — source repo HEAD is on '${currentBranch}', not default '${defaultBranch || 'unknown'}'. Branch ${branchName} preserved for manual review.`);
+    mergeRefused = true;
+    return { stop: null, merged, commitsAhead, mergeRefused };
+  }
+  const countResult = await execGit(
+    ['rev-list', '--count', `${currentBranch}..${branchName}`],
+    sourceWorkspace,
+    { ignoreExitCode: true },
+  ).catch(() => null);
+  const countText = countResult?.stdout?.trim();
+  const parsedCount = typeof countText === 'string' && /^\d+$/.test(countText)
+    ? Number(countText)
+    : NaN;
+
+  // A failed or malformed preflight cannot prove that the branch is empty.
+  // Keep both refs in place so retry can safely decide whether to merge.
+  if (countResult?.exitCode !== 0 || !Number.isSafeInteger(parsedCount)) {
+    console.warn(`⚠️ Could not determine commits ahead for ${branchName}; preserving its worktree and branch for retry`);
+    warnings.push(`Worktree and branch ${branchName} preserved — could not read a valid commit count; retry cleanup when Git refs are available`);
+    return { stop: { merged: false, removed: false, uncommittedSaved: false, warnings }, merged, commitsAhead, mergeRefused };
+  }
+
+  commitsAhead = parsedCount;
+
+  if (commitsAhead > 0) {
+    await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
+      .then(() => { merged = true; })
+      .catch(async (err) => {
+        console.log(`⚠️ Could not auto-merge ${branchName}: ${err.message}`);
+        await execGit(['merge', '--abort'], sourceWorkspace).catch(() => {});
+        warnings.push(`Auto-merge failed for branch ${branchName} — branch preserved for manual recovery`);
+      });
+  }
+  return { stop: null, merged, commitsAhead, mergeRefused };
+}
+
+/** Why a branch-backed checkout may not be removed right now, or null when it may be. */
+async function removalCompletionHold({ ownershipHold, sourceWorkspace, branchName, mergeTarget, expectedHead }) {
+  const owner = await ownershipHold();
+  if (owner) return owner;
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const policy = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
+  if (policy) return policy;
+  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+  const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
+  if (!defaultBranch || !mergeTarget) return 'default-branch-unavailable';
+  if (PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) return 'protected-branch';
+  const head = (await execGit(['rev-parse', '--verify', `refs/heads/${branchName}`], sourceWorkspace).catch(() => null))?.stdout?.trim();
+  if (!head || (expectedHead && head !== expectedHead)) return 'branch-head-changed-or-unavailable';
+  return await hasBranchMergeEvidence(sourceWorkspace, head, mergeTarget).catch(() => false) ? null : 'merge-evidence-unavailable';
+}
+
+/** The detached-follow-up counterpart of removalCompletionHold: only unpublished commits matter. */
+async function removalDetachedHold({ ownershipHold, sourceWorkspace, head }) {
+  const owner = await ownershipHold();
+  if (owner) return owner;
+  const contained = await execGit(['branch', '-r', '--contains', head], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+  return contained?.exitCode === 0 && contained.stdout.trim() ? null : 'detached-head-unpublished';
+}
+
+/**
+ * A merged PR at this exact tip makes a dirty checkout disposable: its uncommitted and
+ * untracked files go with it. Asked outside the lock (a forge call), and never for a
+ * detached follow-up, which does not own its primary's branch. Resolves the delivered
+ * tip, or null.
+ */
+async function readDeliveredHead({ sourceWorkspace, branchName, detachedCheckout }) {
+  const { readMergedPrTip } = await import('./prProbe.js');
+  const mergedTip = await readMergedPrTip(sourceWorkspace, branchName).catch(() => null);
+  return mergedTip && !await detachedCheckout() ? mergedTip : null;
+}
+
+/**
+ * Observe the checkout, refuse on a hold, and return the gate removal re-runs at Git's
+ * mutation boundary (owners can register without the ownership lock). `deliveredHead`
+ * skips the dirt check only while the observed head is still that commit.
+ */
+async function observeWorktreeForRemoval({ sourceWorkspace, worktreePath, branchName, options, ignoredPaths, deliveredHead, detached, checkHold }) {
+  const tree = (await listWorktrees(sourceWorkspace)).find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath));
+  if (!tree || (detached ? !tree.detached || tree.branch : tree.branch !== `refs/heads/${branchName}`)) throw new Error('worktree-holder-changed');
+  const hold = await checkHold(tree.head);
+  if (hold) throw new Error(hold);
+  return {
+    head: tree.head, path: tree.path, branch: detached ? null : branchName,
+    verify: async holder => {
+      if (!holder || holder.head !== tree.head || Boolean(holder.detached) !== Boolean(tree.detached)) return 'worktree-holder-changed';
+      if (!detached && holder.branch !== tree.branch) return 'worktree-holder-changed';
+      const hold = await checkHold(tree.head);
+      if (hold) return hold;
+      if ((deliveredHead && tree.head.toLowerCase() === deliveredHead) || !existsSync(tree.path)) return null;
+      const status = await execGit(['status', '--porcelain'], tree.path).then(r => r.stdout, () => null);
+      if (status === null) return 'worktree-status-unavailable';
+      const dirt = classifyWorktreeDirt(status, { ignoredPaths, preserveLockfiles: options.preserveLockfiles === true });
+      if (!dirt.clean && !options.discardDirt) return 'worktree-dirty';
+      return null;
+    },
+  };
+}
+
+/**
+ * The final removal section's action: remove the checkout, delete its branch under the
+ * same holds, and record the retirement receipt.
+ */
+async function completeWorktreeRemoval({ agentId, sourceWorkspace, worktreePath, branchName, observed, warnings, merged, detachedCheckout, cleanupBranch }) {
+  const removal = await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+    verifyRemoval: observed.verify,
+    label: `Worktree remove failed for ${agentId}, falling back to manual cleanup`,
+    log: 'all',
+    subject: agentId,
+  });
+  if (!removal.removed) {
+    // The checkout (or its registration) survived: the branch is still held, so
+    // deleting it would fail, and `removed: true` would tell the caller it may
+    // queue work onto a branch the old worktree still owns. Report the truth with
+    // a retryable warning; `merged` stays accurate for the publication outcome.
+    // `forceRemoveWorktreeDir` above already reported why on the right stream.
+    console.log(`⏸️ Worktree for ${agentId} was not removed — branch ${branchName} kept`);
+    warnings.push(removal.warning);
+    return { merged, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
+  }
+
+  // Merge evidence and completion policy were checked before removal; the
+  // branch helper checks them again before its leased local deletion.
+  const branchCleaned = await detachedCheckout() || await cleanupBranch(observed.head);
+  if (branchCleaned) console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
+  const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
+  // A completed cleanup attempt may retain a moved or newly held branch.
+  const ref = observed.branch && await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${observed.branch}`],
+    sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+  await recordWorkspaceCheckoutRetirement(sourceWorkspace, {
+    path: observed.path, branch: observed.branch, head: observed.head,
+    branchDeleted: ref?.exitCode === 1,
+    // A detached checkout has no branch to delete; its receipt says so instead of claiming one.
+    ...(!observed.branch && { checkoutOnly: true }),
+  }).catch(error => { warnings.push(`Retirement receipt not recorded: ${error.message}`); });
+  return { merged, removed: true, uncommittedSaved: false, warnings };
 }
 
 /**
@@ -2025,6 +2093,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
     baseBranch = await getDefaultBranch(worktreePath, { allowRemote: fetchOk }).catch(() => null) || 'main';
   }
+
   // Verify origin/<baseBranch> exists; if not, re-detect before giving up
   let remoteBranchValid = await execGit(['rev-parse', `origin/${baseBranch}`], worktreePath, { ignoreExitCode: true })
     .then(r => r.exitCode === 0)
