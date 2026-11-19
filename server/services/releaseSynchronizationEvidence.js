@@ -78,8 +78,13 @@ export async function inspectReleaseDelivery(entry, number) {
     || pr.head?.repo?.full_name !== origin.fullName || !sha(pr.head?.sha)) hold('delivery-pr-unverified');
   const { candidateHead, promotionMerge } = entry.publication;
   if (!sha(candidateHead) || !sha(promotionMerge)) hold('published-ancestry-unverified');
-  const pairs = [[candidateHead, pr.head.sha], [promotionMerge, pr.head.sha], [pr.head.sha, developmentHead],
-    [pr.merge_commit_sha, developmentHead], [candidateHead, developmentHead], [promotionMerge, developmentHead]];
+  // Candidate and promotion ancestry reach development through the verified PR head.
+  const pairs = [
+    [candidateHead, pr.head.sha],
+    [promotionMerge, pr.head.sha],
+    [pr.head.sha, developmentHead],
+    [pr.merge_commit_sha, developmentHead],
+  ];
   const comparisons = await Promise.all(pairs.map(([base, head]) => api(`compare/${base}...${head}`)));
   if (comparisons.some((value, index) => !['ahead', 'identical'].includes(value.status)
     || value.merge_base_commit?.sha !== pairs[index][0])) hold('delivery-ancestry-unverified');

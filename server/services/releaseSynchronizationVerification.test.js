@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
-const f = vi.hoisted(() => ({ agents: [], pr: null, prs: null, unavailable: false, ancestor: true, notAncestor: new Set(), failSave: false,
+const f = vi.hoisted(() => ({ agents: [], pr: null, prs: null, unavailable: false, notAncestor: new Set(), failSave: false,
   liveAgents: null, liveTrusted: true, forgeCalls: 0, developmentVersion: null, lockVersion: null, lockRootVersion: null,
-  hasLock: true, versionUnavailable: false, versionReads: [], developmentHead: null, compareUnavailable: false, runner: [] }));
+  hasLock: true, versionUnavailable: false, versionReads: [], developmentHead: null, developmentHeadReads: [], comparePairs: [], compareUnavailable: false, runner: [] }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-sync-verifier-'), overrides: {
@@ -44,13 +44,14 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   const path = args.at(-1).replace(/^repos\/example\/repo\/?/, '');
   let result;
   if (path === '') result = { full_name: 'example/repo', default_branch: 'main', owner: { login: 'example' } };
-  else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: f.developmentHead } };
+  else if (path === 'git/ref/heads/main') result = { object: { type: 'commit', sha: f.developmentHeadReads.shift() ?? f.developmentHead } };
   else if (path.startsWith('pulls?')) result = [f.prs || [f.pr]];
   else if (/^pulls\/\d+$/.test(path)) result = [f.pr, ...(f.prs || [])].find(pr => pr.number === Number(path.slice(6)));
   else if (path.startsWith('compare/')) {
+    f.comparePairs.push(path.slice(8));
     if (f.compareUnavailable) throw new Error('synthetic compare transport failure');
     const base = path.slice(8, 48);
-    result = { status: f.ancestor && !f.notAncestor.has(base) ? 'ahead' : 'diverged', merge_base_commit: { sha: base } };
+    result = { status: !f.notAncestor.has(base) ? 'ahead' : 'diverged', merge_base_commit: { sha: base } };
   }
   else if (path.startsWith('git/trees/')) result = { truncated: false, tree: f.hasLock
     ? [{ path: 'package-lock.json', type: 'blob', sha: '1'.repeat(40) }] : [] };
@@ -90,6 +91,8 @@ beforeEach(async () => {
   f.versionUnavailable = false;
   f.versionReads = [];
   f.developmentHead = 'e'.repeat(40);
+  f.developmentHeadReads = [];
+  f.comparePairs = [];
   f.compareUnavailable = false;
   f.liveAgents = null;
   f.liveTrusted = true;
@@ -98,7 +101,6 @@ beforeEach(async () => {
   restorePlatform = pinPlatform('darwin');
   f.failSave = false;
   f.unavailable = false;
-  f.ancestor = true;
   f.notAncestor = new Set();
   identity = (await import('node:crypto')).randomBytes(32).toString('hex');
   const source = await addTask({ description: `Release example ${identity}`, app: 'example-app' });
@@ -242,12 +244,25 @@ it('recognizes a merged replacement PR without changing the failed historical ta
   f.pr.merged = false;
   await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('delivery-pr-unverified');
   f.pr.merged = true;
-  f.ancestor = false;
-  await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('delivery-ancestry-unverified');
-  f.ancestor = true;
+  const pairs = [
+    [repairedPublication.candidateHead, f.pr.head.sha],
+    [repairedPublication.promotionMerge, f.pr.head.sha],
+    [f.pr.head.sha, f.developmentHead],
+    [f.pr.merge_commit_sha, f.developmentHead],
+  ];
+  for (const [base] of pairs) {
+    f.notAncestor = new Set([base]);
+    await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('delivery-ancestry-unverified');
+  }
+  f.notAncestor.clear();
+  f.developmentVersion = '2.108.0';
+  await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('development-version-behind-publication');
+  f.developmentVersion = '2.109.0';
   f.lockRootVersion = '2.108.0';
   await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('development-lockfile-version-conflict');
   f.lockRootVersion = '2.109.0';
+  f.developmentHeadReads = [f.developmentHead, '9'.repeat(40)];
+  await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('delivery-development-head-changed');
   continuation.status = 'running';
   await expect(verifyIndependentReleaseDelivery(repairedPublication.identity, 42)).rejects.toThrow('still active');
   expect((await getReleaseSynchronization(repairedPublication.identity)).synchronization).toEqual(before.synchronization);
@@ -256,8 +271,10 @@ it('recognizes a merged replacement PR without changing the failed historical ta
   const onTask = event => events.push(event);
   cosEvents.on('tasks:changed', onTask);
   let proof;
+  f.comparePairs = [];
   try { proof = await verifyIndependentReleaseDelivery(repairedPublication.identity, 42); }
   finally { cosEvents.off('tasks:changed', onTask); }
+  expect(f.comparePairs.toSorted()).toEqual(pairs.map(pair => pair.join('...')).toSorted());
   expect(events.length).toBeGreaterThan(0);
   expect(events.every(event => event.suppressCompletionWake === true && event.suppressDequeue === true)).toBe(true);
   expect(proof).toMatchObject({ status: 'verified', number: 42, base: 'main', publishedVersion: '2.109.0', developmentVersion: '2.109.0' });
