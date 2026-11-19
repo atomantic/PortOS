@@ -20,6 +20,7 @@ a new one.
 | `fakeAudioContext.js` | Minimal Web Audio fake for playback tests (jsdom/node have no Web Audio). |
 | `formValidityPolyfill.js` | Fixes happy-dom's constraint-validation (`stepMismatch`) so implicit form submission behaves like a real browser. |
 | `imageGenPageMocks.jsx` | Shared `vi.mock` scaffold + fixtures + `renderImageGenPage()` for the ImageGen page suites. |
+| `imageTo3dTargetFixture.js` | `imageTo3dTarget(overrides)` — one representative image-to-3D target descriptor for tests. |
 | `mockEventSource.js` | Minimal `EventSource` stand-in for jsdom, with manual `emit`/`emitRaw`/`fail` control. |
 | `mockFrameWindows.js` | `mockFrameWindows` — per-iframe postMessage identities for protocol tests while remote frame loading stays disabled; callers restore spies at teardown. |
 | `musicVideoPageMocks.jsx` | Shared `vi.mock` scaffold + fixtures + `openProject()`/`openStage()` + `installMusicVideoPageHooks()` for the Music Video page suites (the page's shell suite and each stage container's suite). |
