@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -14,6 +14,15 @@ const read = (p) => readFileSync(join(root, p), 'utf8');
 describe('slash-do install pin', () => {
   it('SLASHDO_VERSION is an exact semver', () => {
     expect(read('scripts/SLASHDO_VERSION').trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('SLASHDO_VERSION matches lib/slashdo submodule package.json when present', () => {
+    const slashdoPkgPath = join(root, 'lib/slashdo/package.json');
+    if (!existsSync(slashdoPkgPath)) {
+      return;
+    }
+    const pkg = JSON.parse(readFileSync(slashdoPkgPath, 'utf8'));
+    expect(read('scripts/SLASHDO_VERSION').trim()).toBe(pkg.version);
   });
 
   it('the helper installs the pinned version, never latest', () => {
