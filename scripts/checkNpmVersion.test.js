@@ -194,8 +194,7 @@ describe('PortOS-managed installs preserve committed lockfiles', () => {
     // package.json and setup.ps1 no longer install anything: first-run setup goes
     // through scripts/setup.js, which installs via ensure-deps.js's installWorkspace.
     const managedEntrypoints = [
-      ['update.ps1', /Invoke-Logged npm install/g],
-      ['update.sh', /run npm install/g],
+      ['scripts/update.mjs', /run\('npm', \['install'/g],
       ['scripts/ensure-deps.js', /npmSpawn\(\['install'/g],
     ];
 
