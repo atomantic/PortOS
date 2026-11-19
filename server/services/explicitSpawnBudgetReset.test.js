@@ -28,6 +28,24 @@ describe('explicit orphan budget reset preparation', () => {
     if (condition === 'cleanup') current = { ...task, metadata: { ...task.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: owner.id } };
     expect(await prepareExplicitOrphanBudgetReset(current)).toEqual({ error: expect.any(String) });
   });
+  // Completed runs are archived out of live state after a day, so an old block has none left.
+  describe('no stopped run left in live state', () => {
+    const capped = { ...task, status: 'blocked', metadata: { blockedCategory: 'max-spawns', totalSpawnCount: 5 } };
+    beforeEach(() => { fixture.state.agents = {}; });
+
+    it('restarts a blocked task clean, with no owner and no resume pointer', async () => {
+      expect(await prepareExplicitOrphanBudgetReset(capped)).toEqual({ owner: null, pointer: null });
+    });
+    it('holds an in_progress task, whose checkout only the archived run could identify', async () => {
+      expect(await prepareExplicitOrphanBudgetReset(task)).toEqual({
+        error: 'No stopped run of this task is left in agent history; inspect its checkout before retrying' });
+    });
+    it('still refuses a blocked task while an agent owns it', async () => {
+      fixture.state.agents.live = { id: 'live', taskId: task.id, status: 'paused' };
+      expect(await prepareExplicitOrphanBudgetReset(capped)).toEqual({ error: 'An agent still owns this task' });
+    });
+  });
+
   // A task at its spawn cap has a stopped run per spawn. Only the receipt of the
   // run that dispatched it last still matches the task, so that one is resumed.
   describe('several stopped runs', () => {
