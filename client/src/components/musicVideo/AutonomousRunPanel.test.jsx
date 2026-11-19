@@ -193,6 +193,23 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: '66666666-6666-4666-8666-666666666666' }, { silent: true }));
   });
 
+  it.each(['failed', 'stopped'])('offers a manual Suno take on a %s song stage and shows download approval next', async (status) => {
+    const songId = '11111111-1111-4111-8111-111111111111';
+    const parked = baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'song', output: { sunoSongIds: [songId], songTakeApproved: false } });
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: parked }, run: parked });
+    render(<Harness initial={baseRun({ status, stage: 'song' })} />);
+    const field = screen.getByLabelText('Suno song link or ID');
+    const useSong = screen.getByRole('button', { name: 'Use this Suno song' });
+    fireEvent.change(field, { target: { value: 'https://example.com/song/' + songId } });
+    expect(useSong).toBeDisabled();
+    fireEvent.change(field, { target: { value: songId } });
+    fireEvent.click(useSong);
+    const approve = await screen.findByRole('button', { name: /approve & download this render/i });
+    expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledExactlyOnceWith('mv-1', { sunoSongId: songId }, { silent: true });
+    fireEvent.click(approve);
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenLastCalledWith('mv-1', {}, { silent: true }));
+  });
+
   it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);

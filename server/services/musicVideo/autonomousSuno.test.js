@@ -18,19 +18,24 @@ const OLD = '11111111-1111-1111-1111-111111111111';
 const NEW_A = '22222222-2222-2222-2222-222222222222';
 const NEW_B = '33333333-3333-3333-3333-333333333333';
 const noSleep = async () => {};
+const STYLES_LABELLED = 'textarea[aria-label="Styles"]:visible';
+const STYLES_UNLABELLED = 'textarea:not([aria-label]):not([placeholder="Describe the sound you want"])';
+const STYLES_PLACEHOLDER = 'textarea[placeholder*="style" i]';
 
 /**
  * A just-enough Playwright page: tracks fills/clicks and exposes song links that appear after Create.
  * `options` models the Advanced form's optional controls (version menu, More Options, vocal gender);
  * null is an older UI that has none of them.
  */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false }, options = null, render = null } = {}) {
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, labelled = modern, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false }, options = null, render = null } = {}) {
   const fills = {};
   const actions = [];
   const events = new EventEmitter();
   let created = false;
+  const stylesSelector = labelled ? STYLES_LABELLED : modern ? STYLES_UNLABELLED : STYLES_PLACEHOLDER;
   const count = (selector) => {
     if (selector === 'textarea') return hasForm ? 1 : 0;
+    if ([STYLES_LABELLED, STYLES_UNLABELLED, STYLES_PLACEHOLDER].includes(selector)) return Number(selector === stylesSelector);
     if (selector === '[role="textbox"][aria-label="Lyrics editor"]') return modern ? 1 : 0;
     if (selector === 'input[placeholder="Exclude styles"]:visible') return options?.expanded ? 1 : 0;
     // The current page's More Options toggle carries aria-expanded; older builds have none.
@@ -64,7 +69,10 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     const handle = {
       count: async () => count(selector),
       waitFor: async () => {},
-      fill: async (v) => { fills[selector] = v; },
+      fill: async (v) => {
+        if (!count(selector)) throw new Error(`No match for ${selector}`);
+        fills[selector] = v;
+      },
       click: async () => {
         if (selector === 'button[aria-haspopup="menu"]') actions.push('open-version-menu');
         if (selector === '[aria-expanded]') { options.expanded = true; actions.push('more-options'); }
@@ -127,7 +135,7 @@ describe('submitSunoSong', () => {
     expect(ids).toEqual([NEW_A, NEW_B]);
     expect(page.listenerCount('request')).toBe(0);
     expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe('[verse]\nrain');
-    expect(page.fills['textarea:not([aria-label]):not([placeholder="Describe the sound you want"])']).toBe('synthwave');
+    expect(page.fills[STYLES_LABELLED]).toBe('synthwave');
     expect(page.fills['input[placeholder*="title" i]:visible']).toBe('Neon Rain');
   });
 
@@ -179,11 +187,11 @@ describe('submitSunoSong', () => {
     expect(page.listenerCount('request')).toBe(0);
   });
 
-  it('keeps the older Custom form compatible', async () => {
-    const page = fakePage({ modern: false });
+  it.each([[true, STYLES_UNLABELLED], [false, STYLES_PLACEHOLDER]])('fills the older Styles field (Advanced: %s)', async (modern, selector) => {
+    const page = fakePage({ modern, labelled: false });
     await submitSunoSong(page, fields, { sleep: noSleep });
     expect(page.fills['[role="textbox"][aria-label="Lyrics editor"],textarea[placeholder*="lyrics" i]']).toBe(fields.lyrics);
-    expect(page.fills['textarea[placeholder*="style" i]']).toBe(fields.style);
+    expect(page.fills[selector]).toBe(fields.style);
   });
 
   it('sets the model version, exclude styles, vocal gender and Max Mode, opening More Options for the hidden exclude field', async () => {

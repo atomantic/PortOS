@@ -57,6 +57,13 @@ export const AUTONOMOUS_CHECKPOINT_IDS = Object.freeze([...AUTONOMOUS_STAGE_CHEC
 // and credits) or the on-device Music Designer engines (free, no browser).
 export const AUTONOMOUS_SONG_SOURCES = Object.freeze(['suno', 'local']);
 
+/** A failed or stopped Suno stage can adopt a take made outside Autopilot. */
+export function canAdoptSunoSong(run) {
+  return run.stage === 'song' && ['failed', 'stopped'].includes(run.status)
+    && !run.brief?.songFrom && (run.output?.songSource || run.brief?.songSource) !== 'local'
+    && !run.output?.trackId && !run.output?.sunoSongIds?.length;
+}
+
 // Local Music Studio options: audio models or generative code.
 export const LOCAL_MUSIC_TYPES = Object.freeze(['model', 'code']);
 export const LOCAL_MUSIC_TYPE_LABELS = Object.freeze({
