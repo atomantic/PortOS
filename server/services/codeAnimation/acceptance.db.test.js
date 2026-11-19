@@ -14,14 +14,14 @@ vi.mock('../../lib/fileUtils.js', async original => {
     return actual.atomicWrite(path, ...args);
   } };
 });
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { request } from '../../lib/testHelper.js';
 import { PATHS } from '../../lib/paths.js';
 import { createCodeAnimationPackage } from '../../lib/codeAnimationPackage.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { loadHistory, saveHistory } from '../videoGen/history.js';
 import routes from '../../routes/codeAnimation.js';
 import * as store from './projectStore.js';

@@ -13,6 +13,7 @@ import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './provider/providerQuotaEvents.js';
+import { codeAnimationEvents } from './codeAnimation/events.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
@@ -653,6 +654,20 @@ describe('socket.js — initSocket', () => {
     // And nothing Beeper-shaped ever went through io.emit.
     expect(io.emitted.some(([ev]) => String(ev).startsWith('beeper:'))).toBe(false);
     expect(JSON.stringify(io.emitted)).not.toContain('chat-1');
+  });
+
+  it('forwards codeAnimationEvents changed to code-animation subscribers (#16905)', () => {
+    const subscriber = makeSocket('code-anim-sub');
+    const bystander = makeSocket('code-anim-bystander');
+    createdSockets.push(subscriber, bystander);
+    io.connect(subscriber);
+    io.connect(bystander);
+    subscriber.handlers['code-animation:subscribe']();
+
+    codeAnimationEvents.emit('changed', { id: 'anim-1', kind: 'poster' });
+
+    expect(subscriber.emitted).toContainEqual(['code-animation:changed', { id: 'anim-1', kind: 'poster' }]);
+    expect(bystander.emitted.some(([ev]) => String(ev).startsWith('code-animation:'))).toBe(false);
   });
 
   it('socket receives cos:subscribed ack after emitting cos:subscribe', () => {

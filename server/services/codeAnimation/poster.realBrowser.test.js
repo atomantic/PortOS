@@ -9,7 +9,6 @@ import { cleanupTempDataRoots, lazyTempDataRoot } from '../../lib/mockPathsDataR
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 vi.mock('./jobStore.js', () => ({}));
 
 const { posterCaptureScript } = await import('./poster.js');

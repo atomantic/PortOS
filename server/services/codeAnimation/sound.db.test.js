@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 vi.mock('./stageRender.js', () => ({
   sampleFilm: vi.fn(async (_, { times, captureTimes = [], signal }) => {
     signal.throwIfAborted();
@@ -29,7 +29,7 @@ import { evaluateVerdict } from './evidence.js';
 import { sampleFilm, renderViaMediaQueue } from './stageRender.js';
 import { activeStageRunIds } from './stages.js';
 import { muxSoundtrack } from './sound.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import routes from '../../routes/codeAnimation.js';
 
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));

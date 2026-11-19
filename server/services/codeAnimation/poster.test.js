@@ -10,7 +10,7 @@ const jobs = vi.hoisted(() => ({
   saveCodeAnimationPoster: vi.fn(async () => {}),
 }));
 vi.mock('./jobStore.js', () => jobs);
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 vi.mock('../generatedPreview/codeAnimationPage.js', () => ({
   stageCodeAnimationPage: vi.fn(async () => ({ scratchRoot: '/nonexistent/poster-scratch', directory: 'scratch/composition' })),
 }));
@@ -43,7 +43,7 @@ beforeEach(async () => {
     return page(Buffer.from('jpeg').toString('base64'));
   });
   ({ captureCodeAnimationPoster } = await import('./poster.js'));
-  ({ emitCodeAnimationChanged } = await import('../socket.js'));
+  ({ emitCodeAnimationChanged } = await import('./events.js'));
 });
 
 describe('captureCodeAnimationPoster', () => {

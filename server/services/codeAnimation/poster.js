@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'crypto';
 import { rm } from 'fs/promises';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml, saveCodeAnimationPoster } from './jobStore.js';
 import { stageCodeAnimationPage } from '../generatedPreview/codeAnimationPage.js';
 import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
