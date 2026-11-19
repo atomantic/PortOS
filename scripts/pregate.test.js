@@ -2002,6 +2002,20 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(local.server.files.sort()).toEqual(['server/lib/lazy.test.js', 'server/lib/mock.test.js']);
   });
 
+  it('follows a directory import of a changed index module at both hops', () => {
+    const files = {
+      'client/src/components/micrographics/index.js': '',
+      'client/src/components/Widget.jsx': "import { Spark } from './micrographics';",
+      'client/src/components/Widget.test.jsx': "import Widget from './Widget.jsx';",
+      'client/src/components/micrographics/Sub.jsx': "import { Spark } from '.';",
+      'client/src/components/micrographics/Sub.test.jsx': "import Sub from './Sub.jsx';",
+      'client/src/components/direct.test.jsx': "import { Spark } from './micrographics';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
+    expect(local.client.files.sort()).toEqual(['client/src/components/Widget.test.jsx', 'client/src/components/direct.test.jsx', 'client/src/components/micrographics/Sub.test.jsx']);
+  });
+
   it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', () => {
     const files = {
       'scripts/lib/tool.js': '',
