@@ -110,7 +110,6 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
 // whole provider/codeReview/agentCompletion closure, same reason the rest of this file
 // mocks its neighbors.
 vi.mock('./agentFinalization.js', () => ({
-  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   retireDeadAgent: vi.fn().mockResolvedValue({ success: false }),
   stampLiExecutionVerdict: vi.fn(async (taskUpdate) => taskUpdate),
 }));

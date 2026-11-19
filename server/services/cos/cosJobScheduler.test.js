@@ -74,7 +74,7 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn(),
 }));
 vi.mock('./cosTaskStore.js', () => ({ getCosTasks: vi.fn() }));
-vi.mock('./cosTaskGenerator.js', () => ({ queueEligibleImprovementTasks: vi.fn() }));
+vi.mock('./cosImprovementTasks.js', () => ({ queueEligibleImprovementTasks: vi.fn() }));
 
 const generateTaskFromJob = vi.fn(async (job) => ({ id: `task-${job.id}`, description: job.name }));
 const executeScriptJob = vi.fn().mockResolvedValue(undefined);

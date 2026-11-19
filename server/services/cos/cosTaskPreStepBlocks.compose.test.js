@@ -138,7 +138,7 @@ import { checkReconcileOwnership } from './cosClaimOwnership.js';
 import { emitLog } from './cosEvents.js';
 import { inspectOpenDeliveryRepair } from '../repoCleanupObservation.js';
 import { inspectOrQueueCompletedReview } from '../repoCleanupRecovery.js';
-import { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } from './cosImprovementTasks.js';
 import { getTaskInterval } from '../taskSchedule.js';
 import { getBranchReconcileOutcome, recordBranchReconcileOutcome } from '../branchReconcileOutcome.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';

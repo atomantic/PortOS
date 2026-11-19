@@ -97,7 +97,6 @@ import { resolveAgentProviderAndModel } from '../agent/agentProviderResolution.j
 // these are imported for internal use by the scheduler.
 import {
   evaluateTasks,
-  queueEligibleImprovementTasks,
   admitAutoApprovedSystemTasks,
   admitPendingUserTasks,
   resolveAutonomyBudget,
@@ -105,6 +104,7 @@ import {
   isWithinProjectLimit,
   unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
+import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 
 // Autonomous-job + improvement-check timer machinery (extracted to
 // cosJobScheduler.js). Imported for internal use by start()/stop()/init() and

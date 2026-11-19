@@ -1555,10 +1555,12 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }, retirement) {
+async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith, agentState }, retirement) {
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
     emitLog('info', `🔎 Diverged branch ${branchName} after ${agentId} deferred to scheduled branch-reconcile`, { agentId, branchName, taskId: task?.id });
+    // Scheduling reconciliation preserves the checkout, but does not discharge its owner's cleanup obligation.
+    if (agentState?.result?.cleanupPending === true) return blockWith('deferred-to-branch-reconcile', { issues, observed });
     if (record) await record('verified', 'deferred-to-branch-reconcile', { unresolved: 0 });
     return { verified: true, skipReason: 'deferred-to-branch-reconcile', issues, observed, recoveryTaskId: null };
   }

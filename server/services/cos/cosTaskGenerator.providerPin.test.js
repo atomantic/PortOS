@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { __resetReviewerIdentityCache } from '../reviewerIdentity.js';
 import { buildClaimWorkTask, buildJiraTicketTask } from './cosTaskClaimWork.js';
-import { emitOnDemandEmpty } from './cosTaskGenerator.js';
+import { emitOnDemandEmpty } from './cosImprovementTasks.js';
 import { cosEvents } from './cosEvents.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
 
@@ -99,7 +99,7 @@ import { detectActionableWork } from '../perpetualWork.js';
 import { classifyOriginRemote, getOriginInfo } from '../../lib/gitRemote.js';
 import { getTaskPrompt } from '../taskPromptService.js';
 import { recordPerpetualStall } from '../taskSchedule.js';
-import { prepareManagedAppImprovementTask, generateSelfImprovementTaskForType } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask, generateSelfImprovementTaskForType } from './cosImprovementTasks.js';
 import { resolveClaimWorkMetadata } from './cosTaskClaimWork.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };

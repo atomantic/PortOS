@@ -10,6 +10,7 @@ const policy = vi.hoisted(() => ({ app: {}, reviews: {} }));
 vi.mock('./apps.js', () => ({ getAppById: async () => policy.app }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),
   resolveReviewLoopOptions: async () => structuredClone(policy.reviews) }));
+vi.mock('./releaseSynchronizationStore.js', { spy: true });
 
 import { addTask, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs, releaseTaskDispatchDisposition } from './releaseSynchronization.js';
@@ -57,10 +58,24 @@ it('keeps a new publication on its release task while freezing its delivery poli
   expect(await getTaskById(`task-release-sync-${identity}`)).toBeNull();
   policy.app.defaultPrCompletion = 'merge-on-green';
   policy.reviews = { reviewers: [] };
+  vi.mocked(saveReleaseSynchronization).mockClear();
   expect(await ensureReleaseSynchronization(publisher)).toEqual(first);
+  expect(saveReleaseSynchronization).not.toHaveBeenCalled();
+  expect((await readReleaseSynchronizationOutbox()).publications[identity]).toEqual(entry);
   expect(await releaseTaskDispatchDisposition(await getTaskById(source.id))).toBe('registered-release-owner');
   expect(await releaseTaskDispatchDisposition({ id: 'another-release', metadata: { analysisType: 'do-release', app: 'example-inline' } }))
     .toBe('wait-for-synchronization');
+
+  await updateTask(source.id, { metadata: { app: 'different-app' } }, source.taskType);
+  await expect(ensureReleaseSynchronization(publisher)).rejects.toThrow('Release synchronization task has a conflicting owner');
+  const blocked = (await readReleaseSynchronizationOutbox()).publications[identity];
+  expect(blocked).toMatchObject({ registeredAt: first.registeredAt, attempts: entry.attempts + 1,
+    blocker: 'RELEASE_SYNC_HANDOFF_UNVERIFIED', retryAt: expect.any(String) });
+
+  await updateTask(source.id, { metadata: { app: 'example-inline' } }, source.taskType);
+  expect(await ensureReleaseSynchronization(publisher)).toEqual(first);
+  expect((await readReleaseSynchronizationOutbox()).publications[identity]).toMatchObject({
+    registeredAt: first.registeredAt, attempts: blocked.attempts + 1, blocker: null, retryAt: null });
 });
 
 it.each([

@@ -46,7 +46,7 @@ vi.mock('./cosState.js', async (importActual) => ({
   isImprovementEnabled: vi.fn(() => true),
 }));
 
-const { queueEligibleImprovementTasks } = await import('./cosTaskGenerator.js');
+const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
 
 const state = { config: {} };
 const cosTaskData = { tasks: [] };

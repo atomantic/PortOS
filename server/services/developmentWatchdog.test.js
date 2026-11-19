@@ -23,6 +23,8 @@ vi.mock('./cos/cosTaskClaimWork.js', () => ({
 }));
 vi.mock('./cos/cosTaskGenerator.js', () => ({
   resolveAutonomyBudget: async () => ({ cosAutonomyMode: 'execute', autonomousActionsRemaining: 10 }),
+}));
+vi.mock('./cos/cosImprovementTasks.js', () => ({
   prepareManagedAppImprovementTask: (...args) => m.prepare(...args),
   recordDeferredPerpetualDispatch: (...args) => m.record(...args),
 }));
