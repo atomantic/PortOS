@@ -1,5 +1,33 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { collectServerSources, readServerSource } from './testHelper.js';
+
+let serverSourcesCache;
+const trackedServerSources = () => (serverSourcesCache ??= collectServerSources());
+
+let scanCache;
+function scanTree(spawnSitesInScope) {
+  if (scanCache) return scanCache;
+  const sources = trackedServerSources();
+  const sitesByFile = new Map();
+  const inScopeFiles = [];
+
+  for (const rel of sources) {
+    const src = readServerSource(rel);
+    const sites = spawnSitesInScope(src);
+    if (sites > 0) {
+      sitesByFile.set(rel, { sites, src });
+      inScopeFiles.push(rel);
+    }
+  }
+
+  scanCache = { sitesByFile, inScopeFiles };
+  return scanCache;
+}
+
+afterAll(() => {
+  scanCache = undefined;
+  serverSourcesCache = undefined;
+});
 
 // Source invariant: any spawn that names its own working directory must also
 // pin PWD, or a CLI that reads PWD (OpenCode does) silently runs in the PortOS
@@ -155,7 +183,7 @@ describe('every cwd-passing spawn pins PWD', () => {
   });
 
   it('discovers the cwd-passing spawn sites (guard is not vacuous)', () => {
-    const found = collectServerSources().filter((rel) => spawnSitesInScope(readServerSource(rel)) > 0);
+    const found = scanTree(spawnSitesInScope).inScopeFiles;
     // If this ever collapses toward zero the scan broke (a rename, a new spawn
     // wrapper) and every assertion below would pass for the wrong reason.
     expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
@@ -171,17 +199,15 @@ describe('every cwd-passing spawn pins PWD', () => {
   // A stale entry is worse than no entry: it silently pre-approves whatever
   // cwd-passing spawn is added to that file later.
   it('has no dead EXEMPT / DELEGATES / INLINE_PIN entries', () => {
-    const inScope = new Set(collectServerSources().filter((rel) => spawnSitesInScope(readServerSource(rel)) > 0));
+    const inScope = new Set(scanTree(spawnSitesInScope).inScopeFiles);
     const dead = [...EXEMPT.keys(), ...DELEGATES.keys(), ...INLINE_PIN.keys()].filter((rel) => !inScope.has(rel));
     expect(dead, 'these entries name files the scan no longer finds — delete them').toEqual([]);
   });
 
   it('every cwd-passing spawn either pins PWD or is explicitly exempt', () => {
     const unpinned = [];
-    for (const rel of collectServerSources()) {
-      const src = readServerSource(rel);
-      const sites = spawnSitesInScope(src);
-      if (sites === 0) continue;
+    const { sitesByFile } = scanTree(spawnSitesInScope);
+    for (const [rel, { sites, src }] of sitesByFile.entries()) {
       if (EXEMPT.has(rel)) continue;
       if (DELEGATES.has(rel) && src.includes(DELEGATES.get(rel))) continue;
       // Count pins rather than merely asserting one exists: a file that already
