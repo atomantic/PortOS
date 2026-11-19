@@ -304,7 +304,7 @@ export default function Apps() {
                             <StatusBadge status={app.overallStatus} size="sm" />
                           )}
                         </div>
-                        <AppQualityLink appId={app.id} quality={qualityByApp?.get(app.id)} loading={qualityLoading} />
+                        <AppQualityLink appId={app.id} quality={qualityByApp?.get(app.id)} qualityPending={qualityLoading} />
                         <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
                           {isNonPm2 ? (
                             <span className="break-all">{app.repoPath}</span>
@@ -493,9 +493,9 @@ export default function Apps() {
   );
 }
 
-function AppQualityLink({ appId, quality, loading }) {
+function AppQualityLink({ appId, quality, qualityPending }) {
   let label = 'Quality unavailable';
-  if (loading) label = 'Loading quality…';
+  if (qualityPending) label = 'Loading quality…';
   else if (quality && !quality.unavailable) {
     label = quality.score != null ? `Quality: ${quality.score}/100 · ${formatCount(quality.ratedCategories)} rated`
       : quality.hasAssessments ? 'Quality: no qualifying score' : 'Quality: not assessed';
