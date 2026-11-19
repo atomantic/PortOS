@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
 import * as api from '../services/api';
@@ -11,15 +11,16 @@ import { useValidTab } from '../hooks/useValidTab';
 import useUrlParams from '../hooks/useUrlParams';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import { lazyWithReload } from '../utils/lazyWithReload';
 
-import AgendaTab from '../components/calendar/AgendaTab';
-import DayView from '../components/calendar/DayView';
-import WeekView from '../components/calendar/WeekView';
-import MonthView from '../components/calendar/MonthView';
-import ConfigTab from '../components/calendar/ConfigTab';
-import ReviewTab from '../components/calendar/ReviewTab';
-import CalendarLifetimeTab from '../components/meatspace/tabs/CalendarTab';
-import SyncTab from '../components/calendar/SyncTab';
+const AgendaTab = lazyWithReload(() => import('../components/calendar/AgendaTab'));
+const DayView = lazyWithReload(() => import('../components/calendar/DayView'));
+const WeekView = lazyWithReload(() => import('../components/calendar/WeekView'));
+const MonthView = lazyWithReload(() => import('../components/calendar/MonthView'));
+const ConfigTab = lazyWithReload(() => import('../components/calendar/ConfigTab'));
+const ReviewTab = lazyWithReload(() => import('../components/calendar/ReviewTab'));
+const CalendarLifetimeTab = lazyWithReload(() => import('../components/meatspace/tabs/CalendarTab'));
+const SyncTab = lazyWithReload(() => import('../components/calendar/SyncTab'));
 
 // Icon (and any other presentation-only detail) per tab id. The manifest
 // (`tabGroup: 'calendar'`) owns id/label/order — this page owns only how each
@@ -124,7 +125,11 @@ export default function Calendar() {
             </button>
           </div>
         )}
-        {activeTab === 'lifetime' || accountsReady ? renderTabContent() : (
+        {activeTab === 'lifetime' || accountsReady ? (
+          <Suspense fallback={<PageSkeleton header="none" label="Loading calendar view" cards={3} sidebar={false} />}>
+            {renderTabContent()}
+          </Suspense>
+        ) : (
           <>
             {loading && <PageSkeleton header="none" label="Loading calendar accounts" cards={3} sidebar={false} />}
             {accounts !== null && (

@@ -1,6 +1,9 @@
 import * as filmApi from '../../services/apiCodeAnimationFilm.js';
-import ProductionFilm from './ProductionFilm.jsx';
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import BrailleSpinner from '../BrailleSpinner';
+import { lazyWithReload } from '../../utils/lazyWithReload';
+
+const ProductionFilm = lazyWithReload(() => import('./ProductionFilm.jsx'));
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useSocketResource } from '../../hooks/useSocketResource';
@@ -26,7 +29,9 @@ const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:b
 
 export default function ProductionProjects() {
   const { filmId } = useParams();
-  return filmId ? <ProductionFilm key={filmId} /> : <PackageProjects />;
+  return filmId
+    ? <Suspense fallback={<BrailleSpinner text="Loading film workspace" />}><ProductionFilm key={filmId} /></Suspense>
+    : <PackageProjects />;
 }
 
 function PackageProjects() {

@@ -37,33 +37,34 @@ describe('<Music>', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the matching manager for a known tab', () => {
+  it('renders the matching manager for a known tab', async () => {
     renderAt('/music/albums');
-    expect(screen.getByTestId('albums-manager')).toBeInTheDocument();
+    expect(await screen.findByTestId('albums-manager')).toBeInTheDocument();
     expect(screen.queryByTestId('artists-manager')).toBeNull();
     expect(screen.queryByTestId('tracks-manager')).toBeNull();
   });
 
-  it('defaults bare /music to the stepped designer', () => {
+  it('defaults bare /music to the stepped designer', async () => {
     renderAt('/music');
-    expect(screen.getByTestId('music-designer')).toBeInTheDocument();
+    expect(await screen.findByTestId('music-designer')).toBeInTheDocument();
     expect(screen.queryByTestId('albums-manager')).toBeNull();
   });
 
-  it('redirects an unknown tab param to /music/artists', () => {
+  it('redirects an unknown tab param to /music/artists', async () => {
     renderAt('/music/bogus');
     expect(screen.getByTestId('location')).toHaveTextContent('/music/generate');
-    expect(screen.getByTestId('music-designer')).toBeInTheDocument();
+    expect(await screen.findByTestId('music-designer')).toBeInTheDocument();
   });
 
-  it('clicking a TabPill navigates the URL to the matching tab route', () => {
+  it('clicking a TabPill navigates the URL to the matching tab route', async () => {
     renderAt('/music/artists');
     expect(screen.getByTestId('location')).toHaveTextContent('/music/artists');
+    expect(await screen.findByTestId('artists-manager')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: /tracks/i }));
 
+    expect(await screen.findByTestId('tracks-manager')).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/music/tracks');
-    expect(screen.getByTestId('tracks-manager')).toBeInTheDocument();
     expect(screen.queryByTestId('artists-manager')).toBeNull();
   });
 });

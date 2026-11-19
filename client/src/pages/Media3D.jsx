@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
+import BrailleSpinner from '../components/BrailleSpinner';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
 import useMounted from '../hooks/useMounted';
 import { nameFromImageFilename, timeAgo } from '../utils/formatters';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
-import GlbViewer from '../components/media/GlbViewer';
+import { lazyWithReload } from '../utils/lazyWithReload';
+
+const GlbViewer = lazyWithReload(() => import('../components/media/GlbViewer'));
 import Image3dHfAccessNotice from '../components/media/Image3dHfAccessNotice';
 import { useHfTokenStatus } from '../hooks/useHfTokenStatus';
 import useUrlParams from '../hooks/useUrlParams';
@@ -325,7 +328,9 @@ export default function Media3D() {
         {glbFromRoute && (
           <section className="mb-6">
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Mesh preview</h2>
-            <GlbViewer src={glbFromRoute} />
+            <Suspense fallback={<BrailleSpinner text="Loading 3D viewer" />}>
+              <GlbViewer src={glbFromRoute} />
+            </Suspense>
           </section>
         )}
 

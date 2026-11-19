@@ -10,16 +10,20 @@
  * tab is deep-linkable and survives reload. `tab` defaults to `artists`.
  */
 
+import { Suspense } from 'react';
 import { useParams, useNavigate, Navigate } from 'react-router';
 import { Mic, Disc3, AudioLines, Wand2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
-import ArtistsManager from '../components/music/ArtistsManager';
-import AlbumsManager from '../components/music/AlbumsManager';
-import TracksManager from '../components/music/TracksManager';
-import MusicDesigner from '../components/music/MusicDesigner';
 import TabPills from '../components/ui/TabPills';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import { lazyWithReload } from '../utils/lazyWithReload';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+
+const ArtistsManager = lazyWithReload(() => import('../components/music/ArtistsManager'));
+const AlbumsManager = lazyWithReload(() => import('../components/music/AlbumsManager'));
+const TracksManager = lazyWithReload(() => import('../components/music/TracksManager'));
+const MusicDesigner = lazyWithReload(() => import('../components/music/MusicDesigner'));
 
 // Icon per tab id. The manifest (`tabGroup: 'music'`) owns id/label/order —
 // this page owns only how each tab looks; the short page-local labels (vs the
@@ -59,10 +63,12 @@ export default function Music() {
       />
 
       <div className="flex-1 overflow-auto p-4">
-        {active === 'generate' && <MusicDesigner />}
-        {active === 'artists' && <ArtistsManager />}
-        {active === 'albums' && <AlbumsManager />}
-        {active === 'tracks' && <TracksManager />}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading music section" cards={3} sidebar={false} />}>
+          {active === 'generate' && <MusicDesigner />}
+          {active === 'artists' && <ArtistsManager />}
+          {active === 'albums' && <AlbumsManager />}
+          {active === 'tracks' && <TracksManager />}
+        </Suspense>
       </div>
     </div>
   );
