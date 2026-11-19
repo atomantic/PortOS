@@ -120,6 +120,7 @@ import { verifyCleanupClaimDisposition } from '../claimDisposition.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { recordBranchReconcileCheckout, recordBranchReconcileOutcome } from '../branchReconcileOutcome.js';
 import { loadSchedule } from '../taskScheduleStore.js';
+import { loadState } from '../cos/cosState.js';
 import { acknowledgeSwarmCleanupRefill } from '../taskSchedule.js';
 import { lstat } from 'node:fs/promises';
 import { assertAutomaticRetirementAllowed, readMergedDelivery, retireInventoriedCheckout } from '../heldCheckoutRecovery.js';
@@ -1708,6 +1709,32 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
     expect(releaseRetryHold).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('defers divergent merged checkouts without settling a cleanup owner: cleanup pending %s', async cleanupPending => {
+    const pending = { ...task(), status: cleanupPending ? 'in_progress' : 'completed', metadata: { ...task().metadata,
+      ...(cleanupPending && { deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' }) } };
+    const state = { ...agentState({ repoStateVerification: { status: 'pending' },
+      completionCleanup: { version: 1, status: 'pending' } }), result: { cleanupPending } };
+    getTaskById.mockResolvedValue(pending);
+    loadState.mockResolvedValueOnce({ config: { autoApproveInvestigations: false } });
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([RELEASE]);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/1', detail: 'MERGED' });
+    readMergedDelivery.mockResolvedValue(false);
+
+    expect(await run({ task: pending, agentState: state })).toMatchObject({ verified: !cleanupPending,
+      skipReason: 'deferred-to-branch-reconcile' });
+    expect(recordBranchReconcileCheckout).toHaveBeenCalledWith('demo-app', RELEASE);
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      status: cleanupPending ? 'blocked' : 'verified', reason: 'deferred-to-branch-reconcile' }));
+    expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      status: cleanupPending ? 'pending' : 'completed' }));
+    expect(recordCompletionCleanup).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
     expect(addTask).not.toHaveBeenCalled();
   });
 
