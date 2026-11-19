@@ -78,9 +78,9 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
     describe: 'the OBJECTIVE block — `taskObjective()` in `server/lib/goalFidelity.js`, which composes the task\'s own `description` and `taskContextBlock(task)` (`server/lib/cos/cosTaskPrompt.js`) within `MAX_OBJECTIVE_CHARS`, plus a marker for task screenshots whose separately bounded image content is passed to the local reviewer',
   }),
   diff: Object.freeze({
-    file: 'server/services/agent/agentFinalization.js',
+    file: 'server/services/agent/agentGoalFidelity.js',
     symbol: 'evaluateGoalFidelity',
-    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agent/agentFinalization.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
+    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agent/agentGoalFidelity.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
   }),
   rubric: Object.freeze({
     file: 'server/services/codeReview.js',

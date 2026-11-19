@@ -51,7 +51,6 @@ vi.mock('./agentRunTracking.js', () => ({
 }));
 
 vi.mock('./agentFinalization.js', () => ({
-  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   retireDeadAgent: vi.fn().mockResolvedValue({ success: false }),
   stampLiExecutionVerdict: vi.fn(async (update) => update),

@@ -116,13 +116,13 @@ vi.mock('./agentSummaryExtraction.js', () => ({
 }));
 
 import { resolveTaskHookType } from "../taskTypeHooks.js";
+import { finalizeAgent } from './agentFinalization.js';
 import {
   verifyPrClaim,
-  finalizeAgent,
   PR_MISSING_CATEGORY,
   FORGE_UNREACHABLE_CATEGORY,
   ISSUE_TRAILER_MISSING_CATEGORY,
-} from './agentFinalization.js';
+} from './agentPrVerification.js';
 
 /**
  * Routes the git calls verifyPrClaim makes by their argv, so a test can set the

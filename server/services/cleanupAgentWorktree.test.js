@@ -224,7 +224,7 @@ vi.mock('../lib/execGit.js', () => ({
 // The `if-missing` safety net asks finalize's own PR-claim check whether
 // the agent actually opened the PR it was told to open (#3733).
 const verifyPrClaimMock = vi.fn();
-vi.mock('./agent/agentFinalization.js', () => ({
+vi.mock('./agent/agentPrVerification.js', () => ({
   PR_MISSING_CATEGORY: 'pr-missing',
   verifyPrClaim: (...args) => verifyPrClaimMock(...args)
 }));

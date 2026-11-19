@@ -63,9 +63,8 @@ import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskO
 import {
   finalizeAgent,
   retireDeadAgent,
-  dispatchRecoveredTaskOutputHook,
-  dispatchTaskOutputHookOnce,
 } from './agentFinalization.js';
+import { dispatchRecoveredTaskOutputHook, dispatchTaskOutputHookOnce } from './agentOutputHookDispatch.js';
 
 
 vi.mock('../cos/cosTaskStore.js', () => ({

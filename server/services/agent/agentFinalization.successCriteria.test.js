@@ -26,7 +26,8 @@ vi.mock('../../lib/gitCommitProbe.js', () => ({
   committedDuringRun: vi.fn(),
 }));
 
-import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
+import { evaluateSuccessCriteria } from './agentFinalization.js';
+import { resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentOutputHookDispatch.js';
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
 import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
 import * as repoRepair from '../updateRepoRepairCompletion.js';

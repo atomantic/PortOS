@@ -58,7 +58,7 @@ import {
   getTaskOutputPayloadPredicate,
   isProgrammaticIoTaskType,
 } from '../taskTypeHooks.js';
-import { dispatchTaskOutputHookOnce } from './agentFinalization.js';
+import { dispatchTaskOutputHookOnce } from './agentOutputHookDispatch.js';
 
 // Mirrors layered-intelligence's exported `isTaskOutputPayload` predicate. Kept
 // local rather than imported: that hook module pulls the whole apps/taskLearning
