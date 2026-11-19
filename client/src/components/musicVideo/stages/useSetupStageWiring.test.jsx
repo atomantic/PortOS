@@ -16,6 +16,7 @@ import {
   openSettings,
   openStage,
   openProject,
+  pushSocket,
   openCreateForm,
   forceRerender,
   renderMVWithNav,
@@ -24,7 +25,7 @@ import {
 } from '../../../test/musicVideoPageMocks.jsx';
 import { screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import toast from '../../ui/Toast';
-import { listMusicVideoProjects, createMusicVideoProject, renderMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, transcribeMusicVideoMidi, prepareMusicVideoSong, importMusicVideoLyrics, alignMusicVideoLyrics, getMusicVideoActiveJobs } from '../../../services/apiMusicVideo.js';
+import { listMusicVideoProjects, createMusicVideoProject, renderMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, transcribeMusicVideoMidi, prepareMusicVideoSong, importMusicVideoLyrics, alignMusicVideoLyrics, getMusicVideoActiveJobs, getMusicVideoProject } from '../../../services/apiMusicVideo.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../../../services/apiTracks.js';
 
 installMusicVideoPageHooks();
@@ -65,6 +66,23 @@ describe('MusicVideo audio preview + download', () => {
 });
 
 describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
+  it('shows a saved failure and retries from the Song step', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, midiTranscriptionError: 'FFmpeg could not decode the song audio.' }, 'setup');
+    expect(await screen.findByText(/FFmpeg could not decode the song audio/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry MIDI transcription' }));
+    await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', { model: 'medium' }, { silent: true }));
+    expect(await screen.findByRole('button', { name: /Transcribing.*Cancel/ })).toBeVisible();
+  });
+
+  it('follows a transcription started elsewhere while the Song page is open', async () => {
+    await openProject(PROJECT_WITH_CLIP, 'setup');
+    expect(await screen.findByText('MIDI transcription · Never run')).toBeVisible();
+    getMusicVideoProject.mockResolvedValueOnce({ ...PROJECT_WITH_CLIP, activeMidiJob: 'midi-live' });
+    await pushSocket('music-video:project:changed', { id: 'mv-1' });
+    expect(await screen.findByRole('button', { name: /Transcribing.*Cancel/ })).toBeVisible();
+    expect(transcribeMusicVideoMidi).not.toHaveBeenCalled();
+  });
+
   it('disables the MIDI button when the project has no audio source', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
     await openSettings('Audio');

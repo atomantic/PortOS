@@ -69,13 +69,6 @@ async function setProjectAnalysisUnqueued(id, analysis, sourceProject) {
   return all[idx];
 }
 
-async function setProjectMidiTranscriptionUnqueued(id, midi) {
-  const { all, idx } = await loadAllAndIndex(id);
-  all[idx] = logic.setMidiTranscription(all[idx], midi);
-  await saveAll(all);
-  return all[idx];
-}
-
 async function addProjectSceneUnqueued(id, sceneInput) {
   const { all, idx } = await loadAllAndIndex(id);
   const { project, scene } = logic.addScene(all[idx], sceneInput);
@@ -145,7 +138,6 @@ async function reviewSceneTakeUnqueued(id, sceneId, takeId, review) {
 
 export const cloneProject = serialized(cloneProjectUnqueued);
 export const setProjectAnalysis = serialized(setProjectAnalysisUnqueued);
-export const setProjectMidiTranscription = serialized(setProjectMidiTranscriptionUnqueued);
 export const addProjectScene = serialized(addProjectSceneUnqueued);
 export const addProjectScenes = serialized(addProjectScenesUnqueued);
 export const updateScene = serialized(updateSceneUnqueued);

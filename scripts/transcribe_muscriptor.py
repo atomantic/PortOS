@@ -11,7 +11,7 @@ into an opt-in venv: `INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh`
 (see server/lib/pythonSetup.js resolveMuscriptorPython).
 
 CLI contract (mirrors the generate_* audio sidecars):
-  --audio <path>     input audio (wav/mp3/flac/ogg/m4a — soundfile-supported)
+  --audio <path>     input audio (the server converts unsupported containers)
   --output <path>    output .mid path
   --model <size>     small | medium | large (default medium)
   [--runtime-dir <dir>]  optional sys.path prepend for a vendored checkout
@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 # Share the canonical HuggingFace error → USER_ERROR: translation with the
@@ -43,6 +44,23 @@ def log_stage(name, detail=""):
     """Emit a STAGE: line the JS sidecar tails for phase/progress display."""
     line = f"STAGE:{name}" + (f":{detail}" if detail else "")
     print(line, file=sys.stderr, flush=True)
+
+
+def _check_runtime_version():
+    profile = "mlx" if sys.platform == "darwin" else "cuda"
+    pins = Path(__file__).with_name(f"requirements-muscriptor-{profile}.txt")
+    expected = next(line.split("==", 1)[1] for line in pins.read_text().splitlines()
+                    if line.startswith("muscriptor=="))
+    try:
+        installed = version("muscriptor")
+    except PackageNotFoundError:
+        installed = "not installed"
+    if installed == expected:
+        return True
+    print(f"ERROR: MuScriptor version mismatch (installed {installed}, expected {expected}). "
+          "Run INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh to repair the runtime, then retry.",
+          file=sys.stderr, flush=True)
+    return False
 
 
 def _import_model_class(runtime_dir):
@@ -150,6 +168,9 @@ def _weights_cached(size):
 
 @install_hf_error_handler
 def main():
+    if sys.argv[1:] == ["--check-runtime"]:
+        return 0 if _check_runtime_version() else 1
+
     parser = argparse.ArgumentParser(description="PortOS MuScriptor runner (audio → MIDI)")
     parser.add_argument("--audio", required=True, help="Input audio path")
     parser.add_argument("--output", required=True, help="Output .mid path")
@@ -165,7 +186,18 @@ def main():
         return 2
 
     log_stage("import-runtime")
+    if not args.runtime_dir and not _check_runtime_version():
+        return 1
     TranscriptionModel = _import_model_class(args.runtime_dir)
+
+    import soundfile
+    try:
+        soundfile.info(args.audio)
+    except soundfile.LibsndfileError:
+        # Ask the server to decode with its managed FFmpeg process. Probe before
+        # loading weights so fallback never repeats model loading or inference.
+        print("AUDIO_DECODE_REQUIRED", flush=True)
+        return 1
 
     # First use downloads the weights (minutes); every run after loads the
     # cached copy (seconds). Emit a distinct `download-model` stage for the

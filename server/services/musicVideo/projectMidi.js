@@ -7,9 +7,19 @@
  */
 
 import { PATHS } from '../../lib/fileUtils.js';
+import { audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { startMidiTranscription } from '../audioMidiTranscription.js';
+import { emitRecordInvalidated } from '../sharing/recordEvents.js';
 import { resolveProjectAudioPath } from './projectAudio.js';
-import { getProject, setProjectMidiTranscription } from './projects.js';
+import { mutateProjectRecord } from './projects.js';
+import { setMidiTranscription } from './projectsLogic.js';
+
+function savedFailure({ code, error }) {
+  if (['MIDI_RUNTIME_VERSION_MISMATCH', 'MIDI_FFMPEG_MISSING', 'MIDI_AUDIO_DECODE_FAILED'].includes(code)) return error;
+  if (code === 'gated_repo') return 'MuScriptor model access was denied. Accept its license on Hugging Face and add your token in Image Gen settings, then retry.';
+  // Child stderr can contain paths and credentials. The project record syncs.
+  return 'MuScriptor could not finish MIDI transcription. Check the PortOS server log for details.';
+}
 
 /**
  * Kick off a transcription of `project`'s audio. Resolves `{ jobId, model }`
@@ -19,36 +29,42 @@ import { getProject, setProjectMidiTranscription } from './projects.js';
 export async function startProjectMidiTranscription(project, { model, onSettled } = {}) {
   const audioPath = await resolveProjectAudioPath(project);
   const projectId = project.id;
-  // Audio-source identity at kickoff — the completion callback re-checks it so
-  // a transcription of the OLD track can't land on a project whose audio was
-  // swapped mid-run (another client / peer sync). applyProjectPatch clears
-  // midiTranscription on the swap; without this guard the in-flight job would
-  // reintroduce the stale pointer right after.
-  const sourceTrackId = project.trackId ?? null;
-  const sourceUpload = project.uploadedAudioFilename ?? null;
-  return startMidiTranscription({
+  // Compare inside the write so a track change cannot interleave between
+  // validation and persistence. The revision also catches A → B → A swaps.
+  const writeForSource = (transform) => mutateProjectRecord(projectId, (current) => {
+    const sameSource = (current.trackId ?? null) === (project.trackId ?? null)
+      && (current.uploadedAudioFilename ?? null) === (project.uploadedAudioFilename ?? null)
+      && audioRevisionOf(current) === audioRevisionOf(project);
+    if (!sameSource) return { project: current, discarded: true, skipPersist: true };
+    return { project: transform(current) };
+  }, { presentProject: false });
+  const job = await startMidiTranscription({
     audioPath,
     outputName: `${project.name || 'music-video'}-midi`,
     model,
     ownerKey: projectId,
-    onSettled,
+    onSettled: (frame) => {
+      onSettled?.(frame);
+      emitRecordInvalidated('musicVideoProject', projectId);
+    },
     // Land the .mid in the music dir (not uploads) so the peer-sync asset
     // manifest federates it with the project's other audio — the manifest
     // only ships known asset kinds/directories, and `music` is one.
     destDir: PATHS.music,
     onComplete: async ({ filename, model: usedModel }) => {
-      const current = await getProject(projectId);
-      if (!current) throw new Error('Project was deleted during transcription');
-      if ((current.trackId ?? null) !== sourceTrackId || (current.uploadedAudioFilename ?? null) !== sourceUpload) {
-        // The service deletes the orphaned .mid and reports a discarded (not
-        // "ready") completion to the client.
-        return { discarded: true, reason: `audio source of ${projectId} changed mid-transcription` };
-      }
       const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
-      await setProjectMidiTranscription(projectId, midiTranscription);
+      const outcome = await writeForSource((current) => setMidiTranscription(current, midiTranscription));
+      if (outcome.discarded) return { discarded: true, reason: 'audio source changed mid-transcription' };
       return { midiTranscription };
     },
+    onFailure: (frame) => writeForSource((current) => ({
+      ...current,
+      midiTranscriptionError: savedFailure(frame),
+      updatedAt: new Date().toISOString(),
+    })),
   });
+  emitRecordInvalidated('musicVideoProject', projectId);
+  return job;
 }
 
 /**

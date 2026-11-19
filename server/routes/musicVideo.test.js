@@ -42,7 +42,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   splitProjectScene: vi.fn(),
   mergeProjectNextScene: vi.fn(),
   mergeProjectPreviousScene: vi.fn(),
-  setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
+  mutateProjectRecord: vi.fn(),
   // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
   appendSceneTakes: vi.fn(),
   appendTakesAcrossScenes: vi.fn(),
@@ -919,28 +919,52 @@ describe('musicVideo routes', () => {
     });
 
     it('onComplete persists the pointer on the project and returns it for the SSE frame', async () => {
-      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'Neon', trackId: 't1' });
+      const project = { id: 'mv-1', name: 'Neon', trackId: 't1', midiTranscriptionError: 'Earlier failure' };
+      svc.getProject.mockResolvedValue(project);
+      const write = vi.fn((transform) => transform(project));
+      svc.mutateProjectRecord.mockImplementationOnce((_id, transform) => write(transform));
       getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
       await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
       const { onComplete } = midiSvc.startMidiTranscription.mock.calls[0][0];
       const extra = await onComplete({ filename: 'neon-midi.mid', model: 'medium' });
-      expect(svc.setProjectMidiTranscription).toHaveBeenCalledWith('mv-1', expect.objectContaining({
-        filename: 'neon-midi.mid', model: 'medium',
-      }));
+      expect(write).toHaveReturnedWith({ project: expect.objectContaining({
+        midiTranscription: expect.objectContaining({ filename: 'neon-midi.mid', model: 'medium' }),
+        midiTranscriptionError: null,
+      }) });
       expect(extra.midiTranscription.filename).toBe('neon-midi.mid');
     });
 
     it('onComplete drops a stale result when the audio source changed mid-transcription', async () => {
-      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't1' }); // kickoff read
+      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't1', audioRevision: 1 });
       getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
       await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
-      const { onComplete } = midiSvc.startMidiTranscription.mock.calls[0][0];
-      // By completion time the project points at a different track — the old
-      // audio's MIDI must not be re-attached (applyProjectPatch cleared it).
-      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't2' });
+      const { onComplete, onFailure } = midiSvc.startMidiTranscription.mock.calls[0][0];
+      const current = { id: 'mv-1', name: 'Neon', trackId: 't1', audioRevision: 3 };
+      // The track was switched away and back while transcription was running.
+      svc.mutateProjectRecord.mockImplementation(async (_id, transform) => transform(current));
       const extra = await onComplete({ filename: 'stale.mid', model: 'medium' });
       expect(extra.discarded).toBe(true);
-      expect(svc.setProjectMidiTranscription).not.toHaveBeenCalled();
+      await expect(onFailure({ error: 'stale failure' })).resolves.toEqual({ project: current, discarded: true, skipPersist: true });
+    });
+
+    it('serves the project failure after the active job is gone', async () => {
+      const error = 'FFmpeg could not decode the song audio.';
+      let project = { id: 'mv-1', name: 'Neon', trackId: 't1' };
+      svc.getProject.mockImplementation(async () => project);
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.m4a' });
+      svc.mutateProjectRecord.mockImplementationOnce((_id, transform) => {
+        const outcome = transform(project);
+        project = outcome.project;
+        return outcome;
+      });
+      const planning = () => request(app).get('/api/music-video/mv-1/midi-planning');
+      expect((await planning()).body).toEqual({ facts: null, status: 'never-run', jobId: null, error: null });
+      await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
+      midiSvc.getActiveMidiTranscriptionJobId.mockReturnValueOnce('midi-job-1');
+      expect((await planning()).body).toEqual({ facts: null, status: 'running', jobId: 'midi-job-1', error: null });
+      const { onFailure } = midiSvc.startMidiTranscription.mock.calls[0][0];
+      await onFailure({ code: 'MIDI_AUDIO_DECODE_FAILED', error });
+      expect((await planning()).body).toEqual({ facts: null, status: 'failed', jobId: null, error });
     });
 
     it('404s when the project is missing', async () => {

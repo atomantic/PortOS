@@ -53,8 +53,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   writersRoomFolders: 1,
   // Writers Room exercises (body-less).
   writersRoomExercises: 1,
-  // Music video project body (LWW whole); v63 = title card slide-in, own fade-out and steady flag.
-  musicVideoProjects: 63,
+  // Music video project body (LWW whole); v64 = last MIDI transcription failure.
+  musicVideoProjects: 64,
   // Creative Commission feedback reactions (body-less, tombstoned).
   commissionFeedback: 1,
   // Creative Commission brief (schedule and runs stay machine-local); v9 = Google backend pins in `generation`.
