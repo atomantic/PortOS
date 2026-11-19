@@ -12,7 +12,7 @@ const emitModel = async (event, payload) => act(async () => {
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
-import { imageTo3dTarget } from '../lib/imageTo3dTargetFixture';
+import { imageTo3dTarget } from '../test/imageTo3dTargetFixture';
 import Media3D from './Media3D';
 
 const getImageTo3dTargets = vi.fn();
