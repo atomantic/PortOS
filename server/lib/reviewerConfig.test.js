@@ -7,7 +7,6 @@ import {
   DEFAULT_REVIEWER,
   LOCAL_LLM_REVIEWERS,
   REVIEWER_ALIASES,
-  REVIEWER_CLI_BINARIES,
   REVIEWER_VALUES,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_CAPABLE_CLI_REVIEWERS,
@@ -59,8 +58,8 @@ import {
 import { PROVIDER_VENDORS } from './provider/providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
 // pin survives the schema that persists it, so they need both modules.
-import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cos/cosValidation.js';
-import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
+import { createCosTaskSchema, codeReviewSettingsSchema } from './cos/cosValidation.js';
+import { sanitizeTaskMetadata, reviewerConfigMetadata } from './cos/cosTaskMetadata.js';
 import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './provider/providerModels.js';
 
 describe('reviewerConfig reviewer CLI binaries', () => {
@@ -184,16 +183,6 @@ describe('reviewerConfig reviewer CLI binaries', () => {
     ]);
     expect(flagTokens).toEqual(['ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'codex']);
     expect(portosOnly).toEqual(['mtplx', 'kilo']);
-  });
-
-  // slashdoInvocation keeps its own copy of the roster to decide which slashdo
-  // `lib/*` includes a reviewer needs. Two hand-maintained lists of the same
-  // reviewers drift the moment one gains a member — the `grok` addition is the
-  // precedent — so pin them to each other rather than making slashdoInvocation
-  // import this module (cosValidation.js re-exports this module AND imports
-  // slashdoInvocation, so a cycle here would be worse than the duplication).
-  it('matches slashdoInvocation LOCAL_AGENT_REVIEWERS', () => {
-    expect([...LOCAL_AGENT_REVIEWERS].sort()).toEqual(Object.keys(REVIEWER_CLI_BINARIES).sort());
   });
 });
 

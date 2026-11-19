@@ -99,7 +99,7 @@ import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { createDequeueCapacity } from './cosDequeue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

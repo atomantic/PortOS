@@ -55,7 +55,7 @@ const { forceSpawnTask } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
 const { getTaskById, updateTask } = await import('./cosTaskStore.js');
-const { MAX_TOTAL_SPAWNS } = await import('../../lib/cos/cosValidation.js');
+const { MAX_TOTAL_SPAWNS } = await import('../../lib/cos/cosTaskMetadata.js');
 const { setUseRunner, useRunner, activeAgents } = await import('../agent/agentState.js');
 
 const originalUseRunner = useRunner;

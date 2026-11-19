@@ -9,7 +9,7 @@ import { SCHEDULED_HANDLER_MODULES } from './scheduledHandlers/index.js';
 import { QUOTA_BURN_JOB_TYPES } from '../lib/quotaBurnConfig.js';
 import { planQuotaBurnStepConversion } from '../lib/quotaBurnLegacyConversion.js';
 import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
-import { sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 
 // The catalog row Quota Burn renders its job form from, keyed by param.
 const catalogParams = (taskType) => Object.fromEntries(

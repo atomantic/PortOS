@@ -5,7 +5,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
 import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cos/cosTaskMetadata.js';
 import { MAX_TASK_RETRIES } from './agent/agentErrorAnalysis.js';
 import { USER_DECISION_BLOCKED_CATEGORIES, PAUSED_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { emitLog } from './cos/cosEvents.js';

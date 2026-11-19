@@ -38,7 +38,7 @@ import {
   getAppById,
   updateApp,
 } from './apps.js';
-import { DEFAULT_REVIEWER } from '../lib/cos/cosValidation.js';
+import { DEFAULT_REVIEWER } from '../lib/reviewerConfig.js';
 import { clampText, fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { resolveAppWorkTracker, isFileTracker, formatTrackerInstructions } from '../lib/workTracker.js';
 import { FILE_ISSUES_DELIVERY_SETTINGS } from '../lib/auditCatalog.js';

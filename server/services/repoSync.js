@@ -55,9 +55,7 @@ import {
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { countWords } from '../lib/textUtils.js';
-import {
-  DEFAULT_REPO_SYNC_VERIFY_MODE, REPO_SYNC_ACTION_KEYS, REPO_SYNC_VERIFY_MODES, sanitizeTaskMetadata
-} from '../lib/cos/cosValidation.js';
+import { DEFAULT_REPO_SYNC_VERIFY_MODE, REPO_SYNC_ACTION_KEYS, REPO_SYNC_VERIFY_MODES, sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { stripManagedAgentOptionsFromOverride } from './taskScheduleRegistry.js';
 
 // The action-toggle vocabulary lives in lib/cos/cosValidation.js beside the

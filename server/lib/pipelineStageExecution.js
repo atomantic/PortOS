@@ -3,7 +3,7 @@
  *
  * `applyStageExecution(metadata, stage, { taskDefaults, clearInheritedExecutionOptions })` applies model/provider/effort pins, `executionOptions` and behavior flags (read-only default, task-default fallback, draft-delivery guard). Shared by task creation (stage 0), the agent-completion hand-off (stage 1+) and the pr-reviewer security preflight (#14388), so a policy added here reaches all three.
  */
-import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from './cos/cosValidation.js';
+import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from './cos/cosTaskMetadata.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
 
 /**

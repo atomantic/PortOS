@@ -16,7 +16,7 @@
  */
 
 import { hasKnownPrefix, PRIORITY_VALUES, toRepresentableTask } from '../../lib/taskParser.js';
-import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosValidation.js';
+import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosTaskMetadata.js';
 import { KEYED_REVIEWER_PINS, REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../../lib/reviewerConfig.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../../lib/prDisposition.js';
