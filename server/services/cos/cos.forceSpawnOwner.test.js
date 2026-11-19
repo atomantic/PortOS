@@ -188,6 +188,24 @@ describe('forceSpawnTask — spawn budget', () => {
     expect(taskReadyEmits(emit)).toEqual([['task:ready', { ...saved, taskType: 'user' }]]);
   });
 
+  it('resets a blocked task whose stopped runs were archived without a resume pointer, and holds an in_progress one', async () => {
+    const blocked = queued({ ...atCap, blockedCategory: 'max-spawns' }, 'blocked');
+    vi.mocked(getTaskById).mockResolvedValueOnce(blocked);
+    vi.mocked(updateTask).mockResolvedValueOnce({ ...blocked, status: 'pending', metadata: { failureCount: '2' } });
+    expect(await forceSpawnTask(TASK_ID, { resetSpawnBudget: true })).toEqual({ success: true, taskId: TASK_ID });
+    expect(vi.mocked(updateTask).mock.calls).toEqual([[TASK_ID, { status: 'pending', metadata: { totalSpawnCount: undefined } }, 'user', {
+      expectedStatus: 'blocked', expectedTask: { description: blocked.description, priority: blocked.priority, metadata: blocked.metadata },
+      recoveryOwner: { id: 'explicit-spawn-budget-reset', startedAt: null, requireInactive: true },
+      spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true, preserveRetryBudget: true,
+    }]]);
+
+    vi.mocked(updateTask).mockClear();
+    vi.mocked(getTaskById).mockResolvedValueOnce(queued(atCap, 'in_progress'));
+    expect(await forceSpawnTask(TASK_ID, { resetSpawnBudget: true })).toEqual({
+      error: 'No stopped run of this task is left in agent history; inspect its checkout before retrying' });
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('refuses an explicit reset while a live agent owns the stopped task, or once the store finds it changed', async () => {
     persisted.agents = { [HOLDER_ID]: holder() };
     vi.mocked(getTaskById).mockResolvedValueOnce(queued(atCap, 'in_progress'));
