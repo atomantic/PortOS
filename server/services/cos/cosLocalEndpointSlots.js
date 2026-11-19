@@ -18,7 +18,7 @@
  */
 
 import { LOCAL_LLM_MAX_CONCURRENCY } from '../../lib/localLlmConcurrency.js';
-import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosValidation.js';
+import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosTaskMetadata.js';
 import { localRuntimeForProvider, localEndpointPort, normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { listProviders, getActiveProvider } from '../provider/providers.js';
 import { isProviderAvailable, getFallbackProvider } from '../provider/providerStatus.js';

@@ -5110,7 +5110,7 @@ describe('peerSync', () => {
         expect(after.lastPushedHash).toBeFalsy();
       });
 
-      it('persists the receiver-side gap (`behind`) the 409 reports', async () => {
+      it('points to the peer on a mixed refusal and preserves the behind diagnostic', async () => {
         vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
         vi.mocked(peerFetch).mockResolvedValue({
           ok: false,
@@ -5128,11 +5128,61 @@ describe('peerSync', () => {
         const sub = await subscribePeer({
           peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
         }, { adoptedFromReverse: true });
-        await pushRecordToPeer(sub);
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          expect(await pushRecordToPeer(sub)).toMatchObject({ reason: 'peer-schema-behind', blockedBySchema: true });
+          expect(log).toHaveBeenCalledWith(expect.stringContaining('Update the peer’s PortOS to resume sync. sender ahead of receiver on universes'));
+          expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Update this PortOS'));
+        } finally {
+          log.mockRestore();
+        }
         const after = await findPeerSubscription('peer-a', 'universe', 'u1');
         expect(after.blockedBySchema.behind).toEqual([{ category: 'series', senderV: 2, receiverV: 3 }]);
         expect(after.blockedBySchema.peerPortosVersion).toBeNull();
         expect(after.blockedBySchema.peerSchemaVersions).toBeNull();
+      });
+
+      it('points to this install when the peer refuses a universe push over a behind-only catalog gap', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+          ingredients: [{ id: 'example-object', type: 'object', payload: { name: 'Example' } }],
+          refs: [],
+        });
+        const senderV = PORTOS_SCHEMA_VERSIONS.catalog;
+        const receiverV = senderV + 1;
+        const behind = [{ category: 'catalog', senderV, receiverV }];
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [], behind, receiverPortosVersion: '3.0.0' } },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          expect(await pushRecordToPeer(sub)).toEqual({
+            pushed: false, reason: 'local-schema-behind', blockedBySchema: true,
+          });
+          expect(log).toHaveBeenCalledWith(expect.stringContaining(
+            `Update this PortOS to resume sync. sender behind receiver on catalog (v${senderV} vs v${receiverV})`,
+          ));
+        } finally {
+          log.mockRestore();
+        }
+        const payload = JSON.parse(vi.mocked(peerFetch).mock.calls[0][1].body);
+        expect(payload.catalogBundle.ingredients).toHaveLength(1);
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(blocked.blockedBySchema).toMatchObject({ ahead: [], behind, peerPortosVersion: '3.0.0' });
+        expect(blocked.lastPushedHash).toBeFalsy();
+        expect(await pushRecordToPeer(blocked)).toEqual({
+          pushed: false, reason: 'local-schema-behind-cooldown', blockedBySchema: true,
+        });
+        expect(peerFetch).toHaveBeenCalledTimes(1);
       });
 
       it('reports a 409 without the schema code as a plain http-409 (no schema block)', async () => {

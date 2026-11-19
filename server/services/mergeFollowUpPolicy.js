@@ -4,7 +4,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 export async function followUpRoster(task, policy) {
   if (policy !== PR_COMPLETIONS.REVIEW_THEN_MERGE) return { reviewers: [], usernames: [], optionalReviewers: [], reviewerMaxRounds: {} };
   const [{ resolveReviewLoopOptions }, { normalizeReviewers }] = await Promise.all([
-    import('./codeReview.js'), import('../lib/cos/cosValidation.js'),
+    import('./codeReview.js'), import('../lib/reviewerConfig.js'),
   ]);
   const metadata = { ...task.metadata };
   if (isTruthyMeta(metadata.reviewLoopFollowUp)) {

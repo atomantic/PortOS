@@ -126,7 +126,7 @@ import { PRIORITY_VALUES } from '../../lib/taskParser.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 import { getTaskPrompt, } from '../../lib/cos/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../../lib/taskPauseHold.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { activeAgents, runnerAgents } from '../agent/agentState.js';
 
 const baseState = () => ({ agents: {} });

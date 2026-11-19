@@ -40,7 +40,7 @@ export async function probeSequenceDrain(job, { catalog, ignoreTaskId = null }) 
     return { reason: 'sequence drain requires perpetual claim-issue in Scheduled Tasks' };
   }
   const [{ getAppById }, { detectActionableWork }, { sanitizeTaskMetadata }] = await Promise.all([
-    import('./apps.js'), import('./perpetualWork.js'), import('../lib/cos/cosValidation.js'),
+    import('./apps.js'), import('./perpetualWork.js'), import('../lib/cos/cosTaskMetadata.js'),
   ]);
   const app = await getAppById(resolved.ref.appId);
   if (!app) return { reason: 'sequence target app is unavailable' };

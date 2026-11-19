@@ -13,7 +13,7 @@ import { delimiter, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { createDatabaseWriterRegistry } from './databaseWriterRegistry.js';
-import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
+import { CUTOVER_PSQL_ARGS, STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 import { installCutoverStubs } from '../test/fixtures/databaseCutoverStubs.js';
 import { isProcessAlive } from '../test/processAlive.js';
 
@@ -223,7 +223,7 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
       'import-start', 'import-commit', 'restart portos-server']);
     expect(stubs.events()).toContain('restart portos-cos');
     expect(stubs.invocations('pg_dump')).toEqual([`pg_dump -h ${from.host} -p ${from.port} -U ${from.user} -d ${from.database} --no-owner --no-privileges --no-comments --if-exists --clean`]);
-    expect(stubs.invocations('psql')).toEqual([`psql -h ${to.host} -p ${to.port} -U ${to.user} -d ${to.database} -v ON_ERROR_STOP=1 --single-transaction`]);
+    expect(stubs.invocations('psql')).toEqual([`psql -h ${to.host} -p ${to.port} -U ${to.user} -d ${to.database} ${CUTOVER_PSQL_ARGS}`]);
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);
     expect(stubs.imported()).toBe(STUB_DUMP_COMPLETE);
     expect(readFileSync(join(root, '.env'), 'utf8')).toBe(`PGMODE=${to.mode}\n`);

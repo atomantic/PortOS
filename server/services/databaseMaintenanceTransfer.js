@@ -68,6 +68,7 @@ function runDbScript(action, endpoint, { argument, dumpDir, expectedSha256, sign
     ...(expectedSha256 ? { PORTOS_IMPORT_SHA256: expectedSha256 } : {}) };
   const args = [toBashPath(join(PATHS.root, 'scripts', 'db.sh')), action, '--endpoint',
     endpoint.host, String(endpoint.port), endpoint.user, endpoint.database];
+  if (action === 'import') args.push('--cutover');
   if (argument) args.push(toBashPath(argument));
   return new Promise((resolve) => {
     const child = spawn(resolveBashBinary(), args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root),

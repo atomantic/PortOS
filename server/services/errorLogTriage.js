@@ -35,7 +35,7 @@ import { PATHS } from '../lib/paths.js';
 import { atomicWrite } from '../lib/fileCore.js';
 import { readJSONFile, safeJSONParse } from '../lib/jsonIo.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { ERROR_LOG_TRIAGE_LIMITS } from '../lib/cos/cosValidation.js';
+import { ERROR_LOG_TRIAGE_LIMITS } from '../lib/cos/cosTaskMetadata.js';
 import { fingerprintEntry, groupStderrEntries, templateSearchExcerpt } from '../lib/errorLogFingerprint.js';
 
 export const ERROR_LOG_TRIAGE_TASK_TYPE = 'error-log-triage';

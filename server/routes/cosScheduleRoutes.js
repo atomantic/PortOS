@@ -11,10 +11,8 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import {
-  sanitizeTaskMetadata, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema,
-  releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema
-} from '../lib/cos/cosValidation.js';
+import { taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cos/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';

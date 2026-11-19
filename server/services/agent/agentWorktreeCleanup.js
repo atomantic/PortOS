@@ -40,7 +40,7 @@ import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION,
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { findPullRequestForBranch } from '../github.js';
 import { readClaimOwnershipAgents } from '../cos/cosClaimOwnership.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from '../cos/cosClaimOwnershipState.js';
 
@@ -145,7 +145,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     task: originalTask,
     agentState,
     success,
-    prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
 }

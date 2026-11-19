@@ -18,6 +18,7 @@ import { isTruthyMeta } from './metadataFlags.js';
 import { isClaudeProvider, isOpencodeProvider } from './provider/providerModels.js';
 import { inferTuiCommand } from './provider/providerVendors.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
+import { REVIEWER_CLI_BINARIES } from './reviewerConfig.js';
 
 /** slashdo's command namespace — `commands/do/<cmd>.md` in the submodule. */
 export const SLASHDO_NAMESPACE = 'do';
@@ -49,23 +50,19 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
  * Reviewer slugs that drive slashdo's shared local-agent (spawnable CLI) loop.
  * PortOS-only CLI reviewers (`opencode`, `kilo`, `kimi`) are members too: pruning
  * their include would leave PortOS's inlined CLI Reviewer Procedure with nothing to point at.
- *
- * Kept here, not imported from reviewerConfig.js (its importer cosValidation.js
- * imports THIS module: cycle). Exported so reviewerConfig.test.js can pin it
- * against `REVIEWER_CLI_BINARIES`.
+ * Derived directly from `REVIEWER_CLI_BINARIES` so the two lists cannot drift.
  */
-export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi']);
+const LOCAL_AGENT_REVIEWERS = new Set(Object.keys(REVIEWER_CLI_BINARIES));
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
 const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
 /**
  * slashdo's `--review-with` vocabulary mapped to PortOS slugs (slashdo spells
  * antigravity `agy`, with `gemini` an alias; `cursor-agent` aliases `cursor`).
  *
- * Local for the same cycle reason as LOCAL_AGENT_REVIEWERS. Deliberately NOT the
- * full `REVIEWER_VALUES`: a PORTOS_ONLY slug has no slashdo counterpart and aborts
- * the command, so it means a hand-written argument and falls to the unresolvable
- * branch. `cmd[<invocation>]` is likewise absent: it maps to no PortOS reviewer,
- * so the run keeps every include.
+ * Deliberately NOT the full `REVIEWER_VALUES`: a PORTOS_ONLY slug has no slashdo
+ * counterpart and aborts the command, so it means a hand-written argument and
+ * falls to the unresolvable branch. `cmd[<invocation>]` is likewise absent: it
+ * maps to no PortOS reviewer, so the run keeps every include.
  */
 const SLASHDO_REVIEWER_SLUGS = Object.freeze({
   copilot: 'copilot',

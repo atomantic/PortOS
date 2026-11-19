@@ -20,10 +20,10 @@ const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // Files allowed to call resolveCloudProviderConfig directly:
 // - cloudProviderConfig.js — defines it (and resolveRenderTargetConfig wraps it).
-// - routes/imageGen.js + services/imageGen/index.js — the user-facing
-//   dispatcher pair: the request carries an explicit mode + cloudModel, so
-//   there is no render target to consult (the Image Gen page IS the manual
-//   surface).
+// - services/imageGen/submitJob.js + services/imageGen/index.js — the
+//   dispatcher pair (extracted from routes/imageGen.js): the request carries an
+//   explicit mode + cloudModel, so there is no render target to consult (the
+//   Image Gen page IS the manual surface).
 // - services/imageGen/prepareParams.js — the extracted pre-dispatch half of
 //   routes/imageGen.js, on the same request. It does NOT resolve a backend
 //   (`mode` is already resolved above it, through resolveRenderTargetConfig on
@@ -39,7 +39,7 @@ const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 //   resolved and resolves the same provider knobs the route dispatches with.
 const ALLOWED = new Set([
   'services/imageGen/cloudProviderConfig.js',
-  'routes/imageGen.js',
+  'services/imageGen/submitJob.js',
   'services/imageGen/index.js',
   'services/imageGen/prepareParams.js',
   'services/imageGen/fableLoomParams.js',

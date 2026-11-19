@@ -31,6 +31,8 @@ import { initialCandidateLifecycle } from '../releaseCandidateLifecycle.js';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { isHistoricalReleaseReceipt } from '../../lib/releasePublication.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, completionReceiptDone, completionStagesDone,
+  completionStagesDoneExceptWorktree, verifiedRepositoryWorktreeStage } from '../../lib/agent/agentCompletionStages.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -347,7 +349,7 @@ async function archiveCompletedAgent(agentId, agent) {
 export function recordRepoStateVerification(agentId, verification) {
   return updateCompletionReceipt(agentId, (metadata, agent) => {
     const capture = metadata.checkoutCapture;
-    const verifiedBy = metadata.completionCleanup?.stages?.worktree?.verifiedBy;
+    const verifiedBy = metadata.completionCleanup?.stages?.[COMPLETION_STAGE.WORKTREE]?.verifiedBy;
     const currentInventory = ['current-inventory', 'inherited-current-inventory'].includes(verifiedBy);
     // Completed agent records from before the inventory transition remain valid.
     const legacyRetirement = ['service-retirement-receipt', 'inherited-service-retirement-receipt'].includes(verifiedBy)
@@ -493,10 +495,7 @@ export function isSettleableCompletionReceipt(agent, metadata) {
     || result.executionInterruption || metadata.executionInterruption || metadata.blocker
     || metadata.checkoutCapture?.status !== 'captured'
     || metadata.repoStateVerification?.status !== 'completed'
-    || cleanup?.status !== 'completed' || cleanup.version !== 1
-    || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree']
-      .some(key => cleanup.stages?.[key]?.status !== 'done')
-    || Object.values(cleanup.stages).some(stage => stage.status !== 'done')
+    || !completionReceiptDone(cleanup)
     || outcome?.status !== 'verified' || outcome.unresolved !== 0
     || outcome.committedIntegrationVerified !== true) return false;
   return true;
@@ -562,7 +561,7 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
   const saved = await updateCompletionReceipt(agentId, (metadata, agent) => {
     if (agent.startedAt !== startedAt) return metadata;
     matched = true;
-    const prior = metadata.completionCleanup || { version: 1, stages: {} };
+    const prior = metadata.completionCleanup || { version: COMPLETION_RECEIPT_VERSION, stages: {} };
     const completionCleanup = { ...prior, ...patch,
       stages: { ...prior.stages, ...patch.stages }, updatedAt: new Date().toISOString() };
     if (['completed', 'failed', 'abandoned'].includes(completionCleanup.status)) {
@@ -606,11 +605,10 @@ export async function recordAbsentCheckoutRetirement(agentId, expected, proof) {
         || metadata.isWorktree !== false || metadata.completedCheckouts?.length
         || metadata.worktreeBranch || metadata.prDeliveryTarget || metadata.reviewLoopMergeTarget)) return metadata;
     const stages = metadata.completionCleanup.stages;
-    if (!stages || !stages.worktree || ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
-      || Object.entries(stages).some(([key, stage]) => key !== 'worktree' && stage.status !== 'done')) return metadata;
+    if (!completionStagesDoneExceptWorktree(stages)) return metadata;
     matched = true;
     const completionCleanup = { ...metadata.completionCleanup, status: 'completed', updatedAt: new Date().toISOString(),
-      stages: { ...stages, worktree: { status: 'done', retryable: false, verifiedBy } } };
+      stages: { ...stages, [COMPLETION_STAGE.WORKTREE]: { status: 'done', retryable: false, verifiedBy } } };
     delete completionCleanup.context; delete completionCleanup.replay;
     const updated = { ...metadata, completionCleanup,
       repoStateVerification: { ...metadata.repoStateVerification, status: 'completed', reasons: [],
@@ -639,11 +637,10 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
       || keys.some(key => !isDeepStrictEqual(metadata[key], expected.metadata?.[key]))
       || await getTaskById(agent.taskId)) return metadata;
     const prior = metadata.completionCleanup;
-    if (prior?.version !== 1 || !prior.replay
-      || (successfulAudit ? prior.status !== 'completed' || prior.stages?.worktree?.status !== 'done' : prior.status !== 'pending')) return metadata;
-    const stages = { ...prior.stages, worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } };
-    if (['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
-      || Object.values(stages).some(stage => stage.status !== 'done')) return metadata;
+    if (prior?.version !== COMPLETION_RECEIPT_VERSION || !prior.replay
+      || (successfulAudit ? prior.status !== 'completed' || prior.stages?.[COMPLETION_STAGE.WORKTREE]?.status !== 'done' : prior.status !== 'pending')) return metadata;
+    const stages = { ...prior.stages, [COMPLETION_STAGE.WORKTREE]: verifiedRepositoryWorktreeStage() };
+    if (!completionStagesDone(stages)) return metadata;
     const { context: _context, replay: _replay, ...ledger } = prior;
     const now = new Date().toISOString();
     matched = true;
@@ -844,7 +841,7 @@ export async function completeAgent(agentId, result = {}) {
     const cleanup = agent.metadata?.completionCleanup;
     const cleanupContext = cleanup?.replay || cleanup?.context;
     const metadata = { ...agent.metadata,
-      completionCleanup: { version: 1, stages: {}, ...cleanup, startedAt: agent.startedAt,
+      completionCleanup: { version: COMPLETION_RECEIPT_VERSION, stages: {}, ...cleanup, startedAt: agent.startedAt,
         status: cleanupContext ? cleanup.status || 'pending' : 'abandoned',
         ...(!cleanupContext && { reason: 'completion-context-unavailable' }) },
       ...(completedCheckouts ? { checkoutCapture: checkoutCapture || { status: 'captured' } } : {}),

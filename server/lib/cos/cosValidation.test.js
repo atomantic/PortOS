@@ -1,12 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  createCosTaskSchema,
-  updateCosTaskSchema,
-  createCosJobSchema,
-  updateCosJobSchema,
-  sanitizeTaskMetadata,
-  taskTemplateSettingsSchema,
-} from './cosValidation.js';
+import { createCosTaskSchema, updateCosTaskSchema, createCosJobSchema, updateCosJobSchema, taskTemplateSettingsSchema } from './cosValidation.js';
+import { sanitizeTaskMetadata } from './cosTaskMetadata.js';
 import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { JOB_INTERVAL_VALUES, ON_DEMAND_INTERVAL } from '../autonomousJobIntervals.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
@@ -253,23 +247,6 @@ describe('cosValidation non-worktree completion choice', () => {
     expect(createCosTaskSchema.safeParse({ description: 'x', whenDone: 'later' }).success).toBe(false);
     expect(sanitizeTaskMetadata({ whenDone: 'commit-push' })).toEqual({ whenDone: 'commit-push' });
     expect(sanitizeTaskMetadata({ whenDone: 'later' })).toBeNull();
-  });
-});
-
-// The reviewer vocabulary moved to reviewerConfig.js (#5702); cosValidation.js
-// re-exports it flat. Dropping that hop fails no reviewer test (those import the
-// new module directly) — it surfaces as `undefined is not a function` inside prompt assembly for a
-// scheduled review-loop task, so pin the hop as a SAME-object re-export.
-describe('reviewerConfig transitional re-export shim (#5702)', () => {
-  it('re-exports every reviewerConfig symbol through cosValidation.js', async () => {
-    const reviewerConfig = await import('../reviewerConfig.js');
-    const cos = await import('./cosValidation.js');
-    const keys = Object.keys(reviewerConfig);
-    expect(keys).toContain('buildReviewWithArgs');
-    expect(keys).toContain('REVIEWER_VALUES');
-    for (const key of keys) {
-      expect(cos[key], `cosValidation.js re-export of '${key}'`).toBe(reviewerConfig[key]);
-    }
   });
 });
 

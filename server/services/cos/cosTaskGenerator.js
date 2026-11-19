@@ -21,7 +21,7 @@
  * read from cos.js module state, and the paused check reads state directly.
  */
 
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 import { hasQuotaBurnProvenance, } from '../../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../../lib/investigationTasks.js';

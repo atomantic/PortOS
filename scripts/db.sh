@@ -16,9 +16,9 @@
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
 #                (provisions the PGHOST/PGPORT you select; never another cluster)
-#   use-docker   Unavailable pending coordinated offline cutover
-#   use-native   Unavailable pending coordinated offline cutover
-#   migrate      Unavailable pending coordinated offline cutover
+#   use-docker   Legacy command. Use Settings → Database
+#   use-native   Legacy command. Use Settings → Database
+#   migrate      Legacy command. Use Settings → Database
 #   export       Export database to a SQL dump file
 #   import       Import a SQL dump file into the database
 #   logs         Show database logs
@@ -154,6 +154,12 @@ cmd_transfer() {
     fi
     set_explicit_endpoint "$2" "$3" "$4" "$5" || return 1
     shift 5
+  fi
+  if [ "$action" = import ] && [ "$EXPLICIT_ENDPOINT" = true ] && [ "$#" -eq 2 ] && [ "$1" = --cutover ]; then
+    # pg_dump --clean only drops source objects. Replay the fixed retirement
+    # even if the imported ledger already records it, in the same transaction.
+    cmd_import "$2" -X -f - -f "$ROOT_DIR/server/scripts/db-migrations/030-drop-retired-native-usage-tables.sql"
+    return
   fi
   if [ "$#" -gt 1 ] || { [ "$action" = "import" ] && [ "$#" -ne 1 ]; }; then
     err "Expected one import file or an optional export label" >&2
@@ -699,7 +705,7 @@ cmd_setup_native() {
   info "Using system PostgreSQL on port $PGPORT"
   info "Database: $PGDATABASE (user: $PGUSER)"
   info "Provisioning only: the selected mode is unchanged; Docker data has not been migrated."
-  info "Coordinated backend migration is not yet available. Keep using the current backend."
+  info "To move existing data, use Settings → Database for a coordinated cutover."
 }
 
 # Scope inherited libpq settings out of explicit transfers. PGHOSTADDR takes
@@ -808,6 +814,7 @@ cmd_export() {
 # Import SQL dump into database
 cmd_import() (
   local dumpfile="$1"
+  shift
 
   if [ ! -f "$dumpfile" ]; then
     err "Dump file not found: $dumpfile"
@@ -824,17 +831,16 @@ cmd_import() (
   if ! replay="$(node "$ROOT_DIR/scripts/prepare-database-replay.mjs" "$dumpfile" "$stage")"; then
     return 1
   fi
-  run_psql -v ON_ERROR_STOP=1 --single-transaction < "$replay"
+  run_psql -v ON_ERROR_STOP=1 --single-transaction "$@" < "$replay" || return $?
 
   log "Import complete"
 )
 
 # Do not snapshot and change mode while PortOS can still accept writes.
-# A process-list probe is not a writer fence. The recoverable coordinator in
-# #8805 must own admission, explicit endpoints and verified restart first.
+# The coordinator behind Settings → Database fences writers and verifies restart.
 cmd_migrate() {
-  err "Database migration and switching are temporarily unavailable: coordinated shutdown and restart are required to preserve writes." >&2
-  echo "Keep using the current backend. Backups remain available via scripts/db.sh export." >&2
+  err "This command refuses direct database migration or switching. Use Settings → Database for a coordinated cutover." >&2
+  echo "Backups remain available via scripts/db.sh export." >&2
   return 1
 }
 
@@ -876,10 +882,10 @@ Commands:
   logs           Tail database logs
 
   setup-native   Detect/install PostgreSQL, create portos database
-  use-docker     Unavailable pending coordinated offline cutover
-  use-native     Unavailable pending coordinated offline cutover
+  use-docker     Legacy command. Use Settings → Database
+  use-native     Legacy command. Use Settings → Database
 
-  migrate        Unavailable pending coordinated offline cutover
+  migrate        Legacy command. Use Settings → Database
   export [label] Export database to data/db-dumps/
   import <file>  Import a SQL dump file
   export --endpoint <host> <port> <user> <database> [label]

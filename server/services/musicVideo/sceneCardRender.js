@@ -42,10 +42,11 @@ export async function renderSceneFrames(project, { sceneId, sceneIds, ...input }
       const scene = sceneOrThrow(project, id);
       const built = await buildSceneFrameGenerateBody(project, scene, input);
       const { castInputs, ...body } = built;
-      const { executeImageGenerate, generateSchema } = await import('../../routes/imageGen.js');
+      const { generateSchema } = await import('../../lib/imageGenValidation.js');
+      const { executeImageGenerate } = await import('../imageGen/submitJob.js');
       const { validateRequest } = await import('../../lib/validateRequest.js');
       const data = validateRequest(generateSchema, body);
-      const rendered = await executeImageGenerate({ baseUrl: '/api/image-gen', method: 'POST', route: { path: '/generate' } }, data);
+      const rendered = await executeImageGenerate(data);
       results.push({ sceneId: id, ok: true, ...rendered.body, castInputs: rendered.params?.musicVideo?.castInputs || castInputs });
     } catch (error) {
       if (!sceneIds) throw error;
@@ -219,7 +220,7 @@ export async function renderSceneClips(project, { sceneId, sceneIds, ...input } 
     try {
       const scene = sceneOrThrow(project, id);
       const body = await buildSceneClipSubmission(project, scene, input);
-      const { generateBodySchema } = await import('../../routes/videoGen.js');
+      const { generateBodySchema } = await import('../../lib/videoGenValidation.js');
       const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
       const parsed = generateBodySchema.safeParse(body);
       if (!parsed.success) failValidation(parsed);

@@ -82,7 +82,7 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
     expect(removeWorktree).not.toHaveBeenCalled();
   });
 
-  it('audits after cleanup, carrying the task, the run verdict and the PR expectation', async () => {
+  it('audits after cleanup, carrying the task, agent record and run verdict', async () => {
     const originalTask = { id: 'task-1', metadata: { app: 'demo-app', openPR: true } };
 
     await cleanupAgentWorktree('agent-1', true, { originalTask });
@@ -94,7 +94,6 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
       task: originalTask,
       agentState: worktreeAgent,
       success: true,
-      prExpected: true,
       cleanupWarnings: [],
     });
   });
@@ -113,7 +112,7 @@ describe('cleanupAgentWorktree → repo-state audit', () => {
 
     expect(a).toEqual(b);
     expect(verifyAgentRepoState).toHaveBeenCalledTimes(1);
-    expect(verifyAgentRepoState.mock.calls[0][0].prExpected).toBe(false);
+    expect(verifyAgentRepoState).toHaveBeenCalledWith(expect.objectContaining({ task: originalTask }));
   });
 
   it('does not make callers wait on the audit', async () => {

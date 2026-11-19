@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
-import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
+import { codeReviewSettingsSchema } from '../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
