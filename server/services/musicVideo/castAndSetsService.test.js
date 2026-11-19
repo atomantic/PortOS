@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { EventEmitter } from 'node:events';
 import { request } from '../../lib/testHelper.js';
+import { setAtomicWriteDurabilityForTests } from '../../lib/fileCore.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideo/musicVideoCreativeContext.js';
@@ -255,7 +256,12 @@ afterEach(async () => {
   heldWorkReleases.clear();
   await service.__settleCastAndSetsForTests();
 });
-afterAll(cleanupTempDataRoots);
+// Every hop persists the project into a throwaway root; its crash-durability fsyncs were the suite's dominant cost (#16834).
+setAtomicWriteDurabilityForTests(false);
+afterAll(() => {
+  setAtomicWriteDurabilityForTests(true);
+  cleanupTempDataRoots();
+});
 
 async function productionCheckin(limits, price = 0.25, overrides = {}) {
   const project = await seed(overrides);
