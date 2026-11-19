@@ -18,6 +18,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
+const { resolveInputImages } = await import('../imageGen/inputImages.js');
 const projects = await import('./projects.js');
 const thumbs = await import('./youtubeThumbnail.js');
 const cover = await import('./coverArt.js');
@@ -140,9 +141,22 @@ describe('YouTube thumbnail', () => {
 });
 
 describe('painting the title with the image model', () => {
+  it('only recognizes a kit frame by its absolute path in the thumbnail store', async () => {
+    const { frame } = await projectWithFrame();
+    for (const reference of [frame, join(PATHS.videoThumbnails, 'nested', frame), join(PATHS.videoThumbnails, 'missing.jpg')]) {
+      expect(() => resolveInputImages({ mode: 'codex', referenceImagePaths: [reference] }))
+        .toThrow(expect.objectContaining({ code: 'IMAGE_INPUT_UNAVAILABLE' }));
+    }
+  });
+
   it('queues the frame with the brief as an addition, and makes the painted image the thumbnail when it lands', async () => {
     const { id, frame } = await projectWithFrame();
-    const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));
+    const framePath = join(PATHS.videoThumbnails, frame);
+    const enqueue = vi.fn(async ({ params }) => {
+      const { paths } = resolveInputImages({ mode: 'codex', referenceImagePaths: params.referenceImagePaths });
+      expect(paths).toEqual([framePath]);
+      return { jobId: 'job-example' };
+    });
     thumbs.__setYoutubeThumbnailDepsForTests({
       getSettings: async () => ({}), defaultRoute: async () => ({ mode: 'codex', model: null }),
       imageParams: async (_s, route, common) => ({ ...common, provider: route.mode }), enqueue, jobStatus: async () => 'queued',
@@ -153,7 +167,7 @@ describe('painting the title with the image model', () => {
     expect(params.prompt).toContain('"Example Song"');
     expect(params.prompt.endsWith('chrome letters')).toBe(true);
     expect(params.promptAdditions).toEqual([expect.objectContaining({ id: 'youtube-thumbnail-brief' })]);
-    expect(params.referenceImagePaths).toEqual([join(PATHS.videoThumbnails, frame)]);
+    expect(params.referenceImagePaths).toEqual([framePath]);
     const requestId = params.musicVideo.youtubeThumbnail.requestId;
     expect((await kitOf(id)).youtubeThumbnail.pending).toMatchObject({ requestId, jobId: 'job-example' });
     await expect(thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example Song' })).rejects.toMatchObject({ status: 409 });
