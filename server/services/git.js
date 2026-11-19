@@ -610,10 +610,9 @@ export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHead
 
   // A zero exit may mean queued, and a timeout/nonzero exit may follow a
   // completed merge. Read back before reporting success or deleting anything.
-  const { execGh } = await import('./github.js');
-  const merged = await execGh(['pr', 'view', String(prNumber), '--json',
-    'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository'],
-  undefined, { cwd: dir, env }).then(value => safeJSONParse(value, null), () => null);
+  const { readPullRequest } = await import('./prProbe.js');
+  const merged = await readPullRequest(prNumber,
+    'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository', { cwd: dir, env });
   if (merged?.state !== 'MERGED') {
     return { success: false, error: result.error || 'Pull request merge is not yet verified',
       branchCleanup: { deleted: false, reason: 'merge-unverified' }, ...meta };
