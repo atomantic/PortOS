@@ -8,9 +8,9 @@ vi.mock('./projectStore.js', () => ({
   saveStageRun: vi.fn(),
 }));
 vi.mock('./projectFiles.js', async original => ({ ...await original(), readProjectFiles: vi.fn(async () => { throw new Error('Synthetic source read failure'); }) }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 const { startProductionStageRun, activeStageRunIds } = await import('./stages.js');
-const { emitCodeAnimationChanged } = await import('../socket.js');
+const { emitCodeAnimationChanged } = await import('./events.js');
 const { saveStageRun } = await import('./projectStore.js');
 
 it('holds update admission through terminal persistence and then announces the idle run', async () => {

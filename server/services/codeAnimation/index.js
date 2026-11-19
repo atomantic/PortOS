@@ -16,7 +16,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { isVisionCapableCodexTuiProvider } from '../../lib/codex.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';

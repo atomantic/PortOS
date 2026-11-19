@@ -21,7 +21,7 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { PATHS } from '../../lib/paths.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { analyzeEvidence, evaluateVerdict } from './evidence.js';
 import { buildExportShim, injectExportShim } from './export.js';
 import * as store from './projectStore.js';

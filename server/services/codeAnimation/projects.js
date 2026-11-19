@@ -5,7 +5,7 @@ import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema } from '../
 import { validateRequest } from '../../lib/validateRequest.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import * as store from './projectStore.js';
 import { stageProjectFiles, readProjectFiles, sourceHashOf, ownedStorageRetained } from './projectFiles.js';
 import { activeStageRunIds } from './stages.js';

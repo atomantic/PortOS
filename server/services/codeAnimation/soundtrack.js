@@ -11,7 +11,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, saveCodeAnimationJobRecord } from './jobStore.js';
 
 const fail = (status, code, message, context) => new ServerError(message, { status, code, ...(context ? { context } : {}) });

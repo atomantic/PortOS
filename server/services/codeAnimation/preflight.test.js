@@ -5,7 +5,6 @@ import router from '../../routes/codeAnimation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./projectStore.js', () => ({ getProjectRecord: vi.fn() }));
 vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn(), getSelectableProviders: vi.fn() }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 // Keep the real runner resolver, but trip if a data-only preview dispatches.
 vi.mock('../promptRunner.js', async importOriginal => ({ ...await importOriginal(), runPromptThroughProvider: vi.fn(() => { throw new Error('Unexpected provider call'); }) }));
 import { getProjectRecord } from './projectStore.js';

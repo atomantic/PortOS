@@ -11,7 +11,7 @@ import { acceptanceFreshness, acceptanceProblem, freezeAcceptance, summarizeRunF
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { mutateVideoHistory } from '../videoGen/history.js';
 import * as store from './projectStore.js';
 import { getProductionProject } from './projects.js';
