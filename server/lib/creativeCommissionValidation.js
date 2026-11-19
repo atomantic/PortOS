@@ -16,6 +16,9 @@ import {
   CREATIVE_COMMISSION_IMAGE_MODES, CREATIVE_COMMISSION_VIDEO_MODES,
   COMMISSION_RENDER_BACKEND_AUTO, COMMISSION_RENDER_MODEL_MAX,
   GENERATION_KEY_DEFS, ABILITY_GENERATION_SPEC,
+  CREATIVE_COMMISSION_ABILITIES, CREATIVE_COMMISSION_SCHEDULE_KINDS,
+  COMMISSION_MUSIC_TASTE_ANCHOR_MAX, COMMISSION_MUSIC_TASTE_PERCENT_MAX,
+  COMMISSION_MUSIC_TASTE_ENGINE_MAX, CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS,
 } from './creativeCommissionSpec.js';
 
 // Re-exported for every existing importer of this module (abilityAdapters.js,
@@ -28,6 +31,9 @@ export {
   CREATIVE_COMMISSION_IMAGE_MODES, CREATIVE_COMMISSION_VIDEO_MODES,
   COMMISSION_RENDER_BACKEND_AUTO, COMMISSION_RENDER_MODEL_MAX,
   GENERATION_KEY_DEFS, ABILITY_GENERATION_SPEC,
+  CREATIVE_COMMISSION_ABILITIES, CREATIVE_COMMISSION_SCHEDULE_KINDS,
+  COMMISSION_MUSIC_TASTE_ANCHOR_MAX, COMMISSION_MUSIC_TASTE_PERCENT_MAX,
+  COMMISSION_MUSIC_TASTE_ENGINE_MAX, CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS,
 };
 
 // =============================================================================
@@ -53,12 +59,12 @@ export {
 // explicit type or default to `video`) keep running unchanged. The broader set
 // the original Phase-1 note named (`universe`, `story`, `writers-room`) stays
 // future work under epic #2657 — only the five the request enumerated ship here.
-export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video', 'image', 'music', 'music-video', 'series']);
+// CREATIVE_COMMISSION_ABILITIES lives in creativeCommissionSpec.js.
 
 // Schedule cadence kinds. DAILY/WEEKLY are composed into a cron by the service;
 // CUSTOM carries a raw 5-field cron; RECURRENCE carries the richer calendar rule
 // used for anchored intervals such as every two weeks or the last Thursday.
-export const CREATIVE_COMMISSION_SCHEDULE_KINDS = Object.freeze(['DAILY', 'WEEKLY', 'CUSTOM', 'RECURRENCE']);
+// CREATIVE_COMMISSION_SCHEDULE_KINDS lives in creativeCommissionSpec.js.
 
 // Keys allowed for a given ability (the spec keys + the universal `model`). Used
 // by the create-path superRefine to flag a param that doesn't belong to the type.
@@ -77,11 +83,6 @@ function generationFieldSchema(def) {
   return z.number().int().min(def.min).max(def.max).optional();
 }
 
-export const COMMISSION_MUSIC_TASTE_ANCHOR_MAX = 5;
-export const COMMISSION_MUSIC_TASTE_PERCENT_MAX = 100;
-export const COMMISSION_MUSIC_TASTE_ENGINE_MAX = 64;
-
-export const CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS = Object.freeze(['week', 'month']);
 
 const musicTasteEngineId = z.string().trim().max(COMMISSION_MUSIC_TASTE_ENGINE_MAX).nullable().optional();
 

@@ -13,7 +13,7 @@
 
 import net from 'net';
 import dns from 'dns/promises';
-import { isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
+import { isBlockedIngestHost } from '../lib/safeUrlFetch.js';
 import crypto from 'crypto';
 import { loadData, withData, UNKNOWN_INSTANCE_ID, getInstanceId, getSelf } from './instanceIdentity.js';
 import { DEFAULT_SYNC_CATEGORIES, hasOptedInCategory, resolveEffectiveCategories, allSyncCategoriesOn } from '../lib/instanceSyncCategories.js';

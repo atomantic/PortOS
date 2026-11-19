@@ -12,7 +12,7 @@ import { PHOTOREAL_TEXTURE_ID, PHOTOREAL_TEXTURED_PRESETS, photorealLookSchema }
 import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { worldMapSchema } from '../worldMapValidation.js';
 import { emptyToNull } from '../zodCompat.js';
-import { REVISION_SOURCES } from './catalogValidation.js';
+import { REVISION_SOURCES } from './catalogTypes.js';
 
 // Place greybox (docs/plans/2026-10-25-place-greybox.md). The draft body is the
 // provider › model › effort pick plus the user's own instruction; the picker's

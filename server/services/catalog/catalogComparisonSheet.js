@@ -29,7 +29,7 @@ import { universeAestheticLine } from '../../lib/universeVisualStyle.js';
 import { characterHeightStat } from '../../lib/catalog/catalogAppearance.js';
 import { resolveHeight } from '../../lib/characterHeight.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
-import { CATALOG_COMPARISON_VARIANT_ID } from '../../lib/catalog/catalogValidation.js';
+import { CATALOG_COMPARISON_VARIANT_ID } from '../../lib/catalog/catalogTypes.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { DEFAULT_PHOTOGRAPHIC_SHEET_STYLE, extractCharacterPromptCommon } from '../universeCharacterSheet.js';
 import { promptAddition } from '../../lib/modelInput.js';

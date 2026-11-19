@@ -2,7 +2,7 @@ import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import EventEmitter from 'events';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { digitalTwinMetaSchema } from '../lib/digitalTwinValidation.js';
+import { digitalTwinMetaSchema } from '../lib/digitalTwinSchemas.js';
 import { safeJSONParse, atomicWrite, tryReadFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';

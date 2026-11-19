@@ -34,8 +34,8 @@ import { renderMusicTasteRecipePrompt } from './musicTasteRecipe.js';
 import {
   ABILITY_GENERATION_SPEC, GENERATION_KEY_DEFS, CREATIVE_COMMISSION_ABILITIES,
   COMMISSION_RENDER_BACKEND_AUTO,
-} from '../../lib/creativeCommissionValidation.js';
-import { resolvedDefault } from '../../lib/creativeCommissionSpec.js';
+  resolvedDefault,
+} from '../../lib/creativeCommissionSpec.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { buildVideoPromptGuidance } from './videoPromptGuidance.js';
 import { isStr } from '../../lib/textUtils.js';

@@ -4,7 +4,7 @@ import { join, resolve } from 'path';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, withMetaLock } from './digital-twin-meta.js';
 import { atomicWrite } from '../lib/fileUtils.js';
-import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
+import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { isPathInsideDir } from '../lib/pathSafety.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractVersion } from './digital-twin-meta.js';

@@ -93,3 +93,10 @@ export const ABILITY_GENERATION_SPEC = Object.freeze(
     defaults: Object.fromEntries(keys.map((k) => [k, resolvedDefault(GENERATION_KEY_DEFS[k])])),
   }])),
 );
+
+export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video', 'image', 'music', 'music-video', 'series']);
+export const CREATIVE_COMMISSION_SCHEDULE_KINDS = Object.freeze(['DAILY', 'WEEKLY', 'CUSTOM', 'RECURRENCE']);
+export const COMMISSION_MUSIC_TASTE_ANCHOR_MAX = 5;
+export const COMMISSION_MUSIC_TASTE_PERCENT_MAX = 100;
+export const COMMISSION_MUSIC_TASTE_ENGINE_MAX = 64;
+export const CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS = Object.freeze(['week', 'month']);

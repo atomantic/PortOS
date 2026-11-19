@@ -22,7 +22,7 @@
  */
 
 import { query } from '../lib/db.js';
-import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyValidation.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 // vaultCrypto is imported lazily (inside getPrivacyTwinContext) so merely
 // importing this module — which digital-twin-context.js does at top level —
 // doesn't eagerly evaluate vaultCrypto's install-root .env path resolution.

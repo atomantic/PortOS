@@ -7,7 +7,7 @@
  * differently, in feeds.js `fetchFeedXml` and catalogIngestSources.js
  * `assertIngestUrlSafe`). The hard part — classifying a host literal as
  * loopback/link-local/cloud-metadata across IPv4 / IPv6 / IPv4-mapped forms —
- * is reused from `catalogValidation.isBlockedIngestHost`; this module adds the
+ * is reused from `isBlockedIngestHost` (defined below); this module adds the
  * DNS-resolve check and the redirect-revalidating fetch wrappers on top.
  *
  * Posture (matches the catalog ingest gate): block non-http(s) schemes,
@@ -27,10 +27,82 @@ import dns from 'dns/promises';
 import { Agent, Dispatcher1Wrapper } from 'undici';
 import { ServerError } from './errorHandler.js';
 import { fetchWithTimeout } from './fetchWithTimeout.js';
-import { isSafeIngestUrl, isBlockedIngestHost } from './catalog/catalogValidation.js';
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_BYTES = 12 * 1024 * 1024; // 12 MB — generous for a single image/feed
+
+/**
+ * Decode an IPv4 embedded in an IPv6 literal — IPv4-mapped (::ffff:…) OR the
+ * deprecated IPv4-compatible (::…) form, either dotted (::ffff:1.2.3.4) or the
+ * two-hextet form URL parsing normalizes to (::ffff:c0a8:101 AND the ffff-less
+ * ::c0a8:101). Returns the dotted quad, or null when `lowerHost` isn't one.
+ * Shared by isBlockedIngestHost and isPrivateAddress so neither can drift.
+ */
+function embeddedIPv4(lowerHost) {
+  const embedded = /^::(?:ffff:)?(.+)$/i.exec(lowerHost);
+  if (!embedded) return null;
+  const tail = embedded[1];
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return tail;
+  const parts = tail.split(':');
+  if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+    const hi = parseInt(parts[0], 16);
+    const lo = parseInt(parts[1], 16);
+    return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  return null;
+}
+
+// A host (bracket-stripped, lowercased) that the URL ingest must refuse:
+// loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
+// the named cloud-metadata endpoints that hide inside allowed private ranges
+// (Alibaba 100.100.100.200, AWS IPv6 IMDS fd00:ec2::254 — see inline note),
+// and the unspecified address — in plain IPv4, IPv6, IPv4-mapped-IPv6
+// (`::ffff:127.0.0.1` → WHATWG-hex `::ffff:7f00:1`), AND the deprecated
+// IPv4-compatible-IPv6 form (`::127.0.0.1` → `::7f00:1`), so the guard can't be
+// bypassed by embedding a blocked v4 address inside an IPv6 literal. A trailing
+// FQDN dot (`localhost.`, `127.0.0.1.`) is stripped first since resolvers treat
+// it as equivalent. NOTE: decimal / hex / octal / shorthand IPv4 (`2130706433`,
+// `0x7f000001`, `127.1`) need no special handling — `new URL()` already
+// normalizes them to canonical dotted-quad in `.hostname` before this runs. We
+// deliberately ALLOW other private/LAN hosts (incl. IPv6 ULA `fd00::/8`):
+// reaching a Tailscale peer or home-network wiki is a legit use of this
+// single-user tool. This is a host-literal guard, not a DNS-resolution or
+// post-redirect check — a hostname that RESOLVES to loopback, or a redirect to
+// a blocked host, is not caught here.
+export const isBlockedIngestHost = (host) => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
+  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // Named cloud-metadata endpoints that live INSIDE otherwise-allowed private
+  // ranges, so the "allow LAN" posture would leak them without an explicit
+  // literal block: Alibaba ECS metadata `100.100.100.200` sits in the CGNAT
+  // 100.64/10 block (which Tailscale also uses), and AWS's IPv6 IMDS
+  // `fd00:ec2::254` sits in IPv6 ULA fd00::/8. Both WHATWG-normalize to these
+  // exact canonical forms (and dns.lookup returns them canonical too), so an
+  // exact match catches both the URL-literal and DNS-resolved paths. Blocking
+  // these two exact IPs does NOT meaningfully shrink the Tailscale/ULA space a
+  // real peer could occupy (a peer landing on exactly 100.100.100.200 is a
+  // 1-in-4M collision), and a PortOS install has no reason to fetch cloud IMDS.
+  if (h === '100.100.100.200' || h === 'fd00:ec2::254') return true;
+  // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
+  if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
+  const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
+  // A blocked v4 address embedded in an IPv6 literal (mapped or compatible form).
+  const embeddedV4 = embeddedIPv4(h);
+  if (embeddedV4) return v4Blocked(embeddedV4);
+  return false;
+};
+
+// Block schemes and hosts that would turn "fetch this page" into local-file
+// exfiltration or cloud-metadata SSRF: non-http(s) schemes (file:/chrome:/
+// javascript:/ftp:) and the blocked hosts above.
+export const isSafeIngestUrl = (raw) => {
+  let u;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  return !isBlockedIngestHost(u.hostname);
+};
 
 /**
  * Classify an IP literal as private/loopback/link-local (IPv4 or IPv6) for the
@@ -44,23 +116,9 @@ export function isPrivateAddress(ip) {
   const lower = ip.toLowerCase();
   if (lower.includes(':')) {
     if (lower === '::1' || lower === '::') return true;
-    // Embedded IPv4 — IPv4-mapped (::ffff:…) OR the deprecated IPv4-compatible
-    // (::…) form, either dotted (::ffff:1.2.3.4) or the two-hextet form URL
-    // parsing normalizes to (::ffff:c0a8:101 AND the ffff-less ::c0a8:101 that
-    // `new URL('http://[::192.168.1.1]')` yields). Decode and re-check as IPv4 so
-    // a private v4 embedded in an IPv6 literal can't slip past. Mirrors the
-    // embedded-v4 handling in catalogValidation.isBlockedIngestHost.
-    const embedded = /^::(?:ffff:)?(.+)$/i.exec(lower);
-    if (embedded) {
-      const tail = embedded[1];
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return isPrivateAddress(tail);
-      const parts = tail.split(':');
-      if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
-        const hi = parseInt(parts[0], 16);
-        const lo = parseInt(parts[1], 16);
-        return isPrivateAddress(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
-      }
-    }
+    // A private v4 embedded in an IPv6 literal can't slip past: decode and re-check as IPv4.
+    const embeddedV4 = embeddedIPv4(lower);
+    if (embeddedV4) return isPrivateAddress(embeddedV4);
     const firstGroup = lower.split(':')[0];
     if (firstGroup) {
       const firstWord = parseInt(firstGroup, 16);

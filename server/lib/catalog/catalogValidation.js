@@ -14,6 +14,8 @@
  */
 
 import { z } from 'zod';
+import { CATALOG_PAYLOAD_MAX_CHARS, CATALOG_COMPARISON_VARIANT_ID, CATALOG_LOOK_VARIANT_ID, REVISION_SOURCES } from './catalogTypes.js';
+import { isSafeIngestUrl } from '../safeUrlFetch.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../musicVideo/musicVideoSubjectLimits.js';
 import { universeVisualProfileSchema } from '../universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from '../storyBible.js';
@@ -84,7 +86,6 @@ const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
 // size at the JSON.stringify length to keep a single user accident from
 // landing a 50-MB blob in the catalog. The extraction service is responsible
 // for shape correctness; the schema only enforces the boundary.
-export const CATALOG_PAYLOAD_MAX_CHARS = 200_000;
 const payload = z.record(z.string(), z.unknown())
   .refine((p) => JSON.stringify(p).length <= CATALOG_PAYLOAD_MAX_CHARS, {
     message: 'payload exceeds 200KB JSON size cap',
@@ -162,70 +163,6 @@ export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
 // the same extraction pipeline the paste→extract→commit flow uses, so the
 // client lands on the identical review phase. `providerOverride` mirrors
 // catalogExtractRequestSchema below.
-
-// A host (bracket-stripped, lowercased) that the URL ingest must refuse:
-// loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
-// the named cloud-metadata endpoints that hide inside allowed private ranges
-// (Alibaba 100.100.100.200, AWS IPv6 IMDS fd00:ec2::254 — see inline note),
-// and the unspecified address — in plain IPv4, IPv6, IPv4-mapped-IPv6
-// (`::ffff:127.0.0.1` → WHATWG-hex `::ffff:7f00:1`), AND the deprecated
-// IPv4-compatible-IPv6 form (`::127.0.0.1` → `::7f00:1`), so the guard can't be
-// bypassed by embedding a blocked v4 address inside an IPv6 literal. A trailing
-// FQDN dot (`localhost.`, `127.0.0.1.`) is stripped first since resolvers treat
-// it as equivalent. NOTE: decimal / hex / octal / shorthand IPv4 (`2130706433`,
-// `0x7f000001`, `127.1`) need no special handling — `new URL()` already
-// normalizes them to canonical dotted-quad in `.hostname` before this runs. We
-// deliberately ALLOW other private/LAN hosts (incl. IPv6 ULA `fd00::/8`):
-// reaching a Tailscale peer or home-network wiki is a legit use of this
-// single-user tool. This is a host-literal guard, not a DNS-resolution or
-// post-redirect check — a hostname that RESOLVES to loopback, or a redirect to
-// a blocked host, is not caught here.
-export const isBlockedIngestHost = (host) => {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
-  if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
-  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
-  // Named cloud-metadata endpoints that live INSIDE otherwise-allowed private
-  // ranges, so the "allow LAN" posture would leak them without an explicit
-  // literal block: Alibaba ECS metadata `100.100.100.200` sits in the CGNAT
-  // 100.64/10 block (which Tailscale also uses), and AWS's IPv6 IMDS
-  // `fd00:ec2::254` sits in IPv6 ULA fd00::/8. Both WHATWG-normalize to these
-  // exact canonical forms (and dns.lookup returns them canonical too), so an
-  // exact match catches both the URL-literal and DNS-resolved paths. Blocking
-  // these two exact IPs does NOT meaningfully shrink the Tailscale/ULA space a
-  // real peer could occupy (a peer landing on exactly 100.100.100.200 is a
-  // 1-in-4M collision), and a PortOS install has no reason to fetch cloud IMDS.
-  if (h === '100.100.100.200' || h === 'fd00:ec2::254') return true;
-  // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
-  if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
-  const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
-  // A blocked v4 address embedded in an IPv6 literal — either IPv4-mapped
-  // (`::ffff:…`) or the deprecated IPv4-compatible (`::…`) form. WHATWG
-  // normalizes the trailing v4 to a pair of hex hextets (`7f00:1`), or keeps it
-  // dotted in older inputs; handle both. A `::ffff:`-less match also catches the
-  // compatible form; the real `::1` / `::` cases were already returned above.
-  const embedded = /^::(?:ffff:)?(.+)$/i.exec(h);
-  if (embedded) {
-    const tail = embedded[1];
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return v4Blocked(tail);
-    const parts = tail.split(':');
-    if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
-      const hi = parseInt(parts[0], 16), lo = parseInt(parts[1], 16);
-      return v4Blocked(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
-    }
-  }
-  return false;
-};
-
-// Block schemes and hosts that would turn "fetch this page" into local-file
-// exfiltration or cloud-metadata SSRF: non-http(s) schemes (file:/chrome:/
-// javascript:/ftp:) and the blocked hosts above.
-export const isSafeIngestUrl = (raw) => {
-  let u;
-  try { u = new URL(raw); } catch { return false; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-  return !isBlockedIngestHost(u.hostname);
-};
 
 export const catalogUrlIngestSchema = z.object({
   url: z.string().trim().max(4_000).url()
@@ -342,7 +279,6 @@ export const catalogStoryDraftSchema = z.object({
 // DB CHECK constraint. The PATCH route accepts an optional `source`/`actor` so
 // AI-driven callers (story-builder refine) can label their edits; a manual
 // detail-page save omits them and the DB layer defaults to 'user'.
-export const REVISION_SOURCES = Object.freeze(['user', 'extract', 'refine', 'sync']);
 const revisionSource = z.enum(REVISION_SOURCES).optional();
 const revisionActor = z.string().trim().min(1).max(120).optional();
 
@@ -567,8 +503,6 @@ export const catalogLookAroundAnglesSchema = z.object({
 // the `look:` prefix the render tags its image with.
 // `formId` renders the sheet for one of the record's alternate forms (another
 // age, era or look/style); absent renders the canonical present-story form.
-export const CATALOG_LOOK_VARIANT_ID = 'look';
-export const CATALOG_COMPARISON_VARIANT_ID = 'comparison';
 export const catalogSheetRenderSchema = z.object({
   visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),

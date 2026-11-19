@@ -23,7 +23,7 @@ import {
   greyboxPrompt,
   parseGreyboxAnswer,
 } from '../../lib/greyboxPrompt.js';
-import { CATALOG_PAYLOAD_MAX_CHARS } from '../../lib/catalog/catalogValidation.js';
+import { CATALOG_PAYLOAD_MAX_CHARS } from '../../lib/catalog/catalogTypes.js';
 import * as catalogDB from './catalogDB.js';
 import { uploadIngredientMediaFile } from './catalogMedia.js';
 import { runPrevizJob } from '../previzJobs.js';
