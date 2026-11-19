@@ -175,10 +175,10 @@ async function probeBranchMerged(repoPath, branch, target) {
  * @param {string} params.branchName
  * @param {string} params.worktreePath
  * @param {boolean} params.branchShouldBeGone - gates the remote + merged probes
- * @param {boolean} params.prExpected - gates the forge lookup
+ * @param {{kind: 'exact-target', url: string} | {kind: 'branch'} | {kind: 'skip'}} params.prProbe
  * @returns {Promise<{worktreePresent: boolean|null, localBranchPresent: boolean|null, remoteBranchPresent: boolean|null, branchMerged: boolean|null, prState: string|null, prUrl: string|null, defaultBranch: string|null}>}
  */
-async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prExpected, originalPrUrl }) {
+async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prProbe }) {
   // A worktree counts as present if the directory survived on disk OR git still
   // tracks it. Either alone is a leak: an unregistered directory is the full
   // checkout `removeWorktree` believed it deleted, and a registered-but-deleted
@@ -209,14 +209,14 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // one", so there is nothing here to report and nothing missing on a `none`
   // answer.
   const probePr = async () => {
-    if (originalPrUrl && branchShouldBeGone) {
-      const parsed = parsePullRequestUrl(originalPrUrl);
+    if (prProbe.kind === 'exact-target') {
+      const parsed = parsePullRequestUrl(prProbe.url);
       const origin = await getOriginInfo(sourceWorkspace);
       if (!parsed || origin?.host !== parsed.host || origin?.fullName !== `${parsed.owner}/${parsed.repo}`) return { readable: false, prState: null, prUrl: null };
       const probe = await probeChangeRequestState(sourceWorkspace, { number: parsed.number, branch: branchName });
-      return { ...probe, prUrl: originalPrUrl, prNumber: parsed.number };
+      return { ...probe, prUrl: prProbe.url, prNumber: parsed.number };
     }
-    if (!prExpected || !branchShouldBeGone) return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
+    if (prProbe.kind === 'skip') return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
     return probePrForBranch(sourceWorkspace, branchName);
   };
 
@@ -255,8 +255,8 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     // Merge state is only in question while the branch is still there; once it is
     // gone there is nothing left to be unmerged.
     if (localBranchPresent === true && branchMerged === null) unreadable.push('branch-merged');
-    if (prExpected && !pr.readable) unreadable.push('pull-request');
   }
+  if (prProbe.kind !== 'skip' && !pr.readable) unreadable.push('pull-request');
 
   return {
     worktreePresent,
@@ -273,19 +273,6 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   };
 }
 
-/**
- * Verify one completed worktree agent left the repository as its task asked, and
- * file a recovery task when it did not.
- *
- * @param {object} params
- * @param {string} params.agentId
- * @param {object} params.task - the CoS task
- * @param {object|null} params.agentState - persisted agent record (worktree metadata)
- * @param {boolean} params.success - effective success of the run
- * @param {boolean} [params.prExpected] - the task asked for a PR (`openPR`)
- * @param {string[]} [params.cleanupWarnings] - warnings cleanup already raised
- * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
- */
 const verificationRuns = new Map();
 // Events emitted by an explicit cleanup-only recheck must not start another
 // completion replay. Unrelated events retain their normal wake behaviour.
@@ -374,6 +361,20 @@ function exhaustedCleanupOwner(task, agent) {
     });
 }
 
+/**
+ * Verify one completed worktree agent left the repository as its task asked, and
+ * file a recovery task when it did not.
+ *
+ * @param {object} input
+ * @param {string} input.agentId
+ * @param {object} input.task - the CoS task
+ * @param {object|null} input.agentState - persisted agent record (worktree metadata)
+ * @param {boolean} input.success - effective success of the run
+ * @param {boolean} [input.prExpected] - legacy override for the live task's `openPR` hint
+ * @param {'force-branch' | 'sweep-review-target'} [input.prProbeFallback] - internal branch lookup adapter
+ * @param {string[]} [input.cleanupWarnings] - warnings cleanup already raised
+ * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
+ */
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
@@ -406,7 +407,7 @@ export async function verifyAgentRepoState(input) {
         if (input.manualCleanupOnly) return skipped('cleanup-owner-changed');
         const snapshot = await readAbsentTaskSnapshot(input.agentState);
         if (!snapshot) return skipped('cleanup-task-unavailable');
-        input = { ...input, task: snapshot, prExpected: input.prExpected || isTruthyMeta(snapshot.metadata?.openPR), originTaskAbsent: true };
+        input = { ...input, task: snapshot, originTaskAbsent: true };
         return verifyRunBranches({ ...input, success: true, cleanupWarnings: [] });
       }
       const current = input.manualCleanupOnly ? original : await recoverCompletionTaskHandoff(input.agentState) || original;
@@ -571,7 +572,7 @@ export async function recheckAgentCleanup(agentId, taskId) {
     if (requireCapture && currentAgent.metadata?.checkoutCapture?.status !== 'captured') throw new Error('checkout-capture-unverified');
   };
   const result = await manualCleanupContext.run(true, () => verifyAgentRepoState({ agentId, agentState: agent, task, success: agent.result.success === true,
-    prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup,
+    manualCleanupOnly: true, recheckCleanup,
     deferTaskSettlement: mode === 'repository-held' }));
   if (result.skipReason === 'cleanup-owner-changed') return { ok: false, reason: result.skipReason };
   const reasons = [...new Set([result.skipReason, ...(result.branches || []).map(row => row.skipReason)].filter(Boolean))];
@@ -707,7 +708,7 @@ async function resumeReleasedCompletion(agentId) {
   const originalTask = task || snapshot || { id: agent.taskId };
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: originalTask,
     ...(snapshot && { originTaskAbsent: true }),
-    success: current.result?.success === true, prExpected: isTruthyMeta(originalTask?.metadata?.openPR) });
+    success: current.result?.success === true });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
   await verifyReleasedSynchronization(settled);
@@ -746,7 +747,7 @@ async function resumeCompletedDeliveryParent(task) {
     if (!original || original.status !== 'completed') return;
     const verified = await verifyAgentRepoState({ agentId: m.sourceAgentId, agentState: parent,
       task: { ...original, metadata: { ...original.metadata, reviewLoopPRUrl: m.reviewLoopPRUrl } },
-      success: true, prExpected: true });
+      success: true, prProbeFallback: 'force-branch' });
     if (verified.verified) {
       const { recordRepoStateVerification } = await import('../cos/cosAgentLifecycle.js');
       await recordRepoStateVerification(m.sourceAgentId, { status: 'completed', deliveryVerified: true,
@@ -1104,9 +1105,6 @@ async function settleTasklessCompletionAudit(agent, { readable }) {
     checkedAt: new Date().toISOString(), reasons: [resumed?.skipReason || 'task-unavailable'] });
 }
 
-const completionPrExpected = (task, agent) => isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl
-  || !!agent.metadata?.reviewLoopMergeTarget?.url;
-
 async function verifyAndReplayCompletion(agent, task) {
   const { getAgentRecord } = await import('../cos/cosAgentLifecycle.js');
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
@@ -1114,7 +1112,7 @@ async function verifyAndReplayCompletion(agent, task) {
   await replayAgentCompletionCleanup(agent).catch(deferCleanup);
   const refreshed = await getAgentRecord(agentIdOf(agent)).catch(() => null) || agent;
   await verifyAgentRepoState({ agentId: agentIdOf(refreshed), agentState: refreshed, task,
-    success: refreshed.result?.success === true, prExpected: completionPrExpected(task, refreshed) })
+    success: refreshed.result?.success === true, prProbeFallback: 'sweep-review-target' })
     .catch(error => emitLog('warn', `Completion recovery deferred for ${refreshed.id}: ${error.message}`, { agentId: refreshed.id }));
   const updated = await getAgentRecord(agentIdOf(refreshed)).catch(() => null);
   if (updated) await replayAgentCompletionCleanup(updated)
@@ -1250,7 +1248,7 @@ async function verifyRunBranches(input) {
       results.push(await holdBranch(branch, 'claim-checkout-identity-unverified'));
       continue;
     }
-    results.push({ branch, ...await verifyAgentBranchState({ ...input, prExpected: true,
+    results.push({ branch, ...await verifyAgentBranchState({ ...input, prProbeFallback: 'force-branch',
       agentState: { ...input.agentState, metadata: { ...meta, isWorktree: true,
         worktreeBranch: branch, sourceWorkspace, workspacePath: original?.path ?? null } },
     }) });
@@ -1259,13 +1257,24 @@ async function verifyRunBranches(input) {
     issues: results.flatMap(result => result.issues), skipReason: null };
 }
 
-async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup, manualCleanupOnly = false }) {
-  const metadata = agentState?.metadata || {};
+function resolvePrProbeIntent({ task, metadata, staysOpen, originalPrUrl, originTaskAbsent, prExpected, prProbeFallback }) {
+  if (staysOpen) return { kind: 'skip' };
+  if (originalPrUrl) return { kind: 'exact-target', url: originalPrUrl };
+
+  const taskRequestsPr = isTruthyMeta(task?.metadata?.openPR);
+  // The saved task can restore a PR request the caller did not carry through.
+  const requested = originTaskAbsent ? prExpected || taskRequestsPr : prExpected ?? taskRequestsPr;
   // Claim prompts own publication even when the generic openPR toggle is off.
-  // Resumed claims are already worktree runs, so they bypass the swarm loop
-  // that supplies this expectation. Skipping their forge lookup turns a merged
-  // cleanup hold into another provider retry with no delivery evidence.
-  prExpected ||= hasClaimFlowContract(task) || isTruthyMeta(metadata.configClaimFlow);
+  const claimOwnsPublication = hasClaimFlowContract(task) || isTruthyMeta(metadata.configClaimFlow);
+  // The sweep uses even an unparseable review target as a hint to look up the branch.
+  const sweepReviewHint = prProbeFallback === 'sweep-review-target'
+    && (task?.metadata?.reviewLoopPRUrl || metadata.reviewLoopMergeTarget?.url);
+  if (requested || claimOwnsPublication || sweepReviewHint || prProbeFallback === 'force-branch') return { kind: 'branch' };
+  return { kind: 'skip' };
+}
+
+async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected, prProbeFallback, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup, manualCleanupOnly = false }) {
+  const metadata = agentState?.metadata || {};
   const branchName = metadata.worktreeBranch || null;
   const sourceWorkspace = metadata.sourceWorkspace || null;
   const appId = task?.metadata?.app || null;
@@ -1283,7 +1292,6 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     cleanupWarningCount: cleanupWarnings?.length || 0,
     prCompletion: resolvePrCompletion(task?.metadata),
     leaveOpen: leavesPrForHuman(task),
-    prExpected,
     branchName,
     sourceWorkspace,
   };
@@ -1317,17 +1325,18 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     ? followUp.metadata.reviewLoopPRUrl : null;
   const originalPrUrl = [metadata.reviewLoopMergeTarget?.url, metadata.recoveryMergeTarget?.url,
     task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url, followUpPrUrl].find(value => parsePullRequestUrl(value));
-  const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
+  const expectation = resolveRepoStateExpectation({ ...structural, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
   const hold = await resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
   if (hold) return blockWith(hold.reason, { record: hold.record });
+  const prProbe = resolvePrProbeIntent({ task, metadata, staysOpen: expectation.staysOpen, originalPrUrl, originTaskAbsent, prExpected, prProbeFallback });
   const observed = await probeRepoState({
     sourceWorkspace,
     branchName,
     worktreePath,
     branchShouldBeGone: !expectation.staysOpen,
-    prExpected: expectation.prExpected, originalPrUrl,
+    prProbe,
   }).catch(err => {
     emitLog('warn', `🔎 Repo-state probe failed for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -1339,7 +1348,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     return settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen, recheckCleanup });
   }
   if (originTaskAbsent) return skipped('removed-task-checkout-still-present');
-  const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
+  const issues = classifyRepoStateIssues({ ...expectation, prExpected: prProbe.kind !== 'skip' }, { ...observed, branchName });
   if (issues.length === 0) {
     // A run where some probe could not be read has not been verified — it has been
     // partially checked. Say so rather than logging a firewalled host as a clean

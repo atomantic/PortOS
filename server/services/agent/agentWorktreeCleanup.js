@@ -145,7 +145,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     task: originalTask,
     agentState,
     success,
-    prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
 }
