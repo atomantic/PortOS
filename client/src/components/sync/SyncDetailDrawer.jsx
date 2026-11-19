@@ -156,6 +156,8 @@ const PUSH_SKIP_LABELS = {
   'record-not-found': 'record missing locally',
   'peer-schema-behind': 'peer is on an older PortOS version',
   'peer-schema-behind-cooldown': 'peer is on an older PortOS version',
+  'local-schema-behind': 'update this PortOS to send the record',
+  'local-schema-behind-cooldown': 'update this PortOS to send the record',
   'invalid-subscription': 'subscription is invalid',
   unchanged: 'already up to date',
   network: 'network error reaching the peer',
