@@ -1847,9 +1847,14 @@ const LEGACY_DB_METADATA = [
 // Migrations 018/019 read config.json first and fall back to state.json's
 // config slice. Read from the snapshot even when the selected scope omits CoS.
 async function snapshotLegacyCosTaskPaths(srcDir) {
+  const cosDir = join(srcDir, 'cos');
+  for (const directory of [srcDir, cosDir]) {
+    const info = await lstat(directory).catch(() => null);
+    if (!info?.isDirectory()) return [];
+  }
   for (const name of ['config.json', 'state.json']) {
-    const path = join(srcDir, 'cos', name);
-    const info = await stat(path).catch(() => null);
+    const path = join(cosDir, name);
+    const info = await lstat(path).catch(() => null);
     if (!info?.isFile()) continue;
     const { ok, value } = await readJSONFileStrict(path, null, { logError: false });
     const config = name === 'config.json' ? value : value?.config;
@@ -1887,7 +1892,7 @@ async function legacyDbMetadataDomains(srcDir, paths) {
     const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
     if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
   }
-  if (!domains.has('cos-tasks') && (await snapshotLegacyCosTaskPaths(srcDir)).some(path => paths.includes(path))) {
+  if (paths.length && !domains.has('cos-tasks') && (await snapshotLegacyCosTaskPaths(srcDir)).some(path => paths.includes(path))) {
     domains.add('cos-tasks');
   }
   return [...domains];

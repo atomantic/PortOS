@@ -157,6 +157,32 @@ describe('restoreSnapshot manifest verification', () => {
     }
   });
 
+  it.each(['directory', 'file'])('ignores legacy CoS config outside the snapshot through a symlinked %s', async (kind) => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const path = 'custom/user.md';
+      await writeManifest({ [path]: await writeSnapshotFile(path, 'ordinary file') });
+      const externalCosDir = joinPath(tmpRoot, 'external-cos');
+      const externalConfig = joinPath(externalCosDir, 'config.json');
+      const snapshotCosDir = joinPath(snapshotDataDir, 'cos');
+      await realFs.mkdir(externalCosDir);
+      await realFs.writeFile(externalConfig, JSON.stringify({ userTasksFile: 'data/custom/user.md' }));
+      if (kind === 'directory') await realFs.symlink(externalCosDir, snapshotCosDir, 'junction');
+      else {
+        await realFs.mkdir(snapshotCosDir);
+        await realFs.symlink(externalConfig, joinPath(snapshotCosDir, 'config.json'), 'file');
+      }
+      await expect(finishRestore({ subdirFilter: path }))
+        .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
   it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
     const relativePath = 'restore-integrity/example.json';
     const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
