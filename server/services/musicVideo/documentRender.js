@@ -626,7 +626,7 @@ async function assertLyricsFitSocialBand(page, { startSec, durationSec }) {
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
 export async function encodeDocumentComposition({
-  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false,
+  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false, videoArgs,
 }) {
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
@@ -719,7 +719,7 @@ export async function encodeDocumentComposition({
     // Long windows split across several browsers (encodeCompositionSegments).
     // A stalled worker browser restarts and redraws its frame (#10839).
     const encoded = await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
-      openPage, encode: encodeComposition,
+      openPage, encode: encodeComposition, videoArgs,
       videoFilterAt: (offsetSec, durationSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, {
         fps: target.fps, offsetSec, durationSec, frame: { width: target.width, height: target.height }, wipeFps: plan.clock.fps,
       }),

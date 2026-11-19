@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
@@ -143,6 +144,12 @@ function watchForPost(draft, adapter) {
   page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) check(); });
 }
 
+// Suno refuses files at the limit as well as above it (decimal MB).
+const SUNO_HOOK_MAX_BYTES = 200_000_000;
+const missingReleaseFile = (name) => new ServerError(`A release file is missing on disk (${name}) — rebuild the publishing kit`, {
+  status: 422, code: 'PUBLISH_ASSET_MISSING',
+});
+
 const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails, images: () => PATHS.images };
 
 /** Resolve every `{ dir, name }` file ref in a payload to an existing absolute `path`. */
@@ -151,10 +158,29 @@ function resolveFiles(value) {
   if (!value || typeof value !== 'object') return value;
   if (typeof value.dir === 'string' && typeof value.name === 'string') {
     const path = DIRS[value.dir] ? safeUnder(DIRS[value.dir](), value.name) : null;
-    if (!path || !existsSync(path)) throw new ServerError(`A release file is missing on disk (${value.name}) — rebuild the publishing kit`, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+    if (!path || !existsSync(path)) throw missingReleaseFile(value.name);
     return { ...value, path };
   }
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolveFiles(v)]));
+}
+
+async function checkedPublishPayload(target, project, options, { resolveMedia = false } = {}) {
+  const draft = buildPublishPayload(target, project, options);
+  const payload = resolveMedia || target === 'sunoHook' ? resolveFiles(draft) : draft;
+  if (target !== 'sunoHook') return payload;
+
+  const { video } = payload;
+  const info = await stat(video.path).catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!info?.isFile()) throw missingReleaseFile(video.name);
+  if (info.size >= SUNO_HOOK_MAX_BYTES) {
+    throw new ServerError('Suno Hook videos must be under 200 MB. Choose a shorter 9:16 cut or rebuild the publishing kit.', {
+      status: 422, code: 'PUBLISH_ASSET_TOO_LARGE',
+    });
+  }
+  return payload;
 }
 
 // Square cover sizes: Suno shows 1500px; stores ask distributors for 3000px.
@@ -247,7 +273,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target, urls } });
   }
   const resolved = await withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps);
-  let payload = resolveFiles(buildPublishPayload(target, project, resolved));
+  let payload = await checkedPublishPayload(target, project, resolved, { resolveMedia: true });
   payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
   payload = await withSunoTitle(target, payload, deps);
@@ -311,7 +337,7 @@ export async function previewPublishPost(projectId, target, options = {}, deps =
   }
   const platforms = deps.platforms || await getPublishPlatforms();
   return withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps)
-    .then((resolved) => buildPublishPayload(target, project, resolved))
+    .then((resolved) => checkedPublishPayload(target, project, resolved))
     .then((payload) => ({ ready: true, parts: publishPreviewParts(target, project, payload) }), (err) => {
       if (err?.status === 422 || err?.status === 409) return { ready: false, problem: err.message };
       throw err;

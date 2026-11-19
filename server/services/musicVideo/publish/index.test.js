@@ -4,7 +4,7 @@
  * manual links persist, and discard/re-prepare close the old tab.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, truncate, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../../lib/mockPathsDataRoot.js';
 
@@ -14,7 +14,7 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } = await import('./index.js');
+const { preparePublishDraft, previewPublishPost, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
 const { stackerNewsAdapter } = await import('./stackerNews.js');
 const { step } = await import('./browser.js');
@@ -97,6 +97,39 @@ describe('publish drafts (#9282)', () => {
     })).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/latest Suno Hook window start 3:18/) });
     expect(connect).not.toHaveBeenCalled();
     expect(hook.prepare).not.toHaveBeenCalled();
+  });
+
+  it('refuses Hook uploads at 200 MB in preview and fill before opening a browser', async () => {
+    const { id } = await projects.createProject({ name: 'Synthetic hook' });
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 200 }, publishKit: {
+        links: { song: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc' },
+        master: { renderHistoryId: current.renderHistoryId },
+        exports: [{ kind: 'vertical-9x16', filename: 'sized-hook.mp4', startSec: 20, endSec: 80 }],
+      },
+    } }));
+    await mkdir(PATHS.videos, { recursive: true });
+    const cut = join(PATHS.videos, 'sized-hook.mp4');
+    await writeFile(cut, '');
+    await truncate(cut, 200_000_000);
+    const { connect } = fakeBrowser();
+    const hook = adapter({ label: 'Suno Hook' });
+    const readSongTitle = vi.fn(async () => '');
+    const deps = { connect, readSongTitle, adapters: { sunoHook: hook }, platforms: { sunoHook: { enabled: true, account: null } } };
+    const preview = await previewPublishPost(id, 'sunoHook', {}, deps);
+    expect(preview).toEqual({ ready: false, problem: expect.stringMatching(/under 200 MB.*shorter.*rebuild/) });
+    await expect(preparePublishDraft(id, 'sunoHook', {}, deps)).rejects.toMatchObject({
+      status: 422, code: 'PUBLISH_ASSET_TOO_LARGE', message: preview.problem,
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(readSongTitle).not.toHaveBeenCalled();
+    expect(hook.prepare).not.toHaveBeenCalled();
+
+    await truncate(cut, 199_999_999);
+    await expect(previewPublishPost(id, 'sunoHook', {}, deps)).resolves.toMatchObject({ ready: true });
+    const draft = await preparePublishDraft(id, 'sunoHook', {}, deps);
+    expect(hook.prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ video: expect.objectContaining({ path: cut }) }));
+    await discardPublishDraft(id, draft.id);
   });
 
   it("looks a Hook's song up by the title Suno shows now, and by the project's name when Suno gives none", async () => {
