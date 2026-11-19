@@ -22,10 +22,12 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { atomicWrite } from './fileCore.js';
+import { atomicWrite, setAtomicWriteDurabilityForTests } from './fileCore.js';
 import { restoreFsMocks, loadRealFsPromises } from './fileUtils.testFixtures.js';
 
 beforeAll(loadRealFsPromises);
+// Workers default to non-durable writes (#16864); the Windows flush assertion needs the production path.
+setAtomicWriteDurabilityForTests(true);
 
 // =============================================================================
 // Windows swap-window retries (#4095)
