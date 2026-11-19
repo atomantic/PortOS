@@ -1,6 +1,6 @@
 import { isCleanupOnlyRecovery, verifyCleanupCompletion } from '../cleanupOnlyCompletion.js';
 import { storeCompletionData, completionReplayInput } from './agentCompletionData.js';
-import { prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
+import { completionDispatchFence, prepareCompletionTaskHandoff, recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { hasClaimCheckoutBindings } from '../completedCheckoutEvidence.js';
 import { hasClaimFlowContract } from '../../lib/claimFlowTaskTypes.js';
 import { isLegacyDeepAudit } from '../../lib/auditWorkflow.js';
@@ -2175,7 +2175,7 @@ async function finalizeAgentInCompletionContext({
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
   const prerequisiteTaskResult = PREREQUISITE_BLOCKED_CATEGORIES.includes(taskUpdate.metadata?.blockedCategory)
-    ? await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)) : null;
+    ? await updateTask(task.id, taskUpdate, taskType, ...completionTaskFence(taskUpdate, cleanupOwner)) : null;
   if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) throw new Error('Delivery prerequisite task ownership changed before completion');
   const completedAgent = await completeAgent(agentId, { ...completionRecord({
     task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
@@ -2206,7 +2206,7 @@ async function finalizeAgentInCompletionContext({
   }
   const taskResult = prerequisiteTaskResult || (capturePending
     ? await recoverCompletionTaskHandoff(await getAgentRecord(agentId)) || { error: 'Completion cleanup task ownership changed' }
-    : await updateTask(task.id, taskUpdate, taskType, ...completionBudgetFence(taskUpdate, agentId, cleanupOwner)));
+    : await updateTask(task.id, taskUpdate, taskType, ...completionTaskFence(taskUpdate, cleanupOwner)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
@@ -2587,10 +2587,11 @@ function runtimeRecoveryFence(update) {
   } }];
 }
 
-function completionBudgetFence(update, agentId, agent) {
-  const epoch = agent?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
-  const fence = runtimeRecoveryFence(update);
-  if (!epoch) return fence;
-  return [{ ...fence[0], expectedStatus: fence[0]?.expectedStatus || 'in_progress',
-    spawnBudgetOperation: { kind: 'completion', agentId, epoch } }];
+// The run's own task write. A recovery fence already names its expected task
+// and owner, so it wins over the dispatch fence field by field.
+function completionTaskFence(update, agent) {
+  const [recovery] = runtimeRecoveryFence(update);
+  const dispatch = completionDispatchFence(agent);
+  if (!dispatch) return recovery ? [recovery] : [];
+  return [{ ...dispatch, ...recovery, expectedMetadata: { ...dispatch.expectedMetadata, ...recovery?.expectedMetadata } }];
 }

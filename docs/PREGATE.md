@@ -19,9 +19,11 @@ most 25 suites per source, the second hop at most 60 per run, nearest hop
 first and an importer's own suite before its other referrers; the overflow is
 listed under `skipped` in the receipt and left to CI. The second hop never adds the heavy
 suites (gate tooling and the pool's exclusive tests, tens of seconds each). Untracked tests count.
-Deeper chains, and tests that read a changed non-module file as text (no
-import edge; the test memo records loaded modules, not opened files), are not
-selected. Run a focused public-boundary regression for changed behavior that
+A changed non-module file has no import edge (the test memo records loaded
+modules, not opened files), so suites that spell its path, or an unambiguous
+name, as a quoted string literal are selected too, at most 25 per file and not
+the heavy ones; a nested file's bare name counts only while at most 25 suites
+spell it. Deeper chains are not selected. Run a focused public-boundary regression for changed behavior that
 has no sibling test; automatic selection does not replace engineering
 judgment.
 

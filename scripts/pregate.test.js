@@ -2090,6 +2090,52 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(local.relatedOverflow.reduce((sum, entry) => sum + entry.count, 0)).toBe(4 * RELATED_SUITE_CAP - SECOND_HOP_RUN_CAP);
     expect(uncoveredSuites(local).every(entry => entry.reason.includes('-per-run caps'))).toBe(true);
   });
+
+  describe('suites that read a changed non-module file as text', () => {
+    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', () => {
+      const files = {
+        'scripts/checkNpmVersion.test.js': "const readJson = rel => JSON.parse(readFileSync(join(REPO_ROOT, rel)));\nreadJson('package.json');\nreadFileSync(join(ROOT, \"setup.ps1\"));",
+        'scripts/lookalike.test.js': "readFileSync(join(ROOT, 'package.json.bak')); // setup.ps1 in a comment, unquoted",
+        'scripts/imports.test.js': "import './lib/tool.js';",
+        'server/lib/viaName.test.js': 'readFileSync(`package.json`);',
+      };
+      const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
+      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      expect(local.server.files.sort()).toEqual(['scripts/checkNpmVersion.test.js', 'server/lib/viaName.test.js']);
+      expect(local.relatedOverflow).toEqual([]);
+    });
+
+    it('ignores an untracked or deleted changed file and a heavy suite', () => {
+      const files = { 'scripts/gone.test.js': "readFileSync('gone.json')", 'scripts/pregate.test.js': "readFileSync('package.json')" };
+      const { tracked, read } = plant(files, ['package.json']);
+      expect(focusedLocalPlan(plan(), tracked, ['gone.json'], read).server.files).toEqual([]);
+      expect(focusedLocalPlan(plan(), tracked, ['package.json'], read).server.files).not.toContain('scripts/pregate.test.js');
+    });
+
+    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', () => {
+      const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 4 }, (_, i) => [`server/lib/a${String(i).padStart(2, '0')}.test.js`, "readFileSync('package.json')"]));
+      files['server/lib/zz.test.js'] = "readFileSync('package.json'); readFileSync('setup.ps1');";
+      const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
+      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
+      expect(local.server.files).toContain('server/lib/zz.test.js');
+      expect(local.relatedOverflow).toEqual([{ source: 'package.json', count: 5, hop: 'text' }]);
+      const [skipped] = uncoveredSuites(local);
+      expect(skipped).toMatchObject({ suite: 'related tests' });
+      expect(skipped.reason).toContain('5 suite(s) reading package.json as text');
+    });
+
+    it('answers a nested file by its full path, and by base name only while the name is rare', () => {
+      const nested = { 'client/package.json': '' };
+      const rare = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')", 'scripts/name.test.js': "readFileSync(join(dir, 'package.json'))" };
+      const { tracked, read } = plant(rare);
+      expect(focusedLocalPlan(plan(), tracked, ['client/package.json'], read).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
+      const common = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')" };
+      for (let i = 0; i <= RELATED_SUITE_CAP; i += 1) common[`scripts/n${String(i).padStart(2, '0')}.test.js`] = "readFileSync('package.json')";
+      const planted = plant(common);
+      expect(focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read).server.files).toEqual(['scripts/full.test.js']);
+    });
+  });
 });
 
 describe('workflow lint (actionlint) stage', () => {

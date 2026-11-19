@@ -5,7 +5,7 @@
  * auto-retry (may it re-queue?) so they can't drift into three literal sets (the retry's first draft shipped a `'user-paused'` matching nothing, the real category being `agent-paused`, and missed `challenge-escalation`).
  * `PAUSED_BLOCKED_CATEGORIES` (paused until something outside the task changes; keeps the resume pointer), `USER_DECISION_BLOCKED_CATEGORIES` (user intent / open decision; the reaper's exemption),
  * `NON_AUTO_RETRY_BLOCK_CATEGORIES` (their union; a completed investigation must never revive these), `TIMED_COOLDOWN_BLOCKED_CATEGORIES` (a timer clears these: the cooldown sweeper revives them, so block reporters stay quiet),
- * `PROVIDER_CONFIG_BLOCKED_CATEGORY` (the shared literal the agent-spawn stamp uses). Pure and dependency-free (beyond two categories shared with `taskPauseHold.js` and `taskParser.js`).
+ * `PROVIDER_CONFIG_BLOCKED_CATEGORY` and `MAX_SPAWNS_BLOCKED_CATEGORY` (shared literals the spawn gates stamp). Pure and dependency-free (beyond two categories shared with `taskPauseHold.js` and `taskParser.js`).
  */
 
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
@@ -62,6 +62,9 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   // A config error only the user can clear: exempt from the 14-day `sweepResolvedFailureTasks` auto-expiry (cosTaskStore.js), which would flip it to `completed` / `auto-expired` and federate that false `completed` to every peer.
   PROVIDER_CONFIG_BLOCKED_CATEGORY
 ]);
+
+/** The spawn cap's own block: the task spent `MAX_TOTAL_SPAWNS`, so unblocking alone re-blocks it and only an explicit budget reset runs it again. Stamped by `prepareAgentSpawn` and the dequeue's spawn-cap gate, and read by the task list to offer that reset. */
+export const MAX_SPAWNS_BLOCKED_CATEGORY = 'max-spawns';
 
 /** Explicit spawn-budget resets do not satisfy a separate task prerequisite. */
 export function hasSpawnBudgetResetPrerequisite(metadata = {}) {

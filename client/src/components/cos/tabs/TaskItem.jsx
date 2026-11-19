@@ -41,8 +41,7 @@ import DeliveryStatus from '../DeliveryStatus';
 import BlockedSystemRecovery from '../BlockedSystemRecovery';
 import { ReleasePublicationLine } from '../AgentResultLine';
 import { isDeliveryCleanupHeld, isRetryHeld } from '../../../../../server/lib/taskRetryHold.js';
-import { hasSpawnBudgetResetPrerequisite } from '../../../../../server/lib/taskBlockCategories.js';
-import { isTruthyMeta } from '../../../../../server/lib/metadataFlags.js';
+import { MAX_SPAWNS_BLOCKED_CATEGORY, hasSpawnBudgetResetPrerequisite } from '../../../../../server/lib/taskBlockCategories.js';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -845,7 +844,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   <button
                     onClick={async () => {
                       const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => {
-                        if (err.message?.includes('Spawn budget')) setBudgetResetAvailable(true);
+                        if (err.code === 'SPAWN_BUDGET_EXHAUSTED') setBudgetResetAvailable(true);
                         toast.error(err.message); return null;
                       });
                       if (result?.success) toast.success(`Spawning ${task.id}`);
@@ -862,7 +861,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   && !unconfirmed
                   && !task.metadata?.preflight?.requestId
                   && !hasSpawnBudgetResetPrerequisite(task.metadata) && !isDeliveryCleanupHeld(task.metadata) && !isRetryHeld(task.metadata)
-                  && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || isTruthyMeta(task.metadata?.spawnBudgetReconciledHold) || budgetResetAvailable)
+                  && (task.status === 'in_progress' || task.metadata?.blockedCategory === MAX_SPAWNS_BLOCKED_CATEGORY || budgetResetAvailable)
                   && (budgetResetConfirm ? (
                     <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
                       ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets
@@ -870,7 +869,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                         setBudgetResetting(true);
                         const result = await api.resetSpawnBudgetAndRun(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
                         setBudgetResetting(false);
-                        if (result?.success) { setBudgetResetConfirm(false); toast.success(`Spawning ${task.id}`); }
+                        if (result?.success) { setBudgetResetConfirm(false); setBudgetResetAvailable(false); toast.success(`Spawning ${task.id}`); }
                         if (onRefresh) onRefresh();
                       }} />
                   ) : (

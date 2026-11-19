@@ -6,12 +6,11 @@ vi.mock('./cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({ id: 'ok' }),
 }));
 vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
-const state = vi.hoisted(() => ({ agents: {} }));
-vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: state.agents })) }));
+const state = vi.hoisted(() => ({ agents: {}, trusted: true }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: state.trusted, agents: state.agents })) }));
 
 const { getAllTasks, reviveBlockedTask, updateTask } = await import('./cos/cosTaskStore.js');
 const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
-const { newSpawnBudgetEpisode } = await import('./spawnBudgetProof.js');
 
 const investigation = (metadata = {}) => ({
   id: 'sys-inv',
@@ -20,20 +19,21 @@ const investigation = (metadata = {}) => ({
 });
 
 const queues = ({ user = [], cos = [] } = {}) => ({ user: { tasks: user }, cos: { tasks: cos } });
-const provenTask = (id, taskType = 'user', metadata = {}) => {
+// A blocked task and the completed agent that last dispatched it. The block
+// released the claim, so the spawn stamp and count are what the two still share.
+const dispatchedTask = (id, taskType = 'user', metadata = {}) => {
   const agentId = `agent-${id}`;
-  const epoch = '11111111-1111-4111-8111-111111111111';
-  const dispatch = { agentId, startedAt: 'start', claimedBy: 'fixture', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 1 };
-  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]);
   state.agents[agentId] = { id: agentId, taskId: id, status: 'completed', startedAt: 'start',
-    metadata: { completionTaskDispatch: { taskId: id, taskType, expected, spawnBudgetEpoch: epoch, spawnBudgetStartedAt: 'start' } } };
-  return { id, status: 'blocked', metadata: { ...metadata, totalSpawnCount: '1', spawnBudgetProof: { version: 1, epoch, dispatch } } };
+    metadata: { completionTaskDispatch: { taskId: id, taskType,
+      expected: [['claimedBy', 'fixture'], ['claimedAt', 'claim'], ['lastSpawnedAt', 'spawn'], ['totalSpawnCount', 1]] } } };
+  return { id, status: 'blocked', metadata: { ...metadata, totalSpawnCount: '1', lastSpawnedAt: 'spawn' } };
 };
 
 describe('retryTasksResolvedByInvestigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.agents = {};
+    state.trusted = true;
     reviveBlockedTask.mockResolvedValue({ id: 'ok' });
     updateTask.mockResolvedValue({ id: 'ok' });
   });
@@ -45,19 +45,25 @@ describe('retryTasksResolvedByInvestigation', () => {
     expect(reviveBlockedTask).not.toHaveBeenCalled();
   });
 
-  it('holds a legacy blocked task with spawn history instead of resetting its budget', async () => {
-    getAllTasks.mockResolvedValue(queues({ user: [{ id: 'task-1', status: 'blocked', metadata: {
-      totalSpawnCount: '1', failureCount: '2', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
-    } }] }));
+  // The revive refunds the task's spawn budget, so only the completed run that is
+  // still its latest dispatch may grant it.
+  it.each([
+    ['has no agent record', () => { state.agents = {}; }, {}],
+    ['is still running', () => { state.agents['agent-task-1'].status = 'running'; }, {}],
+    ['was superseded by a later dispatch', () => {}, { lastSpawnedAt: 'later-spawn', totalSpawnCount: '2' }],
+    ['belongs to another task', () => { state.agents['agent-task-1'].taskId = 'task-other'; }, {}],
+    ['cannot be read', () => { state.trusted = false; }, {}],
+  ])('holds a blocked task with spawn history when its dispatch owner %s', async (_label, arrange, metadata) => {
+    const task = dispatchedTask('task-1', 'user', { failureCount: '2' });
+    arrange();
+    getAllTasks.mockResolvedValue(queues({ user: [{ ...task, metadata: { ...task.metadata, ...metadata } }] }));
     expect(await retryTasksResolvedByInvestigation(investigation())).toEqual({ retried: [],
-      skipped: [{ taskId: 'task-1', reason: 'spawn-budget-reconciliation-required' }] });
+      skipped: [{ taskId: 'task-1', reason: 'dispatch-owner-unverified' }] });
     expect(reviveBlockedTask).not.toHaveBeenCalled();
   });
 
-  it('continues a proven undispatched episode only under the inactive-owner fence', async () => {
-    getAllTasks.mockResolvedValue(queues({ user: [{ id: 'task-1', status: 'blocked', metadata: {
-      spawnBudgetProof: newSpawnBudgetEpisode(),
-    } }] }));
+  it('continues a task with no charged spawn only under the inactive-owner fence', async () => {
+    getAllTasks.mockResolvedValue(queues({ user: [{ id: 'task-1', status: 'blocked', metadata: {} }] }));
     expect((await retryTasksResolvedByInvestigation(investigation())).retried).toEqual(['task-1']);
     expect(reviveBlockedTask).toHaveBeenCalledWith('task-1', expect.anything(), 'user', expect.objectContaining({
       expectedStatus: 'blocked', recoveryOwner: { id: 'undispatched-investigation-retry', startedAt: null, requireInactive: true },
@@ -66,7 +72,7 @@ describe('retryTasksResolvedByInvestigation', () => {
 
   it('revives the blocked task the investigation was diagnosing, stamping the auto-retry budget', async () => {
     getAllTasks.mockResolvedValue(queues({
-      user: [provenTask('task-1', 'user', { blockedCategory: 'test-failure' })]
+      user: [dispatchedTask('task-1', 'user', { blockedCategory: 'test-failure' })]
     }));
 
     const result = await retryTasksResolvedByInvestigation(investigation(), { now: 1_700_000_000_000 });
@@ -90,7 +96,7 @@ describe('retryTasksResolvedByInvestigation', () => {
 
   it('routes an internal-queue task back to the internal file', async () => {
     getAllTasks.mockResolvedValue(queues({
-      cos: [provenTask('task-1', 'internal')]
+      cos: [dispatchedTask('task-1', 'internal')]
     }));
 
     await retryTasksResolvedByInvestigation(investigation());
@@ -158,8 +164,8 @@ describe('retryTasksResolvedByInvestigation', () => {
   it('keeps going when one revive fails — the other affected tasks still come back', async () => {
     getAllTasks.mockResolvedValue(queues({
       user: [
-        provenTask('task-1'),
-        provenTask('task-2'),
+        dispatchedTask('task-1'),
+        dispatchedTask('task-2'),
       ]
     }));
     reviveBlockedTask
@@ -175,7 +181,7 @@ describe('retryTasksResolvedByInvestigation', () => {
 
   it('does not throw when a revive rejects — it runs off an event listener', async () => {
     getAllTasks.mockResolvedValue(queues({
-      user: [provenTask('task-1')]
+      user: [dispatchedTask('task-1')]
     }));
     reviveBlockedTask.mockRejectedValue(new Error('disk on fire'));
 
