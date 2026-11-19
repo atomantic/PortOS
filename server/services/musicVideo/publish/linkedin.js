@@ -84,7 +84,8 @@ async function openComposer(page) {
  * second dialog over the composer, which stays visible underneath, so visibility
  * alone would stop before its Next is pressed.
  */
-const editorReachable = (page) => page.locator(EDITOR).first().evaluate((el) => {
+const editorReachable = (page) => page.locator(EDITOR).evaluateAll(([el]) => {
+  if (!el) return false;
   const r = el.getBoundingClientRect();
   if (!r.width || !r.height) return false;
   const hit = el.getRootNode().elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 20));

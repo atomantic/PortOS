@@ -51,9 +51,16 @@ function fixtureHtml({ legacy, posted = false }) {
     }
     if (!${posted}) {
       root.querySelector('#media').onclick = () => root.querySelector('#file').click();
-      // Like LinkedIn, the media editor covers the composer, which stays visible underneath.
-      root.querySelector('#file').onchange = () => { root.querySelector('#media-body').hidden = false; };
-      root.querySelector('#next').onclick = () => { root.querySelector('#media-body').hidden = true; };
+      // Exercise both an editor covered by the overlay and one detached until Next.
+      const post = root.querySelector('#post');
+      root.querySelector('#file').onchange = () => {
+        root.querySelector('#media-body').hidden = false;
+        if (${legacy}) post.remove();
+      };
+      root.querySelector('#next').onclick = () => {
+        root.querySelector('#media-body').hidden = true;
+        if (${legacy}) root.querySelector('#post-body').prepend(post);
+      };
       if (!${legacy}) root.querySelector('#composer').showModal();
     }
   </script></body></html>`;
