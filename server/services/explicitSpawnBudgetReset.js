@@ -1,7 +1,8 @@
 import { isDeliveryCleanupHeld, isRetryHeld } from '../lib/taskRetryHold.js';
 import { hasSpawnBudgetResetPrerequisite } from '../lib/taskBlockCategories.js';
+import { matchesLatestTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 
-/** Resolve a unique stopped orphan's retained checkout before an explicit reset. */
+/** Resolve the stopped run whose retained checkout an explicit reset resumes: the only one, or among several the task's latest dispatch. */
 export async function prepareExplicitOrphanBudgetReset(task) {
   if (!['in_progress', 'blocked'].includes(task?.status) || isDeliveryCleanupHeld(task.metadata) || isRetryHeld(task.metadata)
     || hasSpawnBudgetResetPrerequisite(task.metadata)) {
@@ -13,10 +14,13 @@ export async function prepareExplicitOrphanBudgetReset(task) {
   const owners = Object.values(state.agents || {}).filter(agent => agent.taskId === task.id);
   if (owners.some(agent => ['running', 'paused'].includes(agent.status))) return { error: 'An agent still owns this task' };
   const completed = owners.filter(agent => agent.status === 'completed');
-  if (completed.length !== 1 || !completed[0].id || !completed[0].startedAt) {
+  // A task at its spawn cap has several stopped runs. The one whose dispatch
+  // receipt still matches the task ran last, and its checkout is the one to resume.
+  const latest = completed.length > 1 ? completed.filter(agent => matchesLatestTaskDispatch(agent, task)) : completed;
+  if (latest.length !== 1 || !latest[0].id || !latest[0].startedAt) {
     return { error: 'The stopped run is ambiguous; inspect its retained checkout before retrying' };
   }
-  const owner = completed[0];
+  const owner = latest[0];
   if (typeof owner.metadata?.isWorktree !== 'boolean') return { error: 'The stopped run has no verified checkout identity' };
   const { resolveTaskResumePatch } = await import('./agent/agentWorktreeCleanup.js');
   const pointer = await resolveTaskResumePatch({ task, agentId: owner.id, agentMetadata: owner.metadata }).catch(() => null);

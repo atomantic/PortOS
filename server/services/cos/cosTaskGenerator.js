@@ -76,7 +76,7 @@ import {
   applyDepfreeMode,
   FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../../lib/auditCatalog.js';
-import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
+import { MAX_SPAWNS_BLOCKED_CATEGORY, TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 // The claim marker this stamps is separate from `openPR: false`, which is the
 // CoS provisioning posture that prevents a nested worktree. agentPromptBuilder.js
 // reads the same set back via isClaimFlowTask().
@@ -118,7 +118,7 @@ async function blockMaxSpawnsExceeded(task, taskType) {
   emitLog('info', `🚫 Blocking task ${task.id} — exceeded max spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, { taskId: task.id });
   await updateTask(task.id, {
     status: 'blocked',
-    metadata: { ...task.metadata, blockedReason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, blockedCategory: 'max-spawns', blockedAt: new Date().toISOString() }
+    metadata: { ...task.metadata, blockedReason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`, blockedCategory: MAX_SPAWNS_BLOCKED_CATEGORY, blockedAt: new Date().toISOString() }
   }, taskType).catch(err => {
     emitLog('warn', `Failed to block task ${task.id}: ${err.message}`, { taskId: task.id });
   });

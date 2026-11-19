@@ -42,6 +42,14 @@
  *     >=3 peers (a pre-claim snapshot can supersede a running copy); acceptable
  *     because investigations are approval-gated diagnostics bounded to one per
  *     peer per cause.
+ *
+ *  5. SPAWN accounting (`totalSpawnCount`, `lastSpawnedAt`) resolves independently
+ *     of content, like the claim: it follows the later dispatch. An edit made on a
+ *     copy that predates a dispatch wins the content by its newer `updatedAt`, and
+ *     would otherwise carry its older, lower count back and refund spawns the cap
+ *     already charged. When both copies were last dispatched at the same time (or
+ *     never), the content base decides, so an explicit budget reset still
+ *     propagates.
  */
 
 import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS, parseTimestampMs } from './cosTaskClaim.js';
@@ -77,6 +85,19 @@ const updatedAtMs = (task) => {
 };
 
 const leaseMs = (metadata) => parseTimestampMs(metadata?.leaseExpiresAt);
+
+// The spawn stamp and the count it charged, kept together (rule 5).
+const SPAWN_ACCOUNTING_KEYS = Object.freeze(['totalSpawnCount', 'lastSpawnedAt']);
+
+/** The side that was dispatched later, or null when both were dispatched at the same time or never. */
+function laterDispatch(local, remote) {
+  const localAt = parseTimestampMs(local.metadata?.lastSpawnedAt);
+  const remoteAt = parseTimestampMs(remote.metadata?.lastSpawnedAt);
+  if (localAt === remoteAt) return null;
+  if (localAt === null) return remote;
+  if (remoteAt === null) return local;
+  return localAt > remoteAt ? local : remote;
+}
 
 /** Authoritative claim triple (claimedBy/claimedAt/leaseExpiresAt) for a task on both sides, or null when neither lease is live. */
 function resolveClaim(local, remote, now) {
@@ -202,6 +223,15 @@ function mergeOne(local, remote, now) {
   const metadata = { ...(base.metadata || {}) };
   for (const key of CLAIM_METADATA_KEYS) delete metadata[key];
   if (claim && !isTerminalTaskStatus(base.status)) Object.assign(metadata, claim);
+
+  // (rule 5) spawn accounting from the later dispatch.
+  const dispatched = laterDispatch(local, remote);
+  if (dispatched && dispatched !== base) {
+    for (const key of SPAWN_ACCOUNTING_KEYS) {
+      if (dispatched.metadata[key] == null) delete metadata[key];
+      else metadata[key] = dispatched.metadata[key];
+    }
+  }
 
   return { ...base, metadata };
 }

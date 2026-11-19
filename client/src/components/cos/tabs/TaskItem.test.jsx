@@ -54,7 +54,8 @@ describe('TaskItem task source', () => {
   });
 
   // The reset is offered only where it means something: a stopped run that still
-  // holds the task, or a Run now the server refused at the spawn cap.
+  // holds the task, a task blocked at the spawn cap, or a Run now the server
+  // refused there.
   it('offers the budget reset once Run now is refused at the spawn cap, and runs it only after explicit confirmation', async () => {
     api.forceSpawnTask.mockRejectedValue(Object.assign(new Error('Spawn budget exhausted (5/5)'), { code: 'SPAWN_BUDGET_EXHAUSTED' }));
     api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
@@ -84,9 +85,21 @@ describe('TaskItem task source', () => {
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
   });
 
+  // Unblocking a task at the cap only re-blocks it, so the reset sits on the block itself.
+  it('offers the reset in place on a task the spawn cap blocked, without unblocking it on render', async () => {
+    api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
+    const capped = { ...task, status: 'blocked', metadata: { blockedCategory: 'max-spawns', blockedReason: 'Max total spawns exceeded (5/5)', totalSpawnCount: 5 } };
+    render(<TaskItem task={capped} isSystem onRefresh={vi.fn()} providers={providers} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset spawn budget and run' }));
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+    expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset and run' }));
+    await waitFor(() => expect(api.resetSpawnBudgetAndRun).toHaveBeenCalledWith(task.id, { silent: true }));
+  });
+
   it.each([
     ['a queued task', { status: 'pending', metadata: { totalSpawnCount: 2 } }],
-    ['a blocked task', { status: 'blocked', metadata: { failureCount: '3' } }],
+    ['a task blocked for another reason', { status: 'blocked', metadata: { failureCount: '3', blockedCategory: 'test-failure' } }],
   ])('offers no budget reset on %s the server has not refused', (_label, overrides) => {
     render(<TaskItem task={{ ...task, ...overrides }} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();

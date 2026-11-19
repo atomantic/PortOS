@@ -624,7 +624,7 @@ describe('agent spawn preparation — one block-and-bail epilogue', () => {
     expect(body).toMatch(/if \(emit === 'agent:error'\)/);
     expect(body).toMatch(/\} else if \(emit === 'warn-log'\)/);
     expect(body).toMatch(/emitLog\('warn', `Public review withheld for task \$\{context\.task\.id\}: \$\{category\}`/);
-    expect(body).toMatch(/category: 'max-spawns',\s*emit: 'none',/);
+    expect(body).toMatch(/category: MAX_SPAWNS_BLOCKED_CATEGORY,\s*emit: 'none',/);
   });
 });
 

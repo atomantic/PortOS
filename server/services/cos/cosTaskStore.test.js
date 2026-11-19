@@ -2709,6 +2709,29 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(dispatched.metadata.totalSpawnCount).toBe(3);
   });
 
+  // The spawn cap has to hold across installs too: content is last-writer-wins, and
+  // a peer editing the copy it pulled before this install dispatched would
+  // otherwise bring its older count back.
+  it('does not refund charged spawns when a peer edits a copy that predates the dispatch', async () => {
+    await addTask({ id: 'task-peer-stale', description: 'shared work', priority: 'MEDIUM' }, 'user');
+    const stalePeerCopy = await getTaskById('task-peer-stale');
+    for (const [count, at] of [[1, '2026-06-25T09:00:00.000Z'], [2, '2026-06-25T10:00:00.000Z']]) {
+      const now = Date.parse(at);
+      await updateTask('task-peer-stale', { status: 'in_progress', metadata: { totalSpawnCount: count, lastSpawnedAt: at } }, 'user', { now });
+      await updateTask('task-peer-stale', { status: 'pending' }, 'user', { now });
+    }
+    const edited = { ...stalePeerCopy, taskType: 'user', description: 'shared work, clarified on the peer',
+      metadata: { ...stalePeerCopy.metadata, updatedAt: future(-1000) } };
+    await mergePeerTasks('user', [edited], { now: NOW });
+    const merged = await getTaskById('task-peer-stale');
+    expect(merged.description).toBe('shared work, clarified on the peer');
+    expect(merged.metadata).toMatchObject({ totalSpawnCount: 2, lastSpawnedAt: '2026-06-25T10:00:00.000Z' });
+    // An explicit reset on the peer, made after the dispatch both copies know, still lands.
+    const reset = { ...merged, taskType: 'user', metadata: { ...merged.metadata, totalSpawnCount: undefined, updatedAt: future(1000) } };
+    await mergePeerTasks('user', [reset], { now: NOW });
+    expect((await getTaskById('task-peer-stale')).metadata.totalSpawnCount).toBeUndefined();
+  });
+
   it("never clobbers the local peer's live claim with a remote pending copy", async () => {
     // Local task is claimed + in_progress (this instance is working it).
     await addTask({ description: 'claimed work', id: 'task-c', priority: 'HIGH' }, 'user');
