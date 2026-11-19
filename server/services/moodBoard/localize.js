@@ -15,7 +15,8 @@
 import { createHash } from 'crypto';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, ensureDir, detectImageFormat, writeFileGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, writeFileGuarded } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { MAX_IMAGE_DATA_URL_BYTES } from '../../lib/moodBoardValidation.js';
 import { fetchPublicBinary } from '../../lib/safeUrlFetch.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';

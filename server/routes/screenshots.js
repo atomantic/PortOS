@@ -4,7 +4,9 @@ import { resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { PATHS, sanitizeFilename, isPathInsideDir, saveImageUpload } from '../lib/fileUtils.js';
+import { PATHS, isPathInsideDir } from '../lib/fileUtils.js';
+import { sanitizeFilename } from '../lib/mimeTypes.js';
+import { saveImageUpload } from '../lib/uploads.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import { screenshotUploadBodySchema } from '../lib/uploadValidation.js';
 

@@ -27,8 +27,9 @@ import { join } from 'path';
 import { readdir } from 'fs/promises';
 import {
   PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile,
-  importFileToDir, listDirectoryByExtension, resolveGalleryImage, copyFileGuarded,
+  listDirectoryByExtension, resolveGalleryImage, copyFileGuarded,
 } from '../../lib/fileUtils.js';
+import { importFileToDir } from '../../lib/uploads.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';

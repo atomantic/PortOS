@@ -15,7 +15,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { shortId, importFileToUploads } from '../lib/fileUtils.js';
+import { shortId } from '../lib/fileUtils.js';
+import { importFileToUploads } from '../lib/uploads.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';

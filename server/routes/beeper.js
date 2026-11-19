@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper, ServerError } from '../lib/errorHandler.js';
 import { resolveOAuthOrigin } from '../lib/beeperOAuthOrigin.js';
 import { PORTOS_API_URL, PORTOS_UI_URL } from '../lib/portosUrls.js';
-import { serveLocalFile } from '../lib/fileUtils.js';
+import { serveLocalFile } from '../lib/uploads.js';
 import { basename, dirname } from 'path';
 import {
   beeperOAuthCallbackSchema,

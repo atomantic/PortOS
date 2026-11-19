@@ -25,7 +25,7 @@ vi.mock('../ytdlpAudioImport.js', () => ({
   downloadAudioToTempMp3: vi.fn(async () => ({ outcome: 'ok', title: 'Example Clip', outPath: '/mock/tmp/clip.mp3' })),
   cleanupYtDlpTemp: vi.fn(async () => {}),
 }));
-vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
+vi.mock('../../lib/uploads.js', async (importOriginal) => ({
   ...(await importOriginal()),
   importFileToUploads: vi.fn(async () => ({ filename: 'ab12cd34-Example_Clip.mp3' })),
 }));
@@ -33,7 +33,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
 const catalogDB = await import('./catalogDB.js');
 const { extractIngredientsForScrap } = await import('./catalogExtraction.js');
 const { attachReferenceAudio } = await import('../rounds.js');
-const { importFileToUploads } = await import('../../lib/fileUtils.js');
+const { importFileToUploads } = await import('../../lib/uploads.js');
 const { uploadIngredientMediaFile, recordIngredientVoiceMemo } = await import('./catalogMedia.js');
 const { ingestFromVoice } = await import('./catalogIngestSources.js');
 const { startReferenceAudioImport } = await import('../roundReferenceAudioImport.js');

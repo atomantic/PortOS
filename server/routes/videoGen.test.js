@@ -307,6 +307,10 @@ const fsMock = vi.hoisted(() => ({
   copyFile: vi.fn(async () => {}),
 }));
 
+vi.mock('../lib/uploads.js', () => ({
+  assertFileNotMediaManifest: vi.fn(async () => {}),
+}));
+
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
   sha256File: vi.fn(async (path) => createHash('sha256').update(path).digest('hex')),
@@ -326,7 +330,6 @@ vi.mock('../lib/fileUtils.js', () => ({
   assertSafeFilename: vi.fn(),
   copyFileGuarded: fsMock.copyFile,
   unlinkGuarded: fsMock.unlink,
-  assertFileNotMediaManifest: vi.fn(async () => {}),
   // The route resolves user-supplied basenames through this helper before
   // handing them to the renderer. Mirror the real helper's basename-strip
   // + dot-segment rejection so the "strips path-traversal" test below

@@ -18,14 +18,18 @@ import {
   publicPersistentMindAttachment,
 } from '../../lib/persistent/persistentMind.js';
 import {
-  detectImageFormat,
   PATHS,
   resolveScreenshot,
-  sanitizeFilename,
-  saveImageUpload,
   unlinkGuarded,
   writeFileGuarded,
 } from '../../lib/fileUtils.js';
+import {
+  detectImageFormat,
+  sanitizeFilename,
+} from '../../lib/mimeTypes.js';
+import {
+  saveImageUpload,
+} from '../../lib/uploads.js';
 import { backupSnapshotCutPending, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { loadState, saveState, withStateLock } from '../cos/cosState.js';
 import { isUpdateInProgress } from '../updateChecker.js';

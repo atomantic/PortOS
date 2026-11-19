@@ -9,10 +9,14 @@ import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
-  ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir, saveBase64Upload, serveLocalFile,
-  unlinkGuarded,
+  pathExists, PATHS, isPathInsideDir, unlinkGuarded,
 } from '../lib/fileUtils.js';
+import {
+  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS,
+} from '../lib/mimeTypes.js';
+import {
+  saveBase64Upload, serveLocalFile,
+} from '../lib/uploads.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { attachmentUploadRequestSchema } from '../lib/uploadValidation.js';

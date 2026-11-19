@@ -21,7 +21,8 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
-import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';

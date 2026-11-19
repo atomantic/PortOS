@@ -24,6 +24,10 @@ vi.mock('./local.js', () => ({
   BYOV_VIDEO_RUNTIMES: new Set(['fastvideo', 'ltx25']),
   DEFAULT_NUM_FRAMES: 121,
 }));
+vi.mock('../../lib/uploads.js', async (load) => ({
+  ...(await load()),
+  assertFileNotMediaManifest: async () => {},
+}));
 vi.mock('../../lib/fileUtils.js', async (load) => ({
   ...await load(),
   PATHS: { root: '/mock', data: '/mock/data', images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
@@ -31,7 +35,6 @@ vi.mock('../../lib/fileUtils.js', async (load) => ({
   ensureDir: async () => {},
   copyFileGuarded: m.copy,
   unlinkGuarded: m.unlink,
-  assertFileNotMediaManifest: async () => {},
 }));
 vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (body) => body }));
 vi.mock('../musicVideo/clipCastReferences.js', () => ({

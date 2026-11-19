@@ -38,7 +38,8 @@ import {
   federatedMediaSupports,
   isMultiInputRole,
 } from '../../lib/federatedMediaWire.js';
-import { detectImageFormat, resolveImageInputPath, sha256File } from '../../lib/fileUtils.js';
+import { resolveImageInputPath, sha256File } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 
 // Deliberately NOT imported from remoteExecutor.js. That module statically
 // pulls the peer registry and consumer, and this one is reached from the image
