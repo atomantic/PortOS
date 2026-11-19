@@ -8,20 +8,26 @@
 // useIngredientSavedPatches; `rows` from mediaRowView; `gates` the page's
 // busy/dirty flags and their setters.
 
-import CatalogSheetsPanel from '../CatalogSheetsPanel';
+import { Suspense } from 'react';
+import BrailleSpinner from '../../BrailleSpinner';
 import CatalogUnlockNotice from '../CatalogUnlockNotice';
-import CatalogPlatesPanel from '../CatalogPlatesPanel';
-import LookAroundPanel from '../LookAroundPanel';
-import GreyboxPanel from '../GreyboxPanel';
-import WorldPanel from '../WorldPanel';
-import PhotorealPanel from '../PhotorealPanel';
-import CatalogLooksPanel from '../CatalogLooksPanel';
-import CatalogDesignPanel from '../CatalogDesignPanel';
-import CatalogRelatedImages from '../CatalogRelatedImages';
 import { isSheetMedia, isPlateMedia, lookIdOf } from '../../../lib/creativeLibraries';
 import { listSheetPointers } from '../../../lib/sheetPointers';
 import { formsOf } from '../../../lib/catalogForms';
-import MediaPanel from './MediaPanel';
+import { lazyWithReload } from '../../../utils/lazyWithReload';
+
+const CatalogSheetsPanel = lazyWithReload(() => import('../CatalogSheetsPanel'));
+const CatalogPlatesPanel = lazyWithReload(() => import('../CatalogPlatesPanel'));
+const LookAroundPanel = lazyWithReload(() => import('../LookAroundPanel'));
+const GreyboxPanel = lazyWithReload(() => import('../GreyboxPanel'));
+const WorldPanel = lazyWithReload(() => import('../WorldPanel'));
+const PhotorealPanel = lazyWithReload(() => import('../PhotorealPanel'));
+const CatalogLooksPanel = lazyWithReload(() => import('../CatalogLooksPanel'));
+const CatalogDesignPanel = lazyWithReload(() => import('../CatalogDesignPanel'));
+const CatalogRelatedImages = lazyWithReload(() => import('../CatalogRelatedImages'));
+const MediaPanel = lazyWithReload(() => import('./MediaPanel'));
+
+const MEDIA_FALLBACK = <BrailleSpinner text="Loading media panel" />;
 
 export default function IngredientMediaTabs({ record, draft, activeTab, hasTabs, generateProfilePath, mediaState, actions, saved, gates, rows, renderBlockedReason, canonRemoval, genDescription, onUnlocked }) {
   const { name, payload } = draft;
@@ -40,6 +46,7 @@ export default function IngredientMediaTabs({ record, draft, activeTab, hasTabs,
       {mediaTab !== 'profile' && (mediaError || !mediaReady) && <div role="status" className="text-sm text-gray-400">
         {mediaError || 'Loading media…'}{mediaError && <button type="button" onClick={refreshMedia} disabled={mediaLoading} className="ml-2 text-port-accent underline">Retry media</button>}
       </div>}
+      <Suspense fallback={MEDIA_FALLBACK}>
       {activeTab === 'sheets' && mediaReady && (
         <CatalogSheetsPanel
           ingredientId={record.id}
@@ -190,6 +197,7 @@ export default function IngredientMediaTabs({ record, draft, activeTab, hasTabs,
             ...media.filter((m) => m.kind === 'portrait' || m.kind === 'reference').map((m) => m.mediaKey),
           ]} />
       )}
+      </Suspense>
     </>
   );
 }

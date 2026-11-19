@@ -100,7 +100,7 @@ describe('Calendar account availability', () => {
     expect(screen.getByText('0 accounts')).toBeVisible();
     for (const tab of ['Day', 'Week', 'Month', 'Review', 'Agenda', 'Sync']) {
       selectTab(tab);
-      expect(await screen.findByText('No calendar connected')).toBeVisible();
+      await waitFor(() => expect(screen.getByText('No calendar connected')).toBeVisible());
     }
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -147,12 +147,12 @@ describe('Calendar account availability', () => {
     api.getCalendarAccounts.mockRejectedValue(new Error('Read unavailable'));
     renderCalendar('/calendar/lifetime');
 
-    expect(screen.getByText('Lifetime content')).toBeVisible();
+    expect(await screen.findByText('Lifetime content')).toBeVisible();
     expect(await screen.findByRole('alert')).toHaveTextContent('Calendar accounts unavailable');
     selectTab('Config');
     expect(screen.queryByText('No calendar accounts configured')).toBeNull();
     selectTab('Lifetime');
-    expect(screen.getByText('Lifetime content')).toBeVisible();
+    expect(await screen.findByText('Lifetime content')).toBeVisible();
   });
 
   it('treats an invalid account response as unavailable rather than empty', async () => {
