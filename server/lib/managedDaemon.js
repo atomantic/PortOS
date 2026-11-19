@@ -681,15 +681,6 @@ export function daemonReleaseReason(name) {
   return idleDaemons.get(name)?.releaseReason ?? null;
 }
 
-/** Explicitly clear release reason for `name`. */
-export function clearDaemonReleaseReason(name) {
-  const entry = idleDaemons.get(name);
-  if (entry) {
-    entry.releaseReason = null;
-    entry.releasedAt = null;
-  }
-}
-
 /**
  * Pure policy function for memory pressure daemon eviction.
  * Evaluates current state, pressure reading, and recent history.

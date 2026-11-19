@@ -70,8 +70,6 @@ export const resolveRecipeInvocation = (recipe, primitives, { scope = 'mind' } =
       scopes: [scope], recipe: recipeMetadata(recipe, recipe.definition, { scope, available: false, disabledReason: error.message }),
     }));
 
-export const resolveMindRecipeInvocation = (recipe, primitives) => resolveRecipeInvocation(recipe, primitives, { scope: 'mind' });
-
 export async function readRecipeToolsForScope(scope, primitives) {
   if (!['agent', 'mind'].includes(scope)) return [];
   const { listRecipes } = await import('./mindToolRecipes.js');

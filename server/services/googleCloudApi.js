@@ -104,8 +104,6 @@ export function googleExpressModeRefusal(config, { label, expressMode = false })
   return `${label} is not available in Agent Platform express mode (an API key with no project). Set your Google Cloud project in Settings > Media > Google, or use a service account key.`;
 }
 
-export const isGoogleConfigured = (settings) => Boolean(resolveGoogleCredentialValue(settings));
-
 const base64url = (input) => Buffer.from(input).toString('base64url');
 const tokenCache = new Map();
 

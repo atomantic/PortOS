@@ -23,8 +23,6 @@ import {
 import { characterIdentityPackReadiness } from './storyBible.js';
 import { isNonBlankStr } from './textUtils.js';
 
-export const CONTINUITY_CATEGORIES = Object.freeze(['visual', 'voice', 'playback', 'graph']);
-
 export const CONTINUITY_CODES = Object.freeze({
   MISSING_UNIVERSE_CHARACTER: 'MISSING_UNIVERSE_CHARACTER',
   MISSING_UNIVERSE_PLACE: 'MISSING_UNIVERSE_PLACE',

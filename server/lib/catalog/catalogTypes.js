@@ -586,11 +586,6 @@ export function upgradePayload(id, payload = {}) {
   return p;
 }
 
-// TAG limit re-exported so the catalog validation module can keep one import
-// surface (registry + limits) without a second import line in callers that
-// already pull from here. Sourced from BIBLE_LIMITS so it stays in lockstep.
-export const CATALOG_TAG_MAX = BIBLE_LIMITS.TAG_MAX;
-
 const CONTAINER_ROLES = Object.freeze({
   universe: { character: 'canon-character', place: 'canon-place', object: 'canon-object' },
   series: { character: 'cast', place: 'canon-place', object: 'canon-object' },

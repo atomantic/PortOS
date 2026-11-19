@@ -77,5 +77,4 @@ function createHarnessActionRecovery({ admission = maintenance, resume = wake,
 const recovery = createHarnessActionRecovery();
 export const startHarnessActionRecovery = () => recovery.start();
 export const stopHarnessActionRecovery = () => recovery.stop();
-export const checkHarnessActionRecovery = () => recovery.check();
 export const __testing = { createHarnessActionRecovery };

@@ -99,31 +99,6 @@ export const errorSchema = z.object({
   stack: z.string().optional()
 });
 
-// Inbox Log Record schema
-export const inboxLogRecordSchema = z.object({
-  id: z.string().guid(),
-  capturedText: z.string().min(1).max(10000),
-  capturedAt: z.string().datetime(),
-  source: z.literal('brain_ui'),
-  ai: aiConfigSchema.optional(),
-  classification: classificationSchema.optional(),
-  status: inboxStatusEnum,
-  filed: filedSchema.optional(),
-  correction: correctionSchema.optional(),
-  error: errorSchema.optional(),
-  // The classifier run that owns this row's completion write (#15155). Absent
-  // or null means no live attempt, so any late completion is ignored.
-  classificationAttempt: z.string().nullable().optional(),
-  // User-marked creative note (see captureInputSchema.creative). Drives the
-  // "Send creative notes to Catalog" batch action in the inbox.
-  creative: z.boolean().optional(),
-  // ISO timestamp stamped once this creative note's catalog ingest COMMITS
-  // (not on mere navigation). Drives the inbox's "already consumed" filter so a
-  // batch-sent note drops out of the "ready to become ingredients" banner and
-  // can't be accidentally re-sent. Absent ⇒ still re-sendable.
-  sentToCatalogAt: z.string().datetime().optional()
-});
-
 // People Record schema
 export const peopleRecordSchema = z.object({
   id: z.string().guid(),

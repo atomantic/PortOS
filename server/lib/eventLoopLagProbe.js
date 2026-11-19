@@ -241,15 +241,3 @@ export function createEventLoopLagProbe({
     },
   };
 }
-
-/** Sum the named phase and its `name.` sub-phases from a span summary. */
-export function phaseGroup(summary, name) {
-  let ms = 0;
-  let lagMs = 0;
-  for (const [phase, value] of Object.entries(summary.phases)) {
-    if (phase !== name && !phase.startsWith(`${name}.`)) continue;
-    ms += value.ms;
-    lagMs += value.lagMs;
-  }
-  return { ms, lagMs };
-}

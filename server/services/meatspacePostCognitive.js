@@ -20,9 +20,6 @@
 
 import { shuffle } from '../lib/arrayUtils.js';
 
-// Coarse module tag stored on scored cognitive tasks, so stats read as
-// `byDrill['cognitive:<type>']` (parallel to `mental-math:<type>`).
-export const COGNITIVE_MODULE = 'cognitive';
 // Moved to lib so route validation can enumerate the types without importing
 // this module — issue #4901.
 export { COGNITIVE_DRILL_TYPES } from '../lib/postDrillTypes.js';

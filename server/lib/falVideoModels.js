@@ -31,14 +31,6 @@
 /** Date the schemas and prices below were last verified against fal.ai. */
 export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-13';
 
-/**
- * What an entry renders from: text, a start frame, reference assets, a frame +
- * source audio it lip-syncs to (`lipsync`), or a frame + source audio that
- * drives the whole picture's motion (`a2v` — a drummer hitting on the beat, a
- * dancer, a crowd), steered by a prompt.
- */
-export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync', 'a2v', 'extend']);
-
 export const FAL_DEFAULT_TEXT_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
 export const FAL_DEFAULT_IMAGE_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
 export const FAL_LIPSYNC_VIDEO_MODEL = 'minimax/h3-max/lip-sync/image-to-video';

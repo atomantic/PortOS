@@ -11,9 +11,6 @@
  * client-side hint shown next to the issue-count input.
  */
 
-export const SEASON_MIN_EPISODES = 6;
-export const SEASON_MAX_EPISODES = 11;
-
 /**
  * Pick the natural season count for a given total. Boundaries are tuned so
  * 12 → 1 season, 18 → 3, 24 → 3, 30 → 3, 36 → 4.

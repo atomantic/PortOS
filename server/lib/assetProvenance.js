@@ -194,9 +194,3 @@ export function rollupProvenance(records) {
   }
   return buildProvenance({ sources, capturedAt: null });
 }
-
-export function formatProvenanceSource(src) {
-  const built = buildProvenanceSource(src);
-  if (!built) return null;
-  return { ...built, licenseLabel: licenseLabel(built.license) };
-}

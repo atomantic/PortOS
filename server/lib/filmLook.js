@@ -141,9 +141,6 @@ export const FILM_LOOK_CONTROLS = Object.freeze([
     hint: 'How often the exposure changes. Full speed changes every frame; lower glides between changes like a slow projector lamp.' },
 ]);
 
-export const FILM_LOOK_CONTROL_IDS = Object.freeze(FILM_LOOK_CONTROLS.map((control) => control.id));
-const CONTROL_BY_ID = new Map(FILM_LOOK_CONTROLS.map((control) => [control.id, control]));
-
 // Named starting points. Each lists only what differs from the defaults; the
 // first non-neutral one is the look Adam's 1980s reference reads as.
 export const FILM_LOOK_PRESETS = Object.freeze([
@@ -260,9 +257,6 @@ export function sameFilmLook(a, b) {
   if (!left || !right) return left === right;
   return left.version === right.version && FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
 }
-
-/** The control record for an id (label, term, hint, range). */
-export const filmLookControl = (id) => CONTROL_BY_ID.get(id) || null;
 
 /**
  * The SVG `<filter>` for a look at one frame, in a `<svg>` element sized to

@@ -13,7 +13,6 @@
 
 export const FABLELOOM_PARTICIPATION_MODES = Object.freeze(['helper', 'protagonist']);
 export const FABLELOOM_LEGACY_PARTICIPATION_MODE = 'protagonist';
-export const FABLELOOM_NEW_PARTICIPATION_MODE = 'helper';
 
 export const FABLELOOM_AUDIENCE_CONNECTION_STATES = Object.freeze(['disconnected', 'connected']);
 export const FABLELOOM_AUDIENCE_CONNECTION_DEFAULT = 'disconnected';

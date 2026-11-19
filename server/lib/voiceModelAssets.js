@@ -33,7 +33,6 @@ import { basename, dirname, join, resolve } from 'path';
 
 export const VOICE_ASSET_RECEIPT_VERSION = 1;
 export const VOICE_ASSET_KINDS = Object.freeze(['whisper', 'piper']);
-export const VOICE_ASSET_STATES = Object.freeze(['verified', 'unverified', 'incomplete', 'missing']);
 
 export const voiceAssetReceiptPath = (primaryPath) => `${primaryPath}.portos-complete.json`;
 const piperSidecarPath = (onnxPath) => `${onnxPath}.json`;

@@ -294,8 +294,3 @@ export async function importSpotifyFromBrowser(providerId, model, options = {}) 
   return importInFlight;
 }
 
-export const spotifyBrowserImportInternals = Object.freeze({
-  SPOTIFY_PAGE_STATE_EXPRESSION,
-  SPOTIFY_REQUEST_DOWNLOAD_EXPRESSION,
-  changedSince,
-});

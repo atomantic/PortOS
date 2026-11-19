@@ -9,7 +9,6 @@
  */
 import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 
-export const RUNWAY_IMAGE_PRICING_VERIFIED_AT = '2026-10-22';
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'RUNWAY_IMAGE_INPUT_INVALID' });
 export const RUNWAY_IMAGE_DEFAULT_MODEL = 'gen4_image';
 export const RUNWAY_IMAGE_DISCLOSURE = Object.freeze({

@@ -54,7 +54,6 @@ export const PERSISTENT_MIND_STATUSES = [
   'stopping',
 ];
 
-export const PERSISTENT_MIND_WAKE_KINDS = ['message', 'self'];
 export const PERSISTENT_MIND_SELF_WAKE_SCHEDULE_KINDS = ['quiet', 'requested'];
 
 // How often a running turn pulses its heartbeat. Hoisted so the stale-warning
@@ -144,11 +143,6 @@ const attachmentPath = (filename) => {
 /** True when a value is a safe server-issued Mind attachment id. */
 export function isPersistentMindAttachmentId(value) {
   return asAttachmentId(value) !== null;
-}
-
-/** Convert a stored screenshot filename into the only client-visible reference. */
-export function persistentMindAttachmentPath(filename) {
-  return attachmentPath(filename);
 }
 
 /** Normalize the bounded, machine-local pending attachment record. */

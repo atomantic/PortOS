@@ -43,7 +43,6 @@ const STATE_FILE = () => join(PATHS.data, 'imagegen-quota.json');
 export const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
 export const WINDOW_7D_MS = 7 * 24 * 60 * 60 * 1000;
 export const WINDOW_30D_MS = 30 * 24 * 60 * 60 * 1000;
-export const ACTIVITY_WINDOW_MS = WINDOW_24H_MS;
 
 // Retain up to 35 days so rolling 30-day (month) and 7-day (week) counts are preserved.
 const RETENTION_WINDOW_MS = 35 * 24 * 60 * 60 * 1000;

@@ -29,7 +29,6 @@ const FRAMES = {
   thumbnail: { textScale: 1.7, textWidth: 0.46, bottomClear: 0.14, tag: false, shadow: true },
 };
 const SHADOW_FILTER = '<filter id="shadow" x="-10%" y="-20%" width="120%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="6"/><feOffset dx="0" dy="3" result="b"/><feComponentTransfer><feFuncA type="linear" slope="0.75"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
-export const COVER_FRAMES = Object.freeze(Object.keys(FRAMES));
 
 // The vocabulary a design is written in (the drafting prompt offers exactly these).
 export const COVER_DESIGN_OPTIONS = Object.freeze({

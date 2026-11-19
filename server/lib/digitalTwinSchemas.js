@@ -321,5 +321,4 @@ export const digitalTwinMetaSchema = z.object({
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
 });
-export const soulMetaSchema = digitalTwinMetaSchema; // Alias for backwards compatibility
 

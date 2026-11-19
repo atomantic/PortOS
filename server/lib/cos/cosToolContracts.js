@@ -8,12 +8,6 @@
 import { z } from 'zod';
 
 export const COS_TOOL_SCHEMA_VERSION = 1;
-export const PORTOS_SEMANTIC_TOOL_GRANT_KEYS = Object.freeze([
-  'readPortos',
-  'writePortos',
-  'manageEidoverse',
-  'visitEidoversePeers',
-]);
 export const COS_TOOL_CALL_LIMITS = Object.freeze({
   requestIdChars: 200,
   nameChars: 100,
