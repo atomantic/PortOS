@@ -3,7 +3,6 @@ import { stat } from 'fs/promises';
 import { join } from 'path';
 import { createGunzip } from 'zlib';
 import { createInterface } from 'readline';
-import { pipeline } from 'stream/promises';
 import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 
 const GENOME_DIR = PATHS.meatspace;

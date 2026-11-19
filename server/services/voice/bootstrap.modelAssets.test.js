@@ -3,8 +3,7 @@
 // in lib/voiceModelAssets.js is exercised end to end through bootstrap.js.
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 const home = vi.hoisted(() => ({ dir: '' }));

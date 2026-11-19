@@ -3,7 +3,6 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import * as memory from '../services/memoryBackend.js';
 import { ensureBackend } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';

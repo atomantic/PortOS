@@ -4,7 +4,6 @@ import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../../lib/releaseSynchronization.js';
 import { RELEASE_ATTEMPTS_KEY, mergeReleaseAttempts } from '../../lib/releaseAttemptMembership.js';
-import { currentTaskTypeName } from '../../lib/taskTypeRenames.js';
 import { spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './cosSpawnBudget.js';
 /**
  * CoS Task Store Module
@@ -30,7 +29,7 @@ import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../../lib/cos/cosValidation
 import { validateRequest } from '../../lib/validateRequest.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';
-import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../../lib/taskPauseHold.js';
+import { PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../../lib/investigationTasks.js';

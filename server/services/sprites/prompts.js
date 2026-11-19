@@ -15,7 +15,6 @@
 // — atlas row order in later phases depends on this, so keep it stable.
 // Moved to lib/spriteVocabulary.js in #4901; re-exported for existing callers.
 export { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } from '../../lib/spriteVocabulary.js';
-import { SPRITE_DIRECTIONS } from '../../lib/spriteVocabulary.js';
 
 // Directions that get a derived anchor. `south` is never generated — the
 // frozen main reference IS the south anchor.

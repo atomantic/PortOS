@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
+import { rmSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 
 // The service captures STATE_PATH at module-load time, so the scratch dir

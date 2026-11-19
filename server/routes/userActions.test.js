@@ -27,7 +27,6 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 import userActionRoutes from './userActions.js';
-import { USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { MAX_LIST_LIMIT, recordUserAction } from '../services/userActions.js';
 import { apiAccessForPath } from '../lib/apiCatalog.js';
 

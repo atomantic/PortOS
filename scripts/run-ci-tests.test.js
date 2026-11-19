@@ -32,7 +32,6 @@ import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js'
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
-import { workflowJobs } from './lib/workflowJobs.js';
 import { getAlwaysRunTests } from './ci-test-plan.js';
 import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
 

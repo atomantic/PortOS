@@ -28,7 +28,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 import { readdir } from 'fs/promises';
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { getTools, getEnabledTools, registerTool, updateTool, deleteTool } from './tools.js';
+import { getTools, getEnabledTools, registerTool, deleteTool } from './tools.js';
 
 beforeEach(async () => {
   vi.clearAllMocks();

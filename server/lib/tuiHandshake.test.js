@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  READY_POLL_INTERVAL_MS,
-  READY_IDLE_THRESHOLD_MS,
-  PASTE_MARKER_POLL_MS,
   PASTE_MARKER_PATTERN,
   detectPasteMarker,
   countPasteMarkers,
@@ -27,8 +24,6 @@ import {
   isPasteConfirmed,
   isMcpBootSignal,
   createMcpBootTracker,
-  PASTE_TO_ENTER_MIN_DELAY_MS,
-  PASTE_TO_ENTER_FALLBACK_MS,
   SUBMIT_ENTER_ATTEMPTS,
   SUBMIT_ENTER_SPACING_MS,
   inferTuiCommand,

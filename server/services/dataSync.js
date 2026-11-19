@@ -7,7 +7,6 @@
  */
 
 import { meatspaceEvents } from './meatspaceEvents.js';
-import { dashboardEvents } from './dashboardEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { isDeepStrictEqual } from 'util';

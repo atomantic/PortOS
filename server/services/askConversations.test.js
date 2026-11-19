@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
 
 const { TEMP_ROOT } = vi.hoisted(() => {
   const { mkdtempSync } = require('fs');

@@ -18,7 +18,6 @@ import { mergePersistentMindMaintainer } from '../../lib/persistent/persistentMi
  * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
-import { join } from 'path';
 import { getActiveProvider } from '../provider/providers.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../../lib/cos/cosSpawnWindow.js';
@@ -60,7 +59,7 @@ import { runHealthCheck } from './cosHealthMonitor.js';
 // these from the declaring modules, not from here. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';

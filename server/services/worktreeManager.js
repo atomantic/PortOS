@@ -13,7 +13,7 @@ import { claimBranchAdmission, claimCheckoutOwnerReason } from '../lib/claimCont
 import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
-import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, isPathInsideDir, PATHS, sleep, } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agent/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agent/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
@@ -23,7 +23,7 @@ import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
-import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
+import { worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { MERGED_OWNERSHIP_HOLDS, claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';

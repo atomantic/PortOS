@@ -44,7 +44,6 @@ vi.mock('./subscriptionCosts.js', () => ({
 import {
   getPlanTiers,
   savePlanTiers,
-  groupProvidersByFamily,
   buildSubscriptionFamilies,
   getSubscriptionOverview,
   setSubscriptionEnabled,

@@ -9,7 +9,7 @@ import { createHttpClient } from '../lib/httpClient.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import path from 'path';
-import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { hostFromOriginUrl } from '../lib/workTracker.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 

@@ -25,9 +25,6 @@ import { mergeIssuesFromSync } from '../pipeline/issues.js';
 import { SERIES_ID_RE } from '../pipeline/series.js';
 import { diffWorkBodyManifest } from '../writersRoom/sync.js';
 import {
-  ackDeletesUpTo,
-} from './peerTombstoneCursors.js';
-import {
   diffAssetManifestAgainstLocal,
   referenceCollectionAssetManifest,
   pullMissingAssetsFromPeer,

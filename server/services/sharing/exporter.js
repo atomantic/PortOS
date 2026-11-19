@@ -24,7 +24,7 @@ import { getOrComputeImageSha256, stripImageSidecarLocalBytes } from '../../lib/
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
-import { listSeries, getSeries } from '../pipeline/series.js';
+import { getSeries } from '../pipeline/series.js';
 import { listIssuesForSeries } from '../pipeline/issues.js';
 import { getReview } from '../pipeline/manuscriptReview.js';
 import { getStoredOutline } from '../pipeline/reverseOutline.js';

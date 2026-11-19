@@ -34,7 +34,7 @@ import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
-import { updateAgent, completeAgent, getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
+import { updateAgent, getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';

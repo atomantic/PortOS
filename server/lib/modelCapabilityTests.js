@@ -26,9 +26,7 @@
 import { escapeRegExp } from './textUtils.js';
 import {
   buildRhetoricReferencePrompt,
-  parseRhetoricJson,
   RHETORIC_REFERENCE_SET,
-  scoreRhetoricReference,
 } from './postRhetoric.js';
 
 /** Verdicts every scorer returns. `partial` is real evidence, not a soft fail. */

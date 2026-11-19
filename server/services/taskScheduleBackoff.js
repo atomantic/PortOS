@@ -4,7 +4,7 @@ import { emitLog } from './cos/cosEvents.js';
 // Resolves a pre-rename task type (TASK_TYPE_RENAMES) to the ledger key the
 // rename migration moved its history to.
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
-import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
+import { updateSchedule } from './taskScheduleStore.js';
 import {
   FAILURE_BACKOFF_BASE_MS,
   FAILURE_BACKOFF_CAP_MS,

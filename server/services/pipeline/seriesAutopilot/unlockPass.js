@@ -30,7 +30,7 @@
  * frame + log) so re-locking is an informed choice.
  */
 
-import { BIBLE_KEYS, isSeriesScopedCanonEntry } from '../../../lib/storyBible.js';
+import { BIBLE_KEYS, } from '../../../lib/storyBible.js';
 import { getUniverse } from '../../universeBuilder.js';
 import { setCanonLocksForSeries } from '../../universeCanon.js';
 import { getSeries, updateSeries, listSeries } from '../series.js';

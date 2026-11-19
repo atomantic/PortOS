@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DOMAIN_IDS } from './domainAutonomy.js';
 import {
-  BUDGET_LIMIT_FIELDS,
   DEFAULT_DOMAIN_BUDGET,
   normalizeBudgetLimit,
   normalizeDomainBudgets,

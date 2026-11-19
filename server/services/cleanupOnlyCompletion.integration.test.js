@@ -45,7 +45,7 @@ vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.f
 
 import { PATHS } from '../lib/paths.js';
 import { getAppById } from './apps.js';
-import { getTaskById, updateTask } from './cos/cosTaskStore.js';
+import { updateTask } from './cos/cosTaskStore.js';
 import { completeAgent } from './cos/cosAgentLifecycle.js';
 import { evaluateSuccessCriteria, finalizeAgent, retireDeadAgent } from './agent/agentFinalization.js';
 import { prepareAgentSpawn } from './agent/agentSpawnPreparation.js';

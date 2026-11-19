@@ -36,7 +36,7 @@ import {
   probeBeeperInfo, getInfo, BeeperApiError, __setLastBeeperSuccessAtForTests,
 } from './beeperClient.js';
 import { getBeeperStatus, checkBeeperConnection, listBeeperAccounts } from './beeperStatus.js';
-import { getBeeperSweepProgress, updateBeeperSweepProgress, __resetBeeperSweepProgressForTests } from './beeperSweepProgress.js';
+import { updateBeeperSweepProgress, __resetBeeperSweepProgressForTests } from './beeperSweepProgress.js';
 
 const DOWN_REALTIME_STATE = {
   state: 'down', lastEventAt: null, lastPingAt: null, reconnectAttempts: 0, appState: null, appStateActionable: false, authRejected: false,

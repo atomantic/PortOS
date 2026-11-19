@@ -40,7 +40,7 @@ export const quotaBurnJobKey = (familyId, jobId) => `${familyId}:${jobId}`;
 // `maxDispatchesPerWindow` "no cap" sentinel (the default). Lives in a leaf
 // module so the client shares it; see docs/QUOTA-BURN.md for why the cap is opt-in.
 export { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quotaBurnDispatchCap.js';
-import { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quotaBurnDispatchCap.js';
+import { QUOTA_BURN_UNLIMITED_DISPATCHES, } from './quotaBurnDispatchCap.js';
 
 /**
  * Every numeric/length bound in the plan, in ONE place. The normalizer (CLAMPS), `quotaBurnValidation.js` (REJECTS with 400) and the job catalog's param descriptors

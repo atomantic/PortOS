@@ -18,7 +18,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { readFile, readdir } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { computeSlopPenalty } from '../../lib/editorial/slopScore.js';
 import { planCutsForSection, applyCutsToText, SAFE_CUT_TYPES } from '../../lib/editorial/cutApplier.js';

@@ -22,7 +22,6 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { atomicWrite } from './fileCore.js';
 import { tryReadFileStrict, readJSONFileStrict } from './jsonIo.js';
 import { restoreFsMocks, loadRealFsPromises } from './fileUtils.testFixtures.js';
 

@@ -44,7 +44,7 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
-import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
+import { addProjectScenes, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { parseShotCamera, planShotCameras, shotCameraPromptSection } from './shotCamera.js';

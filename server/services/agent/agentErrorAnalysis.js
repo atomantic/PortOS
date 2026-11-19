@@ -11,7 +11,6 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
 
 import { emitLog } from '../cos/cosEvents.js';
 import { addTask, updateTask } from '../cos/cosTaskStore.js';
-import { cosEvents } from '../cos/cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { redactOutput } from '../../lib/commandSecurity.js';
 import { scrubSecretTokens } from '../../lib/secretText.js';

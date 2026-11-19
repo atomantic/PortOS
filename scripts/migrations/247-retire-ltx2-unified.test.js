@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { repoRoot } from './_testHelpers.js';
 import { RETIRED_VIDEO_MODELS, getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import migration, { RETIRED_ID, SHIPPED_REPO, REPLACEMENT_ID } from './247-retire-ltx2-unified.js';
 

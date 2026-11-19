@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, relative } from 'path';
+import { join, basename, } from 'path';
 import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './provider/providers.js';

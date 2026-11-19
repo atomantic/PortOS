@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isValidTriggerWord,
   sanitizeDatasetImage,
   sanitizeLoraDataset,
   LORA_DATASET_SCHEMA_VERSION,

@@ -50,7 +50,6 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 // needs getPostSessions from this file. Importing getAllTrainingEntries via
 // meatspacePostTraining.js would close that into a 3-file circular import.
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
-import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, normalizeYmd, recordDayKey, withDerivedDayKeys, ymdToUTC, ymdShift } from '../lib/postStreak.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone, userLocalToday as localToday } from './userTimezone.js';

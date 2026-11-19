@@ -154,15 +154,12 @@ import { addTask, approveTask, deleteTask, getTaskView, reorderTasks, updateTask
 import { cleanupZombieAgents, deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
 import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
-import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cos/cosReports.js';
+import { getBriefing, getWhileAwayActivity, listBriefings, } from '../services/cos/cosReports.js';
 import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
-import { getConfig } from '../services/cos/cosState.js';
 import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
 import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
-import { getScript, getStatus, listScripts, pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
+import { pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
 import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
-import * as appActivity from '../services/appActivity.js';
-import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cos/cosTaskClaimWork.js';

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  LI_DEGRADED_MIN_SAMPLE,
   LI_DELIVERY_MIN_SAMPLE,
   LI_HARD_GATE_DELIVERY_THRESHOLD,
   LI_HARD_GATE_EXECUTION_THRESHOLD,

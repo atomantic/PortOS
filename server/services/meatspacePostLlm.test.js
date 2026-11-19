@@ -22,7 +22,6 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import {
-  LLM_DRILL_TYPES,
   generateLlmDrill,
   generateWordAssociation,
   generateStoryRecall,

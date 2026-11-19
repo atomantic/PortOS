@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { homedir } from 'os';
 import {
-  PROPOSAL_SCOPES,
   LI_LABEL,
   LI_BLOCKING_LABEL,
 } from './constants.js';

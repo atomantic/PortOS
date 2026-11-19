@@ -7,7 +7,6 @@
  */
 
 import { invalidateMeatspace } from './meatspaceEvents.js';
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';

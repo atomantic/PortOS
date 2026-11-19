@@ -1,5 +1,5 @@
 /** Filename validation, containment checks, and approved image-asset resolution. */
-import { existsSync, statSync } from 'fs';
+import { statSync } from 'fs';
 import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { platform } from 'os';
 import { ServerError } from './errorHandler.js';

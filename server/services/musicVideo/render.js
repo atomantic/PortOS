@@ -46,7 +46,7 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { isLocalRenderMark, settledRender, settleMusicVideoRender } from './renderSettlement.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideo/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideo/musicVideoLayers.js';
 import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideo/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -58,7 +58,7 @@ import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
 import { coldOpenPlan, coldOpenScenes, withSongScenesOnly } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
-import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { captureMusicVideoEvidence, } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { buildSongAudioMix, clipSoundVoices } from './clipSoundMix.js';
