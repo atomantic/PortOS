@@ -616,7 +616,7 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
 });
 
 describe('always-run guard time budget through the real runner (#16551)', () => {
-  it('fails CI on a guard over budget, timed in its own pass, and only where ci.yml enforces it', () => {
+  it('fails the run on a guard over budget only when enforced, timed in its own pass, and warns otherwise', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-guard-budget-'));
     try {
       // Every selected file passes; the guard reports a wall time over the CI budget.
@@ -646,10 +646,17 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
       // The guard ran alone, before the rest of the selection.
       expect(enforced.stdout.match(/^RAN .*$/gm)).toEqual([`RAN ["../${guard}"]`, `RAN ["../${other}"]`]);
 
-      // Without the ci.yml switch (local pregate, Windows, browser) duration never fails a run.
-      const local = run({});
-      expect(local.status, local.stderr).toBe(0);
-      expect(local.stdout.match(/^RAN .*$/gm)).toHaveLength(1);
+      // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
+      // it stays in the one normal pass with the rest of the selection and never fails the run.
+      for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
+        const reported = run(extraEnv);
+        expect(reported.status, reported.stderr).toBe(0);
+        const ran = reported.stdout.match(/^RAN .*$/gm) ?? [];
+        expect(ran).toHaveLength(1);
+        expect(JSON.parse(ran[0].slice(4)).sort()).toEqual([`../${guard}`, `../${other}`].sort());
+        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${guard} 6.5s over the 6.0s per-file budget.`);
+        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+      }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
@@ -659,9 +666,11 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
     }
   }, 120_000);
 
-  it('enforces it on the Linux server job only', () => {
+  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
     const jobs = readCiJobs();
-    expect(Object.entries(jobs).filter(([, body]) => /CI_GUARD_BUDGET: enforce/.test(body)).map(([id]) => id)).toEqual(['server']);
+    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
+    expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
+    expect(jobs.server).toContain(expression);
   });
 });
 

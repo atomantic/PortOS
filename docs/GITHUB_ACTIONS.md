@@ -217,12 +217,7 @@ or its walk reads a temporary directory). A scanner the detectors cannot see
 
 Because they run on every PR, each always-run guard has a per-file time budget
 (`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
-runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets
-`CI_GUARD_BUDGET=enforce`, so `scripts/run-ci-tests.js` runs the always-run
-guards of its slice as their own Vitest pass, prints the slowest
-(`⏱️ Always-run guards, slowest of …`) and fails the job naming any file over the
-budget. This is the only place the budget fails a run: Windows, browser and DB
-jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets `CI_GUARD_BUDGET` to `enforce` only on the scheduled run (`ci.yml`, #16810), where `scripts/run-ci-tests.js` runs the always-run guards as their own Vitest pass and fails the job naming any file over the budget. Other runs keep them in the normal pass and emit a `::warning::`. Windows, browser and DB jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
 
 ### The bundled `lib/slashdo` submodule
 

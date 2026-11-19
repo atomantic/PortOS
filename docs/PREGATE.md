@@ -53,10 +53,10 @@ and `PORTOS_TEST_MEMO=off` always rerun them. The receipt records guard outcomes
 durations (`fileDurations`). A guard file over the 3s per-file target
 (`scripts/lib/guardBudget.js`) gets a `🐢` line naming it, but never fails local
 pregate: wall time on a machine running several agent gates measures the host,
-not the guard, and a slow pass stays reusable. Hosted CI enforces a 6s budget,
+not the guard, and a slow pass stays reusable. The scheduled hosted run enforces a 6s budget,
 calibrated to its slower runner, on its Linux server job (`CI_GUARD_BUDGET=enforce`), where the always-run guards run
-as their own Vitest pass before the rest of the selection; there are no per-file
-exceptions. `scripts/ensure-deps.test.js`
+as their own Vitest pass before the rest of the selection; PR, push and release runs
+only warn (`CI_GUARD_BUDGET=report`). There are no per-file exceptions. `scripts/ensure-deps.test.js`
 is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
 `update.ps1` and the lockfiles. Persistent test
 memo rules, required stages and worker caps remain the same. Downgraded full
