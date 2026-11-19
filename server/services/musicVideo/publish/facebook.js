@@ -4,10 +4,9 @@
  * video is shared as a reel), with short text and the links, when the
  * director wants them, saved for the first comment instead.
  *
- * prepare() opens the feed's "What's on your mind" composer, pastes the text,
- * hands the 1080p encode to the composer's file input (its drop zone holds one
- * from the start; older layouts show it behind a Photo/video button), waits for
- * the upload (the caption box then reads "Describe your reel") and turns on
+ * prepare() opens the feed's "What's on your mind" composer, hands the 1080p
+ * encode to the file input and waits for the upload to finish. It then writes
+ * the caption into the reel composer, verifies the text and turns on
  * Facebook's AI label unless the director said not to. PortOS never presses
  * Next or Post, and leaves the audience as Facebook has it. The composer posts
  * as whichever profile is active in the PortOS Browser, so a Page posts the
@@ -27,7 +26,7 @@ const HOME_URL = 'https://www.facebook.com/';
 const SIGN_IN = /facebook\.com\/(?:login|checkpoint|recover|r\.php)/;
 const TEXTBOX = '[role=textbox][contenteditable=true]';
 // The composer is the dialog holding the post's text box (a notification can be another dialog).
-const COMPOSER = `[role=dialog]:has(${TEXTBOX})`;
+const COMPOSER = `[role=dialog]:visible:has(${TEXTBOX}:visible)`;
 const COMMENT_BOX = `${TEXTBOX}[aria-label*="comment" i]`;
 // Drafts whose first comment was already typed: a reload of the post page must not type it twice.
 const commented = new WeakSet();
@@ -130,7 +129,6 @@ export const facebookAdapter = {
   label,
   async prepare(page, payload) {
     await openComposer(page);
-    await step(label, 'write the post', () => pasteInto(page, page.locator(`${COMPOSER} ${TEXTBOX}`).first(), payload.text));
     await attachVideo(page, payload.video);
     await step(label, 'wait for the upload', async () => {
       const deadline = Date.now() + UPLOAD_WAIT_MS;
@@ -140,13 +138,25 @@ export const facebookAdapter = {
       }
     });
     const composer = page.locator(COMPOSER).last();
+    const caption = composer.locator(`${TEXTBOX}:visible`).first();
+    // Facebook replaces the post editor during upload and can drop later paragraphs.
+    await step(label, 'write the reel caption', () => pasteInto(page, caption, payload.text));
     const aiLabel = payload.aiLabel === false ? 'Off (you chose)'
       // A miss never fails the draft: the summary asks the director to turn it on.
       : (await labelAsAi(composer).catch(() => null)) || 'Not turned on: switch on Add AI label yourself';
-    const length = await composer.locator(TEXTBOX).first().innerText().then((t) => t.trim().length, () => null);
+    const normalize = (text) => text.replace(/\r\n?/g, '\n').trim();
+    const expected = normalize(payload.text);
+    const actual = await caption.innerText({ timeout: 5000 }).then(normalize, () => null);
+    let warning;
+    if (actual === null) {
+      warning = 'PortOS could not verify the Facebook reel caption. Check the caption before posting.';
+    } else if (actual !== expected) {
+      warning = `The Facebook reel caption differs from the release copy (${actual.length} characters in Facebook, ${expected.length} expected). Check the caption before posting.`;
+    }
     const next = await button(composer, 'Next').count().catch(() => 0);
     return {
-      characters: length,
+      characters: actual?.length ?? null,
+      ...(warning ? { warning } : {}),
       aiLabel,
       audience: 'As Facebook has it (check Post audience)',
       // A video post may ask for Next (post settings) before Post; neither is pressed here.
