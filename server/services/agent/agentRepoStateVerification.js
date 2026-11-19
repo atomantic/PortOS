@@ -73,6 +73,8 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents } from '../cos/cosClai
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { claimCheckoutOwner } from '../../lib/claimContinuation.js';
 import { loadState } from '../cos/cosState.js';
+import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, REPOSITORY_HOLD, completionReceiptDone,
+  completionWaitingOnRepository, verifiedRepositoryWorktreeStage } from '../../lib/agent/agentCompletionStages.js';
 
 // A task in any of these still HOLDS its branch and will resume on it, so a
 // branch one of them targets is owned, not leaked. `challenged` is the easy one
@@ -289,23 +291,12 @@ const verificationRuns = new Map();
 // completion replay. Unrelated events retain their normal wake behaviour.
 const manualCleanupContext = new AsyncLocalStorage();
 const CLAIM_OWNER_HOLDS = new Set(['claim-owner-active', 'claim-owner-ambiguous']);
-const MANUAL_COMPLETION_STAGES = ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'];
-// Chain stages that agentCompletionCleanup defers until this verification's
-// worktree receipt exists. Any other unfinished stage refuses the recheck.
-const REPOSITORY_HELD_STAGES = new Set(['pipeline', 'creative']);
-const REPOSITORY_HOLD_REASONS = new Set(['checkout-capture-pending', 'checkout-retirement-pending']);
 const canonicalRepository = path => typeof path === 'string' && path ? realpath(path).catch(() => resolve(path)) : Promise.resolve(null);
 
-/** 'ready' when every completion stage finished; 'repository-held' when only
- * pipeline/creative stages wait on this verification; otherwise null. */
-function manualCompletionMode(agent) {
-  const receipt = agent?.metadata?.completionCleanup;
-  const stages = receipt?.stages;
-  if (receipt?.version !== 1 || !stages || !MANUAL_COMPLETION_STAGES.every(key => stages[key])) return null;
-  const unfinished = Object.entries(stages).filter(([, stage]) => stage?.status !== 'done');
-  if (!unfinished.length) return receipt.status === 'completed' ? 'ready' : null;
-  return receipt.status === 'pending' && unfinished.every(([key, stage]) => REPOSITORY_HELD_STAGES.has(key)
-    && stage.status === 'held' && REPOSITORY_HOLD_REASONS.has(stage.reason)) ? 'repository-held' : null;
+function manualCompletionMode(receipt) {
+  if (completionReceiptDone(receipt)) return 'ready';
+  if (completionWaitingOnRepository(receipt)) return 'repository-held';
+  return null;
 }
 
 // These are the execution-side prerequisites of isSettleableCompletionReceipt.
@@ -399,10 +390,10 @@ export async function verifyAgentRepoState(input) {
     // forge without a captured head.
     if (input.agentState?.metadata?.checkoutCapture?.status === 'pending' && !(cleanupPending && await pendingCheckoutAbsent(input.agentState))) {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('../cos/cosAgentLifecycle.js');
-      if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
+      if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped(REPOSITORY_HOLD.CAPTURE);
       const recovered = await getAgentRecord(input.agentId).catch(() => null);
       if (!recovered || recovered.status !== 'completed' || recovered.startedAt !== input.agentState.startedAt
-        || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped('checkout-capture-pending');
+        || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped(REPOSITORY_HOLD.CAPTURE);
       input = { ...input, agentState: recovered };
     }
     if (input.manualCleanupOnly) {
@@ -497,12 +488,11 @@ export async function verifyAgentRepoState(input) {
         if (reason) return { ...result, verified: false, skipReason: reason };
       }
       const { recordCompletionCleanup } = await import('../cos/cosAgentLifecycle.js');
-      if (input.agentState.metadata?.completionCleanup?.version === 1) {
+      if (input.agentState.metadata?.completionCleanup?.version === COMPLETION_RECEIPT_VERSION) {
         // A deferred receipt releases held chain stages to the normal replay,
         // whose later verification pass settles the task after they finish.
         const recorded = await recordCompletionCleanup(input.agentId, input.agentState.startedAt, {
-          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification',
-            ...(input.deferTaskSettlement && { taskSettlement: 'after-completion-stages' }) } } });
+          stages: { [COMPLETION_STAGE.WORKTREE]: verifiedRepositoryWorktreeStage(input.deferTaskSettlement) } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
       if (input.manualCleanupOnly) {
@@ -567,7 +557,7 @@ export async function recheckAgentCleanup(agentId, taskId) {
   if (verificationRuns.has(agentId) || getDeliveryActivity(agentId)) return { ok: false, reason: 'cleanup-already-running' };
   if (!manualCleanupProvenanceValid(agent)) return { ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] };
   if (manualSwarmContinuationPending(agent)) return { ok: true, verified: false, reasons: ['swarm-continuation-pending'] };
-  const mode = manualCompletionMode(agent);
+  const mode = manualCompletionMode(agent.metadata?.completionCleanup);
   if (!mode) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
   const recheckCleanup = async ({ requireCapture = true } = {}) => {
     const [currentTask, currentAgent] = await Promise.all([getTaskById(taskId), getAgentRecord(agentId)]);
@@ -576,7 +566,7 @@ export async function recheckAgentCleanup(agentId, taskId) {
     if (!manualCleanupProvenanceValid(currentAgent)) throw new Error('cleanup-provenance-unverified');
     if (manualSwarmContinuationPending(currentAgent)) throw new Error('swarm-continuation-pending');
     // A held run never settles here, even if its stages finish concurrently.
-    const current = manualCompletionMode(currentAgent);
+    const current = manualCompletionMode(currentAgent.metadata?.completionCleanup);
     if (!current || (mode === 'ready' && current !== 'ready')) throw new Error('completion-stages-pending');
     if (requireCapture && currentAgent.metadata?.checkoutCapture?.status !== 'captured') throw new Error('checkout-capture-unverified');
   };

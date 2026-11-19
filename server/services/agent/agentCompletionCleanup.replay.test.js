@@ -157,6 +157,7 @@ describe('durable post-ingestion cleanup replay', () => {
     const settled = await saved();
     expect(settled.metadata.completionCleanup.status).toBe('completed');
     expect(settled.metadata.repoStateVerification).toEqual({ status: 'pending' });
+    expect(settled.result).toEqual(record.result);
     expect(addTask).not.toHaveBeenCalled();
   });
 
