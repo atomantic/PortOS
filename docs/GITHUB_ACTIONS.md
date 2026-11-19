@@ -889,37 +889,23 @@ against the base it was built on: two PRs that were each green can merge into a
 red result, and a direct push skips the gate. There is no merge coordinator (#12247
 and #14185 built and removed one).
 
-`.github/workflows/main-health.yml` consumes every finished push or scheduled run
-on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
+`main-health.yml` runs `scripts/ci-nightly-report.js` after main CI pushes and
+schedules. It needs its own workflow because release.yml calls `ci.yml` without
+`issues: write`.
 
-- **red**: the run summary lists the failing jobs and steps plus every pull request
-  merged since the last **green** run on `main` older than the failed run
-  (the Compare API against the head of that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
-  `model:medium`, `effort:medium`) is created, or updated with a comment when one
-  is already open. The issue carries only job names, the commit range and the run
-  URL. An unreadable range or a missing earlier green run is reported as such, never
-  as "no suspects".
-- **green**: closes the open issue and adds the green run link to its body in
-  the same update.
-- **inconclusive**: a cancelled run or a red gate caused solely by a job that
-  never acquired a runner leaves the issue as it was.
+A red verdict creates or updates one "main is red" issue with jobs, range and
+run link. It uses `bug`, `area:ci`, `model:medium` and `effort:medium`.
+The summary lists merges since the nearest older green run and flags an unknown
+range. To bisect, rerun the failing suite at the midpoint merge. A green verdict closes the issue and appends the run link.
+Cancellation and runner-capacity-only failures leave the issue as it was.
 
-Before changing the alert, the reporter checks the recent `ci.yml` push and
-scheduled runs on `main`. GitHub's original run number determines order. A
-newer run's most recent conclusive attempt supersedes older events. A pending
-or inconclusive retry preserves that run's prior verdict. The reporter also
-checks that the event agrees with the current attempt of its own run. A green
-retry can close its own run's alert, and a green event with no open alert
-needs no freshness lookup.
-
-When the run or job state needed to determine freshness is unreadable, the
-reporter leaves the issue untouched and fails the `main-health` job. Issue read
-or write failures also fail the job so a stale or duplicate issue is visible.
-
-The reporter is a separate workflow because release.yml calls `ci.yml`, and
-a called workflow cannot hold
-`issues: write` that its caller lacks. To bisect, run the failing suite at a merge in
-the middle of the list and halve it.
+Before writing, the reporter orders recent `ci.yml` push and scheduled runs by
+GitHub run number. A newer run's latest conclusive attempt supersedes older
+events. Pending and inconclusive retries preserve prior verdicts. An event
+must match its own run's current attempt, so a green retry can close that
+run's alert. Green events with no alert skip the lookup. An unreadable verdict
+fails the reporter and leaves the issue untouched. Issue read or write
+failures also fail the reporter.
 
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
