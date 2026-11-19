@@ -28,9 +28,39 @@ describe('SchemaGapBadge', () => {
       />,
     );
     expect(screen.getByText(/Bob/)).toBeInTheDocument();
-    expect(screen.getByText(/older PortOS/)).toBeInTheDocument();
+    expect(screen.getByText(/they need to update/)).toBeInTheDocument();
     expect(screen.getByText('2.5.0')).toBeInTheDocument();
     expect(screen.getByText('universe')).toBeInTheDocument();
+  });
+
+  it('asks the operator to update this install after a bundled catalog refusal on a universe subscription', () => {
+    render(
+      <SchemaGapBadge
+        peer={{ name: 'Example Peer' }}
+        peerSubs={[{
+          recordKind: 'universe',
+          blockedBySchema: {
+            ahead: [],
+            behind: [{ category: 'catalog', senderV: 16, receiverV: 17 }],
+            peerPortosVersion: '3.0.0',
+          },
+        }]}
+      />,
+    );
+    expect(screen.getByRole('listitem')).toHaveTextContent('Update this PortOS to send universe updates to Example Peer (3.0.0).');
+  });
+
+  it.each([
+    ['mixed refusal', [{ category: 'universes', senderV: 5, receiverV: 4 }], [{ category: 'catalog', senderV: 16, receiverV: 17 }]],
+    ['pre-feature refusal', [], []],
+  ])('points to the peer on a %s', (_label, ahead, behind) => {
+    render(
+      <SchemaGapBadge
+        peer={{ name: 'Example Peer' }}
+        peerSubs={[{ recordKind: 'universe', blockedBySchema: { ahead, behind } }]}
+      />,
+    );
+    expect(screen.getByRole('listitem')).toHaveTextContent('Example Peer is on an older PortOS — they need to update');
   });
 
   it('renders a "peer is ahead" row when peer.schemaGaps is set by snapshot sync', () => {
