@@ -1143,7 +1143,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
   const rendersReviewers = /\{reviewers\}/.test(promptTemplate);
   const reviewerIdentityNotice = rendersReviewers
-    ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType })
+    ? await preflightClaimReviewers(app, claimReviewers, { metadata, appOverrideMetadata: reviewerOverrideMetadata, taskType: reviewerTaskType, promptTaskType })
     : '';
   const {
     reviewers: promptReviewers,

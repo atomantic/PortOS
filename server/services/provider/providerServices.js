@@ -14,7 +14,6 @@ import {
 } from '../../lib/provider/providerServiceInstances.js';
 import { evaluateSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 import { requireToolkit } from '../../lib/aiToolkitState.js';
-import { isNonBlankStr } from '../../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../../lib/serviceDefinitions.js';
 import {
   connectionFanout,

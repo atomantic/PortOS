@@ -13,7 +13,7 @@ import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 // =============================================================================
 // A mood board collects visual + textual references that feed the Create suite.
 // Boards are db-primary, local-only records; items live inline in the board's
-// JSONB. validation.js re-exports everything here so deep imports keep working.
+// JSONB.
 
 export const MOOD_BOARD_ITEM_TYPES = Object.freeze(['image', 'text', 'video']);
 

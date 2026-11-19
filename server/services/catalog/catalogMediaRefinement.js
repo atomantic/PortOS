@@ -19,7 +19,7 @@ import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFro
 import { previewImagePrompt } from '../imageGen/promptPreview.js';
 import { readImageDimensions } from '../imageGen/regen.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { CATALOG_COMPARISON_VARIANT_ID } from '../../lib/catalog/catalogValidation.js';
+import { CATALOG_COMPARISON_VARIANT_ID } from '../../lib/catalog/catalogTypes.js';
 import { getUniverse } from '../universeBuilder/crud.js';
 
 const COMPARISON_SHEET_ROLE = `sheet:${CATALOG_COMPARISON_VARIANT_ID}`;

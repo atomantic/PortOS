@@ -2,10 +2,8 @@
  * Node-safe image/video backend constants + pure helpers.
  *
  * Image/video render-backend constants + pure helpers — the NODE-SAFE half of
- * `imageGenBackends.js`, split out (#3231 Phase 4) because the server-side
- * parity suite (`server/lib/renderTargets.parity.test.js`) and the server CI
- * job import this module directly, where client-only packages (lucide-react)
- * are not installed. Nothing here may import React, icons, or any package —
+ * `imageGenBackends.js`, split out (#3231 Phase 4) so it loads where client-only
+ * packages (lucide-react) are not installed. Nothing here may import React, icons, or any package —
  * the only imports allowed are the dependency-free server leaves below,
  * the same way `Layout.jsx` reads `server/lib/navManifest.js`. Icon metadata
  * and settings-driven backend derivation stay in `imageGenBackends.js`, which
@@ -21,8 +19,8 @@
  * alphabet is how fal.ai and Reactor video renders came to be filed under
  * "Local machine" (#6292), and the shipped defaults were free to drift
  * silently until the capability leaf existed. What stays local to this module
- * is only what the CLIENT owns: display labels, the Settings row list, and the
- * form's own slot/strength predicates.
+ * is only what the CLIENT owns: display labels and the form's own slot/strength
+ * predicates.
  */
 
 import {
@@ -166,29 +164,8 @@ export {
   renderTargetDefaults,
 };
 
-// The Settings → Image Gen → Defaults rows for the server's render-target
-// alphabet (`RENDER_TARGET`, #3231) — the surfaces whose default backend +
-// model are pinnable via settings.renderDefaults. Only targets whose resolver
-// is LIVE are listed here — showing a pin no resolver reads would be a control
-// that silently does nothing; the parity suite fails on a server target that
-// is neither listed nor explicitly allowlisted as unlisted. Labels are the
-// Settings-UI display names. `video: true` marks the targets whose VIDEO lane
-// also consults `renderDefaults[target].videoMode` (#3231 Phase 4):
-// music-video (scene clips + new-project backend seeding) and creative-agent
-// (commission video steps). Video pins are backend-only — grok video has no
-// model knob (supportsModelOverride: false) and local video models are picked
-// on the surface itself, so no video-model control is offered anywhere.
-export const RENDER_TARGET_OPTIONS = Object.freeze([
-  { id: RENDER_TARGET.UNIVERSE_BIBLE, label: 'Universe Bible & canon renders' },
-  { id: RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, label: 'Universe character sheets' },
-  { id: RENDER_TARGET.SERIES_FIRST_PASS, label: 'Series first-pass portraits & frames' },
-  { id: RENDER_TARGET.SPRITE_REFERENCE, label: 'Sprite references & anchors' },
-  { id: RENDER_TARGET.PIPELINE_VISUAL, label: 'Pipeline visuals (storyboards, comics, covers)' },
-  { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
-  { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets', retired: true },
-  { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
-  { id: RENDER_TARGET.DECK, label: 'Deck card renders (playing cards & tarot)' },
-]);
+// The Settings → Image Gen → Defaults rows are `RENDER_TARGET_OPTIONS`, declared beside the alphabet in `server/lib/renderTargets.js`.
+export { RENDER_TARGET_OPTIONS } from '../../../server/lib/renderTargets.js';
 
 // True when a video backend renders in a provider's cloud rather than on the
 // local accelerator.

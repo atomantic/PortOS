@@ -13,6 +13,10 @@ describe('buildAudioBedMix peak guard', () => {
     expect(mix().filters.at(-1)).toMatch(/amix=inputs=2:duration=first:dropout_transition=0:normalize=0\[mixa\]$/);
   });
 
+  it('treats rates within tempo precision of 1 as unchanged without an empty filter', () => {
+    expect(mix({ beds: [{ ...bed, rate: 1.000000001 }] })).toEqual(mix());
+  });
+
   it('ends the mix with an alimiter at the ceiling and no gain stage', () => {
     const { filters } = mix({ limitPeak: true });
     expect(filters.at(-2)).toMatch(/normalize=0\[bedmix\]$/);

@@ -1,7 +1,7 @@
-import { isSafeRecordId } from '../../lib/validation.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { isStr } from '../../lib/textUtils.js';
 import { PARAM_ALLOWLIST } from './sanitizeJob.js';
+import { isSafeRecordId } from '../../lib/zodCompat.js';
 
 // Re-render metadata a share bucket carries for a gallery asset. The record is
 // peer-authored, so only completed image/video rows survive, and params are

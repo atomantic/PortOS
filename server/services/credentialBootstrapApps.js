@@ -1,6 +1,6 @@
-import { credentialBootstrapsSettingsSchema } from '../lib/validation.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, updateSettingsWith } from './settings.js';
+import { credentialBootstrapsSettingsSchema } from '../lib/providerValidation.js';
 
 /**
  * Credential-bootstrap APPS (#7564): the wrapper CLIs a composite id's

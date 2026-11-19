@@ -7,17 +7,16 @@
  *   GET    /api/devtools/video-download/downloads       → Entry[]    (downloaded videos, newest first)
  *   DELETE /api/devtools/video-download/downloads/:id   → { ok }     (delete a downloaded video)
  *   GET    /api/devtools/video-download/yt-dlp           → yt-dlp version + update availability
+ *   POST   /api/devtools/video-download/yt-dlp/install   → install yt-dlp with Homebrew
  *   POST   /api/devtools/video-download/yt-dlp/update    → update yt-dlp in place
  *   GET    /api/devtools/video-download/:jobId/events    → SSE progress
  *   POST   /api/devtools/video-download/:jobId/cancel    → { ok }
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest, videoDownloadSchema, isPaginationRequested, paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   startVideoDownload,
   attachDownloadSseClient,
@@ -25,7 +24,8 @@ import {
   listDownloads,
   deleteDownload,
 } from '../services/videoDownload.js';
-import { getYtDlpUpdateStatus, updateYtDlp } from '../services/ytdlpUpdate.js';
+import { getYtDlpUpdateStatus, installYtDlp, updateYtDlp } from '../services/ytdlpUpdate.js';
+import { videoDownloadSchema } from '../lib/mediaGenerationValidation.js';
 
 const router = Router();
 
@@ -59,20 +59,21 @@ router.get('/yt-dlp', asyncHandler(async (_req, res) => {
   res.json(await getYtDlpUpdateStatus());
 }));
 
-// A `brew upgrade` can take a minute, so the package manager's own output is
-// relayed over `ytdlp:update` while it runs — the page renders it as a status
-// line on the button that started it.
-router.post('/yt-dlp/update', asyncHandler(async (req, res) => {
+// Relay Homebrew output while the package manager is running.
+const runYtDlpAction = (action, verb) => asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const emit = (frame) => io?.emit('ytdlp:update', frame);
-  const result = await updateYtDlp({ onProgress: emit });
+  const result = await action({ onProgress: emit });
   if (!result.success) {
     emit({ event: 'error', message: result.error });
-    throw new ServerError(result.error || 'yt-dlp update failed', { status: 502 });
+    throw new ServerError(result.error || `yt-dlp ${verb} failed`, { status: 502 });
   }
-  emit({ event: 'complete', message: `yt-dlp ${result.note || `updated to ${result.version}`}` });
+  emit({ event: 'complete', message: `yt-dlp ${result.note || `${verb} completed (${result.version})`}` });
   res.json(result);
-}));
+});
+
+router.post('/yt-dlp/install', runYtDlpAction(installYtDlp, 'install'));
+router.post('/yt-dlp/update', runYtDlpAction(updateYtDlp, 'update'));
 
 router.get('/:jobId/events', (req, res) => {
   if (!attachDownloadSseClient(req.params.jobId, res)) {

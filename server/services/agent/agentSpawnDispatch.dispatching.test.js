@@ -13,7 +13,7 @@ vi.mock('../cos/cos.js', () => ({}));
 vi.mock('../cos/cosState.js', () => ({ getConfig: async () => ({}) }));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => f.updateResult) }));
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
-  registerAgent: vi.fn(async () => { await f.registerGate; return { startedAt: '2026-01-01T00:00:00.000Z' }; }),
+  registerAgent: vi.fn(async () => { await f.registerGate; }),
   updateAgent: vi.fn(),
 }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
@@ -249,7 +249,7 @@ describe('dispatchAgentRun ownership window', () => {
     expect(await dispatchAgentRun(context)).toBeNull();
     expect(registerAgent).toHaveBeenCalledOnce();
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ metadata: expect.objectContaining({ totalSpawnCount: 3, cleanupReviewTarget: undefined }) }), 'user',
-      expect.objectContaining({ expectedTask: { metadata: context.task.metadata }, spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-x', startedAt: '2026-01-01T00:00:00.000Z' } }));
+      { expectedStatus: null, expectedTask: { metadata: context.task.metadata } });
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(context.cleanupOnError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist reviewed-head launch admission'));
     expect(context.claimAcquired).toBe(false);

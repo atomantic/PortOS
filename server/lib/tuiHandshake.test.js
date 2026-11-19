@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  READY_POLL_INTERVAL_MS,
-  READY_IDLE_THRESHOLD_MS,
-  PASTE_MARKER_POLL_MS,
   PASTE_MARKER_PATTERN,
   detectPasteMarker,
   countPasteMarkers,
@@ -27,8 +24,6 @@ import {
   isPasteConfirmed,
   isMcpBootSignal,
   createMcpBootTracker,
-  PASTE_TO_ENTER_MIN_DELAY_MS,
-  PASTE_TO_ENTER_FALLBACK_MS,
   SUBMIT_ENTER_ATTEMPTS,
   SUBMIT_ENTER_SPACING_MS,
   inferTuiCommand,
@@ -40,6 +35,10 @@ import {
   verifyPasteRendered,
   isCollapsedPasteChip,
   createInputReadyTracker,
+  describeTrustGateFailure,
+  TUI_TRUST_MAX_NAVIGATIONS,
+  TUI_TRUST_NAVIGATION_MIN_AGE_MS,
+  TUI_TRUST_SETTLE_MS,
   createStartupDialogAnswers,
   answerStartupDialogs,
   SUBMIT_KEY,
@@ -1077,6 +1076,66 @@ describe('createInputReadyTracker', () => {
     expect(tracker.needsTrust).toBe(true);
     expect(tracker.trustChoiceReady).toBe(true);
     expect(tracker.trustSelectionKey).toBe('\x1b[B');
+  });
+
+  describe('settled trust navigation (Claude resets its selector after first paint)', () => {
+    const DECLINE_FIRST = 'Quick safety check: Is this a project you created or one you trust?\n'
+      + '❯ No, exit\n  Yes, I trust this folder\n';
+    const MOVED = '  No, exit\n❯ Yes, I trust this folder\n';
+    const REVERTED = '❯ No, exit\n  Yes, I trust this folder\n';
+    let clock;
+    beforeEach(() => { clock = 0; vi.spyOn(Date, 'now').mockImplementation(() => clock); });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('waits for the dialog to age and settle, sends the arrow alone, and submits only on a confirmed highlight', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', DECLINE_FIRST);
+      clock = TUI_TRUST_NAVIGATION_MIN_AGE_MS - 1;
+      expect(tracker.trustAnswer()).toBeNull();
+      clock = TUI_TRUST_NAVIGATION_MIN_AGE_MS;
+      const move = tracker.trustAnswer();
+      expect(move).toEqual({ keys: '\x1b[B', final: false });
+      tracker.ackTrustAnswer(move);
+      expect(tracker.needsTrust).toBe(true);
+      expect(tracker.ready).toBe(false);
+
+      // No repaint yet: the stale pre-arrow screen must not justify Enter.
+      clock += TUI_TRUST_SETTLE_MS;
+      expect(tracker.trustAnswer()).toBeNull();
+
+      tracker.observe('', MOVED);
+      expect(tracker.trustAnswer()).toBeNull(); // not settled yet
+      clock += TUI_TRUST_SETTLE_MS;
+      const submit = tracker.trustAnswer();
+      expect(submit).toEqual({ keys: SUBMIT_KEY, final: true });
+      tracker.ackTrustAnswer(submit);
+      expect(tracker.needsTrust).toBe(false);
+    });
+
+    it('re-navigates when the selector reverts, and gives up rather than ever submitting the decline', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', DECLINE_FIRST);
+      clock = TUI_TRUST_NAVIGATION_MIN_AGE_MS;
+      for (let i = 0; i < TUI_TRUST_MAX_NAVIGATIONS; i++) {
+        const answer = tracker.trustAnswer();
+        expect(answer).toEqual({ keys: '\x1b[B', final: false });
+        tracker.ackTrustAnswer(answer);
+        tracker.observe('', MOVED + REVERTED);
+        clock += TUI_TRUST_SETTLE_MS;
+      }
+      expect(tracker.trustNavigationExhausted).toBe(true);
+      expect(tracker.trustAnswer()).toBeNull();
+      expect(tracker.needsTrust).toBe(true);
+      expect(describeTrustGateFailure(tracker, 'claude').reason).toBe('tui-trust-choice-unconfirmed');
+    });
+
+    it('keeps the bundled answer when no highlight chrome can confirm the move', () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe('', 'Is this a project you trust?\nNo, exit\nYes, I trust this folder\n');
+      expect(tracker.trustAnswer()).toBeNull();
+      clock = TUI_TRUST_NAVIGATION_MIN_AGE_MS;
+      expect(tracker.trustAnswer()).toEqual({ keys: '\x1b[B\r', final: true });
+    });
   });
 
   it('uses option ordering when trust-choice highlight chrome is absent', () => {

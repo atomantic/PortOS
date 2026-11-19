@@ -104,7 +104,7 @@ describe('import-growth threshold (#6009, #6156)', () => {
     expect(settingsEdge.largestNewDependencies[0].closureSize).toBe(23);
     expect(settingsEdge.largestSuiteDeltas[0].growth).toBe(23);
 
-    // validation.js reach × checkRegistry.js closure, the #6009 barrel shape.
+    // Catch-all validation barrel reach × checkRegistry.js closure, the #6009 barrel shape.
     const barrel = compareImportGrowth(...Object.values(fanOut({ suites: 224, extra: 69 })));
     expect(barrel.ok).toBe(false);
     expect(barrel.existingSuiteGrowth).toBe(224 * 69);

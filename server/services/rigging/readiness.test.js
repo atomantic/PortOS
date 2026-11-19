@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { RIGGING_UNAVAILABLE_REASONS, RIGGING_REASON_FALLBACK, riggingReasonLabel } from '../../lib/riggingReasons.js';
 import {
   RIGGING_INSTALL_COMMAND,
   RIGGING_MODULE_REQUIREMENT,
@@ -40,6 +43,41 @@ describe('riggingUnavailableReason', () => {
 
   it('defaults to a named blocker rather than ready when handed nothing', () => {
     expect(riggingUnavailableReason()).toBe('unsupported-platform');
+  });
+});
+
+// A code is identified by its kebab shape: every OTHER single-quoted literal in the reducer is a dash-free
+// probe-status token ('ok', 'unimportable'). Comments are stripped so a code named in prose can't count.
+const KEBAB_CODE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+
+function reasonCodesInSource() {
+  const src = readFileSync(fileURLToPath(new URL('./readiness.js', import.meta.url)), 'utf8');
+  const start = src.indexOf('export function riggingUnavailableReason(');
+  expect(start, 'riggingUnavailableReason() not found in readiness.js').toBeGreaterThan(-1);
+  // Bounded by the function's own column-0 closing brace so a later declaration can't widen the window.
+  const end = src.indexOf('\n}\n', start);
+  expect(end, 'no column-0 closing brace found — cannot bound the reducer body').toBeGreaterThan(start);
+  const body = src.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  return [...body.matchAll(/'([a-z][a-z0-9-]*)'/g)].map((m) => m[1]).filter((s) => KEBAB_CODE.test(s));
+}
+
+describe('rigging reason labels', () => {
+  // Without this, a new code with no label renders as the generic fallback under a fully green suite.
+  it('labels exactly the codes riggingUnavailableReason() can return, all kebab-case', () => {
+    for (const code of Object.keys(RIGGING_UNAVAILABLE_REASONS)) {
+      expect(code, `${code} must be kebab-case for the source guard to see it`).toMatch(KEBAB_CODE);
+    }
+    const codes = reasonCodesInSource();
+    expect(codes.length).toBeGreaterThan(0);
+    expect([...new Set(codes)].sort()).toEqual(Object.keys(RIGGING_UNAVAILABLE_REASONS).sort());
+  });
+
+  it('falls back for an unknown or absent code rather than rendering the raw code', () => {
+    expect(riggingReasonLabel(null)).toBe(RIGGING_REASON_FALLBACK);
+    expect(riggingReasonLabel('brand-new-code')).toBe(RIGGING_REASON_FALLBACK);
+    expect(riggingReasonLabel('__proto__')).toBe(RIGGING_REASON_FALLBACK);
+    expect(riggingReasonLabel('brand-new-code', 'custom')).toBe('custom');
+    expect(riggingReasonLabel('unsupported-platform', 'custom')).toBe(RIGGING_UNAVAILABLE_REASONS['unsupported-platform']);
   });
 });
 

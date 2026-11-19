@@ -6,8 +6,9 @@
  */
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { mediaMakePrimarySchema, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { listMediaHolders, makeMediaPrimary } from '../services/mediaHolders.js';
+import { mediaMakePrimarySchema } from '../lib/mediaGenerationValidation.js';
 
 const router = Router();
 

@@ -12,9 +12,10 @@
  */
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { peerMediaDeleteSchema, peerMediaReleaseSchema, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { executePeerMediaDelete } from '../services/mediaRemoteDelete.js';
 import { executePeerMediaRelease } from '../services/mediaHolders.js';
+import { peerMediaDeleteSchema, peerMediaReleaseSchema } from '../lib/federatedMediaValidation.js';
 
 const router = Router();
 

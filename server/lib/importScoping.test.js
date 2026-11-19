@@ -9,16 +9,13 @@
  * instantiations — the sum, over all 1,588 server test files, of the modules in
  * each one's import closure — from ~115.5k to ~94.5k (-18%).
  *
- * That is a property nothing else in the tree defends, and it regresses
- * silently: re-pointing one of these imports back at the convenient barrel
- * still passes every behavioral test, it just quietly re-adds thousands of
- * module instantiations to CI. So each narrowing is pinned here as a negative
- * reachability assertion, paired with a positive control (per the contract in
- * `staticImportGraph.js`: a resolver gap must not be able to make the walk look
- * clean). The aggregate backstop is no longer a fixed total: the growth
- * describe below compares this same closure walk to the merge base.
+ * Individual narrowings are not pinned edge by edge: re-adding a heavy edge
+ * fails the base-relative growth describe below, which compares this same
+ * closure walk to the merge base. What stays here are the architectural
+ * boundaries, the CI-selection cuts (the growth guard does not measure
+ * selection) and the hoisted-import guard.
  *
- * BEFORE narrowing one of these — or any other production import — read the
+ * BEFORE narrowing a production import, read the
  * "Import scoping" section of `server/AGENTS.md`. Bypassing a barrel that a
  * suite `vi.mock()`s reaches the real implementation instead of the double, and
  * the failure surfaces in an unrelated test file.
@@ -63,231 +60,6 @@ it('keeps every shared film module outside the Music Video service graph', () =>
     expect([...closure].filter((file) => file.startsWith(`${abs('services/musicVideo')}${sep}`)), name).toEqual([]);
   }
   expect(reaches('services/film/sync.js', 'lib/musicVideo/musicVideoBlender.js')).toBe(true);
-});
-
-// Each row: the entry that was narrowed, the module it must no longer
-const NARROWED = [
-  ['lib/insightsValidation.js', 'lib/validation.js',
-    'defines insights schemas without loading the catch-all validation barrel'],
-  ['routes/insights.js', 'lib/validation.js',
-    'validates insights requests through domain schemas and the leaf validator'],
-  ['lib/federatedMediaValidation.js', 'lib/validation.js',
-    'validates federated jobs through domain schemas without loading the catch-all barrel'],
-  ['lib/federatedMediaRequest.js', 'lib/validation.js',
-    'builds federated requests through domain schemas and the leaf validator'],
-  ['services/videoGen/renderArgs.js', 'services/videoGen/loraStages.js',
-    'checks the shared request contract without runtime capability validation'],
-  ['services/videoGen/prepareParams.js', 'services/videoGen/loraStages.js',
-    'loads runtime LoRA validation only when preparing a render'],
-  ['services/videoGen/generateVideo.js', 'services/videoGen/loraStages.js',
-    'loads runtime LoRA validation only when executing a render'],
-  ['lib/catalog/catalogValidation.js', 'lib/greyboxScene.js',
-    'leaves greybox scene validation to its endpoint-specific schemas'],
-  ['lib/catalog/catalogValidation.js', 'lib/greyboxPrompt.js',
-    'leaves greybox prompt validation to its endpoint-specific schemas'],
-  ['services/videoGen/spawnWatch.js', 'services/videoGen/metalBufferProfiles.js',
-    'loads learned Metal buffer policies only when executing a render'],
-  ['services/videoGen/loraStages.js', 'services/videoGen/runtimes.js',
-    'probes runtime capability only for a non-default per-stage request'],
-  ['routes/mediaJobs.js', 'services/videoGen/prepareParams.js',
-    'loads local render preparation only when retrying a local video'],
-  ['services/cos/cosLocalEndpointSlots.js', 'services/promptRunner.js',
-    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/cos/cos.js', 'services/promptRunner.js',
-    'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/agent/agentFinalization.js', 'services/promptRunner.js',
-    'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/agent/agentFinalization.js', 'services/cos/cosTaskGenerator.js',
-    'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/investigationTaskProducer.js', 'services/cos/cos.js',
-    'queues investigation tasks through the task store, not the CoS daemon'],
-  ['services/repoIntake.js', 'services/cos/cos.js',
-    'queues intake tasks through the task store, not the CoS daemon'],
-  ['services/askPromote.js', 'services/cos/cos.js',
-    'queues promoted tasks through the task store, not the CoS daemon'],
-  ['routes/gsd.js', 'services/cos/cos.js',
-    'queues GSD tasks through the task store, not the CoS daemon'],
-  ['routes/apps/agents.js', 'services/cos/cos.js',
-    'lists agents from the declaring agent modules, not the CoS daemon'],
-  ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
-    'reads cleaner request policy without loading execution backends'],
-  ['services/codeReview.js', 'lib/validation.js',
-    'reads reviewer vocabulary from its pure declaring module without the validation barrel'],
-  ['services/backup.js', 'services/socket.js',
-    'loads socket/auth listeners only when a failed scheduled DB dump needs the global socket'],
-  ['services/eidoverseWorld.js', 'services/eidoverseWorldSources.js',
-    'uses pure Eidoverse signals without eagerly loading source readers'],
-  ['services/eidoverseTravel.js', 'services/eidoverseWorldSources.js',
-    'uses pure Eidoverse signals without eagerly loading source readers'],
-  ['services/eidoverseWorld.test.js', 'services/eidoverseWorldSources.js',
-    'uses pure Eidoverse signals without eagerly loading source readers'],
-  ['services/eidoverseTravel.test.js', 'services/eidoverseWorldSources.js',
-    'uses pure Eidoverse signals without eagerly loading source readers'],
-  ['lib/eidoverseWorldSignals.js', 'services/eidoverseWorldSources.js',
-    'uses pure Eidoverse signals without eagerly loading source readers'],
-
-  ['services/imageGen/local.js', 'services/localMemory.js',
-    'loads GPU memory management only for generation, not gallery reads'],
-  ['services/imageGen/local.js', 'services/imageGen/regen.js',
-    'loads pixel comparison only for a regeneration, not gallery reads'],
-  ['services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindContext.js',
-    'loads context and memory orchestration only after a turn is admitted'],
-  ['services/github.js', 'services/settings.js',
-    'loads settings only for secret operations, not repository reads or sync'],
-  ['services/sharing/peerSyncPush.js', 'services/writersRoom/bibleSync.js',
-    'loads bible asset handling only for Writers Room work pushes'],
-  ['services/sharing/peerSyncReceive.js', 'services/writersRoom/bibleSync.js',
-    'loads bible asset handling only for Writers Room work receives'],
-  ['services/persistent/persistentMindAttachments.js', 'services/persistent/persistentMindSupervisor.js',
-    'owns screenshot attachment lifecycle without supervisor turn execution'],
-  ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
-    'reads repository ages through shared metadata without catalog selection'],
-  ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
-    'owns Hub transport and caching independently of audio rendering'],
-  ['lib/provider/providerFamilies.js', 'lib/grok.js',
-    'shares browser-safe family identity without Grok filesystem helpers'],
-  ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
-    'needs task names, which scheduledTaskTypes.js declares'],
-  ['services/agent/agentAppWorkspace.js', 'services/promptRunner.js',
-    'resolves app records without AI-backed JIRA title generation'],
-  ['services/agent/agentAppWorkspace.js', 'services/jira.js',
-    'reads workspace metadata without ticket creation'],
-  ['services/agent/agentAppWorkspace.js', 'services/agent/agentPromptBuilder.js',
-    'owns workspace resolution independently of prompt assembly'],
-  ['services/provider/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
-    'loads version and catalog parsers only when probing a harness'],
-  ['lib/db.js', 'lib/db/schema/index.js',
-    'the DDL composer is boot-only — ensureSchemaImpl() imports it lazily'],
-  ['lib/pipelineValidation.js', 'lib/editorial/checkRegistry.js',
-    'needs CHECK_SCOPES/CHECK_SEVERITIES, not the 13 check-definition modules'],
-  ['lib/editorial/severityConfig.js', 'lib/editorial/checkRegistry.js',
-    'needs CHECK_SEVERITIES only'],
-  ['services/pipeline/series.js', 'lib/editorial/checkRegistry.js',
-    'needs CHECK_SEVERITIES only'],
-  ['services/pipeline/applyCuts.js', 'lib/editorial/checkRegistry.js',
-    'needs CUT_TYPES/SAFE_CUT_TYPES only'],
-  ['services/apps.js', 'lib/validation.js',
-    'needs sanitizeTaskMetadata, which cosValidation.js declares'],
-  ['services/apps.js', 'services/pm2.js',
-    'keeps PM2 process projections out of the registry graph'],
-  ['services/apps.js', 'services/streamingDetect.js',
-    'reads process-type vocabulary from the dependency-free leaf'],
-  ['services/memoryEmbeddings.js', 'services/memoryBackend.js',
-    'needs DEFAULT_MEMORY_CONFIG, which memoryConfig.js declares'],
-  ['lib/llmRoutePin.js', 'lib/storyBible.js',
-    'needs trimTo, which textUtils.js declares'],
-  ['lib/slashdoInvocation.js', 'lib/tuiHandshake.js',
-    'needs inferTuiCommand, which providerVendors.js declares'],
-  ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
-    'needs only the pure pipelineStages.js identity leaf'],
-  ['services/cos/cosTaskIntake.js', 'lib/validation.js',
-    'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
-  ['services/brainStorage.js', 'services/instances.js',
-    'needs getInstanceId, which instanceIdentity.js declares'],
-  ['services/memoryDB.js', 'services/instances.js',
-    'needs getInstanceId, which instanceIdentity.js declares'],
-  ['services/worktreeManager.js', 'services/instances.js',
-    'needs getInstanceId, which instanceIdentity.js declares'],
-  ['services/catalogDB/ingredients.js', 'services/instances.js',
-    'needs getInstanceId, which instanceIdentity.js declares'],
-  ['routes/systemHealth.js', 'services/instances.js',
-    'needs getInstanceId, which instanceIdentity.js declares'],
-  // #6837: the string predicates / bounders live in textUtils.js; these pure
-  // leaves used to reach the whole story bible (crypto + fileUtils) for isStr.
-  ['lib/storyArc.js', 'lib/storyBible.js',
-    'needs isStr / trimTo / trimToClause, which textUtils.js declares'],
-  ['lib/styleGuide.js', 'lib/storyBible.js',
-    'needs isStr / trimTo, which textUtils.js declares'],
-  ['lib/sharingOrigin.js', 'lib/storyBible.js',
-    'needs isStr / trimTo, which textUtils.js declares'],
-  ['lib/renderSlot.js', 'lib/storyBible.js',
-    'needs isStr / trimTo, which textUtils.js declares'],
-  ['services/review.js', 'services/reviewActionAdapters.js',
-    'owns source-owned completion policy without the queue action adapters'],
-  // A runner-only change selected ~1,100 suites through vitest related, which
-  // also walks peerExecutionAdapters' lazy import of installState.js.
-  ['services/installState.js', '../scripts/run-migrations.js',
-    'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
-  // #14867: optional music-video and agent workflows load where they run.
-  ['lib/musicVideo/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
-    'reads IMAGE_REFERENCE_REQUEST_LIMIT from the referenceLimits.js leaf'],
-  ['lib/musicVideo/musicVideoValidation.js', 'lib/musicVideo/musicVideoConditioning.js',
-    'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
-  ['routes/signal.js', 'lib/validation.js',
-    'validates through the validateRequest leaf'],
-  ['routes/signal.js', 'lib/musicVideo/musicVideoValidation.js',
-    'validates through the validateRequest leaf'],
-  ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
-    'loads vocal-stem storage only when checking a stem against the master'],
-  ['services/musicVideo/lyricAlignCore.js', 'services/musicVideo/vocalStem.js',
-    'loads vocal-stem storage only when picking the alignment audio'],
-  ['services/musicVideo/vocalSeparation.js', 'services/musicVideo/vocalStem.js',
-    'loads vocal-stem storage only when attaching a separated stem'],
-  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentLifecycle.js',
-    'loads agent lifecycle storage inside the archived-agent lookup'],
-  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentIndex.js',
-    'loads agent index storage inside the archived-agent lookup'],
-];
-
-describe('narrowed imports stay narrow (#6009)', () => {
-  it.each(NARROWED)('%s no longer statically reaches %s — it %s', (entry, target) => {
-    expect(reaches(entry, target)).toBe(false);
-  });
-
-  // Positive controls. Without these the negatives above would also pass if
-  // `staticImportClosure` stopped resolving these files at all.
-  it('still sees the modules the narrowed entries were pointed AT', () => {
-    expect(reaches('lib/insightsValidation.js', 'lib/zodCompat.js')).toBe(true);
-    expect(reaches('routes/insights.js', 'lib/insightsValidation.js')).toBe(true);
-    expect(reaches('routes/insights.js', 'lib/validateRequest.js')).toBe(true);
-    expect(reaches('lib/federatedMediaValidation.js', 'lib/sharedSchemas.js')).toBe(true);
-    expect(reaches('lib/federatedMediaRequest.js', 'lib/federatedMediaValidation.js')).toBe(true);
-    expect(reaches('lib/federatedMediaRequest.js', 'lib/validateRequest.js')).toBe(true);
-    expect(reaches('services/eidoverseWorld.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
-    expect(reaches('services/eidoverseTravel.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
-    expect(reaches('services/eidoverseWorld.test.js', 'services/eidoverseWorldProjection.js')).toBe(true);
-    expect(reaches('services/eidoverseWorldSources.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
-    expect(reaches('services/eidoverseWorldSources.js', 'services/apps.js')).toBe(true);
-    expect(reaches('services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindAttachments.js')).toBe(true);
-    expect(reaches('services/persistent/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
-    expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
-    expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
-    expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
-    expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
-    expect(reaches('services/agent/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
-    expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
-    expect(reaches('services/apps.js', 'lib/cos/cosValidation.js')).toBe(true);
-    expect(reaches('services/appProcessTypes.js', 'services/appProcessTypes.js')).toBe(true);
-    expect(reaches('services/streamingDetect.js', 'services/appProcessTypes.js')).toBe(true);
-    expect(reaches('services/appProcessStatus.js', 'services/apps.js')).toBe(true);
-    expect(reaches('services/appProcessStatus.js', 'services/pm2.js')).toBe(true);
-    expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
-    expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
-    expect(reaches('lib/slashdoInvocation.js', 'lib/provider/providerVendors.js')).toBe(true);
-    expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
-    expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
-    expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
-    expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
-    expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
-    expect(reaches('lib/musicVideo/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
-    expect(reaches('lib/validation.js', 'lib/musicVideo/musicVideoValidation.js')).toBe(true);
-    expect(reaches('services/musicVideo/vocalStem.js', 'services/musicVideo/projects.js')).toBe(true);
-  });
-
-  it('keeps the process-type vocabulary dependency-free', () => {
-    const entry = abs('services/appProcessTypes.js');
-    expect([...staticImportClosure(entry).files]).toEqual([entry]);
-  });
-
-  // And a control on the other side: the barrels themselves still reach what
-  // they re-export, so "nobody reaches checkRegistry" is a statement about the
-  // narrowed callers, not about a broken registry.
-  it('leaves the editorial barrel and the schema composer intact', () => {
-    expect(reaches('lib/editorial/checkRegistry.js', 'lib/editorial/checks/proseStyle.js')).toBe(true);
-    expect(reaches('lib/db/schema/index.js', 'lib/db/schema/catalog.js')).toBe(true);
-    expect(reaches('services/imageGen/index.js', 'services/imageGen/codex.js')).toBe(true);
-    expect(reaches('services/imageGen/prepareParams.js', 'lib/imageCleanDefaults.js')).toBe(true);
-  });
 });
 
 // Serve must never acquire outbound peer registration through shared CLI support.
@@ -340,104 +112,6 @@ describe('instance identity stays a leaf (#6836)', () => {
   });
 });
 
-/**
- * Deferred imports (#6156).
- *
- * The other shape from the AGENTS.md section: not a constant reachable from a
- * lighter module, but a dependency that only a run/boot path executes. #6009
- * used it once (`ensureSchemaImpl`); these are the rest of the head of the
- * distribution — the four heaviest remaining edges were all "imported at module
- * scope, called only once a run is actually executing".
- *
- * Each row is asserted BOTH ways. The negative alone would also pass if someone
- * deleted the call entirely, which is a different (and probably wrong) change
- * than the one this row is defending; the positive pins the `await import()`
- * that has to remain in its place.
- */
-// [entry, target, why, specifier] — same first three columns as NARROWED above,
-// plus the specifier the call site must still name in its `await import()`.
-const DEFERRED = [
-  ['services/harnesses.js', 'lib/homebrewPackage.js',
-    'loads Homebrew version discovery only for an installed Homebrew harness', '../lib/homebrewPackage.js'],
-  ['services/localLlm.js', 'lib/homebrewPackage.js',
-    'loads Homebrew discovery only when checking a managed Ollama installation', '../lib/homebrewPackage.js'],
-  ['services/provider/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
-    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../../lib/homebrewPackage.js'],
-  ['lib/homebrewPackage.js', 'lib/safeUrlFetch.js',
-    'loads the bounded response reader only for a Homebrew version fetch, not runtime path classification', './safeUrlFetch.js'],
-  ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
-    'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
-  ['services/aiProvider.js', 'services/provider/providerExecutionReadiness.js',
-    'loads managed runtime readiness only for an actual inference call', './provider/providerExecutionReadiness.js'],
-  ['services/codeReview.js', 'services/lmStudioManager.js',
-    'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
-  ['services/codeReview.js', 'services/ollamaManager.js',
-    'reads endpoints and model capabilities only for an Ollama review', './ollamaManager.js'],
-  ['services/codeReview.js', 'services/mtplxServerManager.js',
-    'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
-  ['services/agent/agentManagement.js', 'lib/privateSecuritySandbox.js',
-    'loads sandbox cleanup only for private assessments', '../../lib/privateSecuritySandbox.js'],
-  ['services/cos/cos.js', 'services/persistent/persistentMindAdapter.js',
-    'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
-    '../persistent/persistentMindAdapter.js'],
-  ['services/promptRunner.js', 'services/provider/providerExecutionReadiness.js',
-    'runs readiness only on the TUI execution branch, not when a run is built or classified',
-    './provider/providerExecutionReadiness.js'],
-  ['services/promptRunner.js', 'services/tuiPromptRunner.js',
-    'drags node-pty in through services/shell.js for a branch most promptRunner suites never take',
-    './tuiPromptRunner.js'],
-  ['services/settings.js', 'services/userActions.js',
-    'makes one ledger write reaching the DB layer, from a module nearly every service imports',
-    './userActions.js'],
-  ['services/runner.js', 'services/ollamaAgentContext.js',
-    'needs the daemon manager only for an ollama-backed CLI run; the call was already predicate-gated',
-    './ollamaAgentContext.js'],
-  ['services/reviewQueue.js', 'services/cos/cosAgentFeedback.js',
-    'loads feedback persistence only when gathering or rating CoS feedback',
-    './cos/cosAgentFeedback.js'],
-  ['services/reviewQueue.js', 'services/askPromote.js',
-    'loads Ask promotion orchestration only for an explicit promotion action',
-    './askPromote.js'],
-  ['services/reviewQueue.js', 'services/backup.js',
-    'reads backup status only while gathering the failed-backup producer',
-    './backup.js'],
-  ['services/reviewQueue.js', 'services/reviewActionAdapters.js',
-    'adapts stored review and notification rows only while building the queue',
-    './reviewActionAdapters.js'],
-  ['services/notifications.js', 'services/reviewActionAdapters.js',
-    'classifies action history only on notification mutations',
-    './reviewActionAdapters.js'],
-  ['services/telegramForward.js', 'services/reviewActionAdapters.js',
-    'adapts a notification only when a forward is actually sent',
-    './reviewActionAdapters.js'],
-  ['services/videoGen/generateVideo.js', 'services/videoGen/ensureWeights.js',
-    'provisions MiniMax H3 weights only for an actual H3 render',
-    './ensureWeights.js'],
-];
-
-describe('deferred imports stay deferred (#6156)', () => {
-  it.each(DEFERRED)('%s no longer statically reaches %s — it %s', (entry, target) => {
-    expect(reaches(entry, target)).toBe(false);
-  });
-
-  it.each(DEFERRED)('%s still lazily imports %s at its call site', (entry, target, why, specifier) => {
-    const src = readFileSync(abs(entry), 'utf-8');
-    expect(
-      src.includes(`import('${specifier}')`),
-      `${entry} no longer contains a dynamic import('${specifier}'). If ${target} is genuinely unused now, delete this row — do not restore a static import.`,
-    ).toBe(true);
-  });
-
-  // Positive control, mirroring the one above: these targets are real modules
-  // with real graphs, so a resolver gap can't be what makes the negatives pass.
-  it('still sees the deferred modules from their own entry points', () => {
-    expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
-    expect(reaches('services/provider/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
-    expect(reaches('services/persistent/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
-    expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
-  });
-});
-
 // `vitest related` follows dynamic imports, so a lazy import() narrows the
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
@@ -486,7 +160,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 /**
  * Hoisted test imports (#7951).
  *
- * The inverse of DEFERRED, and it defends a runner budget rather than a module
+ * The inverse of a deferred import, and it defends a runner budget rather than a module
  * count. A test file that loads a large graph with `await import()` INSIDE an
  * `it()` or a `beforeAll` pays vitest's transform pipeline for that whole graph
  * the first time any worker touches it, and that cost is charged against
@@ -511,7 +185,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
  * quiet machine and only fails under full-suite contention — so each is pinned
  * here.
  *
- * Asserted BOTH ways, like DEFERRED above: the file must still name the
+ * Asserted BOTH ways: the file must still name the
  * specifier (a row whose import was deleted is a different change), and the
  * call must still sit ahead of the first test/hook registration in the file.
  */
@@ -609,8 +283,8 @@ describe('server suite import growth (#7993)', () => {
 
   // The absolute ceiling this replaced failed ordinary growth: shared modules
   // are counted once per reaching suite, so the repository total climbs even
-  // when no heavy edge was added. The comparison below is the backstop the
-  // per-edge rows cannot be. It fails closed when the base commit cannot be
+  // when no heavy edge was added. The comparison below is the backstop for
+  // per-edge regressions. It fails closed when the base commit cannot be
   // read — a timeout or a throw here is a guard failure, not a pass.
   it('does not fan a heavy subtree into existing suites relative to the merge base', () => {
     const report = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, headMeasurement });
@@ -619,9 +293,9 @@ describe('server suite import growth (#7993)', () => {
   }, 60_000);
 
   // #6836: before the identity leaf split, 181 of these files' closures reached
-  // services/instances.js. Most of them only needed an id read. The targeted
-  // row above pins the direct callers; this counts the whole suite so a new
-  // widely reached edge back onto instances.js is visible.
+  // services/instances.js. Most of them only needed an id read. This counts
+  // the whole suite so a new widely reached edge back onto instances.js is
+  // visible.
   it('keeps fewer than 60 server test files statically reaching services/instances.js', () => {
     const target = 'server/services/instances.js';
     const reachingCount = [...headMeasurement.tests.values()].filter((closure) => closure.has(target)).length;
@@ -650,7 +324,8 @@ it('keeps Video compilation independent of project storage and execution', () =>
   expect(closure.has(abs('lib/reactorVideoClip.js'))).toBe(true);
   expect(closure.has(abs('services/creativeDirector/projectsLogic.js'))).toBe(false);
   expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
-  expect(closure.has(abs('lib/validation.js'))).toBe(false);
+  // The compiler is a pure render-pin leaf: no route-schema module (or the shared fragments they use) may enter its closure.
+  expect([...closure].filter((file) => /(?:Validation|sharedSchemas)\.js$/.test(file))).toEqual([]);
 });
 
 describe('shared provider type leaf', () => {

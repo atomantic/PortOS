@@ -428,29 +428,45 @@ async function newEntry(agent, publication) {
   return entry;
 }
 
+function recordRegistrationAttempt(entry) {
+  entry.attempts++;
+  entry.lastAttemptAt = new Date().toISOString();
+}
+
 async function registerEntry(entry) {
   const { addTask, getTaskById } = await import('./cos/cosTaskStore.js');
   if (!hasFrozenPrDisposition(entry.task.metadata)) {
     throw new ServerError('Release synchronization review policy was not captured; retain the original task and recover from historical delivery evidence (docs/VERSIONING.md)',
       { status: 409, code: 'RELEASE_SYNC_REVIEW_POLICY_UNVERIFIED' });
   }
-  const key = createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex');
-  entry.attempts++;
-  entry.lastAttemptAt = new Date().toISOString();
-  await saveReleaseSynchronization(entry);
-  if (isInlineReleaseSynchronization(entry)) {
-    const source = await getTaskById(entry.owner.taskId);
-    if (!source || source.id !== entry.task.id || (source.taskType || 'internal') !== entry.task.taskType
-      || source.metadata?.app !== entry.task.metadata.app) refuse('Release synchronization task has a conflicting owner');
-    entry.registeredAt ||= new Date().toISOString();
-    entry.blocker = null;
-    entry.retryAt = null;
+  const inline = isInlineReleaseSynchronization(entry);
+  const settledInline = inline && entry.registeredAt && entry.blocker === null && entry.retryAt === null;
+  if (!settledInline) {
+    recordRegistrationAttempt(entry);
     await saveReleaseSynchronization(entry);
+  }
+  if (inline) {
+    try {
+      const source = await getTaskById(entry.owner.taskId);
+      if (!source || source.id !== entry.task.id || (source.taskType || 'internal') !== entry.task.taskType
+        || source.metadata?.app !== entry.task.metadata.app) refuse('Release synchronization task has a conflicting owner');
+    } catch (error) {
+      // A settled inline handoff only records an attempt if source validation fails.
+      if (settledInline) recordRegistrationAttempt(entry);
+      throw error;
+    }
+    if (!settledInline) {
+      entry.registeredAt ||= new Date().toISOString();
+      entry.blocker = null;
+      entry.retryAt = null;
+      await saveReleaseSynchronization(entry);
+    }
     const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => entry.task.metadata[key] != null)
       .map(key => [key, entry.task.metadata[key]]));
-    return { taskId: source.id, registeredAt: entry.registeredAt, policy,
+    return { taskId: entry.task.id, registeredAt: entry.registeredAt, policy,
       synchronizationVerified: effectiveReleaseSynchronization(entry)?.status === 'verified' };
   }
+  const key = createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex');
   // A completed historical task is still the owner. Never regenerate it, even
   // when it has left the task working set or execution reported success.
   const existing = await getTaskById(entry.task.id);

@@ -10,9 +10,11 @@ import { facebookAdapter } from './facebook.js';
 // file. Like Facebook's composer (2026), the drop zone's file input is there
 // from the start, the upload ends in an "Uploaded media" section with Remove
 // video, and the AI label row holds an unnamed switch.
-function fakePage({ url = 'https://www.facebook.com/', shows = '', signedOut = false, nextButton = false, inputPresent = true, aiRow = true } = {}) {
+function fakePage({ url = 'https://www.facebook.com/', shows = '', signedOut = false, nextButton = false, inputPresent = true, aiRow = true, truncateReelPaste = false } = {}) {
   const log = [];
   const typed = {};
+  const firstParagraph = (text) => text.split('\n\n')[0];
+  let attached = false;
   let uploaded = false;
   let photoVideoOpened = false;
   let aiOn = false;
@@ -38,8 +40,14 @@ function fakePage({ url = 'https://www.facebook.com/', shows = '', signedOut = f
         if (name === 'Photo/video') photoVideoOpened = true;
         if (/AI label/.test(String(name))) aiOn = true;
       },
-      setInputFiles: async (path) => { log.push(['setFiles', path]); uploaded = true; },
-      evaluate: async (_fn, text) => { typed[sel] = text; log.push(['paste', sel, text]); },
+      setInputFiles: async (path) => {
+        log.push(['setFiles', path]);
+        attached = true;
+      },
+      evaluate: async (_fn, text) => {
+        typed[sel] = uploaded && truncateReelPaste ? firstParagraph(text) : text;
+        log.push(['paste', sel, text]);
+      },
       innerText: async () => typed[sel] || '',
     };
     return el;
@@ -48,7 +56,13 @@ function fakePage({ url = 'https://www.facebook.com/', shows = '', signedOut = f
     log,
     goto: async (to) => { log.push(['goto', to]); },
     url: () => url,
-    waitForTimeout: async () => {},
+    waitForTimeout: async (ms) => {
+      if (ms !== 2000 || !attached || uploaded) return;
+      // Switching to the reel composer carries over only the first paragraph.
+      for (const [editor, text] of Object.entries(typed)) typed[editor] = firstParagraph(text);
+      uploaded = true;
+      log.push(['uploadSettled']);
+    },
     keyboard: { press: async () => {}, insertText: async () => {} },
     getByText: (want) => ({ first: () => ({ waitFor: async () => { if (!shows.includes(want)) throw new Error('timeout'); } }) }),
     locator: (sel, opts) => element(sel, opts?.hasText?.source),
@@ -58,16 +72,27 @@ function fakePage({ url = 'https://www.facebook.com/', shows = '', signedOut = f
 const payload = { video: { path: '/videos/x.mp4' }, text: 'I made a music video.\n\nMore.', firstComment: 'Full video: https://youtu.be/abc' };
 
 describe('Facebook adapter', () => {
-  it('writes the post, hands the video to the drop zone and turns on the AI label, never pressing Next or Post', async () => {
+  it('attaches the video before writing the full post and turns on the AI label, never pressing Next or Post', async () => {
     const page = fakePage({ nextButton: true });
     const summary = await facebookAdapter.prepare(page, { ...payload, aiLabel: true });
     expect(page.log[0]).toEqual(['goto', 'https://www.facebook.com/']);
     expect(page.log).toContainEqual(['click', 'on your mind']);
     expect(page.log).toContainEqual(['setFiles', '/videos/x.mp4']);
     expect(page.log.some(([, what]) => what === 'Photo/video')).toBe(false);
+    expect(page.log.filter(([kind]) => ['setFiles', 'uploadSettled', 'paste'].includes(kind)).map(([kind]) => kind)).toEqual(['setFiles', 'uploadSettled', 'paste']);
     expect(page.log.find(([kind]) => kind === 'paste')[2]).toBe(payload.text);
     expect(page.log.some(([kind, what]) => kind === 'click' && /^(Post|Next)$/.test(what))).toBe(false);
     expect(summary).toMatchObject({ characters: payload.text.length, aiLabel: 'On', youPress: 'Next, then Post', firstComment: expect.stringMatching(/open the post/) });
+    expect(summary).not.toHaveProperty('warning');
+  });
+
+  it('warns when the reel composer keeps only the first paragraph', async () => {
+    const page = fakePage({ truncateReelPaste: true });
+    const summary = await facebookAdapter.prepare(page, { ...payload, aiLabel: false });
+    expect(summary).toMatchObject({
+      characters: 21,
+      warning: 'The Facebook reel caption differs from the release copy (21 characters in Facebook, 28 expected). Check the caption before posting.',
+    });
   });
 
   it('opens Photo/video when the composer has no file input yet, and leaves a missing AI label to the director', async () => {

@@ -155,7 +155,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   field flows through automatically — no route change needed there.
 - New: `POST /api/backup/restore-db` → validate with a new
   `restoreDbRequestSchema` (`{ snapshotId: string.min(1), dryRun: boolean
-  .optional().default(true) }`) in `server/lib/validation.js`, call
+  .optional().default(true) }`) in the backup validation schema (then a catch-all validation module, now `backupValidation.js`), call
   `backup.restorePostgres(...)`.
 
 ### 6. UI surfacing (`client/src/components/settings/BackupTab.jsx`)

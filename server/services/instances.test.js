@@ -97,7 +97,6 @@ import {
   __resetPeerWakesForTests,
   BACKOFF_TIERS_MS,
   PEER_WAKE_RATE_LIMIT_MS,
-  shouldWakePeer,
   wakePeerProbe
 } from './instances.js';
 

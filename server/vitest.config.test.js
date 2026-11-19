@@ -88,11 +88,12 @@ describe('browser suite CI ownership', () => {
         expect(parallel.exclude).not.toContain(suite);
       }
     }
-    // This independent browser contract has no registry owner and must still run.
-    const overlay = 'services/musicVideo/overlayTextService.browser.test.js';
-    expect(suites).not.toContain(overlay);
-    expect(config.test.exclude).not.toContain(overlay);
-    expect(capture.include).toContain(overlay);
-    expect(capture.exclude).not.toContain(overlay);
+    // Real-Chrome suites once ran unregistered in the unit job (#16799): they are
+    // registry-owned now, so the loop above excludes them from unit runs.
+    for (const owned of ['services/musicVideo/overlayTextService.browser.test.js', 'services/codeAnimation/poster.realBrowser.test.js']) {
+      expect(suites).toContain(owned);
+      expect(capture.include).toContain(owned);
+      if (!excluded) expect(capture.exclude).not.toContain(owned);
+    }
   });
 });

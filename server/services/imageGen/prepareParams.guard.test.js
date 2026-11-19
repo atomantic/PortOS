@@ -14,7 +14,6 @@ const MODEL_PIN_READ = /\bimageGen\s*\??\.\s*local\s*\??\.\s*modelId\b/;
 const ALLOWED_PIN_READERS = new Set([
   'services/imageGen/prepareParams.js',
   'routes/settings.js',
-  'lib/validation.js',
 ]);
 
 function findDirectLocalModelPinReads(root = SERVER_ROOT) {

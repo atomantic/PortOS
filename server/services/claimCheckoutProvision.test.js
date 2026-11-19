@@ -47,7 +47,7 @@ describe('provisionClaimCheckout', () => {
     const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
 
     const worktreePath = claimDir();
-    expect(result).toEqual({ claimCheckout: { repoPath: repo, worktreePath, branchName: 'claim/issue-42', baseBranch: 'main' } });
+    expect(result).toEqual({ claimCheckout: { repoPath: repo, worktreePath, branchName: 'claim/issue-42', baseBranch: 'main', dependencies: [{ path: 'node_modules', status: 'absent' }] } });
     expect((await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)).stdout.trim()).toBe('claim/issue-42');
     expect((await execGit(['rev-parse', 'HEAD'], worktreePath)).stdout.trim()).toBe(tip);
     // --no-track: nothing pushes to main by accident from the claim branch.

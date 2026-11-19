@@ -26,6 +26,7 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   findFfmpeg: async () => 'ffmpeg',
   probeVideoGeometry: vi.fn(async () => null),
+  probeVideoAudioPresence: vi.fn(async () => false),
   runFfmpegProcess: vi.fn(async ({ args }) => {
     if (args.includes('-n')) await writeFile(args.at(-1), await readFile(args[args.indexOf('-i') + 1]));
     return { ok: true };
@@ -514,6 +515,21 @@ it('explains fractional document frames before encoding without changing the imp
   });
   expect(browser.contract.durationSec).toBe(10.01);
   expect(await scratchEntries()).toEqual([]);
+});
+
+it('names a silent selected take instead of silently dropping requested clip sound', async () => {
+  const { project, plan } = await fixture();
+  Object.assign(project.scenes[0], { label: 'Spoken intro', clipSound: { volume: 1, musicLevel: 0.55 } });
+  browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080 };
+  await expect(encode(project, plan, 'silent-take')).rejects.toMatchObject({
+    code: 'DOCUMENT_CLIP_SOUND_UNAVAILABLE',
+    message: expect.stringMatching(/Spoken intro.*has no audio stream/),
+    context: { sceneId: 'a' },
+  });
+  encodeComposition.mockResolvedValueOnce({});
+  await expect(encodeDocumentComposition({ project, plan, jobId: 'outside-silent-take',
+    audioPath: 'synthetic.wav', outputPath: join(PATHS.videos, 'outside.mp4'), windowStart: 5, windowEnd: 6,
+  })).resolves.toMatchObject({ startSec: 5, durationSec: 1 });
 });
 
 

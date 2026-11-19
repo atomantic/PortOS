@@ -6,10 +6,8 @@ import { collectServerSources, readServerSource } from '../testHelper.js';
 // pad a per-1000-word denominator. It had been re-spelled as a bare regex in
 // repetition.js (twice), slopScore.js and checkInfra/proseDensity.js — the last
 // exported as `countWords`, the name lib/textUtils.js gives the WHITESPACE
-// count, so a check could import the wrong denominator by name alone. Like the
-// escape guard in textUtils.guard.test.js this keys on the idiom (the character
-// class), so a paste under any name fails the suite. Server-only: nothing in the
-// browser bundle runs the prose checks.
+// count, so a check could import the wrong denominator by name alone. Match
+// the character class so the guard catches copies under any name.
 const PROSE_WORD_CLASS = /\[A-Za-z\]\[A-Za-z'\]\*/;
 
 describe('no private prose-word tokenizer', () => {

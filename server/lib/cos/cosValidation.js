@@ -11,14 +11,14 @@ import { executionOptionsSchema } from '../aiToolkit/internal/executionOptionsVa
 import { auditWorkflow } from '../auditWorkflow.js';
 import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../../lib/issueContext.js';
 /**
- * Chief-of-Staff (CoS) Zod schemas (split out of validation.js, issue #1831).
+ * Chief-of-Staff (CoS) Zod schemas (split out of the retired validation.js catch-all, issue #1831).
  *
  * Covers CoS tasks, the Code-Review settings slice, recurring jobs, loops,
  * learning insights, and the task-metadata sanitizer. The Review-Loop reviewer
  * vocabulary + helpers (`normalizeReviewers` / `buildReviewWithArgs`) moved to
  * `reviewerConfig.js` (issue #5702) and are re-exported flat from here, so
- * existing deep imports keep working. validation.js re-exports everything here
- * (flat).
+ * existing deep imports keep working. Also home to the CoS agent, task-spawn and
+ * schedule route-body schemas.
  */
 import { z } from 'zod';
 import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from '../reviewerHealth.js';
@@ -40,7 +40,7 @@ import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
-import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
+import { TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
 import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from '../goalFidelityFollowUp.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
@@ -48,7 +48,6 @@ import {
   LOCAL_LLM_REVIEWERS,
   MAX_REVIEWER_MAX_ROUNDS,
   MAX_REVIEWER_MODEL_LENGTH,
-  MODEL_CAPABLE_CLI_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
   REVIEWER_ALIASES,
   isReviewer,
@@ -62,13 +61,13 @@ import {
   normalizeReviewerMaxRounds,
   normalizeReviewerModel,
   normalizeReviewerModels,
-  resolveReviewUsernames,
 } from '../reviewerConfig.js';
+import { nullishString, nonEmptyString } from '../sharedSchemas.js';
 
 export { scheduleExecutionFieldsSchema } from '../scheduleExecutionFieldsValidation.js';
 
 // Transitional shim: the reviewer vocabulary lives in reviewerConfig.js but is
-// still reachable from every existing `cosValidation.js` / `validation.js` import.
+// still reachable from every existing `cosValidation.js` import.
 export * from '../reviewerConfig.js';
 
 // =============================================================================
@@ -983,7 +982,7 @@ export const RELEASE_OPTION_KEYS = ['finishInFlight', 'mergeDependencyUpdates', 
 
 // better-dependency-freedom's removal bar vocabulary is catalog-owned (see
 // DEPFREE_MODES in lib/auditCatalog.js, beside the prompt block that renders
-// it); re-exported here so the validation barrel stays the one import for
+// it); re-exported here so this module stays the one import for
 // task-metadata vocabularies.
 
 const ALLOWED_TASK_METADATA_KEYS = [
@@ -1579,3 +1578,41 @@ export const qualitySchedulePlanSchema = z.object({
   // which is NOT the same as an absent key meaning the same thing by accident.
   fileIssues: z.boolean().nullable().optional(),
 }).strict();
+
+// CoS agents / tasks / schedule
+export const cosAgentFeedbackBodySchema = z.object({
+  rating: z.enum(['positive', 'negative', 'neutral']),
+  comment: nullishString,
+});
+export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
+export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
+export const cosScheduleTriggerBodySchema = z.object({
+  taskType: nonEmptyString,
+  appId: nullishString,
+  provider: nonEmptyString.optional(),
+  model: nonEmptyString.optional(),
+  effort: z.string().trim().nullable().optional(),
+  executionOptions: z.record(z.unknown()).optional(),
+  targetModels: z.array(nonEmptyString).nullable().optional(),
+  targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
+});
+export const releaseSynchronizationResetBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
+  reason: z.string().trim().min(1).max(1000),
+}).strict();
+export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
+  prNumber: z.number().int().positive().safe() }).strict();
+
+// A scoped release names the exact inventory row the operator saw (#12002).
+// `checkoutIdentity` (the retired checkout fingerprint) stays accepted and
+// ignored: persisted rows and older clients still carry it.
+export const heldCheckoutRetireBodySchema = z.object({
+  checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  observedAt: z.string().datetime({ offset: true }).optional(),
+  appId: nonEmptyString,
+  path: nonEmptyString.optional(),
+  head: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/),
+  branch: z.string().min(1).nullable(),
+  locked: z.boolean(),
+  lockReason: z.string().nullable(),
+});

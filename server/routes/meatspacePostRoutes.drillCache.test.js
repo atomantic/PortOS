@@ -18,7 +18,7 @@ vi.mock('../services/meatspacePostDrillCache.js', () => ({
   triggerReplenish: vi.fn(),
 }));
 
-import { getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
+import { requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

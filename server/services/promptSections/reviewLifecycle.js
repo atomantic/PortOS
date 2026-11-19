@@ -356,7 +356,7 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
  * than a fixed `<lmstudio|ollama>` placeholder, so a single configured backend
  * needs no substitution step at all.
  */
-function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, recordAttribution = false }) {
+function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand }) {
   const backendToken = localLlmBackends.length === 1
     ? localLlmBackends[0]
     : `<${localLlmBackends.join('|')}>`;
@@ -386,11 +386,10 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
     ...(pinnedString(reviewerModelMap, backendToken) ? { model: reviewerModelMap[backendToken] } : {}),
     ...(pinnedString(reviewerEffortMap, backendToken) ? { effort: reviewerEffortMap[backendToken] } : {}),
     timeoutMs: LOCAL_LLM_REVIEW_TIMEOUT_MS,
-    ...(recordAttribution ? { recordAttribution: true } : {}),
   } : null;
   const reviewInput = providerRequest
     ? `${JSON.stringify(providerRequest)} + { diff: . }`
-    : `{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, ${recordAttribution ? 'recordAttribution: true, ' : ''}diff: . }`;
+    : `{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, diff: . }`;
   const pinNote = pins.map(({ reviewer, model, effort }) => {
     const keys = [
       ...(model ? [`"model": "${model}"`] : []),
@@ -411,7 +410,6 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
     ...(pins.some(p => p.model) ? ['model: "…"'] : []),
     ...(pins.some(p => p.effort) ? ['effort: "…"'] : []),
     `timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}`,
-    ...(recordAttribution ? ['recordAttribution: true'] : []),
     'diff: .'
   ].join(', ');
   const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
@@ -850,7 +848,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const apiBase = localApiBaseUrl();
   const diffCommand = phase.diffCommand(forge);
   const { backendToken: localLlmBackendToken, invocation: localLlmInvocation } = buildLocalLlmInvocation({
-    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, recordAttribution: localOnly,
+    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand,
   });
   const githubUsersInvocation = phase.supportsUsernameReviewers
     ? forge.requestReviewersText(usernames)

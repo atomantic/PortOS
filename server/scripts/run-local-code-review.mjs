@@ -6,7 +6,6 @@
  */
 import { getCodeReviewDefaults, pickAvailableReviewerGroups, reportReviewerFailure, reportReviewerSuccess, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
-import { recordLocalReviewAttribution } from '../lib/localReviewAttribution.js';
 
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
@@ -133,10 +132,6 @@ try {
   await recordOutcome.catch((err) => {
     process.stderr.write(`Unable to persist reviewer health: ${err.message}\n`);
   });
-  // Attribution is best-effort bookkeeping for PR labels: a failed receipt write never changes the verdict or the exit code.
-  if (request.recordAttribution === true && request.kind !== 'claim-comments') {
-    await recordLocalReviewAttribution(process.cwd(), result).catch(() => {});
-  }
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) {
     // A reviewer that CAN'T be satisfied reads identically to one that merely

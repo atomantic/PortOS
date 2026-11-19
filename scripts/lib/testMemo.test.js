@@ -1695,3 +1695,117 @@ describe('extractFileFacts', () => {
     expect(() => tokenize('const a = `unterminated ${hole')).toThrow();
   });
 });
+
+describe('data-only JS files and bounded dynamic imports (#16902)', () => {
+  const analyze = (files, tests = ['server/lib/a.test.js']) => computeTestMemoKeys(tests, {
+    fs: memoryFs(files),
+    workspace: 'server',
+  });
+
+  it('does not walk edges of data-directory JS files with dynamic imports in gather()', () => {
+    const baseFiles = {
+      ...BASE,
+      'server/lib/doc.js': [
+        "import { readFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "const TEMPLATES = join(__dirname, 'templates');",
+        "export const load = () => readFileSync(join(TEMPLATES, 'world.test.js'), 'utf8');",
+      ].join('\n'),
+      'server/lib/templates/world.test.js': "const threeUrl = getUrl();\nexport const run = async () => import(threeUrl);\n",
+      'server/lib/a.test.js': "import { load } from './doc.js';\nexport const t = load;\n",
+    };
+    const first = analyze(baseFiles).get('server/lib/a.test.js');
+    expect(first.edgesResolved).toBe(true);
+    expect(first.floor.memoizable).toBe(true);
+    expect(first.floor.key).not.toBeNull();
+
+    const edited = analyze({
+      ...baseFiles,
+      'server/lib/templates/world.test.js': "const threeUrl = getUrl();\nexport const run = async () => import(threeUrl); // changed\n",
+    }).get('server/lib/a.test.js');
+    expect(edited.floor.key).not.toBe(first.floor.key);
+  });
+
+  it('resolves PATHS.slashdo dynamic imports and fails closed when fileUtils.js is mocked', () => {
+    const files = {
+      ...BASE,
+      'server/lib/fileUtils.js': 'export const PATHS = {};\n',
+      'server/lib/slashdoLoader.js': [
+        "import { join } from 'node:path';",
+        "import { pathToFileURL } from 'node:url';",
+        "import { PATHS } from './fileUtils.js';",
+        "export async function render() { return import(pathToFileURL(join(PATHS.slashdo, 'src/transformer.js')).href); }",
+      ].join('\n'),
+      'lib/slashdo/src/transformer.js': 'export default {};\n',
+      'server/lib/a.test.js': "import { render } from './slashdoLoader.js';\nexport const t = render;\n",
+    };
+    const res = analyze(files).get('server/lib/a.test.js');
+    expect(res.edgesResolved).toBe(true);
+    expect(res.floor.memoizable).toBe(true);
+
+    const mocked = analyze({
+      ...files,
+      'server/lib/a.test.js': "import { vi } from 'vitest';\nvi.mock('./fileUtils.js', () => ({ PATHS: { slashdo: '/tmp' } }));\nimport { render } from './slashdoLoader.js';\nexport const t = render;\n",
+    }).get('server/lib/a.test.js');
+    expect(mocked.floor.memoizable).toBe(false);
+  });
+
+  it('resolves migration runner dynamic imports using default parameters and scanners while ignoring migration tests', () => {
+    const files = {
+      ...BASE,
+      'scripts/lib/migrationFiles.js': 'export async function scanMigrationFiles() { return []; }\nexport async function scanDatabaseMigrationFiles() { return []; }\n',
+      'scripts/lib/migrationLedger.js': [
+        "import { join, dirname } from 'node:path';",
+        "import { fileURLToPath } from 'node:url';",
+        "const __dirname = dirname(fileURLToPath(import.meta.url));",
+        "export const DEFAULT_MIGRATIONS_DIR = join(__dirname, '..', 'migrations');",
+        "export { scanMigrationFiles } from './migrationFiles.js';",
+      ].join('\n'),
+      'scripts/run-migrations.js': [
+        "import { join } from 'node:path';",
+        "import { pathToFileURL } from 'node:url';",
+        "import { DEFAULT_MIGRATIONS_DIR, scanMigrationFiles } from './lib/migrationLedger.js';",
+        "export async function runMigrations({ migrationsDir = DEFAULT_MIGRATIONS_DIR, through = null } = {}) {",
+        "  return runPending({ migrationsDir, through });",
+        "}",
+        "async function runPending({ migrationsDir, through }) {",
+        "  const files = await scanMigrationFiles(migrationsDir);",
+        "  for (const file of through === null ? files : files.slice(0, files.indexOf(through) + 1)) {",
+        "    await import(pathToFileURL(join(migrationsDir, file)).href);",
+        "  }",
+        "}",
+      ].join('\n'),
+      'scripts/migrations/001-init.js': 'export async function up() {}\n',
+      'scripts/migrations/001-init.test.js': "const u = getUrl();\nexport const t = () => import(u);\n",
+      'server/scripts/run-db-migrations.js': [
+        "import { join, dirname } from 'node:path';",
+        "import { fileURLToPath, pathToFileURL } from 'node:url';",
+        "import { scanDatabaseMigrationFiles } from '../../scripts/lib/migrationFiles.js';",
+        "const __dirname = dirname(fileURLToPath(import.meta.url));",
+        "const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'db-migrations');",
+        "export async function runDatabaseMigrations({ migrationsDir = DEFAULT_MIGRATIONS_DIR } = {}) {",
+        "  const files = await scanDatabaseMigrationFiles(migrationsDir);",
+        "  for (const file of files) {",
+        "    if (file.endsWith('.js')) await import(pathToFileURL(join(migrationsDir, file)).href);",
+        "  }",
+        "}",
+      ].join('\n'),
+      'server/scripts/db-migrations/001-schema.js': 'export async function up() {}\n',
+      'server/lib/a.test.js': [
+        "import { runMigrations } from '../../scripts/run-migrations.js';",
+        "import { runDatabaseMigrations } from '../scripts/run-db-migrations.js';",
+        "export const t = [runMigrations, runDatabaseMigrations];",
+      ].join('\n'),
+    };
+    const first = analyze(files).get('server/lib/a.test.js');
+    expect(first.edgesResolved).toBe(true);
+    expect(first.floor.memoizable).toBe(true);
+    expect(first.floor.key).not.toBeNull();
+
+    const edited = analyze({
+      ...files,
+      'scripts/migrations/001-init.js': 'export async function up() { return 1; }\n',
+    }).get('server/lib/a.test.js');
+    expect(edited.floor.key).not.toBe(first.floor.key);
+  });
+});

@@ -12,6 +12,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   applyMusicVideoAudioTiming: vi.fn(),
   updateMusicVideoProject: vi.fn(),
   listMusicVideoCharacterStyles: vi.fn(() => Promise.resolve([])),
+  getMusicVideoMidiPlanning: vi.fn(() => Promise.resolve({ facts: null })),
 }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({
   getUniverse: vi.fn(() => Promise.resolve(null)),

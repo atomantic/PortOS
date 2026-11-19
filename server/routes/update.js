@@ -74,7 +74,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 // and a static import of the activity/readiness graph would pull the whole CoS
 // + git subtree into every suite that mounts this router (see "Import scoping"
 // in server/AGENTS.md). `sharedSchemas` is already in this module's static
-// closure through validation.js, so it stays a plain import.
+// closure through the validation modules it imports, so it stays a plain import.
 router.get('/auto', asyncHandler(async (req, res) => {
   const [{ getSettings }, { checkUpdateRepoReadiness }, { getSystemActivity }] = await Promise.all([
     import('../services/settings.js'),

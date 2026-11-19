@@ -163,6 +163,34 @@ describe('startAutonomousVideo', () => {
     expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187, sunoSongId: 'song-a' }));
   });
 
+  it('transcribes the song to MIDI after analysis when the brief asks', async () => {
+    doubles.transcribeMidi = stub('midi', async (project) => {
+      store.get(project.id).midiTranscription = { filename: 'song-midi.mid', model: 'medium' };
+      return { type: 'complete', filename: 'song-midi.mid', midiTranscription: { filename: 'song-midi.mid' } };
+    });
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city', transcribeMidi: true });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls.slice(calls.indexOf('analyze'))).toEqual(['analyze', 'midi', 'production']);
+    expect(runOf().brief.transcribeMidi).toBe(true);
+  });
+
+  it('carries on from the beat analysis when the MIDI runtime is missing', async () => {
+    doubles.transcribeMidi = stub('midi', async () => { throw new Error('MuScriptor runtime not found'); });
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city', transcribeMidi: true });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(runOf().status).toBe('running');
+  });
+
+  it('skips the MIDI step when the brief does not ask for it', async () => {
+    doubles.transcribeMidi = stub('midi', async () => ({ type: 'complete' }));
+    service.__setAutonomousDepsForTests(doubles);
+    await service.startAutonomousVideo({ prompt: 'a courier crosses a rainy city' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.transcribeMidi).not.toHaveBeenCalled();
+  });
+
   it('names the imported Suno song on its track only after a backup cut is released (#9982)', async () => {
     const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
     const release = await acquireBackupSnapshotCut();

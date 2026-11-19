@@ -53,6 +53,22 @@ const FILE_WATCH_FALLBACK_POLL_MS = 5000;
 // instead of on every write.
 const unsyncableDirs = new Set();
 
+// Test-only (#12025, #16864): a Vitest worker writes into a throwaway data root with no
+// crash to survive, and the temp-file fsync plus the directory fsync cost ~6-11 ms per
+// write on macOS, over half of a write-heavy suite. The server Vitest config sets
+// PORTOS_TEST_FAST_WRITES=1, which starts every worker non-durable; the DB config leaves
+// it unset and suites asserting on the syncs call the setter to opt back in. The
+// `isVitestRunner()` gate keeps the env var inert for production, smoke boot and any
+// child process, and the setter refuses outside a Vitest worker for the same reason.
+// The flag is read at module load rather than set from a Vitest setup file: a setup file
+// importing fileCore would load it before a suite's `vi.mock('fs/promises')` applies.
+// Module-local, so each test file starts from the config default.
+let durableWrites = !(isVitestRunner() && process.env.PORTOS_TEST_FAST_WRITES === '1');
+export function setAtomicWriteDurabilityForTests(durable) {
+  if (!isVitestRunner()) throw new Error("setAtomicWriteDurabilityForTests is only available under Vitest");
+  durableWrites = durable !== false;
+}
+
 /**
  * fsync a directory so a just-completed rename inside it survives a crash.
  * Best-effort once the rename is visible: the bytes are already in place, so a
@@ -337,7 +353,7 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
     // Own cleanup from that first write, and publish only once its mode is set.
     // `flush` fsyncs the temp file's bytes before the handle closes, so the
     // rename below never publishes an inode the disk has not yet received.
-    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
+    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: durableWrites });
     if (existingMode !== null) await chmod(tmp, existingMode);
     onStage?.('replace');
     await replace();
@@ -346,7 +362,7 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
     throw err;
   }
   onStage?.('dirSync');
-  await syncDirectory(dirname(filePath));
+  if (durableWrites) await syncDirectory(dirname(filePath));
 }
 
 /**

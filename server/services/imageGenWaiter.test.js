@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { imageGenEvents } from './imageGenEvents.js';
 import { createImageGenWaiter } from './imageGenWaiter.js';
 

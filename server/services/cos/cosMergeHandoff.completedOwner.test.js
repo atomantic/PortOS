@@ -65,7 +65,7 @@ describe('completed owner required review inspection', () => {
   it('recovers the latest serial attempt of one persisted task budget without treating retries as competing owners', async () => {
     const first = f.agents[0];
     first.metadata.instanceId = 'instance';
-    first.metadata.completionTaskDispatch = { taskId: 'task', spawnBudgetEpoch: 'epoch', expected: [['totalSpawnCount', 1]] };
+    first.metadata.completionTaskDispatch = { taskId: 'task', expected: [['totalSpawnCount', 1]] };
     const retry = structuredClone(first);
     retry.id = 'retry'; retry.startedAt = '2026-01-01T02:00:00Z'; retry.completedAt = '2026-01-01T03:00:00Z';
     retry.metadata.completionTaskDispatch.expected = [['totalSpawnCount', 2]];
@@ -88,14 +88,13 @@ describe('completed owner required review inspection', () => {
     Object.defineProperty(f.tasks, 'task', { get() { throw new Error('task store offline'); } });
     expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-task-unavailable' });
   });
-  it.each(['epoch', 'instance', 'task', 'overlap', 'ordinal', 'malformed'])('does not collapse distinct or unverified retry history: %s', async change => {
+  it.each(['instance', 'task', 'overlap', 'ordinal', 'malformed'])('does not collapse distinct or unverified retry history: %s', async change => {
     const first = f.agents[0];
     first.metadata.instanceId = 'instance';
-    first.metadata.completionTaskDispatch = { taskId: 'task', spawnBudgetEpoch: 'epoch', expected: [['totalSpawnCount', 1]] };
+    first.metadata.completionTaskDispatch = { taskId: 'task', expected: [['totalSpawnCount', 1]] };
     const retry = structuredClone(first);
     retry.id = 'retry'; retry.startedAt = '2026-01-01T02:00:00Z'; retry.completedAt = '2026-01-01T03:00:00Z';
     retry.metadata.completionTaskDispatch.expected = [['totalSpawnCount', 2]];
-    if (change === 'epoch') retry.metadata.completionTaskDispatch.spawnBudgetEpoch = 'other';
     if (change === 'instance') retry.metadata.instanceId = 'other';
     if (change === 'task') retry.taskId = 'other';
     if (change === 'overlap') retry.startedAt = first.startedAt;

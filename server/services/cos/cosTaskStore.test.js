@@ -102,7 +102,6 @@ import {
   getPendingTaskIds,
   getCosApprovalView,
   getTaskDiagnostics,
-  getTasks,
   getTaskById,
   addTask,
   updateTask,
@@ -125,7 +124,7 @@ import {
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from '../autoFixMetrics.js';
 import { PRIORITY_VALUES } from '../../lib/taskParser.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
-import { getTaskPrompt, getTaskContextNote } from '../../lib/cos/cosTaskPrompt.js';
+import { getTaskPrompt, } from '../../lib/cos/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { activeAgents, runnerAgents } from '../agent/agentState.js';
@@ -157,90 +156,107 @@ beforeEach(() => {
   mock.reviewCalls = [];
 });
 
-it('reconciles a stopped stale completion only against its latest episode dispatch, without resuming it', async () => {
-  const { reconcileSpawnBudget } = await import('../spawnBudgetReconciliation.js');
-  const fresh = await addTask({ id: 'sys-proof', description: 'Proof fixture' }, 'internal');
-  const claim = (count, at) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+// The spawn budget is one counter. It guards provider spend, so the store, not
+// each caller's task snapshot, decides what a write may do to it.
+describe('monotonic spawn counter', () => {
+  const dispatch = (count, at) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
     claimedBy: 'instance-example', claimedAt: at, lastSpawnedAt: at } });
-  mock.state.agents['agent-first'] = { id: 'agent-first', taskId: fresh.id, status: 'running', startedAt: '2026-01-01T00:00:00.000Z' };
-  await updateTask(fresh.id, claim(1, '2026-01-01T00:00:00.000Z'), 'internal',
-    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: '2026-01-01T00:00:00.000Z' } });
-  await updateTask(fresh.id, { status: 'pending' }, 'internal');
-  mock.state.agents['agent-first'].status = 'completed';
-  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z' };
-  const latest = await updateTask(fresh.id, claim(2, '2026-01-02T00:00:00.000Z'), 'internal',
-    { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: '2026-01-02T00:00:00.000Z' } });
-  const proof = latest.metadata.spawnBudgetProof;
-  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]);
-  mock.state.agents['agent-second'] = { id: 'agent-second', taskId: fresh.id, status: 'running', startedAt: '2026-01-02T00:00:00.000Z',
-    metadata: { completionTaskDispatch: { taskId: fresh.id, taskType: 'internal', expected, spawnBudgetEpoch: proof.epoch,
-      spawnBudgetStartedAt: '2026-01-02T00:00:00.000Z' } } };
-  // Completion of the second run replays the first dispatch's count, through
-  // the same trusted completion operation used by finalization.
-  const blocked = await updateTask(fresh.id, { status: 'blocked', metadata: { totalSpawnCount: 1, failureCount: 3 } }, 'internal',
-    { expectedStatus: 'in_progress', spawnBudgetOperation: { kind: 'completion', agentId: 'agent-second', epoch: proof.epoch } });
-  expect(Number(blocked.metadata.totalSpawnCount)).toBe(1);
-  mock.state.agents['agent-second'].status = 'completed';
-  const corrupted = structuredClone(blocked);
-  corrupted.metadata.spawnBudgetProof.baseline = 1;
-  await seed('internal', [corrupted]);
-  const corruptSnapshot = await getTaskById(fresh.id);
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
-  expect(await getTaskById(fresh.id)).toEqual(corruptSnapshot);
-  await seed('internal', [blocked]);
-  const dispatchReceipt = mock.state.agents['agent-second'].metadata.completionTaskDispatch;
-  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '3' : value]);
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-conflict' });
-  dispatchReceipt.expected = dispatchReceipt.expected.map(([key, value]) => [key, key === 'totalSpawnCount' ? '2' : value]);
-  mock.writeFailure = new Error('reconciliation interrupted');
-  await expect(reconcileSpawnBudget(fresh.id)).rejects.toThrow('reconciliation interrupted');
-  mock.writeFailure = null;
-  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
-  mock.state.agents['agent-other'] = { id: 'agent-other', taskId: fresh.id, status: 'running' };
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
-  delete mock.state.agents['agent-other'];
-  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
-  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => {
-    await updateTask(fresh.id, { description: 'Concurrent edit' }, 'internal');
-    return { trusted: true, agents: mock.state.agents };
-  });
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
-  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
-  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => ({ trusted: true, agents: structuredClone(mock.state.agents) }));
-  vi.mocked(readAgentsStateForSafetyCheck).mockImplementationOnce(async () => {
-    mock.state.agents['agent-second'].metadata.completionTaskDispatch.spawnBudgetEpoch = 'changed';
-    return { trusted: true, agents: mock.state.agents };
-  });
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'task-or-owner-changed' });
-  expect(Number((await getTaskById(fresh.id)).metadata.totalSpawnCount)).toBe(1);
-  mock.state.agents['agent-second'].metadata.completionTaskDispatch.spawnBudgetEpoch = proof.epoch;
-  const { retryTasksResolvedByInvestigation } = await import('../investigationRetry.js');
-  expect(await retryTasksResolvedByInvestigation({ id: 'sys-investigation', status: 'completed',
-    metadata: { isInvestigation: true, affectedTasks: [fresh.id] } })).toEqual({ retried: [],
-    skipped: [{ taskId: fresh.id, reason: 'spawn-budget-reconciled-held' }] });
-  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: 2, failureCount: 3 } });
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'already-reconciled' });
-  expect(mock.events.filter(event => event.payload?.action === 'unblocked')).toHaveLength(0);
-  const corrected = await getTaskById(fresh.id);
-  await seed('internal', [{ ...corrected, metadata: { ...corrected.metadata, totalSpawnCount: '1' } }]);
-  mock.state.agents['agent-second'].status = 'running';
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'dispatch-receipt-unverified' });
-  expect((await getTaskById(fresh.id)).metadata.totalSpawnCount).toBe('1');
-  mock.state.agents['agent-second'].status = 'completed';
-  const reset = await reviveBlockedTask(fresh.id, {}, 'internal');
-  expect(reset.metadata.spawnBudgetProof.epoch).not.toBe(proof.epoch);
-  expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
-});
 
-it('holds a legacy stopped task whose episode cannot be proven', async () => {
-  const { reconcileSpawnBudget } = await import('../spawnBudgetReconciliation.js');
-  await addTask({ id: 'sys-legacy-proof', description: 'Legacy example', metadata: {
-    totalSpawnCount: 1, failureCount: 2, lastSpawnedAt: '2026-01-01T00:00:00.000Z',
-  } }, 'internal');
-  await updateTask('sys-legacy-proof', { status: 'blocked' }, 'internal');
-  const before = await getTaskById('sys-legacy-proof');
-  expect(await reconcileSpawnBudget(before.id)).toEqual({ reconciled: false, reason: 'episode-unverified' });
-  expect(await getTaskById(before.id)).toEqual(before);
+  it('keeps the stored count when a stale completion carries a lower one, and lowers it only on an explicit reset', async () => {
+    const fresh = await addTask({ id: 'sys-counter', description: 'Counter fixture' }, 'internal');
+    await updateTask(fresh.id, dispatch(1, '2026-01-01T00:00:00.000Z'), 'internal');
+    await updateTask(fresh.id, { status: 'pending' }, 'internal');
+    const second = await updateTask(fresh.id, dispatch(2, '2026-01-02T00:00:00.000Z'), 'internal');
+    expect(second.metadata.totalSpawnCount).toBe(2);
+    // The second run completes from the snapshot it was handed before its own
+    // dispatch was persisted, replaying the first dispatch's count.
+    const stale = await updateTask(fresh.id, { status: 'blocked', metadata: { ...fresh.metadata, totalSpawnCount: 1, failureCount: 3 } }, 'internal');
+    expect(stale).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: 2, failureCount: 3 } });
+    // Clearing, zeroing and garbage are refused the same way.
+    for (const lower of [undefined, null, 0, '1', 'not-a-count', -1, 1.5]) {
+      const kept = await updateTask(fresh.id, { metadata: { totalSpawnCount: lower } }, 'internal');
+      expect(kept.metadata.totalSpawnCount).toBe(2);
+    }
+    expect((await stored('internal')).find(row => row.id === fresh.id).metadata.totalSpawnCount).toBe(2);
+    const refunded = await updateTask(fresh.id, { metadata: { totalSpawnCount: 1 } }, 'internal', { spawnBudgetOperation: { kind: 'reset' } });
+    expect(refunded.metadata.totalSpawnCount).toBe(1);
+    const reset = await reviveBlockedTask(fresh.id, {}, 'internal');
+    expect(reset.status).toBe('pending');
+    expect(reset.metadata.totalSpawnCount).toBeUndefined();
+    expect((await stored('internal')).find(row => row.id === fresh.id).metadata.totalSpawnCount).toBeUndefined();
+  });
+
+  it('raises the count across the number and text forms, and never rewrites an equal one', async () => {
+    await seed('user', [{ id: 'task-legacy-count', status: 'pending', priority: 'MEDIUM', description: 'Legacy row', metadata: { totalSpawnCount: '2' } }]);
+    // A row written before #16407 holds the count as text; an equal number is not an edit.
+    expect((await updateTask('task-legacy-count', { metadata: { totalSpawnCount: 2 } }, 'user')).metadata.totalSpawnCount).toBe('2');
+    expect((await updateTask('task-legacy-count', { metadata: { totalSpawnCount: 3 } }, 'user')).metadata.totalSpawnCount).toBe(3);
+    expect((await updateTask('task-legacy-count', { metadata: { totalSpawnCount: '3' } }, 'user')).metadata.totalSpawnCount).toBe(3);
+    expect((await updateTask('task-legacy-count', { metadata: { totalSpawnCount: '4' } }, 'user')).metadata.totalSpawnCount).toBe('4');
+  });
+
+  it('charges exactly one spawn when two dispatches race from the same task snapshot', async () => {
+    await addTask({ id: 'sys-race', description: 'Race fixture' }, 'internal');
+    await updateTask('sys-race', dispatch(1, '2026-01-01T00:00:00.000Z'), 'internal');
+    const queued = await updateTask('sys-race', { status: 'pending' }, 'internal');
+    const claim = at => updateTask(queued.id, { status: 'in_progress', metadata: { ...queued.metadata, ...dispatch(2, at).metadata } }, 'internal',
+      { expectedStatus: 'pending', expectedTask: { metadata: queued.metadata } });
+    const results = await Promise.all([claim('2026-01-02T00:00:00.000Z'), claim('2026-01-02T00:00:00.001Z')]);
+    expect(results.filter(result => result.statusChanged)).toHaveLength(1);
+    const winner = results.find(result => !result.statusChanged);
+    expect(await getTaskById(queued.id)).toMatchObject({ status: 'in_progress',
+      metadata: { totalSpawnCount: 2, lastSpawnedAt: winner.metadata.lastSpawnedAt } });
+    // The loser's late write, built from the snapshot both racers read, refunds nothing.
+    const late = await updateTask(queued.id, { status: 'pending', metadata: { ...queued.metadata } }, 'internal');
+    expect(late.metadata.totalSpawnCount).toBe(2);
+  });
+
+  it('drops the retired proof metadata on the next write of a task and never stores a supplied one', async () => {
+    const retired = { spawnBudgetProof: { version: 1, epoch: '11111111-1111-4111-8111-111111111111', baseline: 0, dispatch: null, history: [] },
+      spawnBudgetReconciledHold: true };
+    await seed('internal', [
+      { id: 'sys-retired', status: 'pending', priority: 'MEDIUM', description: 'Stored before the proof was removed', metadata: { ...retired, totalSpawnCount: 1 } },
+      { id: 'sys-untouched', status: 'pending', priority: 'MEDIUM', description: 'Not written yet', metadata: { ...retired } },
+    ]);
+    const saved = await updateTask('sys-retired', { priority: 'HIGH' }, 'internal');
+    expect(saved.metadata).toEqual({ totalSpawnCount: 1, updatedAt: expect.any(String) });
+    const supplied = await updateTask('sys-retired', { metadata: { ...retired } }, 'internal');
+    expect(supplied.metadata).not.toHaveProperty('spawnBudgetProof');
+    expect(supplied.metadata).not.toHaveProperty('spawnBudgetReconciledHold');
+    const rows = await stored('internal');
+    expect(rows.find(row => row.id === 'sys-retired').metadata).toEqual(supplied.metadata);
+    // No migration: a row nothing has written keeps its inert keys.
+    expect(rows.find(row => row.id === 'sys-untouched').metadata).toEqual(retired);
+    const added = await addTask({ id: 'sys-intake', description: 'Intake fixture', status: 'pending', metadata: { ...retired, context: 'ctx' } }, 'internal', { raw: true });
+    expect(added.metadata).toEqual({ context: 'ctx' });
+  });
+
+  // Finalization fences its task write with the receipt its dispatch bound. A run
+  // that was replaced completes late against a task that is no longer its own.
+  it('admits a run\'s completion write only while it is still the task\'s latest dispatch', async () => {
+    const { completionDispatchFence } = await import('../agent/agentCompletionTaskHandoff.js');
+    const fresh = await addTask({ id: 'sys-fence', description: 'Fence fixture' }, 'internal');
+    const run = (id, saved, status) => (mock.state.agents[id] = { id, taskId: fresh.id, status, startedAt: `${id}-start`,
+      metadata: { completionTaskDispatch: { taskId: fresh.id, taskType: 'internal',
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, saved.metadata[key]]) } } });
+    const first = run('agent-first', await updateTask(fresh.id, dispatch(1, '2026-01-01T00:00:00.000Z'), 'internal'), 'completed');
+    await updateTask(fresh.id, { status: 'pending' }, 'internal');
+    const second = run('agent-second', await updateTask(fresh.id, dispatch(2, '2026-01-02T00:00:00.000Z'), 'internal'), 'running');
+    const complete = agent => updateTask(fresh.id, { status: 'completed', metadata: { totalSpawnCount: 1 } }, 'internal', completionDispatchFence(agent));
+
+    expect(await complete(first)).toMatchObject({ statusChanged: true, task: { status: 'in_progress' } });
+    // Not merely because the second run is live: the task carries its spawn stamp now.
+    second.status = 'completed';
+    expect(await complete(first)).toMatchObject({ statusChanged: true, task: { status: 'in_progress' } });
+    // A third owner starting without a dispatch write yet still holds off the second run.
+    runnerAgents.set('agent-third', { taskId: fresh.id });
+    expect(await complete(second)).toMatchObject({ statusChanged: true });
+    runnerAgents.clear();
+    expect(await complete(second)).toMatchObject({ status: 'completed', metadata: { totalSpawnCount: 2 } });
+    expect(await complete(second)).toMatchObject({ statusChanged: true, task: { status: 'completed' } });
+    // A run with no receipt (an unpersisted scheduled job) is not fenced.
+    expect(completionDispatchFence({ id: 'agent-jobless', metadata: {} })).toBeNull();
+  });
 });
 
 it('resets a pending spawn budget only while the captured task and owner remain unchanged', async () => {
@@ -268,7 +284,7 @@ it('resets a pending spawn budget only while the captured task and owner remain 
     ...options, expectedTask: { description: current.description, priority: current.priority, metadata: current.metadata },
   });
   expect(saved.status).toBe('pending');
-  expect(saved.metadata).toMatchObject({ failureCount: '3', spawnBudgetProof: { baseline: 0, dispatch: null } });
+  expect(saved.metadata).toMatchObject({ failureCount: '3' });
   expect(saved.metadata.totalSpawnCount).toBeUndefined();
 });
 
@@ -293,7 +309,7 @@ it('requeues an explicitly reset orphan with its retained checkout and failure c
   mock.state.agents['agent-original'] = { id: 'agent-original', taskId: task.id, status: 'completed', startedAt: 'start', metadata: { isWorktree: true } };
   const saved = await updateTask(task.id, patch, 'user', options);
   expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', existingBranch: 'fix/example',
-    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original', spawnBudgetProof: { baseline: 0, dispatch: null } } });
+    resumeWorktreePath: '/fixture/worktree', resumedFromAgentId: 'agent-original' } });
   expect(saved.metadata.totalSpawnCount).toBeUndefined();
   expect(mock.events.at(-1).payload.suppressDequeue).toBe(true);
 });
@@ -314,18 +330,6 @@ it('preserves failure history when an explicitly reset blocked task is requeued'
   expect(saved).toMatchObject({ status: 'pending', metadata: { failureCount: '3', lastErrorCategory: 'test-failure',
     lastFailureAt: '2026-01-01T00:00:00.000Z', existingBranch: 'fix/example', resumedFromAgentId: 'agent-original' } });
   expect(saved.metadata.totalSpawnCount).toBeUndefined();
-});
-
-it('holds a reconciled spawn budget until an explicit reset, even against stale metadata', async () => {
-  const task = await addTask({ id: 'sys-reconcile-hold', description: 'Reconcile fixture' }, 'internal');
-  const reconciled = await updateTask(task.id, { metadata: { totalSpawnCount: 2 } }, 'internal',
-    { spawnBudgetOperation: { kind: 'reconcile' } });
-  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe(true);
-  const stale = await updateTask(task.id, { metadata: { ...task.metadata, spawnBudgetReconciledHold: undefined } }, 'internal');
-  expect(stale.metadata.spawnBudgetReconciledHold).toBe(true);
-  const reset = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'internal',
-    { spawnBudgetOperation: { kind: 'reset' } });
-  expect(reset.metadata.spawnBudgetReconciledHold).toBeUndefined();
 });
 
 describe('in-memory runner agents count as competing task owners', () => {
@@ -353,26 +357,6 @@ describe('in-memory runner agents count as competing task owners', () => {
     expect(await updateTask('task-competing-mem', { description: 'Edit' }, 'user', options)).toMatchObject({ description: 'Edit' });
   });
 
-  it('refuses dispatch and completion proofs while another in-memory runner holds the task', async () => {
-    const task = await addTask({ id: 'sys-proof-mem', description: 'Proof fixture' }, 'internal');
-    const at = '2026-01-01T00:00:00.000Z';
-    const claim = { status: 'in_progress', metadata: { totalSpawnCount: 1, claimedBy: 'instance-example', claimedAt: at, lastSpawnedAt: at } };
-    const dispatch = { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: at } };
-    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: at };
-    runnerAgents.set('agent-first', { taskId: task.id });
-    runnerAgents.set('agent-other', { taskId: task.id });
-    expect(await updateTask(task.id, claim, 'internal', dispatch)).toEqual({ error: 'Cannot establish spawn budget dispatch proof' });
-    runnerAgents.delete('agent-other');
-    const latest = await updateTask(task.id, claim, 'internal', dispatch);
-    const proof = latest.metadata.spawnBudgetProof;
-    mock.state.agents['agent-first'].metadata = { completionTaskDispatch: { taskId: task.id, taskType: 'internal', spawnBudgetEpoch: proof.epoch,
-      spawnBudgetStartedAt: at, expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } };
-    const completion = { expectedStatus: 'in_progress', spawnBudgetOperation: { kind: 'completion', agentId: 'agent-first', epoch: proof.epoch } };
-    activeAgents.set('agent-other', { task: { id: task.id } });
-    expect(await updateTask(task.id, { status: 'completed' }, 'internal', completion)).toMatchObject({ statusChanged: true, task: { status: 'in_progress' } });
-    activeAgents.clear();
-    expect(await updateTask(task.id, { status: 'completed' }, 'internal', completion)).toMatchObject({ status: 'completed' });
-  });
 });
 
 it('wakes the exact local parent from a persisted completed-follow-up edit', async () => {
@@ -976,11 +960,7 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
   });
 });
 
-describe('cosTaskStore.getAllTasks / getTasks / getTaskById', () => {
-  it('getTasks aliases getUserTasks', () => {
-    expect(getTasks).toBe(getUserTasks);
-  });
-
+describe('cosTaskStore.getAllTasks / getTaskById', () => {
   it('getAllTasks merges user + internal sources', async () => {
     await addTask({ description: 'u1' }, 'user');
     await addTask({ description: 's1', approvalRequired: false }, 'internal');
@@ -1827,11 +1807,11 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.worktreeChangesExpected).toBeUndefined();
   });
 
-  it('raw=true preserves supplied task fields while adding server-owned episode proof', async () => {
+  it('raw=true preserves supplied task fields', async () => {
     const raw = { id: 'sys-raw', description: 'raw task', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });
     expect(task).toMatchObject(raw);
-    expect(task.metadata.spawnBudgetProof).toMatchObject({ version: 1, dispatch: null, epoch: expect.any(String) });
+    expect(task.metadata).toEqual(raw.metadata);
     expect(task.description).toBe('raw task');
   });
 
@@ -2183,7 +2163,7 @@ describe('cosTaskStore.updateTask', () => {
       mock.state.agents[agentId] = { id: agentId, taskId: 'task-delivery-budget', status: 'running', startedAt: at };
       return updateTask('task-delivery-budget', { status: 'in_progress', metadata: {
         totalSpawnCount: count, claimedBy: 'fixture-instance', claimedAt: at, lastSpawnedAt: at,
-      } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt: at } });
+      } }, 'user');
     };
     await dispatch(1, '2026-10-22T00:00:00.000Z', 'agent-first');
     mock.state.agents['agent-first'].status = 'completed';
@@ -2195,7 +2175,6 @@ describe('cosTaskStore.updateTask', () => {
     const task = await getTaskById('task-delivery-budget');
     const owner = { id: 'agent-delivery-budget', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
       result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
-        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
         expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
     mock.state.agents[owner.id] = owner;
     mock.afterWrite = () => { throw new Error('interrupted after committed recovery transition'); };
@@ -2219,14 +2198,13 @@ describe('cosTaskStore.updateTask', () => {
     const latest = await updateTask('task-delivery-owner', { status: 'in_progress', metadata: {
       totalSpawnCount: 1, claimedBy: 'fixture-instance', claimedAt: '2026-10-23T00:00:00.000Z',
       lastSpawnedAt: '2026-10-23T00:00:00.000Z',
-    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-delivery-owner', startedAt: '2026-10-23T00:00:00.000Z' } });
+    } }, 'user');
     await updateTask('task-delivery-owner', { status: 'blocked', metadata: {
       blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00.000Z', failureCount: 1, taskOutcome: outcome,
     } }, 'user');
     const task = await getTaskById('task-delivery-owner');
     const owner = { id: 'agent-delivery-owner', taskId: task.id, status: 'completed', startedAt: '2026-10-23T00:00:00.000Z',
       result: { taskOutcome: outcome }, metadata: { completionTaskDispatch: { taskId: task.id, taskType: 'user',
-        spawnBudgetEpoch: latest.metadata.spawnBudgetProof.epoch, spawnBudgetStartedAt: latest.metadata.spawnBudgetProof.dispatch.startedAt,
         expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, latest.metadata[key]]) } } };
     mock.state.agents[owner.id] = owner;
     if (race === 'manual-blocker') await updateTask(task.id, { metadata: { blocker: 'Operator hold' } }, 'user');
@@ -2606,8 +2584,7 @@ describe('historical release attempt compatibility', () => {
   it('dispatches releases without generating transfer membership', async () => {
     const task = await addTask({ id: 'sys-release', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
     mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: 'first-start' };
-    const result = await updateTask(task.id, { status: 'in_progress', metadata: { totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'first-start', lastSpawnedAt: 'first-start' } }, 'internal',
-      { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
+    const result = await updateTask(task.id, { status: 'in_progress', metadata: { totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'first-start', lastSpawnedAt: 'first-start' } }, 'internal');
     expect(result.status).toBe('in_progress');
     expect(result.metadata.releaseAttempts).toBeUndefined();
   });
@@ -2622,7 +2599,7 @@ describe('historical release attempt compatibility', () => {
     mock.state.agents['agent-successor'] = { id: 'agent-successor', taskId: task.id, status: 'running', startedAt: 'successor-start' };
     const dispatched = await updateTask(task.id, { status: 'in_progress', metadata: {
       totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'successor-start', lastSpawnedAt: 'successor-start',
-    } }, 'internal', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-successor', startedAt: 'successor-start' } });
+    } }, 'internal');
     expect(dispatched.metadata.releaseAttempts).toEqual({ ...history, complete: false });
   });
 });
@@ -2703,36 +2680,51 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
   });
 
-  it('invalidates proof on an older peer payload even when it retained the opaque metadata', async () => {
-    await addTask({ id: 'task-legacy-peer', description: 'Peer example' }, 'user');
-    mock.state.agents['agent-peer'] = { id: 'agent-peer', taskId: 'task-legacy-peer', status: 'running', startedAt: 'start' };
-    const local = await updateTask('task-legacy-peer', { status: 'in_progress', metadata: {
-      totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: '2026-01-01T00:00:00.000Z', lastSpawnedAt: '2026-01-01T00:00:00.000Z',
-    } }, 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-peer', startedAt: 'start' } });
-    expect(local.metadata.spawnBudgetProof).toBeDefined();
-    await mergePeerTasks('user', [{ ...local, taskType: 'user' }], { now: NOW, legacySpawnBudget: true });
-    const after = await getTaskById(local.id);
-    expect(after.status).toBe(local.status);
-    expect(Number(after.metadata.totalSpawnCount)).toBe(1);
-    expect(after.metadata.spawnBudgetProof).toBeUndefined();
+  // A peer still on cosTasks schema 12 sends the retired spawn-budget proof. Nothing
+  // here reads it, so it is dropped on receipt and the task dispatches normally.
+  it('drops the retired proof metadata from a peer payload and keeps the selected copy\'s spawn count', async () => {
+    const proof = { version: 1, epoch: '11111111-1111-4111-8111-111111111111', baseline: 0, history: [],
+      dispatch: { agentId: 'agent-peer', startedAt: 'start', claimedBy: 'peer', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 2 } };
+    const remote = [
+      { id: 'task-peer-new', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'peer task',
+        metadata: { totalSpawnCount: '2', lastSpawnedAt: 'spawn', spawnBudgetProof: proof, spawnBudgetReconciledHold: 'true' } },
+      // A peer whose proof was dropped or never minted: a v12 receiver would hold this task.
+      { id: 'task-peer-proofless', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'legacy peer task',
+        metadata: { totalSpawnCount: '1', lastSpawnedAt: 'spawn' } },
+    ];
+    expect((await mergePeerTasks('user', remote, { now: NOW })).changed).toBe(true);
+    expect((await getTaskById('task-peer-new')).metadata).toEqual({ totalSpawnCount: '2', lastSpawnedAt: 'spawn' });
+    expect((await getTaskById('task-peer-proofless')).metadata).toEqual({ totalSpawnCount: '1', lastSpawnedAt: 'spawn' });
+    // The stripped keys are not a difference: the same payload settles in one pass.
+    vi.mocked(repository.applyTaskListSave).mockClear();
+    expect(await mergePeerTasks('user', remote, { now: NOW })).toEqual({ changed: false });
+    expect(repository.applyTaskListSave).not.toHaveBeenCalled();
+    // A local write still counts from the merged copy's spawn count.
+    const dispatched = await updateTask('task-peer-new', { status: 'in_progress', metadata: { totalSpawnCount: 3 } }, 'user');
+    expect(dispatched.metadata.totalSpawnCount).toBe(3);
   });
 
-  it('accepts a known same-episode dispatch ancestor but invalidates a concurrent fork', async () => {
-    await addTask({ id: 'task-chain', description: 'Chain example' }, 'user');
-    const claim = (count, stamp) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
-      claimedBy: 'fixture', claimedAt: stamp, lastSpawnedAt: stamp } });
-    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: 'task-chain', status: 'running', startedAt: 'first-start' };
-    const first = await updateTask('task-chain', claim(1, 'first'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
-    await updateTask('task-chain', { status: 'pending' }, 'user');
-    mock.state.agents['agent-first'].status = 'completed';
-    mock.state.agents['agent-second'] = { id: 'agent-second', taskId: 'task-chain', status: 'running', startedAt: 'second-start' };
-    const second = await updateTask('task-chain', claim(2, 'second'), 'user', { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-second', startedAt: 'second-start' } });
-    await mergePeerTasks('user', [{ ...first, taskType: 'user' }], { now: NOW });
-    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toEqual(second.metadata.spawnBudgetProof);
-    const fork = structuredClone(second);
-    fork.metadata.spawnBudgetProof.dispatch.agentId = 'agent-competing';
-    await mergePeerTasks('user', [{ ...fork, taskType: 'user' }], { now: NOW });
-    expect((await getTaskById('task-chain')).metadata.spawnBudgetProof).toBeUndefined();
+  // The spawn cap has to hold across installs too: content is last-writer-wins, and
+  // a peer editing the copy it pulled before this install dispatched would
+  // otherwise bring its older count back.
+  it('does not refund charged spawns when a peer edits a copy that predates the dispatch', async () => {
+    await addTask({ id: 'task-peer-stale', description: 'shared work', priority: 'MEDIUM' }, 'user');
+    const stalePeerCopy = await getTaskById('task-peer-stale');
+    for (const [count, at] of [[1, '2026-06-25T09:00:00.000Z'], [2, '2026-06-25T10:00:00.000Z']]) {
+      const now = Date.parse(at);
+      await updateTask('task-peer-stale', { status: 'in_progress', metadata: { totalSpawnCount: count, lastSpawnedAt: at } }, 'user', { now });
+      await updateTask('task-peer-stale', { status: 'pending' }, 'user', { now });
+    }
+    const edited = { ...stalePeerCopy, taskType: 'user', description: 'shared work, clarified on the peer',
+      metadata: { ...stalePeerCopy.metadata, updatedAt: future(-1000) } };
+    await mergePeerTasks('user', [edited], { now: NOW });
+    const merged = await getTaskById('task-peer-stale');
+    expect(merged.description).toBe('shared work, clarified on the peer');
+    expect(merged.metadata).toMatchObject({ totalSpawnCount: 2, lastSpawnedAt: '2026-06-25T10:00:00.000Z' });
+    // An explicit reset on the peer, made after the dispatch both copies know, still lands.
+    const reset = { ...merged, taskType: 'user', metadata: { ...merged.metadata, totalSpawnCount: undefined, updatedAt: future(1000) } };
+    await mergePeerTasks('user', [reset], { now: NOW });
+    expect((await getTaskById('task-peer-stale')).metadata.totalSpawnCount).toBeUndefined();
   });
 
   it("never clobbers the local peer's live claim with a remote pending copy", async () => {

@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
-import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from './sharedSchemas.js';
+import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE, mediaFilenameSchema } from './sharedSchemas.js';
 import { FEDERATED_MEDIA_ASSET_MAX_COUNT, FEDERATED_MEDIA_MAX_VIDEO_FRAMES, federatedMediaInputAssetRefSchema, isFederatedMediaAudioPrompt, federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { isPlainObject } from './objects.js';
 
@@ -217,3 +217,21 @@ export const federatedMediaJobParamsSchema = z.object({
 export const federatedMediaStatusQuerySchema = z.object({
   kinds: z.string().trim().max(40).regex(/^[a-z]+(,[a-z]+)*$/).optional(),
 }).passthrough();
+
+// POST /api/peer-media/delete — a paired peer asks this machine to delete a
+// media row it holds. Video rows key on the history id, images on the filename.
+export const peerMediaDeleteSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  key: z.string().min(1).max(512),
+}).strict();
+
+const isoTimestampSchema = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)), 'Must be a timestamp');
+
+// POST /api/peer-media/release — a paired peer asks this machine to drop its
+// copy of a file's bytes in favor of the primary holder (services/mediaHolders.js).
+export const peerMediaReleaseSchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  primaryInstanceId: z.string().min(1).max(128),
+  primaryAt: isoTimestampSchema,
+}).strict();

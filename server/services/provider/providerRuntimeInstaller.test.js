@@ -321,7 +321,7 @@ describe('harness lifecycle actions', () => {
     const { HARNESS_ACTION_COPY } = await import('../harnessActionStream.js');
     expect(Object.keys(HARNESS_ACTION_COPY).sort()).toEqual([...RUNTIME_ACTIONS].sort());
 
-    const { harnessActionSchema } = await import('../../lib/validation.js');
+    const { harnessActionSchema } = await import('../../lib/providerValidation.js');
     expect([...harnessActionSchema.shape.action.unwrap().unwrap().options].sort())
       .toEqual([...RUNTIME_ACTIONS].sort());
   });

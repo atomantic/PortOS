@@ -60,6 +60,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [ITERM.md](./ITERM.md) | The Shell page's iTerm2 view — requirements, status states and their fixes, why iTerm2 sessions stay separate from PortOS shells, the clean-room protocol rule |
 | [INSTANCE_FEATURES.md](./INSTANCE_FEATURES.md) | Optional per-install features — registry, client-side nav gating, feature groups, reconcile-at-toggle |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
+| [SECURITY_RISK_ASSESSMENT.md](./SECURITY_RISK_ASSESSMENT.md) | Threat boundaries, security finding dispositions and external-content screening |
 | [DEEP-AUDITS.md](./DEEP-AUDITS.md) | Persistent audit coverage, independent passes, checkpoint/resume and completion rules |
 | [DEEP-AUDITS-LEGACY.md](./DEEP-AUDITS-LEGACY.md) | Legacy (historical) exhaustive Deep audit records and their stored evidence format; new launches no longer run this workflow |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
@@ -83,7 +84,6 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [INSTRUCTION_RULE_DETAIL.md](./INSTRUCTION_RULE_DETAIL.md) | Full wording of rules whose short form lives in the `AGENTS.md` files |
 | [LOCAL_REVIEW_LIFECYCLE.md](./LOCAL_REVIEW_LIFECYCLE.md) | Durable one-time pre-PR review, recovery and hosted-feedback continuation |
-| [PR_REVIEW_ATTRIBUTION.md](./PR_REVIEW_ATTRIBUTION.md) | Completed local reviewer model receipts and additive PR labels |
 | [CODE_REVIEW_DIAGNOSTICS.md](./CODE_REVIEW_DIAGNOSTICS.md) | Privacy-safe CLI deadline phases, process timing and a synthetic review probe |
 | [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |

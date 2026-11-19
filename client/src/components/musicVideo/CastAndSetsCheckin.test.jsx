@@ -343,6 +343,17 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { renderingMedium: medium }, { silent: true });
   });
 
+  it('switches an older photographic direction to the standard character sheet', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('review')} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit direction' }));
+    const layout = screen.getByLabelText('Character sheet layout');
+    expect(layout).toHaveValue('five-view');
+    fireEvent.change(layout, { target: { value: 'standard' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save direction' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { sheetLayout: 'standard' }, { silent: true });
+  });
+
   it('edits moods, removes a cast member and re-renders one image from its card', async () => {
     api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
     api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });

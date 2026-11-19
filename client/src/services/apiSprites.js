@@ -211,7 +211,7 @@ export const setSpriteWalkTarget = (id, body, options = {}) => request(`/sprites
 
 // Un-freeze a finalized walk set so its directions can be regenerated/re-approved.
 // Body: `{ acknowledgeNoClips }` — see `spriteWalkUnlockSchema` in
-// server/lib/validation.js for what that override means. Omit it to keep the
+// server/lib/spriteValidation.js for what that override means. Omit it to keep the
 // server's refusal, which is what any caller that hasn't shown the warning wants.
 export const unlockSpriteWalk = (id, body = {}, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/unlock`, {
   method: 'POST', body: JSON.stringify(body), ...options,

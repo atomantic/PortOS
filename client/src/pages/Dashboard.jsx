@@ -11,10 +11,18 @@ import FirstRunCard from '../components/onboarding/FirstRunCard.jsx';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import PageHeader from '../components/PageHeader';
 import { ChevronsDownUp, GripHorizontal, Monitor, Move, Save, X } from 'lucide-react';
-import * as api from '../services/api';
+import { getApps } from '../services/apiApps.js';
+import { getBrainOnThisDay } from '../services/apiBrain.js';
+import { getCalendarAgenda } from '../services/apiCalendar.js';
+import { deleteDashboardLayout, getDailyDriverState, getDashboardLayouts, saveDashboardLayout, setActiveDashboardLayout } from '../services/apiDashboard.js';
+import { getMeatspaceLoggingStats } from '../services/apiMeatspace.js';
+import { getFeedStats } from '../services/apiMessages.js';
+import { getSystemHealth } from '../services/apiSystem.js';
+import { getTribeCareSummary } from '../services/apiTribe.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { pickActiveLayoutId, recordManualLayoutPick } from '../utils/timeWindow.js';
+import { createLayoutSwitcher } from '../lib/layoutSwitch.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
@@ -24,11 +32,11 @@ export const isAppsLoading = (appsReadSettled) => !appsReadSettled;
 // first-visit-of-day signal, #2666) are always fetched; apps has its own error
 // and settled tracking below.
 const OPTIONAL_STREAMS = {
-  tribeCare: () => api.getTribeCareSummary({ silent: true }),
-  feeds: () => api.getFeedStats({ silent: true }),
-  meatspaceLogging: () => api.getMeatspaceLoggingStats({ silent: true }),
-  calendarAgenda: () => api.getCalendarAgenda({ silent: true }),
-  brainOnThisDay: () => api.getBrainOnThisDay({ silent: true }),
+  tribeCare: () => getTribeCareSummary({ silent: true }),
+  feeds: () => getFeedStats({ silent: true }),
+  meatspaceLogging: () => getMeatspaceLoggingStats({ silent: true }),
+  calendarAgenda: () => getCalendarAgenda({ silent: true }),
+  brainOnThisDay: () => getBrainOnThisDay({ silent: true }),
 };
 
 // Renders one widget body. Memoized so a widget that declares no `needs`
@@ -64,27 +72,10 @@ export default function Dashboard() {
   const [activeLayoutId, setActiveLayoutId] = useState(() => (
     layoutCache ? pickActiveLayoutId(layoutCache.activeLayoutId, layoutCache.layouts, false) : null
   ));
-  // Last active-layout id the SERVER confirmed (initial GET, a successful
-  // setActive PUT, or a delete response). Failed optimistic switches revert
-  // to this — never to a `previousId` snapshot, which can itself be an
-  // optimistic-but-uncommitted id when two switches fail back-to-back (the
-  // 2nd switch's `previousId` is the 1st's never-landed value). A ref, not
-  // state: it's read inside async `.catch` revert callbacks, so it must
-  // always reflect current truth without stale-closure capture, and it
-  // never needs to trigger a re-render on its own.
-  const serverConfirmedLayoutIdRef = useRef(null);
-  // Monotonic counter incremented on every active-layout switch attempt
-  // (initial auto-switch, selectLayout, duplicateLayout). It gates only the
-  // FAILURE revert: a switch reverts the displayed layout on PUT failure only
-  // when it's still the latest switch — so an earlier switch's late failure
-  // can't yank the display out from under a newer switch (even one targeting
-  // the same id, where `current === id` alone would wrongly match). The
-  // SUCCESS path does NOT gate on generation: the server's layoutsWriteTail
-  // serializes PUTs and their responses, so the last success to resolve is the
-  // server's final active layout — every acceptance must be recorded, even a
-  // superseded one, or a later failure could revert to a stale id. Mirrors the
-  // `{ target, generation }` pending-request convention used elsewhere.
-  const switchGenerationRef = useRef(0);
+  // Optimistic active-layout switching with the server-confirmed baseline and
+  // the latest-generation revert gate (see lib/layoutSwitch.js). Held in state
+  // only so the factory runs once; it never changes and never re-renders.
+  const [layoutSwitcher] = useState(() => createLayoutSwitcher({ setDisplayed: setActiveLayoutId }));
   const [editorOpen, setEditorOpen] = useState(false);
   // Grid edit mode is local — entered via the "Arrange" button. Holds an
   // in-flight grid snapshot the user can Save/Cancel without touching the
@@ -109,7 +100,7 @@ export default function Dashboard() {
   const refreshHealth = useCallback(async () => {
     // Keep the last good snapshot visible when a manual refresh hits a
     // transient failure; only a failed FIRST read marks the server offline.
-    const data = await api.getSystemHealth({ silent: true }).catch(() => undefined);
+    const data = await getSystemHealth({ silent: true }).catch(() => undefined);
     if (data) setHealth(data);
     else setHealth((prev) => (prev === undefined ? null : prev));
     return data;
@@ -123,7 +114,7 @@ export default function Dashboard() {
       .catch(() => null)
       .then((value) => setStreams((prev) => ({ ...prev, [name]: value }))))), []);
 
-  const fetchApps = useCallback(() => api.getApps({ includeQuality: true })
+  const fetchApps = useCallback(() => getApps({ includeQuality: true })
     .then((appsData) => {
       setDataError(null);
       if (Array.isArray(appsData)) setApps(appsData);
@@ -142,13 +133,13 @@ export default function Dashboard() {
     // fetch resolves, or while a DASHBOARD_LAYOUT_CHANGED fetch is in
     // flight at unmount time.
     let cancelled = false;
-    const fetchLayouts = () => api.getDashboardLayouts()
+    const fetchLayouts = () => getDashboardLayouts()
       .then((data) => {
         if (cancelled) return;
         setLayouts(data.layouts);
         // The server's stored active id is the confirmed baseline until/unless
         // the auto-switch PUT below lands.
-        serverConfirmedLayoutIdRef.current = data.activeLayoutId;
+        layoutSwitcher.confirm(data.activeLayoutId);
         const desiredActiveId = pickActiveLayoutId(data.activeLayoutId, data.layouts, autoSwitchedRef.current);
         setActiveLayoutId(desiredActiveId);
         if (desiredActiveId === data.activeLayoutId) {
@@ -158,23 +149,11 @@ export default function Dashboard() {
           // picks, so this fire-and-forget can't clobber a later click. Only
           // mark "auto-switched" after the PUT settles so a failing server
           // gets retried on the next mount.
-          const switchGen = ++switchGenerationRef.current;
-          api.setActiveDashboardLayout(desiredActiveId)
-            .then(() => {
-              if (cancelled) return;
-              autoSwitchedRef.current = true;
-              // Always record the server's acceptance: even if a user switch
-              // superseded this one, the server did accept desiredActiveId, and
-              // the write-tail guarantees the last success to resolve wins.
-              serverConfirmedLayoutIdRef.current = desiredActiveId;
-            })
-            .catch(() => {
-              if (cancelled) return;
-              // A user switch (even to this same id) supersedes the auto-switch
-              // and owns the displayed state — don't revert out from under it.
-              if (switchGenerationRef.current !== switchGen) return;
-              setActiveLayoutId((current) => (current === desiredActiveId ? data.activeLayoutId : current));
-            });
+          layoutSwitcher.switchTo(
+            desiredActiveId,
+            setActiveDashboardLayout(desiredActiveId).then(() => { autoSwitchedRef.current = true; }),
+            { isCancelled: () => cancelled },
+          );
         }
         if (data.limits) setLayoutLimits(data.limits);
         setLayoutsConfirmed(true);
@@ -251,7 +230,7 @@ export default function Dashboard() {
       refreshHealth(),
       // GET records the first-visit-of-day signal (issue #2666); a failure just
       // hides the Daily Driver card via its gate. No LLM calls here.
-      api.getDailyDriverState().catch(() => null).then(setDailyDriver),
+      getDailyDriverState().catch(() => null).then(setDailyDriver),
       needed.includes('apps') ? fetchApps() : null,
       fetchStreams(needed),
     ]);
@@ -352,8 +331,7 @@ export default function Dashboard() {
       ...orderedIds,
       ...activeLayout.widgets.filter((id) => !orderedIds.includes(id)),
     ];
-    const ok = await api
-      .saveDashboardLayout(activeLayout.id, { name: activeLayout.name, widgets, grid: draftGrid })
+    const ok = await saveDashboardLayout(activeLayout.id, { name: activeLayout.name, widgets, grid: draftGrid })
       .then((result) => { setLayouts(result.layouts); return true; }, () => false);
     setSavingGrid(false);
     if (!ok) return;
@@ -363,25 +341,8 @@ export default function Dashboard() {
   };
 
   const selectLayout = async (id) => {
-    const switchGen = ++switchGenerationRef.current;
-    setActiveLayoutId(id);
     recordManualLayoutPick(id);
-    // Server-side write tail serializes against any in-flight auto-window
-    // PUT so this write always lands after it. On success record the id as the
-    // server-confirmed baseline (always — the write-tail makes the last success
-    // to resolve the server's final state). On failure revert (functional
-    // setState so a later selection isn't clobbered) to that baseline — not to
-    // a local snapshot, which after a prior failed switch may be an id the
-    // server never accepted — and only when this is still the latest switch.
-    await api.setActiveDashboardLayout(id)
-      .then(() => { serverConfirmedLayoutIdRef.current = id; })
-      .catch(() => {
-        // Only the latest switch may revert. A newer switch — even to this
-        // SAME id (which leaves `current === id` true) — supersedes this one
-        // and owns the displayed state; its own resolution will settle it.
-        if (switchGenerationRef.current !== switchGen) return;
-        setActiveLayoutId((current) => (current === id ? serverConfirmedLayoutIdRef.current : current));
-      });
+    await layoutSwitcher.switchTo(id, setActiveDashboardLayout(id));
   };
 
   // Preserve the existing grid on widget add/remove so positional edits
@@ -399,7 +360,7 @@ export default function Dashboard() {
       ? existing.grid
       : synthesizeGrid(existing?.widgets ?? widgets);
     const nextGrid = reconcileGrid(baseGrid, widgets, { reorder: reordered });
-    const result = await api.saveDashboardLayout(id, { name, widgets, grid: nextGrid, activateWindow });
+    const result = await saveDashboardLayout(id, { name, widgets, grid: nextGrid, activateWindow });
     setLayouts(result.layouts);
   };
 
@@ -408,41 +369,25 @@ export default function Dashboard() {
     // visually-arranged dashboard captures what the user actually sees.
     const sourceGrid = renderGrid && renderGrid.length > 0 ? renderGrid : synthesizeGrid(widgets);
     const grid = reconcileGrid(sourceGrid, widgets, { reorder: reordered });
-    const result = await api.saveDashboardLayout(id, { name, widgets, grid, activateWindow });
+    const result = await saveDashboardLayout(id, { name, widgets, grid, activateWindow });
     setLayouts(result.layouts);
-    // Bump the switch generation only now — AFTER the save resolved and right
-    // before the actual active-layout switch. Bumping at function entry would
-    // let a still-in-flight save prematurely supersede (and thus suppress the
-    // failure revert of) an unrelated in-flight selectLayout that fails in the
-    // meantime — and if the save itself rejects, no switch happens at all.
-    const switchGen = ++switchGenerationRef.current;
-    setActiveLayoutId(id);
+    // switchTo bumps the switch generation only now — AFTER the save resolved.
+    // Bumping at function entry would let a still-in-flight save prematurely
+    // supersede (and suppress the failure revert of) an unrelated in-flight
+    // selectLayout, and a rejected save must not switch at all.
     // Lock in for the day so a window-driven auto-switch on the next mount
     // doesn't bump the user off the brand-new layout they just created.
     recordManualLayoutPick(id);
-    // Server-side write tail serializes against any in-flight auto-window
-    // PUT. On success record the new layout as the server-confirmed baseline
-    // (always); on failure revert (functional setState) to the prior confirmed
-    // baseline rather than a possibly-uncommitted local snapshot — and only
-    // when this is still the latest switch.
-    await api.setActiveDashboardLayout(id)
-      .then(() => { serverConfirmedLayoutIdRef.current = id; })
-      .catch(() => {
-        // Only the latest switch may revert. A newer switch — even to this
-        // SAME id (which leaves `current === id` true) — supersedes this one
-        // and owns the displayed state; its own resolution will settle it.
-        if (switchGenerationRef.current !== switchGen) return;
-        setActiveLayoutId((current) => (current === id ? serverConfirmedLayoutIdRef.current : current));
-      });
+    await layoutSwitcher.switchTo(id, setActiveDashboardLayout(id));
   };
 
   const deleteLayoutById = async (id) => {
-    const result = await api.deleteDashboardLayout(id);
+    const result = await deleteDashboardLayout(id);
     setLayouts(result.layouts);
     setActiveLayoutId(result.activeLayoutId);
     // The server chose the post-delete active layout — it's now the
     // confirmed baseline a later failed switch should revert to.
-    serverConfirmedLayoutIdRef.current = result.activeLayoutId;
+    layoutSwitcher.confirm(result.activeLayoutId);
     toast.success('Layout deleted');
   };
 

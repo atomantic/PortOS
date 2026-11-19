@@ -33,9 +33,11 @@ Personal content alone is no reason to block federation ([ADR](decisions/2026-09
 
 Outside the request lifecycle, a caught hook failure logs in the emoji `console.error` style. Async event handlers mutating shared module state (the TUI spawner's `handleData`) serialize on a per-session `Promise.resolve()` queue.
 
-## Server conventions moved from server/AGENTS.md
+## Server conventions
 
-**Schema parity when adding fields.** A field added to a sanitizer, `createXxx` or payload shape gets its Zod schema in the same change (`lib/aiToolkit/validation.js` for toolkit shapes, `lib/validation.js` for routes), wired into POST and PUT (`schema.partial()`); an unwired sub-schema is false confidence. Polymorphic stores (`PUT /api/settings`) validate the present slice with `schema.partial()` (`backupConfigSchema.partial()` in `server/routes/settings.js`). Tolerate UI sentinels (`endpoint: ''`) with `z.preprocess(v => v === '' ? undefined : v, …)`; a service migrating legacy keys on read keeps accepting the legacy shape.
+The original, unabridged wording of rules whose one-sentence form now sits in `server/AGENTS.md`.
+
+**Schema parity when adding fields.** A field added to a sanitizer, `createXxx` or payload shape gets its Zod schema in the same change (`lib/aiToolkit/validation.js` for toolkit shapes, the domain `lib/*Validation.js` file for routes), wired into POST and PUT (`schema.partial()`); an unwired sub-schema is false confidence. Polymorphic stores (`PUT /api/settings`) validate the present slice with `schema.partial()` (`backupConfigSchema.partial()` in `server/routes/settings.js`). Tolerate UI sentinels (`endpoint: ''`) with `z.preprocess(v => v === '' ? undefined : v, …)`; a service migrating legacy keys on read keeps accepting the legacy shape.
 
 **Serialize a `json`/`jsonb` parameter with `toPgJson`, never bare `JSON.stringify`.** Postgres rejects a lone UTF-16 surrogate or NUL in `jsonb` (NUL in `text`), which old file stores accepted, so the write throws and the record is lost (#12815). `toPgJson` and `normalizePgString` in `server/lib/pgJson.js` repair to U+FFFD. `lib/db.js` normalizes plain parameters on every `query()`, but a pre-stringified JSON string looks like text to it. *Enforced:* `server/pgJsonConventions.guard.test.js` (frozen `scripts/db-migrations/` are skipped).
 
@@ -89,7 +91,7 @@ Also remove walkthroughs; keep meaningful type/JSDoc and public API docs. There 
 
 **Web Storage goes through `lib/safeStorage.js`** (`safeReadStorage` / `safeWriteStorage` / `safeRemoveStorage` and their `Json`/`*Session` variants). Raw `localStorage`/`sessionStorage` throws in Safari private mode, sandboxed iframes, disabled cookies and at quota (`typeof`/`?.` don't guard it), unmounting the route (#5689). *Enforced:* `client/lint-no-raw-web-storage.grit` (Biome plugin; exemptions are negated globs on its override in `client/biome.jsonc`).
 
-## Client rules moved from client/src/AGENTS.md
+## Client rules
 
 The original, unabridged wording of rules whose one-sentence form now sits in `client/src/AGENTS.md`.
 

@@ -3,6 +3,7 @@ import { Music, Download } from 'lucide-react';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
+import MidiPlanningFacts from './MidiPlanningFacts.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
 import VocalStemControl from './VocalStemControl.jsx';
@@ -163,6 +164,7 @@ export function AdvancedTrackControls({ project, tracks, renderBound, onProjectU
           model={project.midiTranscription.model}
         />
       )}
+      {midiFile && <MidiPlanningFacts project={project} />}
     </>
   );
 }

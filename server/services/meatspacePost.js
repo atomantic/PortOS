@@ -11,7 +11,7 @@ import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
+import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postDrillTypes.js';
 import { nBackBalancedAccuracy, resolveEstimationTolerancePct } from '../lib/postScoring.js';
 import { normalizeHistoricalPostLlmEvaluation, normalizePostLlmEvaluation } from '../lib/postLlmContracts.js';
 import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '../lib/postTopics.js';
@@ -50,7 +50,6 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 // needs getPostSessions from this file. Importing getAllTrainingEntries via
 // meatspacePostTraining.js would close that into a 3-file circular import.
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
-import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, normalizeYmd, recordDayKey, withDerivedDayKeys, ymdToUTC, ymdShift } from '../lib/postStreak.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone, userLocalToday as localToday } from './userTimezone.js';

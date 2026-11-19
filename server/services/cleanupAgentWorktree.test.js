@@ -4,7 +4,6 @@ vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi
 vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
 import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { cosEvents } from './cos/cosEvents.js';
 vi.mock('./publicationValidation.js', () => ({ validatePublication: vi.fn() }));
 import { validatePublication } from './publicationValidation.js';
 
@@ -225,7 +224,7 @@ vi.mock('../lib/execGit.js', () => ({
 // The `if-missing` safety net asks finalize's own PR-claim check whether
 // the agent actually opened the PR it was told to open (#3733).
 const verifyPrClaimMock = vi.fn();
-vi.mock('./agent/agentFinalization.js', () => ({
+vi.mock('./agent/agentPrVerification.js', () => ({
   PR_MISSING_CATEGORY: 'pr-missing',
   verifyPrClaim: (...args) => verifyPrClaimMock(...args)
 }));
@@ -243,7 +242,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // All five come from `agentWorktreeCleanup.js`, the module that defines them.
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
-import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agent/agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agent/agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getAgents, updateAgent } from './cos/cosAgentLifecycle.js';
 import { getAllTasks, getTaskById, addTask, updateTask } from './cos/cosTaskStore.js';
 import { forceSpawnTask } from './cos/cos.js';

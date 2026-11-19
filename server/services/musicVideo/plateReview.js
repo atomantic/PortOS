@@ -7,7 +7,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { canReviewImages, isCodexVisionReviewer } from '../../lib/imageReviewProviders.js';
-import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from '../../lib/codexAccount.js';
+import { CODEX_ACCOUNT_STATUS, } from '../../lib/codexAccount.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
 import { effectiveModelAccess, scopeModelsByAccess } from '../../lib/aiToolkit/internal/modelAccess.js';

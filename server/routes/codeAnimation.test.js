@@ -54,7 +54,7 @@ vi.mock('../services/codeAnimation/poster.js', () => ({
   }),
   settleCodeAnimationPoster: vi.fn(async () => false),
 }));
-vi.mock('../services/socket.js', () => ({
+vi.mock('../services/codeAnimation/events.js', () => ({
   // Observe the persisted state at emit time: a notification before a save
   // would make a socket-driven client read stale data with no later retry.
   emitCodeAnimationChanged: vi.fn((id) => ({
@@ -88,7 +88,7 @@ vi.mock('../services/trackAlbumMembership.js', () => ({
   createTrackWithAlbum: vi.fn(async (input) => ({ track: { id: 'track-soundtrack', ...input } })),
 }));
 
-import { emitCodeAnimationChanged } from '../services/socket.js';
+import { emitCodeAnimationChanged } from '../services/codeAnimation/events.js';
 import { moveToNativeTrash } from '../lib/nativeTrash.js';
 import { isEngineHealthy } from '../services/pipeline/musicGen.js';
 import { queueMusicGeneration } from '../services/musicGeneration.js';

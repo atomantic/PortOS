@@ -13,7 +13,7 @@ vi.mock('./cos/cosState.js', async original => ({ ...await original(),
 vi.mock('./cos/cosTaskStore.js', async original => ({ ...await original(),
   getTaskById: async () => f.task, getCosTasks: async () => ({ tasks: [f.task] }),
 }));
-vi.mock('./cos/cosTaskGenerator.js', async original => ({ ...await original(),
+vi.mock('./cos/cosImprovementTasks.js', async original => ({ ...await original(),
   queueEligibleImprovementTasks: (...args) => f.queue(...args),
 }));
 vi.mock('./cos/cosAgentLifecycle.js', async original => ({ ...await original(),

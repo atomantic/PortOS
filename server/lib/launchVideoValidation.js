@@ -7,7 +7,8 @@ import { extname } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { PII_PATTERNS, redactPii } from './piiRedactionPatterns.js';
 import { scrubSecretTokens } from './secretText.js';
-import { launchVideoOptionsSchema, launchVideoStoryboardSchema, validateRequest } from './validation.js';
+import { validateRequest } from './validateRequest.js';
+import { launchVideoOptionsSchema, launchVideoStoryboardSchema } from './htmlCompositionValidation.js';
 
 const TEXT_TYPES = new Set(['.html', '.css', '.js', '.json', '.svg', '.md', '.txt']);
 const fail = message => { throw new ServerError(message, { status: 400, code: 'LAUNCH_VIDEO_INVALID' }); };

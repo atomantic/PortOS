@@ -77,7 +77,7 @@ vi.mock('./memoryConfig.js', () => ({
 }));
 
 import { existsSync } from 'fs';
-import { ensureDir, ensureDirs, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
+import { ensureDirs, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';

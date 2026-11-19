@@ -600,3 +600,12 @@ const CONTAINER_ROLES = Object.freeze({
 });
 
 export const catalogReferenceRole = (type, refKind) => CONTAINER_ROLES[refKind]?.[type] || (refKind === 'series' ? 'mentioned' : 'reference');
+
+// Route-schema constants live here (not in catalogValidation.js) so services
+// importing them don't pull the route schema closure into every suite.
+export const CATALOG_PAYLOAD_MAX_CHARS = 200_000;
+// Revision-history sources, mirrored from the catalog_ingredient_revisions DB CHECK constraint.
+export const REVISION_SOURCES = Object.freeze(['user', 'extract', 'refine', 'sync']);
+// Sheet render variants: `look` needs a lookId, `comparison` renders the side-by-side sheet.
+export const CATALOG_LOOK_VARIANT_ID = 'look';
+export const CATALOG_COMPARISON_VARIANT_ID = 'comparison';

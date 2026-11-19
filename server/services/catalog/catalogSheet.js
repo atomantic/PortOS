@@ -58,7 +58,7 @@ import {
   buildProductSheetPrompt,
   buildCharacterLookPrompt,
 } from './catalogSheetPrompts.js';
-import { CATALOG_LOOK_VARIANT_ID } from '../../lib/catalog/catalogValidation.js';
+import { CATALOG_LOOK_VARIANT_ID } from '../../lib/catalog/catalogTypes.js';
 import {
   COMPARISON_IMAGES_PER_CHARACTER, COMPARISON_SHEET_VARIANT, COMPARISON_SHEET_VARIANT_ID,
   buildCharacterComparisonSheetPrompt,

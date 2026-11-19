@@ -87,11 +87,12 @@ export async function readMergedPrDelivery(repoPath, branch, prUrl, { forgeAccou
   if (!origin || !parsed || parsed.host !== origin.host || `${parsed.owner}/${parsed.repo}` !== origin.fullName) {
     throw new Error('merged-pr-repository-mismatch');
   }
-  const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js')]);
+  const [{ execGh }, { resolveForgeExecOptions }, { readPullRequest }] = await Promise.all([import('./github.js'), import('./forgeExecOptions.js'), import('./prProbe.js')]);
   const options = await resolveForgeExecOptions(repoPath, { forgeAccount });
   const read = args => execGh(args, undefined, options).then(JSON.parse).catch(() => { throw new Error('merged-pr-forge-unavailable'); });
   const api = path => read(['api', '--hostname', origin.host, path]);
-  const remote = await read(['pr', 'view', prUrl, '--json', 'url,state,headRefName,headRefOid,isCrossRepository,mergeCommit,baseRefName']);
+  const remote = await readPullRequest(prUrl, 'url,state,headRefName,headRefOid,isCrossRepository,mergeCommit,baseRefName', { cwd: options.cwd, env: options.env });
+  if (!remote) throw new Error('merged-pr-forge-unavailable');
   // The merged PR records its delivery target; the default branch is repository
   // metadata, not a requirement that release work also landed on main.
   const targetBranch = remote.baseRefName;

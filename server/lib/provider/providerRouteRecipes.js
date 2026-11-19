@@ -116,7 +116,7 @@ export const bindingProtocol = (harnessId) => (harnessId ? harnessById(harnessId
  *
  * The counterpart of {@link bindingBlocker}, and the reason both live here
  * rather than in a Zod schema: the registries these answers come from are the
- * same ones a minted record is built from, and `lib/validation.js` is imported
+ * same ones a minted record is built from, and the schema modules are imported
  * by nearly every route in PortOS.
  *
  * @returns {{code:string, message:string}|null}

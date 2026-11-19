@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   alignFrameCount, planLtxAlignment, planTargetDimensions, LTX_GRID, UPSCALE_SCALE,
-  ltxUpscaleRuntimeId, UPSCALE_METHODS, UPSCALE_PROVENANCE_FIELDS, LANCZOS_PROVENANCE_FIELDS,
+  ltxUpscaleRuntimeId, UPSCALE_PROVENANCE_FIELDS, LANCZOS_PROVENANCE_FIELDS,
 } from './upscalePlan.js';
 
 // The grid is the model's, not ours: `scripts/generate_ltx25_cuda.py`'s

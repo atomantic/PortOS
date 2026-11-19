@@ -4,7 +4,8 @@
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync, utimesSync } from 'fs';
+import { pathToFileURL } from 'url';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
 import { delimiter, dirname, join } from 'path';
@@ -25,6 +26,7 @@ import {
   downgradeFullPlan,
   focusedLocalPlan,
   RELATED_SUITE_CAP,
+  SECOND_HOP_RUN_CAP,
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
@@ -54,7 +56,6 @@ const planWith = (overrides = {}) => ({
   windows: false,
   build: false,
   smoke: false,
-  promptHistory: false,
   linuxContainment: false,
   supercolliderLive: false,
   dockerContainmentLive: false,
@@ -155,16 +156,6 @@ describe('resolvePlanStages', () => {
     }
   });
 
-  it('runs the shipped prompt-history guard right after the scan, only when the plan selects it', () => {
-    expect(resolvePlanStages(planWith({ promptHistory: false })).map((stage) => stage.name))
-      .not.toContain('shipped prompt history');
-    const stages = resolvePlanStages(planWith({ promptHistory: true, lint: { mode: 'full', files: [] } }));
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'shipped prompt history', 'client/server lint', 'workflow lint (actionlint)', 'server tests']);
-    expect(stages[1]).toEqual({
-      name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {},
-    });
-  });
-
   it('drops the lint stage under --skip-lint but keeps the test stages', () => {
     const stages = resolvePlanStages(
       planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } }),
@@ -256,7 +247,7 @@ describe('pregate hidden-content invocation', () => {
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -518,7 +509,7 @@ describe('pregate hidden-content invocation', () => {
       write('.cache/guard-ms', '9000');
       const slow = runReuse();
       expect(slow.status, slow.stderr).toBe(0);
-      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (hosted CI fails a guard over 6.0s).');
+      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (the scheduled hosted run fails a guard over 6.0s; PR and push runs only warn).');
       expect(slow.stdout).toContain('✔️ server structural guards passed');
       expect(receipt().stages.find(stage => stage.guard)).toMatchObject({
         status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 }, reuseKey: expect.any(String), passedAt: expect.any(String),
@@ -748,6 +739,9 @@ describe('pregate hidden-content invocation', () => {
 
   // This regression catches stale inherited packages before any lint/test child
   // can produce a misleading product failure or repair the shared source tree.
+  // A fresh worktree with no links (or only cache dirs) is linked from its
+  // primary checkout by pregate itself (#16802); a dangling link, a stale
+  // install or any real directory stays a read-only diagnostic.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
       // The server lockfile selects the native Windows job.
@@ -756,18 +750,25 @@ describe('pregate hidden-content invocation', () => {
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
       for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
-      const shared = join(scratch, 'source', 'server', 'node_modules');
+      const shared = join(scratch, 'primary', 'server', 'node_modules');
+      const autoLinks = ['missing-link', 'unlinked'].includes(state);
+      // The linker only visits workspaces that have a manifest.
+      write('server/package.json', '{}');
+      // The sandbox copies only pregate's builtin-only entrypoints, so the
+      // linker entrypoint delegates to the real worktreeManager module.
+      write('scripts/link-worktree-deps.js', `import { linkWorktreeDependencies } from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'server/services/worktreeManager.js')).href)};
+await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       const installed = join(shared, 'express', 'package.json');
       const modules = join(root, 'server', 'node_modules');
       mkdirSync(dirname(installed), { recursive: true });
       writeFileSync(installed, state === 'unreadable-package' ? '{broken' : JSON.stringify({ version: state === 'stale' ? '5.2.1' : '5.3.0' }));
       if (state === 'missing-package') rmSync(installed);
+      mkdirSync(join(scratch, 'source'));
       const sourceReceipt = join(scratch, 'source', 'deps-hashes.json');
       writeFileSync(sourceReceipt, '{"server":"legacy"}');
       writeFileSync(join(shared, '.package-lock.json'), '{"packages":{"node_modules/express":{"version":"5.3.0"}}}');
-      const sourceSnapshot = () => Object.fromEntries(readdirSync(join(scratch, 'source'), { recursive: true })
-        .filter(path => lstatSync(join(scratch, 'source', path)).isFile())
-        .map(path => [path, readFileSync(join(scratch, 'source', path), 'utf8')]));
+      const sourceSnapshot = () => Object.fromEntries([installed, join(shared, '.package-lock.json'), sourceReceipt]
+        .map(path => [path, existsSync(path) ? readFileSync(path, 'utf8') : null]));
       const before = sourceSnapshot();
       const fakeBin = join(scratch, 'fake-bin');
       mkdirSync(fakeBin);
@@ -775,7 +776,7 @@ describe('pregate hidden-content invocation', () => {
       writeFileSync(join(fakeBin, 'npm.cmd'), '@node "%~dp0npm" %*\r\n');
       rmSync(modules, { recursive: true });
       const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
-      if (state === 'unlinked') mkdirSync(modules);
+      if (state === 'unlinked') mkdirSync(join(modules, '.cache'), { recursive: true });
       else if (state !== 'missing-link') symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
       write('server/package-lock.json', JSON.stringify({ packages: {
         '': {}, 'node_modules/express': { version: '5.3.0' },
@@ -787,14 +788,15 @@ describe('pregate hidden-content invocation', () => {
         write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
       }
       const result = run();
-      if (state === 'matching') {
+      if (state === 'matching' || autoLinks) {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain('Dependency consistency preflight passed');
+        expect(result.stdout.includes('Linked worktree dependencies from the primary checkout')).toBe(autoLinks);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
-        const needsLink = ['dangling', 'missing-link', 'unlinked'].includes(state);
-        expect(result.stderr).toContain(`server (${['missing-link', 'unlinked'].includes(state) ? 'owned' : 'linked'} node_modules)`);
+        const needsLink = state === 'dangling';
+        expect(result.stderr).toContain('server (linked node_modules)');
         if (needsLink) expect(result.stderr).toContain('Re-link with: node scripts/link-worktree-deps.js');
         else {
           expect(result.stderr).toContain('owning source checkout');
@@ -808,20 +810,27 @@ describe('pregate hidden-content invocation', () => {
           'missing-package': 'missing package.json (ENOENT)',
           'unreadable-package': 'unreadable package.json (invalid JSON)',
           dangling: 'linked target unavailable',
-          'missing-link': 'node_modules missing',
-          unlinked: 'missing package.json',
         }[state];
         expect(result.stderr).toContain(diagnostic);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
       }
-      if (state === 'missing-link') expect(existsSync(modules)).toBe(false);
-      else expect(lstatSync(modules).isSymbolicLink()).toBe(state !== 'unlinked');
+      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
       expect(sourceSnapshot()).toEqual(before);
       expect(existsSync(join(root, 'unexpected-npm'))).toBe(false);
       expect(readFileSync(sourceReceipt, 'utf8')).toBe('{"server":"legacy"}');
       if (state === 'dangling') expect(existsSync(target)).toBe(false);
     },
   );
+
+  it('does not link or check dependencies for --plan-only, even in a bare worktree', () => {
+    const worktree = join(scratch, 'plan-only-worktree');
+    git('worktree', 'add', '--detach', worktree, base);
+    root = worktree;
+    const result = run('--plan-only');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('Linked worktree dependencies');
+    expect(existsSync(join(root, 'server', 'node_modules'))).toBe(false);
+  });
 
   it('diagnoses a production-only install before spawning development checks', () => {
     prepareWindowsInventory();
@@ -1466,7 +1475,7 @@ describe('the gate end to end', () => {
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
@@ -1947,34 +1956,185 @@ describe('focused local policy', () => {
   });
 });
 
-describe('focused local policy: one-hop referencing suites', () => {
+describe('focused local policy: referencing suites within two import hops', () => {
   const plan = () => planWith({ browser: { files: [] }, server: { mode: 'related', files: [], sources: [] } });
   const reader = files => path => files[path] ?? null;
+  const plant = (files, extraTracked = []) => ({ tracked: [...new Set([...Object.keys(files), ...extraTracked])], read: reader(files) });
 
-  it('selects a differently named suite that mocks or imports a changed source, but not a transitive one', () => {
+  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', () => {
     const files = {
       'server/routes/x.test.js': "vi.mock('../services/x.js', () => ({}));",
       'server/routes/lazy.test.js': "const m = await import('../services/x');",
       'server/routes/direct.test.js': "import { a } from '../services/x.js';",
-      'server/routes/twoHops.test.js': "import { r } from './routeUsingX.js';",
+      'server/routes/unresolved.test.js': "import { r } from './routeUsingX.js';",
       'server/routes/lookalike.test.js': "import { a } from '../other/x.js';",
     };
-    const tracked = ['server/services/x.js', 'server/other/x.js', ...Object.keys(files)];
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    const { tracked, read } = plant(files, ['server/services/x.js', 'server/other/x.js']);
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
+    expect(local.relatedOverflow).toEqual([]);
+  });
+
+  // The two pre-fix heads from #16863 whose failing suite sits two imports from the edit.
+  it.each([
+    ['server/lib/dispatchLabels.js', 'server/lib/quotaBurnPresets.js', 'server/lib/quotaBurnPresets.test.js', "import { LABELS } from './dispatchLabels.js';", "import { presets } from './quotaBurnPresets.js';"],
+    ['server/services/promptSections/prAttribution.js', 'server/services/agent/agentPromptBuilder.js', 'server/services/cos/cosTaskClaimWork.composition.test.js', "import { attribution } from '../promptSections/prAttribution.js';", "import { buildAgentPrompt } from '../agent/agentPromptBuilder.js';"],
+  ])('selects the suite two hops from %s through %s', (source, importer, test, importerText, testText) => {
+    const files = { [source]: 'export const x = 1;', [importer]: importerText, [test]: testText };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, [source], read);
+    expect(local.server.files).toContain(test);
+    expect(local.relatedOverflow).toEqual([]);
+  });
+
+  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/viaLazy.js': "export const load = () => import('./a.js');",
+      'server/lib/viaMock.js': "vi.mock('./a.js');",
+      'server/lib/hop3.js': "import { load } from './viaLazy.js';",
+      'server/lib/lazy.test.js': "import { load } from './viaLazy.js';",
+      'server/lib/mock.test.js': "import './viaMock.js';",
+      'server/lib/deep.test.js': "import './hop3.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files.sort()).toEqual(['server/lib/lazy.test.js', 'server/lib/mock.test.js']);
+  });
+
+  it('follows a directory import of a changed index module at both hops', () => {
+    const files = {
+      'client/src/components/micrographics/index.js': '',
+      'client/src/components/Widget.jsx': "import { Spark } from './micrographics';",
+      'client/src/components/Widget.test.jsx': "import Widget from './Widget.jsx';",
+      'client/src/components/micrographics/Sub.jsx': "import { Spark } from '.';",
+      'client/src/components/micrographics/Sub.test.jsx': "import Sub from './Sub.jsx';",
+      'client/src/components/direct.test.jsx': "import { Spark } from './micrographics';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
+    expect(local.client.files.sort()).toEqual(['client/src/components/Widget.test.jsx', 'client/src/components/direct.test.jsx', 'client/src/components/micrographics/Sub.test.jsx']);
+  });
+
+  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', () => {
+    const files = {
+      'scripts/lib/tool.js': '',
+      'scripts/lib/toolUser.js': "import './tool.js';",
+      'scripts/run-ci-tests.test.js': "import './lib/toolUser.js';",
+      'scripts/ci-test-plan.test.js': "import './lib/toolUser.js';",
+      'scripts/lib/toolUser.test.js': "import './toolUser.js';",
+    };
+    const { tracked, read } = plant(files);
+    expect(focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read).server.files).toEqual(['scripts/lib/toolUser.test.js']);
+    const direct = { ...files, 'scripts/run-ci-tests.test.js': "import './lib/tool.js';" };
+    const withDirect = plant(direct);
+    expect(focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read).server.files.sort())
+      .toEqual(['scripts/lib/toolUser.test.js', 'scripts/run-ci-tests.test.js']);
+  });
+
+  it('does not count a suite already selected for another reason against the second hop', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/mid.js': "import './a.js';",
+      'server/lib/both.test.js': "import './a.js'; import './mid.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files).toEqual(['server/lib/both.test.js']);
     expect(local.relatedOverflow).toEqual([]);
   });
 
   it('caps suites per changed source and reports the overflow as skipped', () => {
     const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 3 }, (_, i) => [`server/routes/s${String(i).padStart(2, '0')}.test.js`, "vi.mock('../services/x.js');"]));
-    const tracked = ['server/services/x.js', ...Object.keys(files)];
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    const { tracked, read } = plant(files, ['server/services/x.js']);
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
-    expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3 }]);
+    expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3, hop: 1 }]);
     const skipped = uncoveredSuites(local);
     expect(skipped).toHaveLength(1);
     expect(skipped[0]).toMatchObject({ suite: 'related tests' });
     expect(skipped[0].reason).toContain('3 suite(s) referencing server/services/x.js');
+  });
+
+  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/mid.js': "import './a.js';",
+      ...Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 2 }, (_, i) => [`server/aaa/s${String(i).padStart(2, '0')}.test.js`, "import '../lib/mid.js';"])),
+      'server/lib/mid.test.js': "import './mid.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
+    expect(local.server.files).toContain('server/lib/mid.test.js');
+    expect(local.relatedOverflow).toEqual([{ source: 'server/lib/a.js', count: 3, hop: 2 }]);
+    const [skipped] = uncoveredSuites(local);
+    expect(skipped.reason).toContain('3 suite(s) two imports away from server/lib/a.js');
+  });
+
+  it('caps the second hop per run across sources and never displaces a first-hop suite', () => {
+    const sources = Array.from({ length: 4 }, (_, i) => `server/lib/src${i}.js`);
+    const files = {};
+    for (const [i, source] of sources.entries()) {
+      files[source] = '';
+      files[`server/lib/mid${i}.js`] = `import './src${i}.js';`;
+      for (let n = 0; n < RELATED_SUITE_CAP; n += 1) files[`server/hop2/${i}/t${String(n).padStart(2, '0')}.test.js`] = `import '../../lib/mid${i}.js';`;
+    }
+    files['server/hop1/direct.test.js'] = "import '../lib/src3.js';";
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, sources, read);
+    const added = local.server.files.filter(file => file.startsWith('server/hop2/'));
+    expect(local.server.files).toContain('server/hop1/direct.test.js');
+    expect(added).toHaveLength(SECOND_HOP_RUN_CAP);
+    expect(local.relatedOverflow.every(entry => entry.hop === 2)).toBe(true);
+    expect(local.relatedOverflow.reduce((sum, entry) => sum + entry.count, 0)).toBe(4 * RELATED_SUITE_CAP - SECOND_HOP_RUN_CAP);
+    expect(uncoveredSuites(local).every(entry => entry.reason.includes('-per-run caps'))).toBe(true);
+  });
+
+  describe('suites that read a changed non-module file as text', () => {
+    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', () => {
+      const files = {
+        'scripts/checkNpmVersion.test.js': "const readJson = rel => JSON.parse(readFileSync(join(REPO_ROOT, rel)));\nreadJson('package.json');\nreadFileSync(join(ROOT, \"setup.ps1\"));",
+        'scripts/lookalike.test.js': "readFileSync(join(ROOT, 'package.json.bak')); // setup.ps1 in a comment, unquoted",
+        'scripts/imports.test.js': "import './lib/tool.js';",
+        'server/lib/viaName.test.js': 'readFileSync(`package.json`);',
+      };
+      const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
+      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      expect(local.server.files.sort()).toEqual(['scripts/checkNpmVersion.test.js', 'server/lib/viaName.test.js']);
+      expect(local.relatedOverflow).toEqual([]);
+    });
+
+    it('ignores an untracked or deleted changed file and a heavy suite', () => {
+      const files = { 'scripts/gone.test.js': "readFileSync('gone.json')", 'scripts/pregate.test.js': "readFileSync('package.json')" };
+      const { tracked, read } = plant(files, ['package.json']);
+      expect(focusedLocalPlan(plan(), tracked, ['gone.json'], read).server.files).toEqual([]);
+      expect(focusedLocalPlan(plan(), tracked, ['package.json'], read).server.files).not.toContain('scripts/pregate.test.js');
+    });
+
+    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', () => {
+      const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 4 }, (_, i) => [`server/lib/a${String(i).padStart(2, '0')}.test.js`, "readFileSync('package.json')"]));
+      files['server/lib/zz.test.js'] = "readFileSync('package.json'); readFileSync('setup.ps1');";
+      const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
+      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
+      expect(local.server.files).toContain('server/lib/zz.test.js');
+      expect(local.relatedOverflow).toEqual([{ source: 'package.json', count: 5, hop: 'text' }]);
+      const [skipped] = uncoveredSuites(local);
+      expect(skipped).toMatchObject({ suite: 'related tests' });
+      expect(skipped.reason).toContain('5 suite(s) reading package.json as text');
+    });
+
+    it('answers a nested file by its full path, and by base name only while the name is rare', () => {
+      const nested = { 'client/package.json': '' };
+      const rare = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')", 'scripts/name.test.js': "readFileSync(join(dir, 'package.json'))" };
+      const { tracked, read } = plant(rare);
+      expect(focusedLocalPlan(plan(), tracked, ['client/package.json'], read).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
+      const common = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')" };
+      for (let i = 0; i <= RELATED_SUITE_CAP; i += 1) common[`scripts/n${String(i).padStart(2, '0')}.test.js`] = "readFileSync('package.json')";
+      const planted = plant(common);
+      expect(focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read).server.files).toEqual(['scripts/full.test.js']);
+    });
   });
 });
 

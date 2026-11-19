@@ -1,142 +1,14 @@
-import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 /**
- * Machine-local, DB-primary coverage evidence. No timers or provider calls.
+ * Read-only access to historical Deep certification ledgers.
  *
- * Storage: `db-primary` — machine-local, never federated (no sync cursor or tombstones).
- * `deep_audit_ledgers` holds structured JSONB evidence under row locks, covered by the
- * PostgreSQL dump; additive schema needs no seed. Agent checkpoint JSON under
- * `data/cos/deep-audit-checkpoints/` is a retained recovery input; imported DB receipts win.
+ * Storage: `db-primary` — machine-local, never federated. The multi-pass certification engine that
+ * created and mutated `deep_audit_ledgers` rows was retired (#16910); remaining rows are evidence
+ * served by GET /api/cos/schedule/deep-audits/:id. Nothing writes them anymore.
  */
-import { join } from 'path';
-import { ensureSchema, query, withTransaction } from '../lib/db.js';
-import { execGit } from '../lib/execGit.js';
-import { PATHS } from '../lib/fileUtils.js';
-import { tryReadFile } from '../lib/jsonIo.js';
-import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
-import { normalizeAuditTaskType, isAuditTaskType } from '../lib/auditCatalog.js';
-import { deepAuditProgress, mergeDeepAuditReport, DEEP_AUDIT_CONTRACT_VERSION } from '../lib/deepAudit.js';
-import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
-import { resolveTaskHookType } from './taskTypeHooks.js';
-import { toPgJson } from '../lib/pgJson.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
-
-function deepAuditId(task) {
-  const meta = task.metadata || {};
-  return meta.deepAuditId || meta.quotaBurnStepId || (meta.app
-    ? `deep-${canonicalSnapshotChecksum({ app: meta.app, category: resolveTaskHookType(task) || 'code-quality', job: meta.jobId || null, fileIssues: isTruthyMeta(meta.fileIssues) }).slice(0, 32)}`
-    : task.id);
-}
-
-function deepAuditReportPath(agentId) {
-  return join(PATHS.cos, 'deep-audit-checkpoints', `.portos-deep-${canonicalSnapshotChecksum(agentId).slice(0, 24)}-report.json`);
-}
-
-async function inventoryDeepAudit(workspacePath, { promptHash, category }) {
-  if ((await execGit(['rev-parse', '--show-prefix'], workspacePath)).stdout.trim()) throw new Error('Deep inventory requires an initialized repository root');
-  const revision = (await execGit(['rev-parse', 'HEAD'], workspacePath)).stdout.trim();
-  const tree = (await execGit(['ls-tree', '-rz', '--full-tree', revision], workspacePath)).stdout;
-  let files = tree.split('\0').filter(Boolean).map(entry => {
-    const tab = entry.indexOf('\t');
-    const [mode, kind, blob] = entry.slice(0, tab).split(' ');
-    return { path: entry.slice(tab + 1), blob, mode, kind };
-  }).sort((a, b) => a.path.localeCompare(b.path));
-  const nested = [];
-  for (const entry of files.filter(file => file.kind === 'commit')) {
-    try {
-      const snapshot = await inventoryDeepAudit(join(workspacePath, entry.path), { promptHash, category });
-      if (snapshot.revision !== entry.blob) throw new Error('Submodule revision does not match pin');
-      nested.push(...snapshot.files.map(file => ({ ...file, path: `${entry.path}/${file.path}` })));
-      entry.expanded = true;
-    } catch { /* An unreadable submodule stays in scope as an explicit blocker. */ }
-  }
-  files = [...files.filter(file => !file.expanded), ...nested].sort((a, b) => a.path.localeCompare(b.path));
-  const dirty = (await execGit(['diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--'], workspacePath)).stdout.trim();
-  const untracked = (await execGit(['ls-files', '--others', '--exclude-standard', '-z'], workspacePath)).stdout
-    .split('\0').filter(path => path && !/^\.agent-done(?:-[a-zA-Z0-9_-]+)?(?:\.json)?$/.test(path));
-  if (dirty || untracked.length) throw new Error('Deep audit needs a clean source snapshot; tracked or untracked changes require a fresh inventory');
-  if (!files.length) throw new Error('Deep audit cannot certify an empty inventory');
-  // Submodules are kept in the inventory and require an explicit blocker or nested-repo evidence.
-  const { detectRepoCapabilities } = await import('./appQualitySchedule.js');
-  const detected = await detectRepoCapabilities({ repoPath: workspacePath }, { refresh: true });
-  const capabilities = { ...detected.capabilities, git: true, trackedFiles: files.length, submodules: files.filter(file => file.kind === 'commit').map(file => file.path) };
-  return { revision, inventoryHash: canonicalSnapshotChecksum(files), files, capabilities,
-    exclusions: ['Git-ignored files are outside the tracked-source inventory; required runtime evidence must be reported blocked when unavailable.'],
-    promptVersions: { contract: DEEP_AUDIT_CONTRACT_VERSION, category: PROMPT_VERSIONS[category] ?? null }, promptHash };
-}
-
-async function mutateLedger(id, initial, mutate) {
-  await ensureSchema();
-  return withTransaction(async client => {
-    if (initial) await client.query(`INSERT INTO deep_audit_ledgers (id, app_id, category, ledger)
-      VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (id) DO NOTHING`, [id, initial.appId, initial.category, toPgJson(initial)]);
-    const { rows } = await client.query('SELECT ledger FROM deep_audit_ledgers WHERE id=$1 FOR UPDATE', [id]);
-    if (!rows.length) throw new Error('Deep audit ledger is unavailable');
-    const updated = await mutate(rows[0].ledger);
-    await client.query('UPDATE deep_audit_ledgers SET ledger=$2::jsonb, updated_at=NOW() WHERE id=$1', [id, toPgJson(updated)]);
-    return updated;
-  });
-}
+import { ensureSchema, query } from '../lib/db.js';
 
 export async function getDeepAuditLedger(id) {
   await ensureSchema();
   const { rows } = await query('SELECT ledger FROM deep_audit_ledgers WHERE id=$1', [id]);
   return rows[0]?.ledger ?? null;
-}
-
-/** Read the server-owned pin before provisioning a replacement workspace. */
-export async function getDeepAuditSourceRevision(task, deps = {}) {
-  if (!isLegacyDeepAudit(task.metadata)) return null;
-  const ledger = await (deps.readLedger || getDeepAuditLedger)(deepAuditId(task));
-  if (!ledger) return null;
-  const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
-  const delivery = isTruthyMeta(task.metadata.fileIssues) ? 'file-issues' : 'fix';
-  if (ledger.appId !== task.metadata.app || ledger.category !== category || ledger.delivery !== delivery) {
-    throw new Error('Deep audit resume must keep the same app, category and delivery mode');
-  }
-  return ledger.scope.revision;
-}
-
-/** Import even on failure; absent/malformed output preserves a partial, resumable ledger. */
-export async function checkpointDeepAudit({ task, agentId, workspacePath, success }, deps = {}) {
-  if (!isLegacyDeepAudit(task.metadata)) return null;
-  const id = deepAuditId(task);
-  const ledger = await (deps.mutate || mutateLedger)(id, null, async current => {
-    if (current.appId !== task.metadata.app) throw new Error('Deep audit app mismatch');
-    const attempt = current.attempts[agentId];
-    if (!attempt) return { ...current, reason: 'No server-assigned Deep audit attempt; resume required' };
-    if (attempt.reportHash) return current; // Durable idempotence after files have been cleaned.
-    try {
-      if (!workspacePath) throw new Error('Checkpoint workspace is unavailable');
-      const pass = attempt.pass;
-      let validationRevision = null;
-      if (pass === 'post-fix') {
-        const validationScope = await (deps.inventory || inventoryDeepAudit)(workspacePath, { promptHash: current.scope.promptHash, category: current.category });
-        validationRevision = validationScope.revision;
-      } else {
-        const scope = await (deps.inventory || inventoryDeepAudit)(workspacePath, {
-          promptHash: current.scope.promptHash, category: current.category,
-        });
-        if (canonicalSnapshotChecksum(scope) !== current.scopeHash) throw new Error('Source changed during review; resume to invalidate and re-inventory');
-      }
-      const contents = await (deps.read || tryReadFile)(deepAuditReportPath(agentId));
-      if (!contents) throw new Error('Deep audit checkpoint missing; no coverage credited');
-      return mergeDeepAuditReport(current, agentId, JSON.parse(contents), { deliverySuccess: success === true, validationRevision });
-    } catch (err) {
-      return { ...current, invalidReason: /Source changed|clean source snapshot/.test(err.message) ? err.message : current.invalidReason,
-        reason: `Partial: ${err.message}` };
-    }
-  });
-  return { id, revision: ledger.scope.revision, ...deepAuditProgress(ledger) };
-}
-
-
-export async function settleDeepAuditDelivery({ task, agentId, success, validationPassed }, deps = {}) {
-  const ledger = await (deps.mutate || mutateLedger)(deepAuditId(task), null, current => {
-    const attempt = current.attempts[agentId];
-    if (!attempt?.reportHash || attempt.generation !== current.generation || current.lastReportAgent !== agentId) return current;
-    const deliverablePass = current.delivery === 'fix' ? 'post-fix' : 'challenge';
-    if (attempt.pass !== deliverablePass) return current;
-    return { ...current, deliveryVerified: success === true && (current.delivery !== 'fix' || validationPassed === true) };
-  });
-  return { id: ledger.id, revision: ledger.scope.revision, ...deepAuditProgress(ledger) };
 }

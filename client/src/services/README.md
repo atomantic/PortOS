@@ -14,6 +14,10 @@ large page modules `apiMusicVideo.js` and `apiPipeline.js`; the sidebar reads th
 from `apiNavNames.js`. `client/src/entryClosure.test.js` fails on a regression and prints the
 import chain. Lazy pages may keep using the barrel.
 
+**The landing Dashboard closure follows the same rule.** `pages/Dashboard.jsx` and every
+`components/dashboard/` widget load on the first paint, so the same ban applies to them: each
+is a root in `entryClosure.test.js` and must not reach `api.js` statically (#16813).
+
 **App-shell code never imports the voice stack either.** Voice is off by default, so
 `voiceClient.js`, `voiceFastPath.js`, `domIndex.js` and the audio helpers load with the voice
 widget, on demand. The shell's only voice import is `components/voice/VoiceWidgetGate.jsx`,

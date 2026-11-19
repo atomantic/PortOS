@@ -71,12 +71,9 @@ vi.mock('../services/chiptune.js', () => ({
 
 import decksRoutes from './decks.js';
 import tracksRoutes from './tracks.js';
-import { getDeck, applyCardGenerations } from '../services/decks.js';
 import { analyzeDeckSample } from '../services/deckStyleAnalysis.js';
 import { generateDeckCardPrompts } from '../services/deckPrompts.js';
 import { renderDeckCards } from '../services/deckRender.js';
-import { beginPromptProgress } from '../services/deckPromptProgress.js';
-import { getTrack } from '../services/tracks/index.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
 // The refusal/principal matrix lives in services/authGate.test.js and

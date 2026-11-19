@@ -1,4 +1,3 @@
-import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { MERGED_OWNERSHIP_HOLDS, STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, claimIssueOfBranch, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
 /**
@@ -32,12 +31,12 @@ import { readClaimIssueReservation, readRepoClaimIssueReservation } from './clai
 import { probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readCheckoutPresence, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
-import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
+import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
-import { forgeDispatchLabels, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
+import { forgeDispatchLabels, } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -124,17 +123,6 @@ export { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, resolv
 // head is integrated can retire from any directory, subject to the same live
 // ownership, lock, completion-policy and content checks as managed checkouts.
 export const SUPERSEDED_UNMANAGED_IDLE_MS = SHIPPED_CLAIM_IDLE_MS;
-
-/**
- * A claim branch without an issue number is never a valid /claim deliverable.
- * It can be left behind when a scheduled claim run creates its worktree before
- * target selection completes; unlike a real claim, there is no issue session
- * that could resume it. Keep this narrow so ordinary human claim branches
- * retain their liveness grace period.
- */
-export function isMalformedClaimBranch(branch) {
-  return branch === 'claim/issue-';
-}
 
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;
@@ -397,21 +385,6 @@ function reconcileWorktreeRoots(repoPath) {
   return [PATHS.worktrees, repoPath && join(repoPath, '.claude', 'worktrees')]
     .filter(Boolean)
     .map((path) => ({ path, requireAgentId: false }));
-}
-
-/**
- * When `worktreeProtectionReason`'s hold on this worktree lapses by itself, as an
- * ISO instant — or null when only an outside change can clear it.
- *
- * The exact mirror of the gate above, so cleanup can report not just THAT a
- * merged branch was held back but WHEN it stops being held. Policy lives in
- * worktreeOwnership.js; this only supplies this caller's defaults.
- *
- * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
- * @returns {string|null} ISO timestamp
- */
-export function worktreeProtectionExpiresAt(input) {
-  return worktreeHoldExpiresAt(teardownGate(input));
 }
 
 /**
@@ -1022,7 +995,6 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...((entry.head || entry.tip) && { head: entry.head || entry.tip }),
       ...(entry.observedAt && { observedAt: entry.observedAt }),
       ...(entry.createdAt && { createdAt: entry.createdAt }),
-      ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }),
       ...(entry.preservationReceipt && { preservationReceipt: entry.preservationReceipt }),
       ...(entry.preservationEvidence && { preservationEvidence: entry.preservationEvidence }),
       ...(entry.checkoutMissing && { checkoutMissing: true }),
@@ -1388,9 +1360,7 @@ export async function checkoutIdleMs(worktreePath) {
  */
 async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHold, mergeTarget, label, requireCleanWorktree, claimOwners, mergedRetirement, claimCompletion, appId }) {
   let removal = null;
-  let checkoutIdentity = null;
   if (b.worktreePath) {
-    checkoutIdentity = await readRetirementCheckoutIdentity(b.worktreePath).catch(() => null);
     const verifyRemoval = async (holder, worktrees) => {
       if (!holder || holder.branch !== `refs/heads/${b.branch}` || holder.head !== expectedHead) return 'worktree-holder-changed';
       if (claimOwners !== undefined) {
@@ -1455,7 +1425,6 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
       const { recordHeldCheckoutRetirement } = await import('./branchReconcileOutcome.js');
       await recordHeldCheckoutRetirement(appId, {
         ...(b.worktreePath && { path: b.worktreePath }),
-        ...(checkoutIdentity && { checkoutIdentity }),
         branch: b.branch, head: expectedHead, branchDeleted: true,
       }).catch(error => console.error(`❌ Retirement history not recorded for ${b.branch}: ${error.message}`));
     },
@@ -1503,12 +1472,11 @@ const isCommitOnBranch = (repoPath, sha, branch) =>
 async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
   const trees = preloadedTrees || await listWorktrees(repoPath).catch(() => null);
   if (!trees?.length) return null;
-  return Promise.all(trees.slice(1).filter(tree => !tree.bare).map(async tree => {
+  return trees.slice(1).filter(tree => !tree.bare).map(tree => {
     const managed = worktreeOwnershipReason({ path: tree.path, roots: reconcileWorktreeRoots(repoPath), allowLiveClaim: true }) !== 'worktree-unmanaged-location';
     return {
       path: tree.path,
       observedAt: new Date().toISOString(),
-      checkoutIdentity: await readRetirementCheckoutIdentity(tree.path),
       ...(tree.branch && { branch: tree.branch.replace(/^refs\/heads\//, '') }),
       head: tree.head ?? null,
       detached: !tree.branch,
@@ -1517,7 +1485,7 @@ async function gatherRecoveryWorktrees(repoPath, preloadedTrees = null) {
       managed,
       reason: recoveryWorktreeReason({ prunable: tree.prunable, locked: tree.locked, managed }),
     };
-  }));
+  });
 }
 
 const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
@@ -1535,8 +1503,8 @@ const isStillDetachedOnMerged = async (repoPath, treePath, defaultBranch) => {
  * Best-effort display history for a removed detached checkout: it has no
  * branch, so the row must not claim one was deleted. Never gates the removal.
  */
-async function recordDetachedRetirement(repoPath, appId, { path, head, checkoutIdentity }) {
-  const receipt = { path, head, branchDeleted: false, checkoutOnly: true, ...(checkoutIdentity && { checkoutIdentity }) };
+async function recordDetachedRetirement(repoPath, appId, { path, head }) {
+  const receipt = { path, head, branchDeleted: false, checkoutOnly: true };
   const outcomes = await import('./branchReconcileOutcome.js');
   await (appId ? outcomes.recordHeldCheckoutRetirement(appId, receipt) : outcomes.recordWorkspaceCheckoutRetirement(repoPath, receipt))
     .catch(error => console.error(`❌ Retirement history not recorded for ${path}: ${error.message}`));
@@ -1603,13 +1571,12 @@ async function reapDetachedWorktrees(repoPath, defaultBranch, detached, { active
       if (!current || current.head !== tree.head || current.branch) return { removed: false, reason: 'worktree-holder-changed' };
       const initialHold = await verifyRemoval(current);
       if (initialHold) return { removed: false, reason: initialHold };
-      const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path).catch(() => null);
       const removed = await forceRemoveWorktreeDir(repoPath, tree.path, {
         label: '🔀 branch-reconcile: remove detached worktree', log: 'all',
         verifyRemoval: async holder => (holder && holder.head !== current.head ? 'worktree-holder-changed' : verifyRemoval(holder)),
       });
       if (!removed.removed) return removed;
-      await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head, checkoutIdentity });
+      await recordDetachedRetirement(repoPath, appId, { path: tree.path, head: tree.head });
       return removed;
     });
     if (!removal.removed) {

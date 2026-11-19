@@ -2,7 +2,6 @@ import { it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
 import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES } from './appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 vi.mock('./instances.js', () => mockNoPeers());
 const now = Date.parse('2026-09-10T12:00:00Z');

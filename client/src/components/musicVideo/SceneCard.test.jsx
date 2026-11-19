@@ -1372,8 +1372,8 @@ describe('shot timing in frames', () => {
 });
 
 describe('shot editor groups', () => {
-  // Uniquely catches a group header not saying what is set, or the cold open's Sound group showing on a shot in the song.
-  it('names what each group sets and offers Sound only before the song', async () => {
+  // Uniquely catches a group header not saying what is set, or a song shot offering the cold open's sound layers instead of its own clip sound.
+  it('names what each group sets, with the cold open sound before the song and clip sound in it', async () => {
     // On a phone the groups start closed, each header naming what it sets.
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: false });
     const props = { index: 0, expanded: true, onEditLocal: () => {}, onSave: () => {} };
@@ -1387,7 +1387,7 @@ describe('shot editor groups', () => {
     unmount();
     render(<SceneCard {...props} scene={{ sceneId: 's2', startSec: 1, endSec: 3, takes: [] }} />);
     expect(header('shot-group-timing')).toMatch(/1\.00–3\.00s/);
-    expect(screen.queryByTestId('shot-group-sound')).toBeNull();
+    expect(header('shot-group-sound')).toMatch(/silent under the song/);
     expect(header('shot-group-effects')).toMatch(/none/);
     window.matchMedia.mockRestore();
   });

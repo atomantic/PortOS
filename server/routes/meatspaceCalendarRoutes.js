@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseIndexParam, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   activitySchema,
   activityTargetQuerySchema,
@@ -15,6 +15,7 @@ import {
   lifeEventUpdateSchema,
 } from '../lib/meatspaceValidation.js';
 import * as calendarService from '../services/meatspaceCalendar.js';
+import { parseIndexParam } from '../lib/queryValidation.js';
 
 const router = Router();
 

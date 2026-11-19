@@ -24,10 +24,9 @@ import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.j
  * already-converged rows is a no-op anyway (the LWW comparison finds them
  * equal-or-fresher and writes nothing material).
  *
- * The corresponding `scripts/migrations/055-reconcile-canon-catalog.js` is a
- * registration stub for the migration ledger — the actual repair runs here
- * (boot-time) because the `scripts/migrations/` runner executes before the DB
- * pool is up (same reason migrations 048–053 are boot-time + stubbed).
+ * The repair runs here at boot rather than as a migration because the
+ * `scripts/migrations/` runner executes before the DB pool is up. No ledger
+ * entry exists for it (the log-only stub was deleted in #16815).
  *
  * Invoked from server/index.js at boot, after `ensureSchema()` + the bible→
  * catalog backfill + `migrateCatalogPayload`, so every promoted row exists and

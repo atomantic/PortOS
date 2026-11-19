@@ -16,8 +16,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as feedsService from '../services/feeds.js';
+import { parsePagination } from '../lib/queryValidation.js';
 
 const router = Router();
 

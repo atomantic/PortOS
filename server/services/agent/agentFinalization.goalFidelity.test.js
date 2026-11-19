@@ -14,7 +14,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('../claimDisposition.js', () => claimVerifier);
@@ -229,6 +231,37 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  it('passes the first attempt’s completion report and late conditional requirements to the reviewer', async () => {
+    const prompt = [
+      'Inventory dependency alerts and resolve bot pull requests.',
+      'For each environment, record scanner coverage and tool failures.\n'.repeat(155),
+      'After the inventory, update bot-uncovered patch and minor versions.',
+    ].join('\n');
+    const summary = 'Paginated the alert inventory. No bot PRs were open. Containment returned exit 2; host validation ran.';
+    const workspacePath = await mkdtemp(join(tmpdir(), 'fidelity-completion-'));
+    try {
+      await writeFile(join(workspacePath, '.agent-done-agent-1'), JSON.stringify({
+        summary, taskOutcome: { status: 'completed', reason: 'Audit finished.' },
+      }));
+      await finalize({
+        task: { id: 'maintenance-task', description: 'Audit dependencies', taskType: 'internal',
+          metadata: { prompt, analysisType: 'dependency-updates', totalSpawnCount: 1 } },
+        workspacePath,
+        outputBuffer: 'Raw transcript must stay out of the review.',
+      });
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
+
+    const [input] = runLocalGoalFidelityReviewMock.mock.lastCall;
+    expect(input.objective).toBe(`Audit dependencies\n\n${prompt}`);
+    expect(input.executionReport).toBe(summary);
+    expect(JSON.stringify(input)).not.toContain('Raw transcript');
+    expect(input.priorDeliveryDiff).toBeUndefined();
+    expect(runWindowDiffMock.mock.lastCall[2].maxChars + input.objective.length).toBe(68_000);
+    expect(completion().goalFidelity.verdict).toBe('ship');
+  });
+
   describe('a retry whose earlier attempt already merged', () => {
     const retryTask = { id: 'task-retry', description: 'Investigate the provider timeout and fix its cause', taskType: 'internal', metadata: { totalSpawnCount: '2' } };
     const earlier = { diff: '# fix: bound the prompt\ndiff --git a/fix.js b/fix.js', heads: ['a'.repeat(40)] };

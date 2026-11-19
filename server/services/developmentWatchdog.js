@@ -276,7 +276,7 @@ async function dispatch(app, decision) {
     const candidate = { metadata: { app: app.id, claimFlow: true } };
     const owner = liveTasks.find(task => DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, candidate));
     if (owner) return { taskId: owner.id, duplicate: true };
-    const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cos/cosTaskGenerator.js');
+    const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cos/cosImprovementTasks.js');
     const prepared = await prepareManagedAppImprovementTask('claim-issue', app, current);
     if (!prepared.task) return { reason: 'claim-schedule-no-work' };
     const finalState = await loadState();

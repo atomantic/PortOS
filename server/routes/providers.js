@@ -2,7 +2,6 @@ import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { freshQuerySchema, runtimeQuerySchema, providerReadinessQuerySchema, providerReadinessSetupQuerySchema, providerServeModelQuerySchema } from '../lib/queryValidation.js';
 import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
 import { harnessForProvider } from '../lib/provider/providerHarnesses.js';
-import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/provider/providerModePairing.js';
@@ -35,25 +34,7 @@ import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/interna
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
-import {
-  validateRequest,
-  codexLoginCancelSchema,
-  codexLoginStartSchema,
-  modelPinClearSchema,
-  providerVisionTestSchema,
-  providerVisionSuiteSchema,
-  providerBindingCreateSchema,
-  providerBindingUpdateSchema,
-  providerConnectionCreateSchema,
-  providerConnectionUpdateSchema,
-  providerServiceCreateSchema,
-  providerServiceUpdateSchema,
-  providerRouteSettingsUpdateSchema,
-  providerPresetCreateSchema,
-  credentialBootstrapsSettingsSchema,
-  harnessEnablementUpdateSchema,
-  harnessIdParamSchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
@@ -96,6 +77,14 @@ import {
 } from '../lib/systemCapabilities.js';
 import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
 import { presentServiceDefinition } from '../lib/provider/providerServiceInstances.js';
+import {
+  executionOptionSelectionSchema, providerExecutionOptionsQuerySchema, codexLoginCancelSchema,
+  codexLoginStartSchema, modelPinClearSchema, providerVisionTestSchema, providerVisionSuiteSchema,
+  providerBindingCreateSchema, providerBindingUpdateSchema, providerConnectionCreateSchema,
+  providerConnectionUpdateSchema, providerServiceCreateSchema, providerServiceUpdateSchema,
+  providerRouteSettingsUpdateSchema, providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
+  harnessEnablementUpdateSchema, harnessIdParamSchema
+} from '../lib/providerValidation.js';
 
 /**
  * The CoS Agent Runner's exec allowlist, published read-only so the AI

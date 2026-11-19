@@ -20,7 +20,6 @@ vi.mock('../services/settings.js', () => ({
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   getMemoryItems,
-  getMemoryItem,
   createMemoryItem,
   updateMemoryItem,
   deleteMemoryItem,
@@ -29,7 +28,6 @@ import {
   advanceScheduleFromSession,
   mergeMasteryFromSession,
   applySessionToMemoryItems,
-  getMastery,
   getChunkMasteryOrder,
   generateMemoryDrill,
   getDueMemoryItems,

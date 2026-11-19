@@ -9,7 +9,7 @@
 // `<MidiPianoRoll>` moving playhead. Pure (no React) — `useMidiPlayer` wraps it.
 //
 // Synth preview of a transcribed MIDI file (#2490) — turns the parseMidiFile
-// view-model (midiNotes.js) into audible oscillator tones with a live
+// view-model (server/lib/midiFile.js) into audible oscillator tones with a live
 // `position()` the <MidiPianoRoll> reads for its moving playhead. Companion to
 // scorePlayback.js: that synthesizes the WRITTEN lead-sheet melody, this
 // synthesizes the TRANSCRIBED .mid; both reuse the same lookahead-scheduler

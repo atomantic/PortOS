@@ -170,19 +170,30 @@ describe('warnOnOutdatedNpm', () => {
 });
 
 describe('the advisory is actually reachable', () => {
-  it.each(['setup', 'start', 'dev'])('the root `%s` script runs it before installing', (name) => {
+  it.each(['start', 'dev'])('the root `%s` script runs it before installing', (name) => {
     const script = readJson('package.json').scripts[name];
     expect(script).toContain('node scripts/checkNpmVersion.js &&');
     // After the Node gate (which is fatal) and before anything that installs.
     expect(script.indexOf('checkNodeVersion.js')).toBeLessThan(script.indexOf('checkNpmVersion.js'));
   });
+
+  // `npm run setup` is `node scripts/setup.js` (#16820): its first step runs
+  // the Node gate, then this advisory, before the submodule and install steps.
+  it('the root `setup` script is setup.js, whose version step runs it after the Node gate and before installing', () => {
+    expect(readJson('package.json').scripts.setup).toBe('node scripts/setup.js');
+    const source = readFileSync(join(REPO_ROOT, 'scripts/setup.js'), 'utf8');
+    const versions = source.indexOf("id: 'versions'");
+    expect(versions).toBeGreaterThanOrEqual(0);
+    expect(source.indexOf("script('checkNodeVersion.js'", versions)).toBeLessThan(source.indexOf("script('checkNpmVersion.js'", versions));
+    expect(source.indexOf("script('checkNpmVersion.js'", versions)).toBeLessThan(source.indexOf("id: 'dependencies'"));
+  });
 });
 
 describe('PortOS-managed installs preserve committed lockfiles', () => {
   it('passes --no-save through every setup, update, and dependency-repair install', () => {
+    // package.json and setup.ps1 no longer install anything: first-run setup goes
+    // through scripts/setup.js, which installs via ensure-deps.js's installWorkspace.
     const managedEntrypoints = [
-      ['package.json', /npm install(?: --prefix \w+)?/g],
-      ['setup.ps1', /^npm install/gm],
       ['update.ps1', /Invoke-Logged npm install/g],
       ['update.sh', /run npm install/g],
       ['scripts/ensure-deps.js', /npmSpawn\(\['install'/g],

@@ -41,12 +41,18 @@ vi.mock('../updateChecker.js', () => ({
 
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { screenshots: '/tmp/portos-mind-attachments' },
-  detectImageFormat: mocks.detectImageFormat,
   resolveScreenshot: mocks.resolveScreenshot,
-  sanitizeFilename: mocks.sanitizeFilename,
-  saveImageUpload: mocks.saveImageUpload,
   unlinkGuarded: mocks.unlink,
   writeFileGuarded: mocks.writeFile,
+}));
+
+vi.mock('../../lib/mimeTypes.js', () => ({
+  detectImageFormat: mocks.detectImageFormat,
+  sanitizeFilename: mocks.sanitizeFilename,
+}));
+
+vi.mock('../../lib/uploads.js', () => ({
+  saveImageUpload: mocks.saveImageUpload,
 }));
 
 vi.mock('fs/promises', async (importOriginal) => ({

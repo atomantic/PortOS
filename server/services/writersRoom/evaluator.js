@@ -7,7 +7,6 @@
 import { join } from 'path';
 import { readFile, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile, rmGuarded } from '../../lib/fileUtils.js';
-import { ServerError } from '../../lib/errorHandler.js';
 import { runStagedLLM } from '../stageRunner.js';
 import { extractJson as extractJsonShared } from '../../lib/jsonExtract.js';
 import { extractBible } from '../bibleExtractor.js';

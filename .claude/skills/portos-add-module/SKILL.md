@@ -13,7 +13,7 @@ Moved from the root `AGENTS.md` Module Organization section (#16087). Root keeps
 - React hooks → `client/src/hooks/` (`use…`) only when two or more modules import them. A hook with a single importer lives next to that owner (`components/<feature>/useX.js` beside the component, or the page's component directory, never `pages/`) with its test, so the catalog lists only reusable hooks; move it into `hooks/` when a second importer appears. A hook whose only importer is another co-located hook moves with that hook's owner.
 - Formatting helpers (pure, no React) → `client/src/utils/`
 - HTTP / socket / browser clients → `client/src/services/` (API wrappers `api*`)
-- Express handlers → `server/routes/`, validated with `validateRequest` + `lib/validation.js` schemas
+- Express handlers → `server/routes/`, validated with `validateRequest` + the route family's domain `lib/<domain>Validation.js` schemas
 - Domain orchestration → `server/services/`
 - Persisted data → decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`; app-native relational records are `db-primary`, and its "Adding a new data store?" checklist is required in review. Record the chosen class, federation stance and reason as a ``Storage: `<class>` …`` paragraph in the store module's header (after the summary sentence), never as a new section in `docs/STORAGE.md`. For file-backed storage, choose the backend under `docs/STORAGE.md` first, then use `fileUtils.js` / `collectionStore.js`; a growing collection is not a reason to bypass the database policy.
 

@@ -29,10 +29,12 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { watchForFile, ensureDir, pathExists, atomicWrite, formatDuration, listDirectoryByExtension, dirSize, sha256File } from './fileCore.js';
+import { watchForFile, ensureDir, pathExists, atomicWrite, formatDuration, listDirectoryByExtension, dirSize, sha256File, setAtomicWriteDurabilityForTests } from './fileCore.js';
 import { restoreFsMocks, realFsPromises, loadRealFsPromises } from './fileUtils.testFixtures.js';
 
 beforeAll(loadRealFsPromises);
+// Workers default to non-durable writes (#16864); the atomicWrite sync-ordering tests below assert the production path.
+setAtomicWriteDurabilityForTests(true);
 
 describe('fileUtils', () => {
   describe('pathExists', () => {

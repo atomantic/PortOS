@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, } from 'vitest';
 import { aiStatusEvents, startAIOp } from './aiStatusEvents.js';
 
 // Capture every emitted status event so we can assert which fields cross the

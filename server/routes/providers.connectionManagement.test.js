@@ -20,7 +20,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { modelAliasRevision } from '../lib/provider/providerModelAliases.js';
 
 const store = {
   readGraph: vi.fn(),

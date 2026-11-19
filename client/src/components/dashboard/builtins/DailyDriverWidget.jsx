@@ -5,7 +5,10 @@ import {
   Brain, HeartPulse, PenLine, Globe, Clapperboard, Users,
   BookOpen, Package, Share2, ListTree, BrainCircuit,
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { markDailyDriverHandled } from '../../../services/apiDashboard.js';
+import { getAutobiographyConfig } from '../../../services/apiDigitalTwin.js';
+import { getGoals } from '../../../services/apiGoals.js';
+import { getPostRecommendations, getPostStats } from '../../../services/apiMeatspace.js';
 import { getGoalFeatureAreas } from '../../../lib/goalFeatureMap.js';
 import { useInstanceFeatures } from '../../../hooks/useInstanceFeatures.js';
 
@@ -61,10 +64,10 @@ export default function DailyDriverWidget({ dashboardState }) {
     setLoaded(false);
     setLoadedForFeature(null);
     Promise.all([
-      postEnabled ? api.getPostStats().catch(() => null) : Promise.resolve(null),
-      postEnabled ? api.getPostRecommendations(1).catch(() => null) : Promise.resolve(null),
-      autobiographyEnabled ? api.getAutobiographyConfig().catch(() => null) : Promise.resolve(null),
-      api.getGoals({ silent: true }).catch(() => null),
+      postEnabled ? getPostStats().catch(() => null) : Promise.resolve(null),
+      postEnabled ? getPostRecommendations(1).catch(() => null) : Promise.resolve(null),
+      autobiographyEnabled ? getAutobiographyConfig().catch(() => null) : Promise.resolve(null),
+      getGoals({ silent: true }).catch(() => null),
     ]).then(([stats, recs, autobiographyConfig, goalsData]) => {
       if (!active) return;
       setPost(stats);
@@ -92,7 +95,7 @@ export default function DailyDriverWidget({ dashboardState }) {
   // still-visible card's only control disabled until a full reload.
   const handleDismiss = useCallback(async () => {
     setDismissing(true);
-    const ok = await api.markDailyDriverHandled().then(() => true).catch(() => false);
+    const ok = await markDailyDriverHandled().then(() => true).catch(() => false);
     if (!ok) { setDismissing(false); return; }
     if (refetchDashboard) await refetchDashboard();
   }, [refetchDashboard]);

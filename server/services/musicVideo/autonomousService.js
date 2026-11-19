@@ -83,6 +83,7 @@ import {
   autonomousLyricsReviewEnabled,
   autonomousMedium,
   autonomousPool,
+  canAdoptSunoSong,
   isOrchestratedRun,
   nextAutonomousStage,
   ORCHESTRATOR_REVIEW_LOG_MAX,
@@ -133,6 +134,7 @@ const defaults = {
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
   analyzeSong: async (projectId) => (await import('./projectAudio.js')).analyzeProjectSong(projectId),
+  transcribeMidi: async (project) => (await import('./projectMidi.js')).transcribeProjectMidi(project),
   designCoverArt: async (projectId, input) => (await import('./coverArt.js')).designCoverArt(projectId, input),
   startProduction: async (...args) => (await import('./productionService.js')).startProduction(...args),
   resumeProduction: async (...args) => (await import('./productionService.js')).resumeProduction(...args),
@@ -436,6 +438,19 @@ function repairLyricWordTimings(cues, durationSec) {
  * will not verify guessed timings; the repair still runs so a failed
  * alignment leaves what it can.
  */
+// The brief's optional audio→MIDI step: the transcription's parts, hits and
+// chords then reach the Cast & Sets direction and the shot plan
+// (songMidiDigest.js). Best-effort: a missing MuScriptor runtime or a failed
+// transcription leaves the run planning from the beat analysis alone.
+async function transcribeRunMidi(projectId, run) {
+  const project = await getProject(projectId);
+  if (!project || project.midiTranscription?.filename) return;
+  console.log(`🎹 Autonomous music video ${short(run.id)}: transcribing the song to MIDI for planning`);
+  const frame = await deps.transcribeMidi(project).catch((err) => ({ type: 'error', error: err.message }));
+  if (frame?.type === 'complete' && frame.midiTranscription) return;
+  console.warn(`⚠️ Autonomous music video ${short(run.id)}: MIDI transcription skipped (${trimTo(frame?.error || (frame?.discarded ? 'the song changed' : frame?.type) || 'no result', 200)}); planning from the beat analysis`);
+}
+
 async function alignRunLyrics(projectId, run) {
   if (run.brief.instrumental || !(await getProject(projectId))?.lyricCues?.some((c) => cueText(c))) return null;
   let alignError = null;
@@ -1181,6 +1196,7 @@ const STAGES = {
         return { output: reset, goto: 'song', unlinkTrack: run.output.trackId || null };
       }
     }
+    if (run.brief.transcribeMidi) await transcribeRunMidi(project.id, run);
     // The single's own cover design, drafted from the song just made, ready
     // for the publishing kit. Best-effort: a failed draft never stops the video.
     if (!project.publishKit?.coverArt?.design) {
@@ -1745,7 +1761,7 @@ function produceContinuation(run) {
 }
 
 export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
-  const { run } = await requireRun(projectId);
+  const { project, run } = await requireRun(projectId);
   // Tools are only ever added (a video tool once the stills are approved, say); the pool follows.
   const added = (edits.addTools || []).filter((id) => !run.brief.tools.includes(id));
   const toolsPatch = added.length ? MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((id) => run.brief.tools.includes(id) || added.includes(id)) : null;
@@ -1762,9 +1778,19 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   // Parked on fresh Suno renders before any download: approving downloads one of them, or a
   // version the director made or revised in Suno meanwhile (`sunoSongId`).
   const pickingSong = (r) => r.status === 'awaiting-approval' && r.awaiting === 'song' && r.stage === 'song';
-  if (edits.sunoSongId && (retake || !pickingSong(run))) {
-    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A Suno song can only be picked while the run waits for approval of its song, before the download');
+  const adoptSong = Boolean(edits.sunoSongId && canAdoptSunoSong(run));
+  // Retrying the adoption request must not spend a download. To approve the
+  // adopted take, resume without an id, which selects the only saved take.
+  if (!retake && edits.sunoSongId && pickingSong(run) && run.output.songTakeApproved === false
+      && edits.sunoSongId === run.output.sunoSongIds?.[0]) {
+    return { project, run: presentAutonomousRun(run) };
   }
+  const assertCanUseSunoSong = (r) => {
+    if (edits.sunoSongId && (retake || !(adoptSong ? canAdoptSunoSong(r) : pickingSong(r)))) {
+      throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A Suno song can only be supplied at download approval or when a failed or stopped Suno stage has no takes');
+    }
+  };
+  assertCanUseSunoSong(run);
   // A changed prompt or guidance reaches production's shot planner on this resume.
   const directionPatch = Object.fromEntries(['prompt', 'guidance'].filter((key) => typeof edits[key] === 'string' && edits[key] !== (run.brief[key] ?? '')).map((key) => [key, edits[key]]));
   const directionChanged = Object.keys(directionPatch).length > 0;
@@ -1783,6 +1809,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   const out = await patchRun(projectId, (r, current) => {
     // Cancel or another Resume may have won while the old attempt settled.
     assertResumable(r);
+    assertCanUseSunoSong(r);
     if (retake) {
       assertAtSongCheckpoint(r);
       // Unlink only the track this run linked, never one the director picked since.
@@ -1792,7 +1819,8 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     // the stage — the stage re-runs only when production never started.
     const stage = retake ? 'song' : r.stage;
     return {
-      status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
+      status: adoptSong ? 'awaiting-approval' : 'running', awaiting: adoptSong ? 'song' : null,
+      error: null, errorCode: null, processId: PROCESS_ID,
       ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved || directionChanged ? { brief: {
         ...r.brief,
         ...directionPatch,
@@ -1808,12 +1836,13 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       } } : {}),
       output: {
         ...(retake ? Object.fromEntries(SONG_OUTPUT_KEYS.map((key) => [key, null])) : {}),
+        ...(adoptSong ? { sunoSongIds: [edits.sunoSongId], sunoSongPick: null, songTakeApproved: false } : {}),
         ...(!retake && pickingSong(r) ? { songTakeApproved: true, ...(edits.sunoSongId ? { sunoSongPick: edits.sunoSongId } : {}) } : {}),
         ...(typeof edits.lyrics === 'string' ? { lyrics: edits.lyrics } : {}),
         ...(typeof edits.style === 'string' && edits.style.trim() ? { sunoStyle: edits.style.trim() } : {}),
       },
-      ...(retake
-        ? { stage, ...stagePatch(r, stage, { status: 'pending', startedAt: null, finishedAt: null, error: null, step: null }) }
+      ...(retake || adoptSong
+        ? { stage, ...stagePatch(r, stage, { status: 'pending', startedAt: null, finishedAt: null, error: null, step: adoptSong ? SONG_PICK_STEP : null }) }
         : stagePatch(r, stage, { error: null })),
     };
   });
@@ -1828,6 +1857,8 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       videoSettings: { ...current.videoSettings, ...video },
       ...(lipSync ? {} : { scenes: (current.scenes || []).map((scene) => (isPerformanceScene(scene) ? { ...scene, shotMode: 'cutaway' } : scene)) }) } }));
   }
+  // Adopting a take always asks for download approval, even on a brief without checkpoints.
+  if (adoptSong) return { project: out.project, run: presentAutonomousRun(out.run) };
   const { resume } = produceContinuation(out.run);
   if (resume.kind === 'final-revision') {
     // The orchestrator's footage revision picks up where it stopped. One that

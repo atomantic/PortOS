@@ -8,7 +8,7 @@
  * ../taskPromptDefaults/prompts.js.
  */
 
-import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLabelFlags, formatVolunteerClaimCommands } from '../../lib/dispatchLabels.js';
+import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLabelFlags, formatVolunteerClaimCommands, mandatoryDispatchHintGuidance } from '../../lib/dispatchLabels.js';
 import { TASK_PROMPT_KEY } from '../../lib/cos/cosTaskPrompt.js';
 import { GITHUB_HOST_SETUP } from './constants.js';
 
@@ -157,6 +157,12 @@ export function buildClaimCheckRecovery(forge, leaveOpen) {
 // Only text emitted by the composer is eligible. Each exact variant carries
 // its own staged body, even if the task's two fields contain different variants.
 const CLAIM_SECTIONS = [
+  ...['github', 'gitlab'].map((forge) => ({
+    name: `claim-issue-filing-${forge}`,
+    text: mandatoryDispatchHintGuidance({ cli: forge === 'github' ? 'gh' : 'glab' }),
+    trigger: 'Before filing any issue or epic slice',
+    instruction: 'follow it (and `.claude/skills/portos-file-issue/SKILL.md` when present) for dispatch, quality, and batching rules.',
+  })),
   ...['github', 'gitlab'].flatMap((forge) => [false, true].map((leaveOpen) => ({
     name: `claim-epic-${forge}`,
     text: buildClaimEpicSection(forge, leaveOpen),
@@ -176,6 +182,12 @@ When Phase 1 lands on an epic (the second-pass undecomposed epic, or a selected 
     text: buildClaimLinkedScreen(forge),
     trigger: `- When a linked ${forge === 'github' ? 'PR' : 'MR'} is by a non-collaborator and is open or closed without merging`,
     instruction: 'screen its diff before reading it.',
+  })),
+  ...['github', 'gitlab'].map((forge) => ({
+    name: `claim-issue-filing-${forge}`,
+    text: mandatoryDispatchHintGuidance({ cli: forge === 'github' ? 'gh' : 'glab' }),
+    trigger: 'Before filing any issue or epic slice',
+    instruction: 'follow it (and `.claude/skills/portos-file-issue/SKILL.md` when present) for dispatch, quality, and batching rules.',
   })),
   ...['github', 'gitlab'].flatMap((forge) => [false, true].map((leaveOpen) => ({
     name: `claim-ci-recovery-${forge}`,

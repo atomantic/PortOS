@@ -3,7 +3,7 @@
  *
  * `assertFileNotMediaManifest(path)` refuses a media upload whose bytes are a playlist or manifest before ffmpeg can probe it (the base64 and multipart import helpers apply the same check).
  */
-import { open, readFile, stat, unlink } from 'fs/promises';
+import { open, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';
 import { MIRRORED_MIME_TYPES } from './beeperAttachmentPaths.js';
@@ -14,7 +14,7 @@ import {
   MEDIA_MANIFEST_PROBE_BYTES, RISKY_MIME_TYPES, sanitizeFilename,
 } from './mimeTypes.js';
 import { PATHS } from './paths.js';
-import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
+import { isPathInsideDir } from './pathSafety.js';
 
 // Uploads under these types may later be probed, thumbnailed or rendered by ffmpeg.
 const isFfmpegInputExtension = (ext) => /^(audio|video|image)\//.test(getMimeType(ext));

@@ -7,12 +7,17 @@ import { MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER } from '../lib/maint
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-maintenance-run-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 
-const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} }));
+// `history` is completed work that aged out of the working set: `getAllTasks`
+// no longer returns it, but a by-id read still finds it.
+const state = vi.hoisted(() => ({ tasks: [], history: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} }));
 // Applicability is decided by the quota-burn resolver (covered in
 // quotaBurnInvoke.test.js); the invoke double below returns its not-applicable
 // verdict so these cases pin only the run's reaction to it.
 vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
-vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
+vi.mock('./cos/cosTaskStore.js', () => ({
+  getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })),
+  getTaskById: vi.fn(async (id) => [...state.tasks, ...state.history].find((task) => task.id === id) ?? null),
+}));
 vi.mock('./onDemandHandoff.js', () => ({ getOnDemandHandoffs: vi.fn(async () => ({})) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
@@ -69,7 +74,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   __resetMaintenanceRunScheduler();
   await rm(join(tempRoot, 'cos', 'maintenance-runs.json'), { force: true });
-  Object.assign(state, { tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} });
+  Object.assign(state, { tasks: [], history: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} });
 });
 afterAll(cleanup);
 
@@ -202,7 +207,7 @@ describe('manual maintenance run', () => {
     expect(getQuotaBurnConfig).not.toHaveBeenCalled();
   });
 
-  it('holds on its own queued, running or blocked work and on a failed audit, then retries once the hold clears', async () => {
+  it('holds on its own queued, running or blocked work and on a failed audit, then advances once the retried task succeeds', async () => {
     const { run } = await start();
     state.requests = [{ id: 'demand-1', taskType: 'better-structural-drift', burn: { maintenanceRunId: run.id } }];
     expect(await evaluateMaintenanceRun(run.id)).toMatchObject({ dispatched: false, reason: expect.stringContaining('demand-1') });
@@ -215,15 +220,71 @@ describe('manual maintenance run', () => {
     expect((await getMaintenanceRun(run.id)).completed).toEqual({});
     expect((await getMaintenanceRun(run.id)).reason).toBe('waiting for blocked task task-0');
     expect(state.invoked).toHaveLength(1);
-    // Another run's task on the same family is not this run's business.
-    state.tasks = [{ id: 'other', status: 'in_progress', metadata: { quotaBurnFamily: 'codex' } }];
-    state.dispatch = { dispatched: false, reason: 'an on-demand run of "better-structural-drift" is already queued' };
+    // Retrying requeues the SAME task, so the run keeps waiting on it rather
+    // than dispatching a second copy of the step.
+    state.tasks[0].status = 'pending';
     await __retryMaintenanceRuns();
+    expect((await getMaintenanceRun(run.id)).reason).toBe('waiting for pending task task-0');
+    expect(state.invoked).toHaveLength(1);
+    // Another run's task on the same family is not this run's business, and a
+    // refused dispatch of the next step is a hold the sweep retries.
+    state.tasks = [{ id: 'other', status: 'in_progress', metadata: { quotaBurnFamily: 'codex' } }];
+    state.dispatch = { dispatched: false, reason: 'an on-demand run of "claim-issue" is already queued' };
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
     expect((await getMaintenanceRun(run.id)).reason).toMatch(/already queued/);
     state.dispatch = null;
     await __retryMaintenanceRuns();
     expect(state.invoked).toHaveLength(3);
-    expect((await getMaintenanceRun(run.id)).active.stepId).toBe(run.steps[0].id);
+    expect((await getMaintenanceRun(run.id)).active.stepId).toBe(run.steps[1].id);
+  });
+
+  // The regression: deleting a step's failed task read as "the hold cleared",
+  // so the next sweep dispatched the same audit again — once per dismissal, for
+  // as long as the run lived, whatever the app's own schedule said.
+  it.each([
+    ['deleted', () => { state.tasks = []; }, 'was deleted'],
+    ['auto-expired by the failure reaper', () => {
+      state.tasks = [{ ...state.tasks[0], status: 'completed', metadata: { ...state.tasks[0].metadata, resolution: 'auto-expired' } }];
+    }, 'expired after failing'],
+  ])('stops instead of re-dispatching when the failed step task is %s, and reruns only on an explicit resume', async (_case, dismiss, how) => {
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    await __onMaintenanceAgentSpawned(agentFor(run, 0));
+    state.tasks = [{ id: 'task-0', status: 'blocked', metadata: { quotaBurnFamily: 'codex', quotaBurnMaintenanceRunId: run.id } }];
+    await __onMaintenanceAgentCompleted(agentFor(run, 0, false));
+    expect((await getMaintenanceRun(run.id)).reason).toBe('waiting for blocked task task-0');
+
+    dismiss();
+    await __retryMaintenanceRuns();
+    await __retryMaintenanceRuns();
+    expect(await getMaintenanceRun(run.id)).toMatchObject({
+      status: 'stopped', active: null, finishedAt: expect.any(String),
+      reason: `stopped: the copy task task-0 ${how} — start the check again to rerun it`,
+    });
+    expect(state.invoked).toHaveLength(1);
+
+    const { run: resumed, result } = await resumeMaintenanceRun(run.id);
+    expect(resumed.status).toBe('running');
+    expect(result).toMatchObject({ dispatched: true, taskType: 'copy' });
+    expect(state.invoked).toHaveLength(2);
+  });
+
+  // Before any agent spawns, only the accepted handoff names the step's task.
+  it('stops when the accepted step task is deleted before an agent ever picked it up', async () => {
+    const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    getOnDemandHandoffs.mockResolvedValue({ 'demand-1': { request: { id: 'demand-1', burn: { maintenanceRunId: run.id } }, status: 'accepted', taskId: 'task-0', claimedAt: new Date().toISOString() } });
+    await __retryMaintenanceRuns();
+    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: expect.stringContaining('copy task task-0 was deleted') });
+    expect(state.invoked).toHaveLength(1);
+    getOnDemandHandoffs.mockResolvedValue({});
+  });
+
+  it('does not mistake a step task that aged out of the working set for a deleted one', async () => {
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    await __onMaintenanceAgentSpawned(agentFor(run, 0));
+    state.history = [{ id: 'task-0', status: 'completed', metadata: { quotaBurnMaintenanceRunId: run.id } }];
+    await __retryMaintenanceRuns();
+    expect((await getMaintenanceRun(run.id)).status).toBe('running');
   });
 
   it('a relaunched step neither completes nor settles the run', async () => {
@@ -255,8 +316,10 @@ describe('manual maintenance run', () => {
     // and wait forever for a continuation that will never complete; the run
     // advanced only once the `retryMaintenanceRuns` backstop eventually swept
     // it. The step's underlying task is gone (not merely blocked), so a correct
-    // fix re-evaluates now and re-dispatches the step immediately.
+    // fix re-evaluates now — and, the task having been deleted, settles the run
+    // as stopped rather than leaving it running or re-dispatching the step.
     const { run } = await start();
+    await __onMaintenanceAgentSpawned(agentFor(run, 0));
     const stranded = {
       ...agentFor(run, 0, false),
       result: { success: false, resumed: true, error: 'Pause retired — its task task-0 no longer exists' },
@@ -264,7 +327,8 @@ describe('manual maintenance run', () => {
 
     await __onMaintenanceAgentCompleted(stranded);
 
-    expect(state.invoked).toHaveLength(2);
+    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: expect.stringContaining('task-0 was deleted') });
+    expect(state.invoked).toHaveLength(1);
   });
 
   it('stops without recalling work, resumes from its ledger, and refuses a second run for the same app', async () => {

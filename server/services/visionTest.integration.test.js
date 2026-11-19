@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { existsSync, readdirSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { testVision, checkVisionHealth, runVisionTestSuite } from './visionTest.js';
 import { getProviderById } from './provider/providers.js';

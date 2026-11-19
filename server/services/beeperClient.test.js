@@ -10,7 +10,6 @@ import {
   paginateBeeperCursor,
   listChatsPage,
   listChats,
-  listMessages,
   searchChatsPage,
   searchMessagesPage,
   getInfo,

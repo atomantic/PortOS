@@ -15,9 +15,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const chrome = resolveTestChrome();
+const canRun = browserSuiteCanRun('overlay text browser suite', { Chrome: chrome }, { onUnavailable: cleanupTempDataRoots });
 // A CPU-loaded CI runner can take longer than the 20s production startup
 // deadline to bring Chrome up (#14847); the production default is unchanged.
 const priorStartupMs = process.env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS;
@@ -72,7 +73,7 @@ function draw(t) {
 globalThis.portosComposition = { durationSec: 4, fps: 12, width: 1280, height: 720, async seek(t) { draw(t); } };
 `;
 
-describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
+describe.skipIf(!canRun)('overlay text check (headless Chrome)', () => {
   it('flags each text problem once, names the shot, and passes outlined or plated type', async () => {
     const source = join(PATHS.data, 'overlay-doc');
     await mkdir(source, { recursive: true });

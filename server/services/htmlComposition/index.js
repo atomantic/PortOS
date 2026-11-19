@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { PATHS, ensureDir, unlinkGuarded } from '../../lib/fileUtils.js';
-import { LAUNCH_VIDEO_FORMATS, LAUNCH_VIDEO_FORMAT_SIZES, htmlCompositionContractSchema, htmlCompositionContractSchemaFor, htmlCompositionRenderSchema, validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { mutateVideoHistory } from '../videoGen/history.js';
@@ -17,6 +17,10 @@ import { encodeComposition, encodeContactSheet, proofTimes, synthesizeCompositio
 import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
+import {
+  LAUNCH_VIDEO_FORMATS, LAUNCH_VIDEO_FORMAT_SIZES, htmlCompositionContractSchema,
+  htmlCompositionContractSchemaFor, htmlCompositionRenderSchema
+} from '../../lib/htmlCompositionValidation.js';
 
 const active = new Map();
 const resolveAudioUpload = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });

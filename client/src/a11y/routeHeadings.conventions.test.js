@@ -44,7 +44,7 @@ describe('a11y conventions: routeHeadings', () => {
     const src = maskedSourceOf(file);
     const rendered = renderedTagNames(src);
     if (rendered.has('h1') || rendered.has('PageHeader')) return true;
-    const imports = relativeImportBindings(src, file);
+    const imports = routeElementBindings(src, file);
     // A file that imports the shared header counts even before its tag is
     // spelled out (#7245's rule) — and covers an aliased render of it.
     for (const { file: imported } of imports.values()) {

@@ -1,4 +1,3 @@
-import { ciTestConfig, ciTestRunnerAccess } from '../scripts/ciTestPolicy.js';
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestCaptureProjects, vitestCiPool, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
@@ -34,12 +33,10 @@ process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 const runnerSelection = vitestRunnerSelection();
 
 const config = defineConfig({
-  plugins: ciTestRunnerAccess(),
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   test: {
-    ...ciTestConfig(),
     // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
     fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest/modules', import.meta.url)),
     // Environment teardown also owns collection-only/skipped suite fixtures.
@@ -49,6 +46,8 @@ const config = defineConfig({
     env: {
       NODE_ENV: 'test',
       NODE_DISABLE_COMPILE_CACHE: '1',
+      // Throwaway data roots need no crash-durability fsyncs (#16864); see fileCore.js.
+      PORTOS_TEST_FAST_WRITES: '1',
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
@@ -58,8 +57,6 @@ const config = defineConfig({
       // The runner's selection is for THIS Vitest process only: a suite that
       // spawns a nested Vitest on a fixture must not inherit it.
       PORTOS_CI_TEST_SELECTION: '',
-      PORTOS_CI_COLLECTION: '',
-      PORTOS_CI_TEST_POLICY: '',
       // Same for the memo store: a nested Vitest must point at its own directory or stay off.
       PORTOS_TEST_MEMO_DIR: '',
     },

@@ -3,12 +3,9 @@
  * extra egress hosts, digest-pinned image overrides) and the `/api/docker-containment` run/pull
  * bodies.
  *
- * Kept out of `validation.js` to keep that closure narrow.
- *
  * Route schemas for Docker containment (#12844): the machine-local
- * `dockerContainment` settings slice and the run/pull request bodies. Kept out
- * of `validation.js` so the containment profile does not join that module's
- * very wide import closure.
+ * `dockerContainment` settings slice and the run/pull request bodies. Its own module so the
+ * containment profile does not join a wide schema import closure.
  */
 import { z } from 'zod';
 import { DOCKER_CONTAINMENT_PHASES, isDigestPinnedImage, isEgressHostname } from './dockerContainment.js';

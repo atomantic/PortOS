@@ -162,7 +162,7 @@ POST   /api/insights/generate     — (re)run generation for a pair; preserves a
 PATCH  /api/insights/:id          — { disposition, dismissReason?, snoozeUntil? }
 ```
 
-Validation extends `server/lib/validation.js`: a new `insightDispositionSchema`
+Validation extends the server's `*Validation.js` schema modules (then one catch-all file, now split per domain): a new `insightDispositionSchema`
 (`z.enum(['new','accepted','dismissed','snoozed'])` + optional reason/snoozeUntil) wired
 into the PATCH, and a `insightGenerateSchema` (`{ pair, providerId?, model? }`). The
 existing `insightRefreshSchema` stays for the legacy narrative/themes refresh endpoints

@@ -4,7 +4,7 @@
 // it, so the follow-up attaches DETACHED at the reviewed commit instead.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'fs';
-import { writeFile, mkdir, readFile, readdir } from 'fs/promises';
+import { writeFile, mkdir, readFile, } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot, mockTestIdentity } from '../lib/mockPathsDataRoot.js';
 import { destroyGitSandbox, makeGitSandbox, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';

@@ -243,10 +243,9 @@ async function verifiedPolicyTip(repoPath, branch, prUrl, { requireMerged = fals
   const { execGit } = await import('../lib/execGit.js');
   const tip = expectedTip || (await execGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath)).stdout?.trim();
   if (!/^[a-f0-9]{40,64}$/i.test(tip || '')) return null;
-  const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
-  const { execGh } = await import('./github.js');
-  const { cwd, env } = await resolveForgeExecOptions(repoPath);
-  const remote = JSON.parse(await execGh(['pr', 'view', prUrl, '--json', 'url,state,headRefName,headRefOid,isCrossRepository'], undefined, { cwd, env }));
+  const { readPullRequest } = await import('./prProbe.js');
+  const remote = await readPullRequest(prUrl, 'url,state,headRefName,headRefOid,isCrossRepository', { repoPath });
+  if (!remote) return null;
   return remote.url === prUrl && remote.headRefName === branch && remote.headRefOid === tip
     && remote.isCrossRepository === false && (!requireMerged || remote.state === 'MERGED') ? tip : null;
 }

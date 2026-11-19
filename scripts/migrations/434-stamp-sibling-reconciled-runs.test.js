@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import migration, { SIBLING_SCAN_SHIPPED_AT } from './434-stamp-sibling-reconciled-runs.js';
+import migration from './434-stamp-sibling-reconciled-runs.js';
 import { scanHistoricalUsage } from '../../server/services/usageBackfillWorker.js';
 
 let rootDir;

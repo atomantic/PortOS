@@ -13,7 +13,7 @@ import {
   COMMISSION_MUSIC_TASTE_ANCHOR_MAX,
   COMMISSION_MUSIC_TASTE_PERCENT_MAX,
   CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS,
-} from '../../lib/creativeCommissionValidation.js';
+} from '../../lib/creativeCommissionSpec.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const MUSIC_TASTE_RECIPE_VERSION = 1;

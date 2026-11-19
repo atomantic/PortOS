@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../server/lib/fileCore.js';
-import { modelComparisonImportSchema } from '../../server/lib/validation.js';
+import { modelComparisonImportSchema } from '../../server/lib/modelComparisonValidation.js';
 
 export default {
   async up({ rootDir }) {

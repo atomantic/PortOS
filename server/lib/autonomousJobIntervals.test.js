@@ -9,7 +9,6 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 import {
   INTERVAL_OPTIONS,
-  JOB_INTERVAL_VALUES,
   ON_DEMAND_INTERVAL,
   isOnDemandJob,
   resolveIntervalMs

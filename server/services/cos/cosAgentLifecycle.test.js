@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
-import { mkdir, rm, writeFile, readFile, mkdtemp, rename } from 'fs/promises';
+import { mkdir, rm, writeFile, readFile, mkdtemp, } from 'fs/promises';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'fs';
 import { join } from 'path';

@@ -3,10 +3,6 @@ import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
-// The unlocked phase of a completion's removal ends by observing the checkout's identity, so
-// this is where a test pauses or perturbs the window between the two critical sections.
-const observeIdentityMock = vi.fn(async () => null);
-vi.mock('../lib/retirementCheckoutObservation.js', () => ({ readRetirementCheckoutIdentity: (...args) => observeIdentityMock(...args) }));
 vi.mock('./heldCheckoutRecovery.js', () => ({}));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./branchReconcileOutcome.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
@@ -863,7 +859,6 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mock.calls.some(([args]) => JSON.stringify(args) === JSON.stringify(subcommandArgs));
 
   beforeEach(() => {
-    observeIdentityMock.mockReset().mockResolvedValue(null);
     retirementReceiptMock.mockClear();
     completionHoldMock.mockReset().mockResolvedValue(null);
     completionOwnersMock.mockReset().mockResolvedValue([]);
@@ -1221,7 +1216,8 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     const otherOwner = { id: 'agent-other', status: 'running', workspacePath: join(PATHS.worktrees, 'agent-x'), metadata: { sourceWorkspace: '/repo', worktreeBranch: 'cos/task-1/agent-x' } };
     if (state === 'active') completionOwnersMock.mockResolvedValue([otherOwner]);
     if (state === 'unreadable') completionOwnersMock.mockResolvedValue(null);
-    if (state === 'arrives-during-observation') observeIdentityMock.mockImplementation(async () => {
+    // The first completion-policy read happens while the checkout is being observed.
+    if (state === 'arrives-during-observation') completionHoldMock.mockImplementation(async () => {
       completionOwnersMock.mockResolvedValue([otherOwner]);
       return null;
     });
@@ -1258,7 +1254,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     let started;
     let resume;
     const observing = new Promise(resolve => { started = resolve; });
-    observeIdentityMock.mockImplementationOnce(() => new Promise(resolve => {
+    completionHoldMock.mockImplementationOnce(() => new Promise(resolve => {
       resume = () => resolve(null);
       started();
     }));
@@ -1304,7 +1300,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     execGitMock.mockImplementation((args, ...rest) => (admitted && args[0] === 'status'
       ? Promise.resolve({ stdout: ' M package-lock.json\n?? notes.md', stderr: '', exitCode: 0 })
       : scripted(args, ...rest)));
-    observeIdentityMock.mockImplementationOnce(async () => {
+    completionHoldMock.mockImplementationOnce(async () => {
       admitted = true;
       return null;
     });

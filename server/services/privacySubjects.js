@@ -38,7 +38,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
   PRIVACY_SELF_SUBJECT_ID, PRIVACY_CONSENT_SCOPES, PRIVACY_BROKER_CONSENT_SCOPES,
-} from '../lib/privacyValidation.js';
+} from '../lib/privacyConstants.js';
 
 const SUBJECT_COLUMNS = `id, display_name, relationship, created_at, updated_at`;
 

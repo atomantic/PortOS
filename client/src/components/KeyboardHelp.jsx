@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useRef, useCallback } from 'react';
 import { Keyboard, X } from 'lucide-react';
 import { useKeyboardHelp } from '../hooks/useKeyboardHelp';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -34,14 +34,6 @@ const SHORTCUT_SECTIONS = [
     ],
   },
   {
-    title: 'OpenWorld',
-    shortcuts: [
-      { keys: ['W', 'A', 'S', 'D'], description: 'Move around' },
-      { keys: ['Tab'], description: 'Toggle mode' },
-      { keys: ['E'], description: 'Interact with building' },
-    ],
-  },
-  {
     // The terminal keeps Tab for shell completion, so the way back out is a
     // backtab — see useShellSession's attachCustomKeyEventHandler.
     title: 'Shell',
@@ -54,49 +46,18 @@ const SHORTCUT_SECTIONS = [
 
 export default function KeyboardHelp() {
   const { open, setOpen } = useKeyboardHelp();
-  const dialogRef = useRef(null);
   const closeButtonRef = useRef(null);
-  const previousFocusRef = useRef(null);
 
   const close = useCallback(() => setOpen(false), [setOpen]);
 
   // Lock body scroll when open
   useScrollLock(open);
 
-  // Focus management: capture previous focus, focus close button on open, restore on close
-  useEffect(() => {
-    if (open) {
-      previousFocusRef.current = document.activeElement;
-      // Defer focus to after portal render
-      requestAnimationFrame(() => closeButtonRef.current?.focus());
-    } else if (previousFocusRef.current) {
-      previousFocusRef.current.focus();
-      previousFocusRef.current = null;
-    }
-  }, [open]);
-
-  // Focus trap: keep Tab/Shift+Tab within the dialog
-  const handleKeyDown = useCallback((e) => {
-    if (e.key !== 'Tab') return;
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const focusable = dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }, []);
-
   return (
     <Modal
       open={open}
       onClose={close}
+      initialFocusRef={closeButtonRef}
       // Modal installs bubble-phase keydown listeners on BOTH `document`
       // and `window`. Its document listener is registered at module load
       // (before useKeyboardHelp's mount-time effect), so it fires first as
@@ -112,7 +73,7 @@ export default function KeyboardHelp() {
       ariaLabelledBy="keyboard-help-title"
       panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
     >
-      <div ref={dialogRef} onKeyDown={handleKeyDown}>
+      <div>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <div className="flex items-center gap-2.5">

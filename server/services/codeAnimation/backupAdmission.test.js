@@ -18,7 +18,6 @@ vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({
   ...(await importOriginal()),
   assertDatabaseAdmission: () => {},
 }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 const store = vi.hoisted(() => ({
   getProjectRecord: vi.fn(), getRevisionRecord: vi.fn(), startImportRecord: vi.fn(), commitImportRecord: vi.fn(),
   failImportRecord: vi.fn(), startStageRun: vi.fn(), saveStageRun: vi.fn(), reserveRunBytes: vi.fn(),

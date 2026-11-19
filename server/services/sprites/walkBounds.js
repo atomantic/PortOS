@@ -2,7 +2,7 @@
  * Sprites — walk-cycle authoring bounds + pure label/clamp helpers.
  *
  * A dependency-free leaf (NO sharp/ffmpeg) so the packer (walkPostprocess.js)
- * and request validation (server/lib/validation.js) share one definition of the
+ * and request validation (server/lib/spriteValidation.js) share one definition of the
  * frame-count / fps range without dragging the native image graph into
  * validation. The numbers live in the per-track registry (`animationTracks.js`,
  * #3015); the exports here are the WALK view of that registry.

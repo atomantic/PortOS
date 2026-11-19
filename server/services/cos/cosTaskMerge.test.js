@@ -451,6 +451,75 @@ describe('mergeTaskLists', () => {
     });
   });
 
+  // The spawn count bounds provider spend. Content is last-writer-wins, so without
+  // this rule an edit made on a copy that predates a dispatch would carry its
+  // older count back and hand the task spawns the cap had already charged.
+  describe('spawn accounting follows the later dispatch (#16807)', () => {
+    const copy = (updatedAt, metadata, overrides = {}) =>
+      task('task-s', overrides.status || 'pending', { ...overrides, metadata: { updatedAt, ...metadata } });
+    const bothWays = (a, b) => [mergeTaskLists([a], [b], { now: NOW })[0], mergeTaskLists([b], [a], { now: NOW })[0]];
+
+    it('keeps the charged count when a newer edit lands on a copy that predates the dispatch', () => {
+      const dispatched = copy(past(5000), { totalSpawnCount: 4, lastSpawnedAt: past(6000) });
+      const staleEdit = copy(past(1000), { totalSpawnCount: 1, lastSpawnedAt: past(60_000) }, { description: 'edited on the peer' });
+      for (const merged of bothWays(dispatched, staleEdit)) {
+        expect(merged.description).toBe('edited on the peer');
+        expect(merged.metadata).toMatchObject({ totalSpawnCount: 4, lastSpawnedAt: past(6000), updatedAt: past(1000) });
+      }
+    });
+
+    it('keeps the charged count against an edited copy that was never dispatched', () => {
+      const dispatched = copy(past(5000), { totalSpawnCount: 2, lastSpawnedAt: past(6000) });
+      const neverDispatched = copy(past(1000), {}, { priority: 'HIGH' });
+      for (const merged of bothWays(dispatched, neverDispatched)) {
+        expect(merged.priority).toBe('HIGH');
+        expect(merged.metadata).toMatchObject({ totalSpawnCount: 2, lastSpawnedAt: past(6000) });
+      }
+    });
+
+    it('propagates an explicit reset made after the dispatch both copies last saw', () => {
+      const charged = copy(past(5000), { totalSpawnCount: 4, lastSpawnedAt: past(6000) });
+      const reset = copy(past(1000), { lastSpawnedAt: past(6000) });
+      for (const merged of bothWays(charged, reset)) {
+        expect(merged.metadata.totalSpawnCount).toBeUndefined();
+        expect(merged.metadata.lastSpawnedAt).toBe(past(6000));
+      }
+    });
+
+    it('takes the later dispatch\'s lower count when it followed a reset the other copy never saw', () => {
+      const redispatched = copy(past(5000), { totalSpawnCount: 1, lastSpawnedAt: past(2000) });
+      const staleEdit = copy(past(1000), { totalSpawnCount: 4, lastSpawnedAt: past(60_000) }, { description: 'edited on the peer' });
+      for (const merged of bothWays(redispatched, staleEdit)) {
+        expect(merged.description).toBe('edited on the peer');
+        expect(merged.metadata).toMatchObject({ totalSpawnCount: 1, lastSpawnedAt: past(2000) });
+      }
+    });
+
+    it('settles: merging the result against either copy again changes nothing', () => {
+      const dispatched = copy(past(5000), { totalSpawnCount: 4, lastSpawnedAt: past(6000) });
+      const staleEdit = copy(past(1000), { totalSpawnCount: 1, lastSpawnedAt: past(60_000) }, { description: 'edited on the peer' });
+      const [merged] = bothWays(dispatched, staleEdit);
+      for (const other of [dispatched, staleEdit]) expect(bothWays(merged, other)).toEqual([merged, merged]);
+    });
+
+    // Three installs can meet in any order: one still holds the charged count, one
+    // reset it, and one edited a copy from before the dispatch. Whichever two merge
+    // first, the reset stands and the edit's content wins.
+    it('reaches the same accounting whichever copies meet first', () => {
+      const charged = copy(past(5000), { totalSpawnCount: 5, lastSpawnedAt: past(6000) });
+      const reset = copy(past(3000), { lastSpawnedAt: past(6000) });
+      const staleEdit = copy(past(1000), { totalSpawnCount: '1', lastSpawnedAt: past(60_000) }, { description: 'edited on the peer' });
+      const orders = [[charged, reset, staleEdit], [charged, staleEdit, reset], [reset, charged, staleEdit],
+        [reset, staleEdit, charged], [staleEdit, charged, reset], [staleEdit, reset, charged]];
+      for (const [first, ...rest] of orders) {
+        const settled = rest.reduce((held, next) => mergeTaskLists([held], [next], { now: NOW })[0], first);
+        expect(settled.description).toBe('edited on the peer');
+        expect(settled.metadata.totalSpawnCount).toBeUndefined();
+        expect(settled.metadata.lastSpawnedAt).toBe(past(6000));
+      }
+    });
+  });
+
   describe('cross-peer investigation fingerprint dedup (#2628)', () => {
     // An investigation task carries a durable fingerprint marker (#2615). Two
     // federated peers can each mint one for the SAME failure cause before syncing;

@@ -37,8 +37,8 @@ import {
   pullMissingAssetsFromPeer,
   ASSET_PULL_TIMEOUT_MS,
 } from './peerSyncAssets.js';
-import { findPeerById, FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
-import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
+import { FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
+import { isStr, } from '../../lib/textUtils.js';
 import { admitPeerImageTombstones } from '../imageGen/imageRecords.js';
 
 

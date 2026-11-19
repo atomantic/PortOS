@@ -1,31 +1,23 @@
 /**
- * yt-dlp version reporting and in-place update (#7255 follow-up).
- *
- * YouTube gates its media URLs behind a player handshake that yt-dlp tracks
- * release-to-release, so a binary only weeks old starts returning a flat
- * `HTTP Error 403: Forbidden` for videos the browser plays fine. That is the
- * single most common cause of a failed download here, and the remedy is always
- * the same one command — so the Video Downloader page offers the button rather
- * than sending the user to a terminal, mirroring the llama.cpp / Ollama update
- * affordances on the Local LLMs page.
- *
- * Deliberately NOT modelled on `llamaServerManager`'s package plan: yt-dlp has
- * no daemon to stop and restart, and its own `-U` self-update covers every
- * install shape Homebrew doesn't (standalone binary, pip, pipx) — refusing with
- * its own accurate message when it can't. So there are exactly two paths here,
- * and the non-Homebrew one delegates the decision to yt-dlp itself.
+ * Report the active yt-dlp version and manage its installation from the Video
+ * Downloader. Release checks stay off the download path because YouTube's
+ * player changes can require a newer yt-dlp even when the URL is valid.
  */
 
 import { realpath } from 'fs/promises';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
 import { findYtDlp, resetYtDlpCache } from '../lib/ytdlp.js';
 
 const BREW_FORMULA = 'yt-dlp';
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const BREW_INFO_TIMEOUT_MS = 20_000;
-const UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
+const PACKAGE_CHANGE_TIMEOUT_MS = 10 * 60 * 1000;
 const GITHUB_TIMEOUT_MS = 8_000;
+
+const findInstallBrew = () => process.platform === 'darwin' ? findCommandOnPath('brew') : null;
+let installInProgress = false;
 
 export const YTDLP_DOWNLOAD_URL = 'https://github.com/yt-dlp/yt-dlp#installation';
 
@@ -140,6 +132,7 @@ const isNewer = (latest, installed) => Boolean(latest && installed && latest > i
 export async function getYtDlpUpdateStatus() {
   const binaryPath = await findYtDlp();
   if (!binaryPath) {
+    const canInstall = Boolean(findInstallBrew());
     return {
       installed: false,
       path: null,
@@ -147,10 +140,11 @@ export async function getYtDlpUpdateStatus() {
       latestVersion: null,
       updateAvailable: false,
       canUpdate: false,
+      canInstall,
       method: null,
       methodLabel: null,
       updateCommand: null,
-      blockedReason: 'yt-dlp is not on PATH. Install it first — PortOS does not vendor it.',
+      blockedReason: canInstall ? null : 'yt-dlp is not on PATH. Follow the install instructions to make it available.',
       downloadUrl: YTDLP_DOWNLOAD_URL,
     };
   }
@@ -223,7 +217,7 @@ export async function updateYtDlp({ onProgress = () => {} } = {}) {
     command,
     args,
     (message) => onProgress({ event: 'progress', message }),
-    { timeoutMs: UPGRADE_TIMEOUT_MS },
+    { timeoutMs: PACKAGE_CHANGE_TIMEOUT_MS },
   );
 
   if (!run.success) {
@@ -248,4 +242,41 @@ export async function updateYtDlp({ onProgress = () => {} } = {}) {
       ? `already on ${after.version}`
       : null,
   };
+}
+
+/** Install the fixed Homebrew formula and verify that PortOS can use it immediately. */
+export async function installYtDlp({ onProgress = () => {} } = {}) {
+  const brew = findInstallBrew();
+  if (!brew) return { success: false, error: 'One-click installation requires Homebrew on the macOS host.' };
+  if (installInProgress) return { success: false, error: 'yt-dlp installation is already in progress.' };
+
+  installInProgress = true;
+  try {
+    resetYtDlpCache();
+    const existing = await findYtDlp();
+    if (existing) {
+      return { success: true, version: await readYtDlpVersion(existing), note: 'is already installed' };
+    }
+
+    onProgress({ event: 'progress', message: 'Installing yt-dlp via Homebrew…' });
+    const run = await runStreamingCommand(
+      brew,
+      ['install', BREW_FORMULA],
+      (message) => onProgress({ event: 'progress', message }),
+      {
+        timeoutMs: PACKAGE_CHANGE_TIMEOUT_MS,
+        processGroup: true,
+        env: { HOMEBREW_NO_AUTO_UPDATE: '1', HOMEBREW_NO_INSTALL_CLEANUP: '1' },
+      },
+    );
+    resetYtDlpCache();
+    if (!run.success) return { success: false, error: `yt-dlp installation failed: ${run.error || 'Homebrew reported an unknown error'}` };
+
+    const binary = await findYtDlp();
+    const version = binary && await readYtDlpVersion(binary);
+    if (!version) return { success: false, error: 'Homebrew finished, but PortOS could not run yt-dlp. Check the install instructions.' };
+    return { success: true, version };
+  } finally {
+    installInProgress = false;
+  }
 }

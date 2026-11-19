@@ -40,7 +40,7 @@
  *    top of an overnight sweep and corrupt its timings.
  */
 
-import { cp, readdir, readFile, rm, stat } from 'fs/promises';
+import { cp, readdir, rm, } from 'fs/promises';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';

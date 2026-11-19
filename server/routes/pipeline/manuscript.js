@@ -16,7 +16,6 @@ import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
-import * as applyCuts from '../../services/pipeline/applyCuts.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';

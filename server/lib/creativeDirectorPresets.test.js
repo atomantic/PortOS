@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { presetToRenderParams, ASPECT_PRESETS, QUALITY_PRESETS, ASPECT_RATIOS, resolveAspectDimensions } from './creativeDirectorPresets.js';
+import { presetToRenderParams, ASPECT_RATIOS, resolveAspectDimensions } from './creativeDirectorPresets.js';
 
 describe('presetToRenderParams', () => {
   it('returns valid params for all current aspect ratios', () => {

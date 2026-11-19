@@ -216,8 +216,8 @@ function isPushableSubscription(sub) {
     && isNonBlankStr(sub.recordId);
 }
 
-// SCHEMA-BLOCK COOLDOWN — if the peer rejected our last push for being
-// schema-ahead, hold off re-probing on every local edit. Re-probes happen on
+// SCHEMA-BLOCK COOLDOWN — when a schema mismatch blocked the last push,
+// hold off re-probing on every local edit. Re-probes happen on
 // the next `peer:online` (where `retryPendingPushesForPeer` passes
 // `bypassSchemaCooldown: true`) or after the cooldown elapses. A tombstone
 // push is never held back.
@@ -229,15 +229,14 @@ async function isSchemaBlockCooling(sub, options) {
     && (Date.now() - detectedAtMs) < SCHEMA_BLOCK_RETRY_COOLDOWN_MS;
 }
 
-// 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
-// PortOS and can't parse our newer storage layout. Persist the gap on the
-// subscription so the Instances UI can surface "Peer X needs to update PortOS
-// to receive your updates" — and short-circuit retries to that peer for the
-// affected record kind. We don't tear down the subscription; when the peer
-// upgrades and reconnects, `peer:online` will re-fire pushRecordToPeer and the
-// next response either clears the block (success) or refreshes the gap info
-// (still behind). Returns the push result for a schema refusal, else null; a
-// 409 carrying any other code falls through to the caller's http-409 report.
+function localSchemaIsBehind({ ahead, behind }) {
+  // An ahead gap is sufficient to reject a push. In that case the receiver
+  // can also report behind gaps that it would normally accept.
+  return !ahead?.length && behind?.length > 0;
+}
+
+// Persist either direction of the 409 version refusal so the UI can identify
+// which install to update and edit-triggered pushes honor the same cooldown.
 async function recordSchemaVersionRefusal(res, body, sub, peer) {
   if (res?.status !== 409) return null;
   if (body?.code !== ERR_SCHEMA_VERSION_AHEAD) return null;
@@ -257,11 +256,12 @@ async function recordSchemaVersionRefusal(res, body, sub, peer) {
     peerPortosVersion: typeof details.receiverPortosVersion === 'string' ? details.receiverPortosVersion : null,
     peerSchemaVersions: isPlainObject(details.receiverSchemaVersions) ? details.receiverSchemaVersions : null,
   });
-  console.log(
-    `⏸️ peerSync: ${peerLabel(peer)} rejected push — peer is on an older PortOS schema. ` +
-    `Re-tries will pause until they upgrade. ${formatVersionGap({ ahead, behind })}`,
-  );
-  return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+  const localBehind = localSchemaIsBehind({ ahead, behind });
+  const action = localBehind ? 'Update this PortOS to resume sync.' : 'Update the peer’s PortOS to resume sync.';
+  const gap = localBehind ? { behind } : { ahead };
+  const diagnostic = ahead.length || behind.length ? ` ${formatVersionGap(gap)}` : '';
+  console.log(`⏸️ peerSync: ${peerLabel(peer)} rejected push — ${action}${diagnostic}`);
+  return { pushed: false, reason: localBehind ? 'local-schema-behind' : 'peer-schema-behind', blockedBySchema: true };
 }
 
 // Count BOTH generic assets and Writers Room draft bodies as "stranded" — a
@@ -340,7 +340,8 @@ async function stampPushedBaseHashes(sub, payload) {
 export async function pushRecordToPeer(sub, options = {}) {
   if (!isPushableSubscription(sub)) return { pushed: false, reason: 'invalid-subscription' };
   if (await isSchemaBlockCooling(sub, options)) {
-    return { pushed: false, reason: 'peer-schema-behind-cooldown', blockedBySchema: true };
+    const reason = localSchemaIsBehind(sub.blockedBySchema) ? 'local-schema-behind-cooldown' : 'peer-schema-behind-cooldown';
+    return { pushed: false, reason, blockedBySchema: true };
   }
   const peer = await findPeerById(sub.peerId);
   if (!peer) return { pushed: false, reason: 'peer-not-found' };
@@ -651,12 +652,8 @@ async function persistPushDeliveryEvidence(subId, {
 
 /**
  * Persist a `blockedBySchema` field on the subscription so subsequent pushes
- * short-circuit until the peer upgrades. Stored on the same record as
- * `lastPushedAt` / `lastPushedHash` so the Instances UI can read everything
- * from a single subscription fetch. We capture both directions of the gap
- * (`ahead` = what the PEER needs to gain to receive our pushes; `behind` =
- * what the peer has that we don't — informational) along with the peer's
- * PortOS version string for the user-visible message.
+ * honor the cooldown. The gap arrays use the sender's perspective and
+ * accompany the rejecting peer's PortOS version for the Instances UI.
  */
 async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions, reason = 'schema-version-ahead' }) {
   // Capture peerId inside the lock so the emitted event carries it — lets each
@@ -671,7 +668,7 @@ async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersi
     sub.blockedBySchema = {
       detectedAt: now,
       // `schema-version-ahead` = the 409 version-gate path (the peer parsed our
-      // envelope but its per-category gate rejected an ahead schema). `peer-pre-feature`
+      // envelope but its per-category gate rejected a schema mismatch). `peer-pre-feature`
       // = the 400 unknown-kind path below (the peer's push schema has no arm for
       // this record kind at all, so it 400s at Zod before the gate runs). Both
       // surface the same SchemaGapBadge + engage the same cooldown; the marker just

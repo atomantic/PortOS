@@ -23,7 +23,7 @@ import { readJSONFile } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
-import { validateRequest, appSchema, appUpdateSchema } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
@@ -33,6 +33,7 @@ import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
 import { isRepo } from '../../services/git.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
+import { appSchema, appUpdateSchema } from '../../lib/appValidation.js';
 
 const router = Router();
 
@@ -54,6 +55,20 @@ router.get('/quality-federation', asyncHandler(async (req, res) => {
     severity: 'warning',
   });
   res.json(payload);
+}));
+
+// Keep the dashboard's optional scores independent of PM2 and Git status reads.
+router.get('/quality/summaries', asyncHandler(async (_req, res) => {
+  const apps = await enrichAppsWithQuality(await appsService.getAllApps());
+  res.json(apps.map(({ id, quality }) => ({
+    id,
+    quality: {
+      score: quality.score,
+      ratedCategories: quality.ratedCategories,
+      hasAssessments: quality.categories?.some(category => category.assessedAt) ?? false,
+      unavailable: quality.unavailable,
+    },
+  })));
 }));
 
 // GET /api/apps - List all apps. The bare response is the frozen PM2-enriched

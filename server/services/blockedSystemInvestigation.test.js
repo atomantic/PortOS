@@ -17,20 +17,16 @@ vi.mock('./agent/agentState.js', async importOriginal => ({ ...(await importOrig
 let root, path, time, created, calls, hold, failAfterCreate, race, failLink, analyses;
 const read = async () => JSON.parse(await readFile(path, 'utf8'));
 const write = queues => writeFile(path, JSON.stringify(queues));
-const episode = (agentId = 'agent-original', count = 1) => ({ version: 1, epoch: '11111111-1111-4111-8111-111111111111', baseline: Number(count) - 1,
-  dispatch: { agentId, startedAt: '2026-01-01T00:00:00Z', claimedBy: 'fixture-local', claimedAt: 'claimed', lastSpawnedAt: 'spawned', totalSpawnCount: count } });
-const ownerForTask = task => {
-  const proof = task.metadata.spawnBudgetProof;
-  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, proof.dispatch[key]]);
-  return { id: proof.dispatch.agentId, startedAt: proof.dispatch.startedAt, completedAt: '2026-01-01T00:01:00Z', status: 'completed', taskId: task.id,
-    metadata: { instanceId: 'fixture-local', completionTaskDispatch: { taskId: task.id, taskType: 'internal',
-      expected, spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } } };
-};
-const withTaskId = (task, id) => ({ ...task, id, metadata: { ...task.metadata,
-  spawnBudgetProof: episode(`agent-${id}`) } });
+const ownerIdFor = task => task.id === 'system-original' ? 'agent-original' : `agent-${task.id}`;
+// The completed local run that last dispatched `task`, with the receipt that dispatch bound.
+const ownerForTask = (task, charged = task.metadata.totalSpawnCount) => ({ id: ownerIdFor(task), startedAt: '2026-01-01T00:00:00Z',
+  completedAt: '2026-01-01T00:01:00Z', status: 'completed', taskId: task.id,
+  metadata: { instanceId: 'fixture-local', completionTaskDispatch: { taskId: task.id, taskType: 'internal',
+    expected: [['claimedBy', 'fixture-local'], ['claimedAt', 'claimed'], ['lastSpawnedAt', 'spawned'], ['totalSpawnCount', charged]] } } });
+const withTaskId = (task, id) => ({ ...task, id });
 const source = () => ({ id: 'system-original', taskType: 'internal', status: 'in_progress', priority: 'MEDIUM',
   description: 'Finish retained claims, including unfinished source work.', metadata: { app: 'fixture', analysisType: 'claim-issue',
-    failureCount: String(MAX_TASK_RETRIES - 1), totalSpawnCount: '1', spawnBudgetProof: episode() } });
+    failureCount: String(MAX_TASK_RETRIES - 1), totalSpawnCount: '1', lastSpawnedAt: 'spawned' } });
 const blocked = () => {
   const task = source();
   const update = resolveUndeliveredTaskUpdate(task, { status: 'incomplete', reason: 'Merged delivery still has unfinished siblings.' }, 'agent-original', time);
@@ -74,7 +70,7 @@ const update = async (task, state) => {
 };
 const factory = (realOwner = false) => _createBlockedSystemInvestigationRecovery({ read, update, create, now: () => time,
   ...(!realOwner && { ownerFor: async task => task.metadata?.foreign ? null :
-    { agentId: task.metadata.spawnBudgetProof.dispatch.agentId, instanceId: 'fixture-local', agent: ownerForTask(task) } }),
+    { agentId: ownerIdFor(task), instanceId: 'fixture-local', agent: ownerForTask(task) } }),
   permission: async () => hold });
 
 beforeEach(async () => {
@@ -227,24 +223,25 @@ describe('blocked system recovery persisted workflow', () => {
     expect(created).toBe(0);
   });
 
+  // Diagnosis neither revives the task nor touches its budgets, so the completed
+  // local owner is enough: its receipt need not still agree with the task.
   it.each([[2, '1'], ['2', 1]])('recovers a blocked task with a completed local owner even when its receipt charged %s and its record retained %s', async (charged, retained) => {
     const queues = await read();
     queues.cos.tasks[0].metadata.deliveryDecisionAgentId = 'agent-original';
     queues.cos.tasks[0].metadata.totalSpawnCount = retained;
-    queues.cos.tasks[0].metadata.spawnBudgetProof = episode('agent-original', charged);
     await write(queues);
-    identity.agent = ownerForTask(queues.cos.tasks[0]);
+    identity.agent = ownerForTask(queues.cos.tasks[0], charged);
     const recovery = factory(true);
     expect(await recovery.recover('system-original')).toEqual({ handled: true, phase: 'queued', taskId: 'investigator-1' });
     expect(created).toBe(1);
   });
 
-  it('recovers a blocked task with a completed local owner when legacy history lacks its episode proof', async () => {
+  it('recovers a blocked task with a completed local owner whose legacy record has no dispatch receipt', async () => {
     const queues = await read();
     const task = queues.cos.tasks[0];
     task.metadata.deliveryDecisionAgentId = 'agent-original';
     identity.agent = ownerForTask(task);
-    delete task.metadata.spawnBudgetProof;
+    delete identity.agent.metadata.completionTaskDispatch;
     await write(queues);
     expect(await factory(true).recover('system-original')).toEqual({ handled: true, phase: 'queued', taskId: 'investigator-1' });
     expect(created).toBe(1);

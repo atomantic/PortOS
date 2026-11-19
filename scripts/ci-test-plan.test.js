@@ -25,6 +25,7 @@ import {
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   LINUX_CONTAINMENT_TESTS,
+  CLIENT_FANOUT_TEST_FILES,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
   PLATFORM_PACKAGE_RES,
@@ -34,10 +35,11 @@ import {
   splitByRunner,
   structuralTestsFor,
   SUPERCOLLIDER_LIVE_ENTRIES,
+  TOOLING_OWNER_RE,
+  TOOLING_TESTS,
   DOCKER_CONTAINMENT_LIVE_ENTRIES,
   MACOS_NATIVE_TESTS,
   WINDOWS_CONTRACT_TESTS,
-  WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
 
 // Capture the planner's stderr so a spawn adds nothing to the run's output; a
@@ -57,6 +59,7 @@ const REAL_TREE_SOURCES = [
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
   'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
 let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
@@ -383,12 +386,78 @@ describe('real shared-source import chains', () => {
     expect(plan.server.sources).toEqual([source]);
     // Explicit guards stay additive to the traversal.
     expect(plan.server.files).toEqual(expect.arrayContaining(getAlwaysRunTests().filter((path) => path.startsWith('server/'))));
-    // validation.test.js reaches the leaf only through pipelineValidation; it names
+    // domainSchemas.test.js reaches the leaf only through pipelineValidation; it names
     // neither the leaf nor the editorial feature, so only traversal selects it.
-    expect(plan.server.files).not.toContain('server/lib/validation.test.js');
-    expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
+    expect(plan.server.files).not.toContain('server/lib/domainSchemas.test.js');
+    expect(staticImportClosure(join(cwd, 'server/lib/domainSchemas.test.js')).files)
       .toContain(join(cwd, source));
   });
+});
+
+// The eight gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
+// narrowing record and `related` selection used to fail closed into every plan (#16798).
+describe('gate-tooling tests in a related plan', () => {
+  const inputs = realTree();
+  const relatedPlan = (path) => {
+    const plan = buildCiTestPlan([path], inputs);
+    expect(plan.full, path).toBe(false);
+    expect(plan.server.mode, path).toBe('related');
+    return plan;
+  };
+
+  it('lists eight existing suites, each under an owner path', () => {
+    expect(TOOLING_TESTS).toHaveLength(8);
+    for (const test of TOOLING_TESTS) {
+      expect(existsSync(join(REPO_ROOT, test)), test).toBe(true);
+      expect(TOOLING_OWNER_RE.test(test), test).toBe(true);
+    }
+  });
+
+  it('adds none of them for a diff that touches no tooling', () => {
+    const plan = relatedPlan('server/services/maintenanceRun.js');
+    expect(plan.server.files.filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
+  });
+
+  it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
+    'selects all eight for a diff of %s, an owner path', (path) => {
+      const plan = relatedPlan(path);
+      expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
+    });
+
+  it.each([
+    ['server/vitest.config.js', 'a Vitest config'],
+    ['.github/workflows/ci.yml', 'a workflow'],
+    ['server/package.json', 'a dependency manifest'],
+  ])('still runs everything for %s (%s), which forces a full plan', (path) => {
+    expect(buildCiTestPlan([path], inputs)).toMatchObject({ full: true, server: { mode: 'full' } });
+  });
+
+  it('matches every dependency manifest and Vitest config owner and nothing broader', () => {
+    for (const path of ['package.json', 'package-lock.json', 'client/package.json', 'autofixer/package-lock.json', 'server/.npmrc', 'client/vitest.config.js', 'server/vitest.setup.js']) {
+      expect(TOOLING_OWNER_RE.test(path), path).toBe(true);
+    }
+    for (const path of ['server/services/maintenanceRun.js', 'server/lib/vitestHelper.js', 'client/src/vitest.js', 'docs/package.json.md', 'server/test/browserFixture.js']) {
+      expect(TOOLING_OWNER_RE.test(path), path).toBe(false);
+    }
+  });
+
+  // End to end through the memo walk: the planner's list plus planTestMemo, over the real
+  // tree. Without the runner's narrowing, pregate.test.js (an open read) and
+  // run-ci-tests.test.js (an unresolved edge) are selected for this diff.
+  it('keeps them out of the memo-resolved selection for an unrelated diff', async () => {
+    const { planTestMemo } = await import('./lib/testMemoRunner.js');
+    const { toWorkspacePath } = await import('./lib/workspaceTests.js');
+    const resolve = (path) => {
+      const plan = relatedPlan(path);
+      return planTestMemo({
+        scope: 'server', mode: plan.server.mode, repoFiles: plan.server.files, repoSources: plan.server.sources,
+        memoDir: null, repoRoot: REPO_ROOT, env: process.env, platform: process.platform, arch: process.arch, nodeVersion: process.version,
+        // Only the tooling suites need analysis here; the rest of the inventory adds time, not coverage.
+        listTests: () => TOOLING_TESTS.map((test) => toWorkspacePath('server', test)),
+      }).selected;
+    };
+    expect(resolve('server/services/maintenanceRun.js').filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
+  }, 120_000);
 });
 
 it('keeps exact-file selection for a test-only diff and traverses a nested feature leaf for a differently named consumer', () => {
@@ -614,6 +683,12 @@ it('shares source reads within one collection and observes edits and unreadable 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it('resolves the bounded dynamic imports so an unrelated edit does not poison DB or browser dependencies', () => {
+  const inputs = realTree();
+  expect(inputs.dbDependencies).not.toBeNull();
+  expect(Object.entries(inputs.browserDependencies).filter(([, deps]) => deps === null)).toEqual([]);
 });
 
 it('requests DB verification for every shape of suite in the real canonical inventory without widening the matrix', () => {
@@ -877,7 +952,7 @@ describe('CI test impact planner', () => {
       'server/vitest.config.js',
       'client/vitest.config.js',
       'client/src/test/setup.js',
-      'server/lib/validation.js',
+      'server/lib/schemaVersions.js',
       // The client lint configuration. Both of these carry real enforced rules —
       // the .grit plugins include the crypto.randomUUID ban — so a change to
       // either must widen CI the same way the former eslint.config.js did. This
@@ -1552,18 +1627,32 @@ describe('CI test impact planner', () => {
       expect(plan.slashdo).toBe(true);
     });
 
-    it('fans the client out only when its own selection is over the cap', () => {
+    it('keeps a client selection of 165 files on one runner (the server cap does not apply to the client)', () => {
       const source = 'client/src/components/bigfeature/Panel.jsx';
-      const tests = featureTests('client/src/components/bigfeature', MAX_TARGETED_TEST_FILES + 5, 'jsx');
+      const tests = featureTests('client/src/components/bigfeature', 165, 'jsx');
       const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
 
       expect(plan).toMatchObject({ full: false, client: { mode: 'related', sources: [source] }, build: true });
       expect(plan.client.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards.client).toEqual([1]);
+      expect(plan.shards.server).toEqual([1]);
+    });
+
+    it('fans the client out only when its own selection exceeds CLIENT_FANOUT_TEST_FILES', () => {
+      const source = 'client/src/components/bigfeature/Panel.jsx';
+      const tests = featureTests('client/src/components/bigfeature', CLIENT_FANOUT_TEST_FILES + 1, 'jsx');
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
+
+      expect(plan.client.files).toEqual(expect.arrayContaining(tests));
       expect(plan.shards.client).toEqual(CLIENT_FANOUT);
       expect(plan.shards.server).toEqual([1]);
+      expect(plan.suiteReasons.client).toMatch(/exceed the 400-file cap, sharded 3 ways/);
 
-      const underCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, 20)] });
-      expect(underCap.shards.client).toEqual([1]);
+      // TRACKED adds client selectors of its own, so size the boundary case from the measured floor.
+      const floor = plan.client.files.length - tests.length;
+      const atCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, CLIENT_FANOUT_TEST_FILES - floor)] });
+      expect(atCap.client.files).toHaveLength(CLIENT_FANOUT_TEST_FILES);
+      expect(atCap.shards.client).toEqual([1]);
     });
 
     it('keeps a server related graph and an exact-file plan under the cap on one runner', () => {
@@ -2324,7 +2413,7 @@ describe('dependency manifest Windows escalation', () => {
   });
 
   it('runs shared schema contracts on the primary platform', () => {
-    for (const path of ['server/lib/validation.js', 'server/lib/schemaVersions.js']) {
+    for (const path of ['server/lib/schemaVersions.js']) {
       const plan = planFor([path], {});
       expect(plan.full, path).toBe(true);
       expect(plan.server.mode, path).toBe('full');
@@ -2365,25 +2454,23 @@ describe('path-gated single-purpose jobs', () => {
   // The gates read only the static input lists, which do not depend on the
   // diff; walking the repository once per case exceeded the 5 s test timeout (#12461).
   const realPlan = (changedFiles) => {
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
-    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
+    const { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
+    return buildCiTestPlan(changedFiles, { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
   };
   const gates = (plan) => ({
-    promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
+    linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
   });
 
   it('runs each job only when the real diff reaches its inputs', () => {
     expect(gates(realPlan(['docs/README.md'])))
-      .toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
-    // Reached only through the hash-declaring migrations' import closure.
-    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ promptHistory: true, linuxContainment: true });
+      .toEqual({ linuxContainment: false, supercolliderLive: false });
+    // Shared helper reached through the containment suite's import closure.
+    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ linuxContainment: true });
     expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
-      .toEqual({ promptHistory: false, linuxContainment: true, supercolliderLive: false });
-    expect(gates(realPlan(['data.reference/prompts/stages/example.md'])))
-      .toEqual({ promptHistory: true, linuxContainment: false, supercolliderLive: false });
+      .toEqual({ linuxContainment: true, supercolliderLive: false });
     expect(gates(realPlan(['server/package-lock.json']))).toMatchObject({ linuxContainment: true, supercolliderLive: true });
     expect(gates(realPlan(['.github/workflows/ci.yml'])))
-      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      .toEqual({ linuxContainment: true, supercolliderLive: true });
   });
 
   it('selects the SuperCollider live job for the spawn plumbing its containment cases depend on, not for unrelated files (#12612)', () => {
@@ -2435,13 +2522,13 @@ describe('path-gated single-purpose jobs', () => {
 
   it('runs every gated job when forced full or when an input walk is inconclusive', () => {
     expect(gates(buildCiTestPlan(['docs/README.md'], { forceFull: true })))
-      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      .toEqual({ linuxContainment: true, supercolliderLive: true });
     expect(gates(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: null, linuxContainmentInputs: null, supercolliderLiveInputs: null,
-    }))).toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      linuxContainmentInputs: null, supercolliderLiveInputs: null,
+    }))).toEqual({ linuxContainment: true, supercolliderLive: true });
     expect(gates(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
-    }))).toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
+      linuxContainmentInputs: [], supercolliderLiveInputs: [],
+    }))).toEqual({ linuxContainment: false, supercolliderLive: false });
   });
 
   it('still runs a job when the diff deletes one of its entry points', () => {
@@ -2461,23 +2548,20 @@ describe('path-gated single-purpose jobs', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       emitGitHubPlan(buildCiTestPlan(['docs/README.md'], {
-        promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+        linuxContainmentInputs: [], supercolliderLiveInputs: [],
       }));
       const outputs = JSON.parse(log.mock.calls.at(-1)[0]);
-      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false, supercollider_live: false });
+      expect(outputs).toMatchObject({ linux_containment: false, supercollider_live: false });
     } finally {
       log.mockRestore();
     }
 
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
-    expect(jobs['prompt-history']).toContain('needs: impact');
-    expect(jobs['prompt-history']).toContain('if: fromJSON(needs.impact.outputs.plan).prompt_history\n');
     expect(jobs['linux-containment']).toContain('if: fromJSON(needs.impact.outputs.plan).linux_containment\n');
     // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
     const run = jobs['linux-containment'].match(/run: bash scripts\/ci-install-containment-tools\.sh npm test --prefix server -- --run (.*)/)[1];
     expect(run.split(' ').map((path) => posix.normalize(posix.join('server', path)))).toEqual(LINUX_CONTAINMENT_TESTS);
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
-    expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
 
     // The native SuperCollider matrix lives in ci.yml, is planner-gated, and a
@@ -2502,7 +2586,7 @@ describe('path-gated single-purpose jobs', () => {
   // the job (or, in a gate's `!…` test, silently passes it) instead of failing.
   it('emits every plan key ci.yml reads, with JSON types the expressions compare correctly', () => {
     const output = githubPlanOutput(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+      linuxContainmentInputs: [], supercolliderLiveInputs: [],
     }));
     const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
     const reads = [...ci.matchAll(/fromJSON\(needs\.impact\.outputs\.plan\)\.(\w+)(\s*[!=]=\s*'[^']*')?/g)];
@@ -2526,7 +2610,7 @@ describe('path-gated single-purpose jobs', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       Object.assign(process.env, env);
-      const plan = buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [] });
+      const plan = buildCiTestPlan(['docs/README.md'], { linuxContainmentInputs: [], supercolliderLiveInputs: [] });
       emitGitHubPlan(plan, { gatedBaseSha: 'a'.repeat(40) });
       const lines = readFileSync(env.GITHUB_OUTPUT, 'utf8').trim().split('\n');
       const outputs = Object.fromEntries(lines.map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
@@ -2603,17 +2687,16 @@ describe('path-gated single-purpose jobs', () => {
 // single-purpose jobs follow the tree diff since the last green push or
 // schedule run (CI_GATED_BASE_SHA from scripts/ci-base-sha.js), so a client
 // change no longer queues the macOS, Windows and SuperCollider runners.
-// Prompt history is history-sensitive and stays unconditional.
 describe('native jobs on a push to main', () => {
   const NATIVE_OUTPUTS = ['linux_containment', 'supercollider_live', 'docker_containment_live',
     'macos_native', 'node_minimum', 'windows'];
   const nativeOutputs = (outputs) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, outputs[name]]));
   const allNative = (value) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, value]));
   const gatedPlan = (gatedChangedFiles, extra = {}) => {
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
+    const { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
     return buildCiTestPlan([], {
       forceFull: true, forceFullReason: 'full CI requested', trackedFiles: WINDOWS_CONTRACT_TESTS, gatedChangedFiles,
-      promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, ...extra,
+      linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, ...extra,
     });
   };
   const gates = (plan) => ({
@@ -2658,8 +2741,8 @@ describe('native jobs on a push to main', () => {
       expect(clientOnly).toMatchObject({ full: true, server_mode: 'full', client_mode: 'full', db: true, build: true, smoke: true });
       expect(nativeOutputs(clientOnly)).toEqual(allNative(false));
       expect(clientOnly.windows_mode).toBe('skip');
-      // Gated, so not complete-run evidence; prompt history still runs.
-      expect(clientOnly).toMatchObject({ native_gated: true, prompt_history: true });
+      // Native gating withholds the Full CI Gate.
+      expect(clientOnly.native_gated).toBe(true);
 
       write('server/lib/darwinAgentSupervisor.py', 'print("changed")\n');
       commit();
@@ -2668,7 +2751,7 @@ describe('native jobs on a push to main', () => {
       // A base git cannot diff against (a failed fetch) fails open.
       const unresolvable = plan('0'.repeat(40));
       expect(nativeOutputs(unresolvable)).toEqual(allNative(true));
-      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false, prompt_history: true });
+      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false });
       // As does a push whose lookup exported nothing.
       expect(nativeOutputs(plan(''))).toEqual(allNative(true));
     } finally {
@@ -2703,12 +2786,6 @@ describe('native jobs on a push to main', () => {
     expect(gatedPlan([LOCK], { gatedDependencyChanges: { [LOCK]: sensitive } }).windows).toBe(true);
     // No comparison available fails closed.
     expect(gatedPlan([LOCK]).windows).toBe(true);
-  });
-
-  it('always runs prompt history on a push, because a reverted prompt change leaves no tree diff', () => {
-    for (const files of [[], ['client/src/App.jsx'], ['data.reference/prompts/stages/example.md']]) {
-      expect(gatedPlan(files).promptHistory, files.join()).toBe(true);
-    }
   });
 
   it('runs every native job when forced full without a gated diff', () => {

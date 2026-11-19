@@ -4,7 +4,6 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import {
-  DEFAULT_PEER_PORT,
   PORTS,
   resolvePostgresPort,
 } from './ports.js';

@@ -26,6 +26,20 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
     }
   });
 
+  it('keeps the security preset mission recognizable while adding trust-boundary assessment to its contract', () => {
+    const preset = findQuotaBurnPreset('security-audit');
+    const prompt = preset.params.prompt;
+    const contract = prompt.slice(prompt.indexOf(AUDIT_CONTRACT_HEADING));
+    expect(contract).toContain('attacker control');
+    expect(contract).toContain('reachable sink and unauthorized impact');
+    expect(contract).toContain('compromised dev dependencies');
+    expect(contract).toContain('CSRF');
+    expect(contract).toContain('only on covered paths');
+    // A previously saved, untouched mission remains eligible for the old conversion.
+    const oldContract = contract.replace(/\nUse the target's risk model[\s\S]*?do not re-file unchanged ones\.\n/, '\n');
+    expect(matchStoredAuditPreset(prompt.slice(0, prompt.indexOf(AUDIT_CONTRACT_HEADING)) + oldContract)).toBe(preset);
+  });
+
   it('exposes unique ids with a label, a summary, and a real prompt', () => {
     expect(QUOTA_BURN_PROMPT_PRESETS.length).toBeGreaterThan(0);
     const ids = QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id);
@@ -123,8 +137,8 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
       expect(prompt).toContain('model:light|medium|heavy');
       expect(prompt).toContain('effort:low|medium|high|xhigh|max');
       expect(prompt).not.toContain('Omit an axis rather than guessing');
-      expect(prompt).toContain('repeated `--label`');
-      expect(prompt).toContain('gh label create');
+      expect(prompt).toContain('one `--label` flag per label');
+      expect(prompt).toContain('Only if the create call rejects a label as not found');
       expect(prompt).toContain('Do not relabel an existing issue');
       expect(prompt).toContain('good first issue');
       expect(prompt).toContain('help wanted');

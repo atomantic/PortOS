@@ -78,7 +78,7 @@ export function classifyNonNodeType(files) {
  * else's project. That is what this predicate exists to stop.
  *
  * It is a DENY list rather than an allowlist of Node types because `type` is a
- * free-form string (`appSchema` in `server/lib/validation.js` defaults it to
+ * free-form string (`appSchema` in `server/lib/appValidation.js` defaults it to
  * `express` and accepts any value) PERSISTED on the app record. Installs
  * upgrade on their own schedule, so app records in the wild carry values this
  * file has never heard of — `unknown` from before this classification existed,

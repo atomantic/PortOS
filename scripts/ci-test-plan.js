@@ -39,6 +39,11 @@ const MAX_CHANGED_CODE_FILES = 30;
 // selection now stays exactly as computed and only execution is partitioned
 // (#11871). 125 is that former full-plan threshold (#10312).
 export const MAX_TARGETED_TEST_FILES = 125;
+// The client runner has no reach measure and its cold-memo cost is about 0.4s per
+// file including overhead (#16805 measurements), so one runner absorbs 400 client
+// files inside the existing critical path. Fanning out earlier only adds three
+// runner starts, Chrome warm-ups and memo restores.
+export const CLIENT_FANOUT_TEST_FILES = 400;
 
 // Preserve the planner's public registry export for existing callers.
 export { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -76,7 +81,8 @@ export const shardIndexes = (mode, count) => (
 /**
  * Whether a scoped Linux runner fans out across its full-suite shard count.
  *
- * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
+ * - Over the runner's cap of explicit selectors (MAX_TARGETED_TEST_FILES for the
+ *   server, CLIENT_FANOUT_TEST_FILES for the client): either mode.
  * - A server `related` plan whose measured import reach (`serverReach.selected`,
  *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
  *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
@@ -88,8 +94,9 @@ export const shardIndexes = (mode, count) => (
  * No shard-count floor is needed: the runner slices the selection itself and
  * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
-const fansOut = ({ mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
-  && (files.length > MAX_TARGETED_TEST_FILES || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+const runnerFanOutCap = (runner) => (runner === 'client' ? CLIENT_FANOUT_TEST_FILES : MAX_TARGETED_TEST_FILES);
+const fansOut = (runner, { mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
+  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
 
 const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
 
@@ -246,7 +253,7 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
   // Widely imported, but pure cross-platform schema logic: no spawn, path or
   // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
+  { re: /^server\/lib\/schemaVersions\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
@@ -404,6 +411,35 @@ export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
   ...getGuardTests().filter((path) => !isClientGuard(path)),
 ])].sort());
 
+// The gate-tooling suites: tests of the CI/pregate machinery itself. Each spawns git
+// or carries `test-memo: never`, so none can earn a narrowing record, and `related`
+// selection used to fail closed into every plan whatever the diff touched (#16798).
+// The planner now selects them when a diff touches a TOOLING_OWNER_RE path, and
+// `planTestMemo` keeps one from the related walk only when a changed source reaches
+// its closure or inputs. Full plans and every push to main still run all of them.
+// Before adding a file, audit its real-tree reads: each must sit under
+// TOOLING_OWNER_RE or inside the test's module closure. A test that asserts over
+// other tracked files stays out (runCiTestsClientFixture.test.js is that half of
+// run-ci-tests.test.js, split off so the rest can be listed).
+export const TOOLING_TESTS = [
+  'scripts/lib/testMemo.test.js',
+  'scripts/lib/testMemoRunner.test.js',
+  'scripts/pregate.test.js',
+  'scripts/run-ci-tests.test.js',
+  'scripts/vitestCiPool.test.js',
+  'scripts/vitestSiblingSweep.test.js',
+  'scripts/vitestTempRoot.test.js',
+  'scripts/workspaceCaches.test.js',
+];
+
+// Paths whose edit can break a tooling test with no import edge reaching it: the
+// scripts and workflows themselves, every dependency manifest, the Vitest configs,
+// and the Vitest environment modules the real configs load in the fixtures' child runs.
+export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|ownedBrowserDiagnostics|runTempRoot)\.js$)/;
+
+const toolingTestsFor = (changedFiles, trackedSet) => (
+  changedFiles.some((path) => TOOLING_OWNER_RE.test(path)) ? TOOLING_TESTS.filter((path) => trackedSet.has(path)) : []);
+
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
   /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
@@ -544,21 +580,15 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 // The narrow CI jobs below observe a small, enumerable input set, so a pull
 // request that touches none of it skips them, and so does a push to `main`
 // whose tree diff against the last green push or schedule run touches none of
-// it (CI_GATED_BASE_SHA), except prompt history (see buildCiTestPlan). Schedule,
-// dispatch, workflow_call and release-base runs always run every one. A gate takes one of two forms:
+// it (CI_GATED_BASE_SHA). Schedule, dispatch, workflow_call and release-base
+// runs always run every one. A gate takes one of two forms:
 // - the head tree's static import closure of the job's entry points, computed
 //   per run so it cannot drift from a hand-kept list, plus the non-module
-//   inputs named by the job's pattern (prompt-history, linux-containment,
-//   supercollider-live, docker-containment-live);
+//   inputs named by the job's pattern (linux-containment, supercollider-live,
+//   docker-containment-live);
 // - an explicit path list alone, when the closure would select the job on most
 //   diffs (macos-native; see its note).
 // Every pattern names ci.yml so a workflow edit proves the job still runs.
-export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
-// The guard reads git history of data.reference/prompts against
-// data.reference/prompts/shipped-hashes.json, which the hash regenerator writes.
-// taskPromptDefaults and the snapshot regenerator are the other half of a
-// prompt-default bump.
-export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-(?:prompt-integrity-snapshot|shipped-prompt-hashes)(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
   'autofixer/sandbox.verify.test.js',
@@ -639,9 +669,6 @@ const staticClosureOf = (entries, cwd) => {
     return null;
   }
 };
-
-/** Static closure of the prompt-history guard. */
-export const collectPromptHistoryInputs = (cwd) => staticClosureOf([PROMPT_HISTORY_GUARD], cwd);
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
@@ -928,10 +955,11 @@ export const isRouteOnlyAppDiff = (diff) => {
 const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
-  if (plan[runner].files.length <= MAX_TARGETED_TEST_FILES) {
+  const cap = runnerFanOutCap(runner);
+  if (plan[runner].files.length <= cap) {
     return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
   }
-  return `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
+  return `; ${plan[runner].files.length} selected test files exceed the ${cap}-file cap, sharded ${count} ways`;
 };
 
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
@@ -969,26 +997,22 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  */
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
- * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live, macOS native, Node minimum) runs.
+ * path-gated job (Linux containment, SuperCollider live, Docker containment
+ * live, macOS native, Node minimum) runs.
  *
- * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
- * import closures from collectPlanInputs(); null (the default) runs the job.
+ * The static import closures of the single-purpose jobs come from
+ * collectPlanInputs(). A missing closure (null) runs its job.
  *
  * A forced-full plan runs every gated job, except when `gatedChangedFiles` is
  * an array: a push to `main` whose diff against the last green push or
  * schedule run is known (`CI_GATED_BASE_SHA`). Then the gated jobs and the
  * Windows native job are decided from that diff exactly as a pull request
  * would decide them, while the primary suites stay full. null keeps them all.
- * Prompt history is the exception: its guard reads every committed prompt
- * body, so a change reverted between the base and HEAD leaves no trace in a
- * tree diff yet still needs checking, and the shallow impact clone cannot
- * walk the intervening commits. It always runs on a forced-full plan.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
-    forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null,
+    forceFull = false, linuxContainmentInputs = null, supercolliderLiveInputs = null,
     dockerContainmentLiveInputs = null, serverReach = null, trackedFiles = [],
     gatedChangedFiles = null, gatedDependencyChanges = {},
   } = options;
@@ -1018,7 +1042,6 @@ export function buildCiTestPlan(changedFiles, options = {}) {
     // A gated push still is not complete-run evidence: ci.yml withholds the
     // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
     nativeGated: gatedFull,
-    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
     linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
     supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
     dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
@@ -1183,6 +1206,7 @@ function buildSuitePlan(changedFiles, {
     ...fixtureTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
+    ...toolingTestsFor(changed, trackedSet),
     ...Object.entries(clientTestDependencies)
       .filter(([test, dependencies]) => trackedSet.has(test) && runnerForTest(test) === 'client'
         && jsSources.some((source) => isSharedClientDependency(source)
@@ -1288,7 +1312,7 @@ function buildSuitePlan(changedFiles, {
 const finishPlan = (plan, options = {}) => {
   const reachSelected = serverReachCount(options.serverReach);
   const linuxShards = (runner) => shardIndexes(
-    fansOut(plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
+    fansOut(runner, plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {
@@ -1451,7 +1475,6 @@ export function githubPlanOutput(plan) {
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
-    prompt_history: plan.promptHistory,
     linux_containment: plan.linuxContainment,
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
@@ -1482,7 +1505,6 @@ export function formatPlanSummary(output, shards, gatedBaseSha) {
     `- Client build: ${code(output.build)}`,
     `- Server smoke: ${code(output.smoke)}`,
     `- Slashdo submodule: ${code(output.slashdo)}`,
-    `- Shipped prompt history: ${code(output.prompt_history)}`,
     `- Linux worker containment: ${code(output.linux_containment)}`,
     `- SuperCollider live containment: ${code(output.supercollider_live)}`,
     `- Docker containment live: ${code(output.docker_containment_live)}`,
@@ -1529,6 +1551,29 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   if (baseRef === 'release') return 'release gate: pull request into release';
   return null;
 }
+
+// Computed `import(expr)` sites whose target set is fixed and enumerable. The
+// directory sites contribute every tracked module under the directory as edges;
+// `external` sites load a package or untracked submodule, which no tracked-file
+// edge can represent. A file with any other computed import stays inconclusive
+// only if it is not listed here, so adding a new unbounded site to a listed
+// file means extending this table deliberately.
+// Numbered migrations only: `_helpers`, fixtures and guard tests share the
+// directories but are never loaded by the runners.
+const MIGRATION_FILE_RE = /\/\d+-[^/]*\.js$/;
+const BOUNDED_DYNAMIC_IMPORTS = {
+  'scripts/run-migrations.js': { directory: 'scripts/migrations/', pattern: MIGRATION_FILE_RE },
+  'server/scripts/run-db-migrations.js': { directory: 'server/scripts/db-migrations/', pattern: MIGRATION_FILE_RE },
+  'server/services/eidoverseControllerRegistry.js': {
+    directory: 'server/services/eidoverseControllerDefinitions/', pattern: /\.controller\.js$/,
+  },
+  'server/lib/slashdoLoader.js': { external: true },
+  'server/services/greyboxCapturePage.js': { external: true },
+};
+
+// Browser suites resolve vite and its plugins through resolveClientBundler or
+// the client's require, i.e. packages outside the tracked-file graph.
+const CLIENT_BUNDLER_IMPORT_RE = /\bresolveClientBundler\b|\brequireClient\.resolve\(/;
 
 // A collection owns its snapshot: each source is read and each prerequisite
 // edge is resolved once, even when many browser suites reach the same module.
@@ -1581,12 +1626,21 @@ function createDependencySnapshot(files, cwd) {
       const { deferred, computed } = importsFor(file);
       const statics = staticDependencies(file);
       const dynamic = resolve(file, deferred);
+      const bounded = computed ? boundedComputedImports(file) : null;
       testEdges.set(file, {
-        dependencies: [...statics.dependencies, ...dynamic.dependencies],
-        inconclusive: computed || statics.inconclusive || dynamic.inconclusive,
+        dependencies: [...statics.dependencies, ...dynamic.dependencies, ...(bounded?.dependencies ?? [])],
+        inconclusive: (computed && !bounded) || statics.inconclusive || dynamic.inconclusive,
       });
     }
     return testEdges.get(file);
+  };
+  const boundedComputedImports = (file) => {
+    const site = BOUNDED_DYNAMIC_IMPORTS[file];
+    if (site?.directory) {
+      return { dependencies: files.filter((path) => path.startsWith(site.directory) && site.pattern.test(path)) };
+    }
+    if (site?.external || CLIENT_BUNDLER_IMPORT_RE.test(readText(file))) return { dependencies: [] };
+    return null;
   };
   return { readText, staticDependencies, testDependencies };
 }
@@ -1781,14 +1835,13 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
 
   // A forced-full run with no gated diff runs every gated job, so it skips the walks.
   const walkGates = !forceFull || gatedChangedFiles !== null;
-  const promptHistoryInputs = walkGates ? collectPromptHistoryInputs(cwd) : null;
   const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd) : null;
   const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd) : null;
   const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
-    dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
+    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
+    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
 }
 
 function main() {
@@ -1815,7 +1868,7 @@ function main() {
   const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
-    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
+    dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
     gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
@@ -1836,7 +1889,6 @@ function main() {
     dbDependencies,
     browserDependencies,
     dependencyChanges,
-    promptHistoryInputs,
     linuxContainmentInputs,
     supercolliderLiveInputs,
     dockerContainmentLiveInputs,

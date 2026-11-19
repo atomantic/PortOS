@@ -56,7 +56,6 @@ import {
   explainGoalFidelityPublicationRefusal,
   goalFidelityFingerprint,
   goalFidelityFollowUpApplies,
-  goalFidelityIssueMarker,
   issueMatchesGoalFidelityMarker,
   resolveGoalFidelityFollowUp,
 } from '../lib/goalFidelityFollowUp.js';

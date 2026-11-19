@@ -11,7 +11,6 @@ import {
   filterCutComments,
   filterSafeCutComments,
   CUT_TYPES,
-  SAFE_CUT_TYPES,
 } from './applyCuts.js';
 
 describe('locateCutSpan', () => {

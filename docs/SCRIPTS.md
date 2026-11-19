@@ -1,13 +1,17 @@
 # Scripts reference
 
-Every top-level file in `scripts/` is either wired into something (CI, a test, a `package.json` script, the server) or listed here with when to run it. The guard in `server/scriptReferences.guard.test.js` fails a top-level script that nothing references, so a new one needs a row here or a caller. Test files (`*.test.js`) are collected by the Vitest run and are not listed.
+Every top-level or fixture/experiment file in `scripts/` is either wired into something (CI, a test, a `package.json` script, the server) or listed here with when to run it. The guard in `server/scriptReferences.guard.test.js` fails a script that nothing references, so a new one needs a row here or a caller. Test files (`*.test.js`) are collected by the Vitest run and are not listed.
 
 ## npm scripts
 
 | Command | Purpose |
 |---------|---------|
 | `npm run api -- <cmd> …` | Call this machine's PortOS API from a terminal agent without the instance password. See [AGENT_API_KEY.md](./AGENT_API_KEY.md). |
+| `npm run lint` | Biome over client, server, scripts, lib and autofixer, the same command pregate and CI run (`scripts/run-ci-lint.js`). Exits non-zero on any diagnostic. Use it as the local lint step, e.g. `npm run lint && npm test`. |
 | `npm run eval:agent-context` | Evaluate the agent instruction context (`server/services/agent/agentContextEval.js`). Takes `--fixture <path>` and `--failure-threshold <n>`. |
+| `npm run setup` | The first-run install pipeline, `scripts/setup.js`; `install:all` is an alias and `setup.sh` / `setup.ps1` call the same file, so all three run the same ordered steps: version checks, git submodules, root/client/server/autofixer dependency installs (cwd-based `npm install --no-save`, no `--prefix`, via the installer in `scripts/ensure-deps.js`) with the trusted native rebuilds, then data, database, local LLM, managed browser and certificate setup, then ffmpeg, slash-do and the setup walkthrough. It imports only Node builtins so it runs on a fresh clone. ffmpeg and slash-do are fail-soft. `PORTOS_DEFER_SETUP_GUIDE=1` holds the walkthrough back for the caller to print. |
+| `node scripts/ensure-ffmpeg.js [--non-interactive]` | The one ffmpeg installer (Homebrew, apt-get, dnf or pacman; a manual hint on Windows). Called by `scripts/setup.js`, `update.sh` and `update.ps1`; `--non-interactive` limits Linux to passwordless `sudo -n`. Always exits 0. |
+| `node scripts/install-slashdo.js` | The one slash-do installer: runs `npx slash-do@<version>` for the version pinned in `scripts/SLASHDO_VERSION`. Called by `scripts/setup.js`, `update.sh` and `update.ps1`. Always exits 0. |
 | `npm run setup:spotlight` | macOS only. Excludes churny `data/` subdirectories (worktrees, archives, profiles) from Spotlight; user media stays indexed. Also runs from `setup-data.js`. Set `PORTOS_SKIP_SPOTLIGHT_EXCLUDE=1` to opt out. |
 | `npm run setup:ghostty` | Installs the PortOS Ghostty themes and adds a source line to `~/.zshrc`. Run once on a machine that uses Ghostty. |
 | `npm run reset:password -- <newPassword>` | Recovery when the instance password is lost. Writes `secrets.auth` directly; `--disable` turns the gate off. Stop PortOS first, since the running server caches `settings.json`. |
@@ -25,3 +29,8 @@ Every top-level file in `scripts/` is either wired into something (CI, a test, a
 | `scripts/jira-update-ticket.js --app <app> --ticket <KEY> [--transitions\|--transition\|--comment\|…]` | Updates, comments on, transitions or deletes a JIRA ticket. |
 | `scripts/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
 | `scripts/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
+| `scripts/prune-model-comparison-seed.js [--check]` | Prunes `data.reference/model-comparison.json` to models in provider scope and public benchmark observations. Run with `--check` in CI or after modifying `providers.json`. |
+| `scripts/diagnose_minimax_h3.py --output-dir <dir> [--run]` | Reproduces MiniMax H3 continuity scenarios (#8867) on synthetic keyframes without private inputs. See `docs/research/minimax-h3-continuity.md`. |
+| `scripts/diagnose_minimax_h3_processor.py --cases <all\|production\|undersized>` | Compares H3 torchvision vs PIL image-processor backends across synthetic canvas resolutions. |
+| `scripts/diagnose_minimax_h3_vision.py <torch\|mlx> --output-dir <dir>` | Inspects H3 vision precision across backends/devices with cached weights and synthetic inputs. |
+| `scripts/compare_minimax_h3_vision.py --actual <dir> --reference <dir>` | Compares synthetic H3 vision traces produced by `diagnose_minimax_h3_vision.py`. |

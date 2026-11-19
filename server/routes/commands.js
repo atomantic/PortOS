@@ -7,9 +7,10 @@ import { requireHostControl } from '../services/authGate.js';
 import { broadcastToCommandSubscribers } from '../services/socket.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, commandExecuteBodySchema, processListQuerySchema, processActionSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { getAppById } from '../services/apps.js';
+import { commandExecuteBodySchema, processListQuerySchema, processActionSchema } from '../lib/processValidation.js';
 
 const router = Router();
 

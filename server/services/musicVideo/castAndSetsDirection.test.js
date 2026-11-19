@@ -167,6 +167,31 @@ describe('Cast & Sets direction', () => {
     expect(buildCastAndSetsPrompt(project, { previous: first })).toContain('preserve existing renderingMedium values');
   });
 
+  it('quotes what the MIDI transcription shows in each song section when the project has one', async () => {
+    const { buildMidiDigest } = await import('../../lib/musicVideo/musicVideoMidiDigest.js');
+    const notes = [0, 1, 2, 3, 4, 5].map((i) => ({ track: 0, midi: 60 + i, startSec: 22 + i * 4, durationSec: 1, velocity: 0.5 }));
+    const midi = buildMidiDigest({ notes, tracks: [{ index: 0, name: 'Choir', program: 52, drums: false }] });
+    const prompt = buildCastAndSetsPrompt(project, { midi });
+    expect(prompt).toContain('Audio-to-MIDI transcription of the song');
+    expect(prompt).toContain('Song sections (index. label start–end — what the transcription shows)');
+    expect(prompt).toMatch(/0\. Intro 0:00–0:20 — transcription: no notes/);
+    expect(prompt).toMatch(/1\. Chorus 0:20–1:00 — transcription: .*playing: choir/);
+    expect(buildCastAndSetsPrompt(project)).not.toContain('transcription');
+  });
+
+  it('gives a new direction the standard people sheet and leaves an older one on five views until switched', () => {
+    const fresh = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections }).direction;
+    expect(fresh.sheetLayout).toBe('standard');
+    const { sheetLayout: _dropped, ...older } = fresh;
+    const revised = mergeCastAndSetsDirection(older, parseCastAndSetsResponse(JSON.stringify({ logline: 'a revised night' })), { sections }).direction;
+    expect(revised).not.toHaveProperty('sheetLayout');
+    // The provider never picks the layout: only the director's edit does.
+    expect(mergeCastAndSetsDirection(older, parseCastAndSetsResponse(JSON.stringify({ sheetLayout: 'standard' })), { sections }).direction).not.toHaveProperty('sheetLayout');
+    const switched = applyCastAndSetsDirectionEdits(older, { sheetLayout: 'standard' }, { sections });
+    expect(switched.direction.sheetLayout).toBe('standard');
+    expect(switched.changed).toContain('character sheet layout');
+  });
+
   it('refuses a first pass missing the protagonist or enough sets', () => {
     const parsed = parseCastAndSetsResponse(JSON.stringify({ logline: 'x', sets: [{ name: 'A', description: 'a' }] }));
     expect(mergeCastAndSetsDirection(null, parsed, { sections }).missing).toEqual(['protagonist', 'looks', 'sets']);

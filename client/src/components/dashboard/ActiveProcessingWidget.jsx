@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { AudioLines, Bot, Brain, Cpu, ExternalLink, Film, Image as ImageIcon, Layers3, Package, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { cancelMediaJob } from '../../services/apiMediaJobs.js';
+import { getGpuTelemetry } from '../../services/apiSystem.js';
 import { formatBytes, formatCount } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
@@ -92,12 +93,12 @@ function ActiveProcessingWidget() {
   // Samples only. `enabled: visible` is the "inspector on screen" gate; the
   // hook's own visibility pause covers a hidden tab. No activity fields here.
   const { data: telemetry } = useAutoRefetch(
-    () => api.getGpuTelemetry({ silent: true }),
+    () => getGpuTelemetry({ silent: true }),
     GPU_SAMPLE_MS,
     { enabled: visible, compare: sameGpuSample },
   );
   const data = snapshot;
-  const cancel = (id) => api.cancelMediaJob(id).catch(() => undefined);
+  const cancel = (id) => cancelMediaJob(id).catch(() => undefined);
   const jobs = data?.jobs || [];
   const gpu = telemetry?.gpu;
   const imageTo3d = data?.extras?.imageTo3d || [];

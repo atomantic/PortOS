@@ -1,10 +1,9 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
-import { limitQuerySchema } from '../lib/queryValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
-import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
@@ -15,6 +14,7 @@ import * as googleOAuthAutoConfig from '../services/googleOAuthAutoConfig.js';
 import { getToken, getTokenStatus, clearTokenCache } from '../services/messageTokenExtractor.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
+import { calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/calendarValidation.js';
 
 const router = express.Router();
 

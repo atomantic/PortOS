@@ -1,4 +1,4 @@
-// Single source of truth for Writers Room enums. Imported by validation.js
+// Single source of truth for Writers Room enums. Imported by pipelineValidation.js
 // (Zod) and services/writersRoom/local.js (membership checks) so the schema
 // and the storage layer can never drift.
 //

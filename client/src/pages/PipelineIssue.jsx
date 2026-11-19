@@ -7,7 +7,7 @@
  * where the issue stands and the one next action.
  */
 
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Sparkles, Loader2, Lightbulb, BookOpen, FileText, Film as FilmIcon,
@@ -25,15 +25,7 @@ import {
 } from '../services/api';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { useLockToggle } from '../hooks/useLockToggle';
-import IdeaStage from '../components/pipeline/stages/IdeaStage';
-import ProseStage from '../components/pipeline/stages/ProseStage';
-import NounsStage from '../components/pipeline/stages/NounsStage';
-import ComicScriptStage from '../components/pipeline/stages/ComicScriptStage';
-import TeleplayStage from '../components/pipeline/stages/TeleplayStage';
-import ComicPagesStage from '../components/pipeline/stages/ComicPagesStage';
-import StoryboardsStage from '../components/pipeline/stages/StoryboardsStage';
-import EpisodeVideoStage from '../components/pipeline/stages/EpisodeVideoStage';
-import AudioStage from '../components/pipeline/stages/AudioStage';
+import { lazyWithReload } from '../utils/lazyWithReload';
 import IssueJudgePanel from '../components/pipeline/IssueJudgePanel';
 import SeriesLlmPicker from '../components/pipeline/SeriesLlmPicker';
 import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
@@ -41,6 +33,16 @@ import ArcRolePicker from '../components/pipeline/ArcRolePicker';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
 import { describePipelineIssueStatus } from '../lib/pipelineIssueStatus';
+
+const IdeaStage = lazyWithReload(() => import('../components/pipeline/stages/IdeaStage'));
+const ProseStage = lazyWithReload(() => import('../components/pipeline/stages/ProseStage'));
+const NounsStage = lazyWithReload(() => import('../components/pipeline/stages/NounsStage'));
+const ComicScriptStage = lazyWithReload(() => import('../components/pipeline/stages/ComicScriptStage'));
+const TeleplayStage = lazyWithReload(() => import('../components/pipeline/stages/TeleplayStage'));
+const ComicPagesStage = lazyWithReload(() => import('../components/pipeline/stages/ComicPagesStage'));
+const StoryboardsStage = lazyWithReload(() => import('../components/pipeline/stages/StoryboardsStage'));
+const EpisodeVideoStage = lazyWithReload(() => import('../components/pipeline/stages/EpisodeVideoStage'));
+const AudioStage = lazyWithReload(() => import('../components/pipeline/stages/AudioStage'));
 
 // Stages that surface a header-level settings gear. The Comic editor
 // (`comicScript`) owns its own image-gen drawer inside ComicScriptStage,
@@ -498,13 +500,15 @@ export default function PipelineIssue() {
           refLabel={issue.title ? `#${issue.number} ${issue.title}` : `issue #${issue.number}`}
         />
         {StageComponent ? (
-          <StageComponent
-            issue={issue}
-            series={series}
-            onStageUpdate={(id, updatedStage, updatedIssue) => handleStageUpdate(issue.id, id, updatedStage, updatedIssue)}
-            onSeriesUpdate={setSeries}
-            actionsGated={arcRoleSaving || lengthProfileSaving || genConfigSaving}
-          />
+          <Suspense fallback={<PageSkeleton header="none" label="Loading stage" cards={3} sidebar={false} />}>
+            <StageComponent
+              issue={issue}
+              series={series}
+              onStageUpdate={(id, updatedStage, updatedIssue) => handleStageUpdate(issue.id, id, updatedStage, updatedIssue)}
+              onSeriesUpdate={setSeries}
+              actionsGated={arcRoleSaving || lengthProfileSaving || genConfigSaving}
+            />
+          </Suspense>
         ) : (
           <div className="text-gray-500 text-sm">Unknown stage.</div>
         )}

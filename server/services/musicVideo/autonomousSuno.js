@@ -210,11 +210,15 @@ async function submitSunoSong(page, fields, { sleep = defaultSleep, now = Date.n
     await box.fill(fields.instrumental ? '' : fields.lyrics || '', { timeout: T });
   });
   await step(LABEL, 'fill the style', async () => {
-    // Advanced's Styles textarea uses rotating style examples as its
-    // placeholder. Cowriter, Speech and Sounds are separate editors.
-    const modern = await page.locator('[role="textbox"][aria-label="Lyrics editor"]').count();
-    const styles = modern ? page.locator('textarea:not([aria-label]):not([placeholder="Describe the sound you want"])') : page.locator('textarea[placeholder*="style" i]');
-    await styles.first().fill(fields.style, { timeout: T });
+    const labelled = page.locator('textarea[aria-label="Styles"]:visible');
+    if (await labelled.count()) {
+      await labelled.first().fill(fields.style, { timeout: T });
+      return;
+    }
+    // Older Advanced forms used an unlabelled Styles box with rotating examples.
+    const advanced = await page.locator('[role="textbox"][aria-label="Lyrics editor"]').count();
+    const legacy = advanced ? page.locator('textarea:not([aria-label]):not([placeholder="Describe the sound you want"])') : page.locator('textarea[placeholder*="style" i]');
+    await legacy.first().fill(fields.style, { timeout: T });
   });
   await step(LABEL, 'fill the title', async () => {
     const title = page.locator('input[placeholder*="title" i]:visible').first();

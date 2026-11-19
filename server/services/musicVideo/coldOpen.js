@@ -17,20 +17,11 @@ import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder, probeVideoGeom
 import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { nameShots } from './productionReview.js';
 import { shotSegmentDir } from './shotSegmentPaths.js';
+import { atempoChain } from '../videoTimeline/audioBedMix.js';
 
 const RATE = 48000;
 const FORMAT = `aresample=${RATE},aformat=sample_fmts=fltp:channel_layouts=stereo`;
 const round3 = (n) => Math.round(n * 1000) / 1000;
-
-// atempo takes 0.5..2 per stage; a clip played at 3x or 0.25x chains two.
-function atempoChain(rate) {
-  const stages = [];
-  let left = rate;
-  while (left > 2) { stages.push(2); left /= 2; }
-  while (left < 0.5) { stages.push(0.5); left /= 0.5; }
-  if (Math.abs(left - 1) > 1e-6) stages.push(round3(left));
-  return stages.map((r) => `atempo=${r}`).join(',');
-}
 
 /**
  * Pure: the ffmpeg args that mix the cold open's shots into one WAV at
@@ -57,9 +48,9 @@ function buildColdOpenAudioArgs(shots, outputPath) {
     const clip = shot.clip;
     if (clip) {
       const idx = addInput(clip.path, { loop: clip.loop });
-      const tempo = clip.rate && clip.rate !== 1 ? `,${atempoChain(clip.rate)}` : '';
+      const tempo = atempoChain(clip.rate || 1);
       const lead = clip.leadSec > 0 ? `,adelay=${Math.round(clip.leadSec * 1000)}:all=1` : '';
-      filters.push(`[${idx}:a]${clip.reverse ? 'areverse,' : ''}atrim=start=${round3(clip.sourceInSec || 0)},asetpts=PTS-STARTPTS${tempo},${FORMAT},volume=${clip.volume}${lead}[clip${i}]`);
+      filters.push(`[${idx}:a]${clip.reverse ? 'areverse,' : ''}atrim=start=${round3(clip.sourceInSec || 0)},asetpts=PTS-STARTPTS${tempo ? `,${tempo}` : ''},${FORMAT},volume=${clip.volume}${lead}[clip${i}]`);
       legs.push(`[clip${i}]`);
     }
     (shot.layers || []).forEach((layer, j) => {

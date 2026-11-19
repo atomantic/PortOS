@@ -7,19 +7,8 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  generatePostSchema,
-  generateCommentSchema,
-  publishPostSchema,
-  publishCommentSchema,
-  engageSchema,
-  checkPostsSchema,
-  createDraftSchema,
-  updateDraftSchema,
-  agentToolsFeedQuerySchema,
-  agentToolsRelevantPostsQuerySchema
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { generatePostSchema, generateCommentSchema, publishPostSchema, publishCommentSchema, engageSchema, checkPostsSchema, createDraftSchema, updateDraftSchema } from '../lib/agent/agentValidation.js';
 import { agentToolsAccountQuerySchema, agentToolsPublishedQuerySchema, agentToolsDraftQuerySchema } from '../lib/agent/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agent/agentPersonalities.js';
@@ -30,6 +19,7 @@ import { findRelevantPosts, findReplyOpportunities } from '../services/agent/age
 import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
 import { collectPublishedPosts } from '../services/agent/agentPublished.js';
 import { sleep } from '../lib/fileUtils.js';
+import { agentToolsFeedQuerySchema, agentToolsRelevantPostsQuerySchema } from '../lib/agentToolsValidation.js';
 
 // Throttle between successive platform writes (votes/comments/replies) so a
 // single agent run doesn't burst the platform API.

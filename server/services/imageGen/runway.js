@@ -1,6 +1,7 @@
 import { readFile } from 'fs/promises';
 import { basename } from 'path';
-import { detectImageFormat, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   RUNWAY_IMAGE_DEFAULT_MODEL, getRunwayImageModel, buildRunwayImageRequest, runwayReferenceTags,

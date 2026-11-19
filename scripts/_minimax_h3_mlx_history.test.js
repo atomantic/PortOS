@@ -4,10 +4,18 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const pyBin = resolveTestPython();
+const mediaPy = resolveTestPython({ modules: ['numpy'] }) || pyBin;
 const scripts = fileURLToPath(new URL('.', import.meta.url));
-const run = (source) => execFileSync(pyBin, ['-c', `import sys\nsys.path.insert(0, sys.argv[1])\n${source}`, scripts], {
+const run = (source, bin = pyBin) => execFileSync(bin, ['-c', `import sys\nsys.path.insert(0, sys.argv[1])\n${source}`, scripts], {
   encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
 }).trim();
+let mediaFixture = false;
+if (mediaPy) {
+  try {
+    execFileSync(mediaPy, ['-c', 'import shutil, importlib.util as u; assert shutil.which("ffmpeg"); assert u.find_spec("numpy")'], { stdio: 'ignore', timeout: 30_000 });
+    mediaFixture = true;
+  } catch { /* Media fixture requires ffmpeg and numpy */ }
+}
 
 describe.skipIf(!pyBin)('H3 history runner admission and preservation', () => {
   it('resolves a bounded exclusive prior interval and refuses unsupported or ambiguous requests', () => {
@@ -125,5 +133,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert scratch and all(not p.exists() for p in scratch)
     assert sorted(p.name for p in root.iterdir()) == ['clip.mp4', 'clip.wav', 'source.mp4']
 print('OK')`)).toBe('OK');
+  });
+
+  it.skipIf(!mediaFixture)('exercises real media intervals and audio synchronization via check_media()', () => {
+    expect(run(`
+from fixtures.minimax_h3_history import check_media
+check_media()
+print('media fixture passed')`, mediaPy)).toBe('media fixture passed');
   });
 });

@@ -21,11 +21,11 @@ const Ambient = lazyWithReload(() => import('./pages/Ambient'));
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
 const AIProviders = lazyWithReload(() => import('./pages/AIProviders'));
-const HistoryPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.HistoryPage })));
-const RunnerPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.RunnerPage })));
-const UsagePage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.UsagePage })));
-const ProcessesPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
-const AgentsPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
+const HistoryPage = lazyWithReload(() => import('./pages/HistoryPage'));
+const RunnerPage = lazyWithReload(() => import('./pages/RunnerPage'));
+const UsagePage = lazyWithReload(() => import('./pages/UsagePage'));
+const ProcessesPage = lazyWithReload(() => import('./pages/ProcessesPage'));
+const AgentsPage = lazyWithReload(() => import('./pages/AgentsPage'));
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));

@@ -8,6 +8,11 @@
  * non-overlapping few. Pure: project in, suggestions out.
  */
 
+// Use the same VBV cap for fitted and natively rendered social exports.
+export const SOCIAL_VIDEO_ARGS = Object.freeze([
+  '-c:v', 'libx264', '-profile:v', 'high', '-preset', 'medium', '-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M', '-pix_fmt', 'yuv420p',
+]);
+
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 const HOOK_SECTION = /\b(chorus|hook|refrain|drop)\b/i;

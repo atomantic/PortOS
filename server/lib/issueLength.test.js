@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   LENGTH_PROFILES,
-  LENGTH_PROFILE_NAMES,
   DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX,
   CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,

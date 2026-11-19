@@ -16,7 +16,6 @@ import { getAllTasks, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { isDeepStrictEqual } from 'node:util';
 import { readAgentsStateForSafetyCheck } from './cos/cosState.js';
 import { getSettingsWithStatus } from './settings.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const SHA = /^[a-f0-9]{40}$/;
 const CATEGORY = 'runtime-verification';
@@ -36,9 +35,10 @@ async function integrationEvidence(request) {
     || url.pathname.split('/').slice(1, 3).join('/').toLowerCase() !== origin.fullName.toLowerCase()
     || !/^\/[^/]+\/[^/]+\/pull\/[1-9]\d*$/.test(url.pathname)) throw new Error('The fix must belong to this PortOS repository');
   const { execGh } = await import('./github.js');
-  const raw = await execGh(['pr', 'view', url.pathname.split('/').at(-1), '--repo', origin.fullName,
-    '--json', 'url,state,headRefOid,mergeCommit,baseRefName'], 15000, { cwd: PATHS.root });
-  const pr = JSON.parse(raw);
+  const { readPullRequest } = await import('./prProbe.js');
+  const pr = await readPullRequest(url.pathname.split('/').at(-1), 'url,state,headRefOid,mergeCommit,baseRefName',
+    { repoSpec: origin.fullName, timeoutMs: 15000, cwd: PATHS.root });
+  if (!pr) throw new Error('The fix pull request could not be read from the forge');
   const repo = JSON.parse(await execGh(['repo', 'view', origin.fullName, '--json', 'defaultBranchRef'], 15000, { cwd: PATHS.root }));
   if (pr.state !== 'MERGED' || pr.url !== request.prUrl || pr.baseRefName !== repo.defaultBranchRef?.name
     || !SHA.test(pr.mergeCommit?.oid || '') || ![pr.headRefOid, pr.mergeCommit.oid].includes(request.requiredCommit)) {
@@ -173,7 +173,7 @@ export async function sweepRuntimeVerifications() {
     for (const task of queue?.tasks || []) {
       const m = task.metadata || {};
       const p = m.runtimeVerification;
-      if (task.status !== 'blocked' || isTruthyMeta(m.spawnBudgetReconciledHold) || m.blockedCategory !== CATEGORY || p?.version !== 1 || p.status !== 'waiting'
+      if (task.status !== 'blocked' || m.blockedCategory !== CATEGORY || p?.version !== 1 || p.status !== 'waiting'
         || p.taskId !== task.id || m.runtimeVerificationId !== `${task.id}:${p.agentId}`
         || m.deliveryDecisionAgentId !== p.agentId || (m.app && m.app !== PORTOS_APP_ID)
         || (m.lastSpawnedAt || null) !== p.lastSpawnedAt

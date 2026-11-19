@@ -26,6 +26,8 @@ describe('restoreSnapshot manifest verification', () => {
     ['writers-room', 'writers-room/exercises.json', [{ id: 'exercise-example' }]],
     ['writers-room', 'writers-room/works/wr-work-aabb/manifest.json', { id: 'wr-work-aabb' }],
     ['creative-director', 'creative-director-projects.json', [{ id: 'project-example' }]],
+    ['cos-tasks', 'TASKS.md', '# User Tasks'],
+    ['cos-tasks', 'COS-TASKS.md', '# Internal Tasks'],
   ])('refuses %s legacy metadata at %s before preview or execution (#12397)', async (domain, path, record) => {
     getBackendName.mockReturnValue('postgres');
     const savedBackend = process.env.MEMORY_BACKEND;
@@ -33,7 +35,7 @@ describe('restoreSnapshot manifest verification', () => {
     const markerPath = joinPath(PATHS.data, `${domain === 'creative-director' ? 'creative-director-projects' : domain}.migrated.json`);
     await realFs.writeFile(markerPath, '{"imported":1}');
     try {
-      const hash = await writeSnapshotFile(path, JSON.stringify(record));
+      const hash = await writeSnapshotFile(path, typeof record === 'string' ? record : JSON.stringify(record));
       await writeManifest({ [path]: hash });
       // Both empty and overlapping destination databases must refuse: this is
       // source compatibility, not an opportunistic ON CONFLICT merge.
@@ -74,6 +76,7 @@ describe('restoreSnapshot manifest verification', () => {
         'story-builder.imported/stb-example/index.json', 'writers-room/folders.imported.json',
         'writers-room/exercises.imported.json', 'writers-room/works/wr-work-aabb/manifest.imported.json',
         'writers-room/works/wr-work-aabb/drafts/draft-example.md', 'creative-director-projects.imported.json',
+        'TASKS.md.imported', 'COS-TASKS.md.imported-123',
       ];
       const files = {};
       for (const path of paths) files[path] = await writeSnapshotFile(path, '{}');
@@ -84,6 +87,94 @@ describe('restoreSnapshot manifest verification', () => {
       await writeManifest(files);
       spawn.mockReset();
       await expect(finishRestore({ dryRun: false, subdirFilter: 'writers-room/works/wr-work-aabb/drafts' }))
+        .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
+  it.each(['cos/config.json', 'cos/state.json'])('checks configured CoS task files using snapshot %s', async (configPath) => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const userQueue = 'custom/user.md';
+      const internalQueue = 'custom/internal.md';
+      const config = {
+        userTasksFile: ' ./data/custom/user.md ',
+        cosTasksFile: joinPath(PATHS.data, internalQueue),
+      };
+      const files = {
+        [configPath]: await writeSnapshotFile(configPath, JSON.stringify(configPath === 'cos/config.json' ? config : { config })),
+        [userQueue]: await writeSnapshotFile(userQueue, '# User Tasks'),
+        [internalQueue]: await writeSnapshotFile(internalQueue, '# Internal Tasks'),
+        'custom/note.md': await writeSnapshotFile('custom/note.md', 'unrelated file'),
+        'custom/user.md.imported': await writeSnapshotFile('custom/user.md.imported', 'parked queue'),
+      };
+      await writeManifest(files);
+
+      for (const dryRun of [true, false]) {
+        for (const subdirFilter of [null, 'custom', userQueue, internalQueue]) {
+          await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun, subdirFilter }))
+            .rejects.toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA', context: { domains: ['cos-tasks'] } });
+        }
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      for (const subdirFilter of ['custom/note.md', 'custom/user.md.imported']) {
+        spawn.mockClear();
+        await expect(finishRestore({ subdirFilter }))
+          .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+      }
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
+  it('ignores obsolete CoS config and configured queues outside the data tree', async () => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const files = {
+        'cos/config.json': await writeSnapshotFile('cos/config.json', JSON.stringify({
+          userTasksFile: 'data/../custom/user.md',
+          cosTasksFile: joinPath(PATHS.data, '..', 'custom/internal.md'),
+        })),
+        'cos/state.json': await writeSnapshotFile('cos/state.json', JSON.stringify({ config: { userTasksFile: 'data/custom/user.md' } })),
+        'custom/user.md': await writeSnapshotFile('custom/user.md', 'ordinary file'),
+        'custom/internal.md': await writeSnapshotFile('custom/internal.md', 'ordinary file'),
+      };
+      await writeManifest(files);
+      await expect(finishRestore()).resolves.toMatchObject({ verification: { status: 'verified' } });
+    } finally {
+      if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;
+      else process.env.MEMORY_BACKEND = savedBackend;
+      getBackendName.mockReturnValue(null);
+    }
+  });
+
+  it.each(['directory', 'file'])('ignores legacy CoS config outside the snapshot through a symlinked %s', async (kind) => {
+    getBackendName.mockReturnValue('postgres');
+    const savedBackend = process.env.MEMORY_BACKEND;
+    delete process.env.MEMORY_BACKEND;
+    try {
+      const path = 'custom/user.md';
+      await writeManifest({ [path]: await writeSnapshotFile(path, 'ordinary file') });
+      const externalCosDir = joinPath(tmpRoot, 'external-cos');
+      const externalConfig = joinPath(externalCosDir, 'config.json');
+      const snapshotCosDir = joinPath(snapshotDataDir, 'cos');
+      await realFs.mkdir(externalCosDir);
+      await realFs.writeFile(externalConfig, JSON.stringify({ userTasksFile: 'data/custom/user.md' }));
+      if (kind === 'directory') await realFs.symlink(externalCosDir, snapshotCosDir, 'junction');
+      else {
+        await realFs.mkdir(snapshotCosDir);
+        await realFs.symlink(externalConfig, joinPath(snapshotCosDir, 'config.json'), 'file');
+      }
+      await expect(finishRestore({ subdirFilter: path }))
         .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
     } finally {
       if (savedBackend === undefined) delete process.env.MEMORY_BACKEND;

@@ -67,34 +67,6 @@ export default {
   const corruptSiblings = () =>
     readdirSync(dataDir).filter((f) => f.startsWith('migrations.applied.json.corrupt-'));
 
-  it.each(['pending', 'missing', 'corrupt', 'applied'])('retires unsafe 428 with a %s ledger before earlier failures (#12398)', async state => {
-    const retired = '428-prune-dangling-collection-images.js';
-    // Exercise the shipped, frozen transform through the real runner. If the
-    // retirement regresses it removes both kinds of unresolved image pointer.
-    writeFileSync(join(migrationsDir, retired), `export { default } from ${JSON.stringify(new URL('./migrations/428-prune-dangling-collection-images.js', import.meta.url).href)};`);
-    mkdirSync(join(dataDir, 'images'));
-    const collectionDir = join(dataDir, 'media-collections', 'collection-example');
-    mkdirSync(collectionDir, { recursive: true });
-    const original = JSON.stringify({ items: [{ kind: 'image', ref: 'hosted.png' }, { kind: 'image', ref: 'temporarily-missing.png' }], coverKey: 'image:hosted.png', updatedAt: '2026-01-01T00:00:00Z' });
-    writeFileSync(join(collectionDir, 'index.json'), original);
-    writeFileSync(join(dataDir, 'peer-hosted-media.json'), JSON.stringify({ version: 1, entries: { 'image:hosted.png': { peerId: 'example-peer', at: '2026-01-01T00:00:00Z' } } }));
-    if (state === 'pending') writeFileSync(appliedFile, '["000-earlier.js"]');
-    if (state === 'corrupt') writeFileSync(appliedFile, '{broken');
-    if (state === 'applied') writeFileSync(appliedFile, JSON.stringify([retired]));
-    writeFileSync(join(migrationsDir, '002-failure.js'), 'export async function up() { throw new Error("fixture interruption"); }');
-    if (state === 'missing' || state === 'corrupt') {
-      writeFileSync(join(migrationsDir, '429-purge.js'), 'export const purge = true; export async function up() { throw new Error("purge must stay disarmed"); }');
-    }
-    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('fixture interruption');
-    expect(JSON.parse(readFileSync(appliedFile, 'utf8'))).toContain(retired);
-    expect(readFileSync(join(collectionDir, 'index.json'), 'utf8')).toBe(original);
-    // A retry with a now nonempty ledger cannot re-arm the retired transform.
-    rmSync(join(migrationsDir, '002-failure.js'));
-    expect(await runMigrations({ rootDir, migrationsDir })).toBe(0);
-    expect(readFileSync(join(collectionDir, 'index.json'), 'utf8')).toBe(original);
-    if (state !== 'applied') expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Retired migration 428'));
-  });
-
   it('renames truncated JSON aside and rebuilds from scratch', async () => {
     writeFileSync(appliedFile, '[\n  "001-fixture.js",\n  "002-'); // truncated mid-write
 
@@ -139,6 +111,19 @@ export default {
 
     expect(ran).toBe(1);
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+    expect(corruptSiblings()).toHaveLength(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // Migrations deleted from the tree (#16815) stay in old ledgers; an applied
+  // entry with no file must be inert, not an error or a pending item.
+  it('runs cleanly when the applied list names a migration file that was deleted', async () => {
+    writeFileSync(appliedFile, JSON.stringify(['108-mood-boards-table.js']));
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['108-mood-boards-table.js', '001-fixture.js']);
     expect(corruptSiblings()).toHaveLength(0);
     expect(warnSpy).not.toHaveBeenCalled();
   });
@@ -227,8 +212,8 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['002-purge.js', '001-fixture.js']);
   });
 
-  it('runs numbered migrations without importing helper, CLI or test modules', async () => {
-    for (const file of ['_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js', '001-fixture.test.js']) {
+  it('runs numbered migrations without importing helper or test modules', async () => {
+    for (const file of ['_lib.js', 'shippedPromptHistory.js', '001-fixture.test.js']) {
       writeFileSync(join(migrationsDir, file), 'throw new Error("Non-migration module was imported");');
     }
 
@@ -280,6 +265,35 @@ export default {
 
     await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
     expect(readFileSync(installed, 'utf-8')).toBe('# new\n');
+  });
+
+  // #16827 deleted the migrations that only swapped a shipped prompt body. An
+  // install that never ran one and an install whose ledger still names it must
+  // both end on the live body, with the ledger left exactly as it was.
+  it.each([
+    ['predates the deleted prompt migration', ['001-fixture.js']],
+    ['still names the deleted prompt migration', ['001-fixture.js', '431-security-audit-skill-trust-model.js']],
+  ])('upgrades a retired shipped prompt when the ledger %s', async (_name, ledger) => {
+    const md5 = (body) => createHash('md5').update(body).digest('hex');
+    const reference = join(rootDir, 'data.reference', 'prompts');
+    const installed = join(dataDir, 'prompts');
+    for (const dir of [reference, installed]) mkdirSync(join(dir, 'skills'), { recursive: true });
+    for (const name of ['security-audit.md', 'code-review.md']) writeFileSync(join(reference, 'skills', name), '# new\n');
+    writeFileSync(join(reference, 'shipped-hashes.json'), JSON.stringify({
+      'skills/security-audit.md': { current: md5('# new\n'), retired: [md5('# old\n')] },
+      'skills/code-review.md': { current: md5('# new\n'), retired: [md5('# old\n')] },
+    }));
+    writeFileSync(join(installed, 'skills', 'security-audit.md'), '# old\n');
+    writeFileSync(join(installed, 'skills', 'code-review.md'), '# my own edit\n');
+    const ledgerText = JSON.stringify(ledger);
+    writeFileSync(appliedFile, ledgerText);
+
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual([]);
+    await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
+
+    expect(readFileSync(appliedFile, 'utf-8')).toBe(ledgerText);
+    expect(readFileSync(join(installed, 'skills', 'security-audit.md'), 'utf-8')).toBe('# new\n');
+    expect(readFileSync(join(installed, 'skills', 'code-review.md'), 'utf-8')).toBe('# my own edit\n');
   });
 });
 
@@ -826,8 +840,8 @@ describe('listPendingMigrations', () => {
     expect(pending).toEqual([]);
   });
 
-  it('excludes tests and unnumbered helper or CLI modules', async () => {
-    for (const file of ['001-a.test.js', '_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js']) {
+  it('excludes tests and unnumbered helper modules', async () => {
+    for (const file of ['001-a.test.js', '_lib.js', 'shippedPromptHistory.js']) {
       writeFileSync(join(migrationsDir, file), 'throw new Error("Pending discovery must not import modules");');
     }
     const pending = await listPendingMigrations({ rootDir, migrationsDir });

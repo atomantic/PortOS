@@ -199,8 +199,8 @@ export const JEV_FAILURE_CODES = Object.freeze([
 /**
  * What a caller may ask the sidecar to score. Also the route-input schema:
  * `routes/localLlm.js` validates against it from HERE rather than through
- * `validation.js`. Re-exporting it there put this module into the static import
- * closure of all ~227 suites that reach `mediaValidation.js`, for one schema one
+ * a shared validation module: re-exporting it there would put this module into the
+ * static import closure of every suite that reaches that module, for one schema one
  * route uses — the "constant re-exported through a heavy barrel" shape the
  * import budget in `lib/importScoping.test.js` exists to catch.
  *

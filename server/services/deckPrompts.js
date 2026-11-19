@@ -23,7 +23,7 @@ import { truncDesc } from '../lib/universePromptRenderers.js';
 import {
   DECK_KIND, DECK_KIND_LABELS, deckCardIdentityPrompt, deckCardOrientation, deckCardOrientationPrompt,
 } from '../lib/deckTemplates.js';
-import { DECK_CARD_PROMPT_MAX } from '../lib/deckValidation.js';
+import { DECK_CARD_PROMPT_MAX } from '../lib/deckTemplates.js';
 
 // Keep each response bounded while amortizing the full-roster context over
 // fewer sequential calls; a 79-card tarot deck is five calls.

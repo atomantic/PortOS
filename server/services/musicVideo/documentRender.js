@@ -32,7 +32,7 @@ import { documentSceneCameo, documentCameos } from '../../lib/musicVideo/musicVi
  * The document stays song-timed: a full render seeks 0…durationSec, an excerpt
  * seeks the SAME song times (`startSec + n / fps`), so a draft frame matches the
  * full render at that song time. The picture is captured silent; the master
- * song (plus the optional sound-design bed) is muxed after, trimmed to the
+ * song, clip sound and optional sound-design bed are muxed after, trimmed to the
  * window. The page declares its own size; the project's aspect ratio picks the
  * frame, and a different aspect must be listed in `portosComposition.formats`
  * (the page's optional `layout({ width, height })` hook reframes it).
@@ -44,9 +44,9 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
+import { songClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideo/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideo/musicVideoAspect.js';
 import { lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
@@ -55,8 +55,10 @@ import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
+import { buildSongAudioMix, clipSoundVoice } from './clipSoundMix.js';
 
-import { safeUnder, findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, probeVideoGeometry, edgeFadeFilter } from '../../lib/ffmpeg.js';
+import { safeUnder, findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, probeVideoGeometry, probeVideoAudioPresence, edgeFadeFilter } from '../../lib/ffmpeg.js';
+import { htmlCompositionContractSchemaFor } from '../../lib/htmlCompositionValidation.js';
 export { documentRenderClock, documentSongDuration } from './documentTiming.js';
 // The frame each project aspect renders at (the composition browser's sizes).
 export const DOCUMENT_FRAME_SIZES = Object.freeze({
@@ -545,10 +547,49 @@ function documentBoundaryTimes(data, window) {
   return [...times].sort((a, b) => a - b);
 }
 
-// Mux the silent picture with the master song (and the optional bed), both
-// cut to the window on SONG time.
-function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed = null, buildBed, audioNorm, fade = '' }) {
-  if (!soundBed?.path) {
+async function documentClipSoundVoices(project, data, media, window) {
+  const byId = new Map((project.scenes || []).filter(Boolean).map(scene => [scene.sceneId, scene]));
+  const audioProbes = new Map();
+  const voices = [];
+  const windowEnd = window.startSec + window.durationSec;
+  for (const scene of data.scenes) {
+    const clipSound = songClipSound(byId.get(scene.sceneId));
+    if (!clipSound || scene.startSec == null || scene.endSec == null || scene.startSec >= windowEnd || scene.endSec <= window.startSec) continue;
+    const take = media.get(scene.sceneId);
+    // The browser reads the staged file on its output clock. Read the original
+    // audio from the corresponding source time, with silence under any lead hold.
+    const rate = take?.rate ?? 1;
+    const leadSec = round3(take?.leadSec ?? 0);
+    const startSec = scene.startSec + leadSec;
+    const playable = take?.outSec == null ? Infinity : take.outSec - take.inSec - leadSec;
+    const durationSec = Math.min(scene.endSec - startSec, playable);
+    if (take?.kind === 'video' && durationSec > 0) {
+      if (startSec >= windowEnd || startSec + durationSec <= window.startSec) continue;
+      if (!audioProbes.has(take.path)) audioProbes.set(take.path, await probeVideoAudioPresence(take.path));
+      if (audioProbes.get(take.path) === true) {
+        voices.push(clipSoundVoice({
+          sceneId: scene.sceneId, assetPath: take.path, offsetSec: take.inSec * rate,
+          startSec, durationSec, rate, clipSound,
+        }));
+        continue;
+      }
+    }
+    const reason = take?.kind !== 'video' ? 'select a video take with audio'
+      : durationSec <= 0 ? 'adjust the take trim or offset to leave playable clip sound'
+      : audioProbes.get(take.path) === false ? 'the selected take has no audio stream'
+      : 'the selected take’s audio stream could not be verified';
+    throw new ServerError(`Clip sound is enabled for “${scene.label || scene.sceneId}” but cannot be rendered: ${reason}. Pick a take with sound or turn off Clip sound over the music in Shots.`, {
+      status: 422, code: 'DOCUMENT_CLIP_SOUND_UNAVAILABLE', context: { sceneId: scene.sceneId },
+    });
+  }
+  return voices;
+}
+
+// Mix on song time before trimming to the captured window, so an excerpt
+// starting inside a shot hears the same point in the take as the final.
+function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationSec, songDurationSec, soundBed, voices, fade = '' }) {
+  const mix = buildSongAudioMix({ mainLabel: '[1:a]', soundBed, voices, firstInputIdx: 2, durationSec: songDurationSec, outLabel: '[mixa]' });
+  if (!mix) {
     const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath];
     if (startSec > 0) args.push('-ss', String(startSec));
     args.push('-i', audioPath, '-map', '0:v:0', '-map', '1:a:0', '-t', String(durationSec), '-c:v', 'copy',
@@ -556,13 +597,9 @@ function documentMuxArgs(videoPath, audioPath, outputPath, { startSec, durationS
       '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath);
     return args;
   }
-  const bed = buildBed({
-    beds: [{ assetPath: soundBed.path, offsetSec: 0, durationSec: songDurationSec, volume: soundBed.volume }],
-    firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]', limitPeak: true,
-  });
-  const filters = [`[1:a]${audioNorm}[master]`, ...bed.filters,
+  const filters = [...mix.filters,
     `[mixa]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,apad=whole_dur=${durationSec}${fade}[outa]`];
-  return ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-i', audioPath, ...bed.inputs,
+  return ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-i', audioPath, ...mix.inputs,
     '-filter_complex', filters.join(';'), '-map', '0:v:0', '-map', '[outa]', '-t', String(durationSec), '-c:v', 'copy',
     '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', outputPath];
 }
@@ -589,13 +626,12 @@ async function assertLyricsFitSocialBand(page, { startSec, durationSec }) {
  * Resolves `{ width, height, fps, durationSec, startSec, boundaryTimes }`.
  */
 export async function encodeDocumentComposition({
-  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false,
+  project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false, videoArgs,
 }) {
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const { loadHistory } = await import('../videoGen/history.js');
-  const { AUDIO_NORM, buildAudioBedMix } = await import('../videoTimeline/audioBedMix.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const history = (project.scenes || []).some((s) => scenePlayableClipId(s, project.scenes)) ? await loadHistory() : [];
@@ -653,6 +689,7 @@ export async function encodeDocumentComposition({
     }
     const target = documentTargetFrame(parsed.data, project);
     const window = documentRenderWindow(target, { windowStart, windowEnd });
+    const voices = await documentClipSoundVoices(project, data, media, window);
     // Sample three moments per footage shot against its actual transformed source.
     // Bound cost for long edits; unsampled/missing hooks remain explicit unknowns.
     if (target.width !== parsed.data.width || target.height !== parsed.data.height) {
@@ -682,7 +719,7 @@ export async function encodeDocumentComposition({
     // Long windows split across several browsers (encodeCompositionSegments).
     // A stalled worker browser restarts and redraws its frame (#10839).
     const encoded = await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
-      openPage, encode: encodeComposition,
+      openPage, encode: encodeComposition, videoArgs,
       videoFilterAt: (offsetSec, durationSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, {
         fps: target.fps, offsetSec, durationSec, frame: { width: target.width, height: target.height }, wipeFps: plan.clock.fps,
       }),
@@ -700,7 +737,7 @@ export async function encodeDocumentComposition({
       bin: ffmpeg, signal,
       args: documentMuxArgs(silent, audioPath, outputPath, {
         startSec: window.startSec, durationSec: window.durationSec, songDurationSec: plan.songDurationSec,
-        soundBed, buildBed: buildAudioBedMix, audioNorm: AUDIO_NORM, fade: fade ? edgeFadeFilter(window.durationSec) : '',
+        soundBed, voices, fade: fade ? edgeFadeFilter(window.durationSec) : '',
       }),
     });
     if (!mux.ok) {

@@ -105,6 +105,49 @@ describe('music-video publishing project boundary', () => {
     expect(within(row('YouTube')).queryByText(/Waiting for X thread/)).toBeNull();
   });
 
+  it('keeps the earlier draft on the card when a replacement fails', async () => {
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({
+      drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }],
+    });
+    api.prepareMusicVideoPublishDraft.mockRejectedValueOnce(new Error('Could not open a tab'));
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill again' })); });
+    expect(screen.getByText('Could not open a tab')).toBeInTheDocument();
+    expect(screen.getByText('Example A')).toBeInTheDocument();
+  });
+
+  it('keeps the draft visible on discard failure and removes it after a successful retry', async () => {
+    const discard = deferred();
+    const retry = deferred();
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({
+      drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }],
+    });
+    api.discardMusicVideoPublishDraft.mockReturnValueOnce(discard.promise).mockReturnValueOnce(retry.promise);
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    const youtube = within(row('YouTube'));
+    const confirmDiscard = () => {
+      fireEvent.click(youtube.getByRole('button', { name: 'Discard' }));
+      fireEvent.click(youtube.getByRole('button', { name: 'Confirm discard YouTube draft' }));
+    };
+
+    confirmDiscard();
+    expect(api.discardMusicVideoPublishDraft).toHaveBeenCalledWith('project-a', 'draft-a', { silent: true });
+    expect(youtube.getByText('Example A')).toBeInTheDocument();
+    expect(youtube.getByRole('button', { name: 'Discard' })).toBeDisabled();
+
+    await act(async () => { discard.reject(new Error('Could not discard the draft')); });
+    expect(youtube.getByRole('alert')).toHaveTextContent('Could not discard the draft');
+    expect(youtube.getByText('Example A')).toBeInTheDocument();
+    expect(youtube.getByRole('button', { name: 'Discard' })).toBeEnabled();
+
+    confirmDiscard();
+    expect(youtube.queryByRole('alert')).toBeNull();
+    await act(async () => { retry.resolve(true); });
+    expect(youtube.queryByText('Example A')).toBeNull();
+  });
+
   it('ignores a late old-project preparation without clearing the current preparation', async () => {
     const first = deferred();
     const second = deferred();
@@ -147,6 +190,105 @@ describe('music-video publishing project boundary', () => {
     act(() => onDraft({ projectId: 'project-a', draftId: 'draft-a', target: 'youtube', state: 'closed' }));
     expect(screen.getByText('Tab closed — Fill again')).toBeInTheDocument();
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
+  });
+
+  it('shows a draft and its screenshot in both posting panels, then discards the replacement by ID', async () => {
+    const platformSettings = { platforms: { stackerNews: { enabled: true } } };
+    api.getMusicVideoPublishPlatforms.mockResolvedValueOnce(platformSettings).mockResolvedValueOnce(platformSettings);
+    const original = { draftId: 'first', target: 'stackerNews', state: 'open', summary: { title: 'First draft' }, screenshot: 'data:image/jpeg;base64,AA' };
+    const replacement = { ...original, draftId: 'second', summary: { title: 'Second draft' } };
+    const fill = deferred();
+    api.prepareMusicVideoPublishDraft.mockReturnValueOnce(fill.promise);
+    const view = render(<><div data-testid="first-panel"><Posting id="project-a" /></div><div data-testid="second-panel"><Posting id="project-a" /></div></>);
+    const first = within(view.getByTestId('first-panel'));
+    const second = within(view.getByTestId('second-panel'));
+    await first.findByText(rowLabel('Stacker News'));
+    await second.findByText(rowLabel('Stacker News'));
+    fireEvent.click(first.getByRole('button', { name: 'Fill draft' }));
+
+    const emit = (draft, state, projectId = 'project-a') => {
+      for (const [event, handler] of socket.on.mock.calls) {
+        if (event === 'music-video:publish-draft') handler({ projectId, target: draft.target, draftId: draft.draftId, state });
+      }
+    };
+    await act(async () => emit(original, 'open', 'project-other'));
+    expect(api.getMusicVideoPublishDrafts).toHaveBeenCalledTimes(2);
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({ drafts: [original] }).mockResolvedValueOnce({ drafts: [original] });
+    await act(async () => { emit(original, 'open'); fill.resolve(original); });
+    expect(second.getByText('First draft')).toBeInTheDocument();
+    expect(second.getByAltText('Stacker News draft as filled')).toHaveAttribute('src', original.screenshot);
+
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({ drafts: [replacement] }).mockResolvedValueOnce({ drafts: [replacement] });
+    await act(async () => { emit(original, 'discarded'); emit(replacement, 'open'); });
+    act(() => { emit(original, 'closed'); emit(original, 'discarded'); });
+    expect(first.getByText('Second draft')).toBeInTheDocument();
+    expect(second.getByText('Second draft')).toBeInTheDocument();
+    expect(second.queryByText('First draft')).toBeNull();
+    fireEvent.click(second.getByRole('button', { name: 'Discard' }));
+    await act(async () => fireEvent.click(second.getByRole('button', { name: 'Confirm discard Stacker News draft' })));
+    expect(api.discardMusicVideoPublishDraft).toHaveBeenCalledWith('project-a', 'second', { silent: true });
+    expect(api.getMusicVideoPublishDrafts).toHaveBeenCalledTimes(6);
+  });
+
+  it('keeps the replacement when initial hydration, an older open read and its fill finish late', async () => {
+    const initial = deferred();
+    const olderOpen = deferred();
+    const olderFill = deferred();
+    const original = { draftId: 'first', target: 'youtube', state: 'open', summary: { title: 'First draft' } };
+    const replacement = { ...original, draftId: 'second', summary: { title: 'Second draft' } };
+    api.getMusicVideoPublishDrafts
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(olderOpen.promise)
+      .mockResolvedValueOnce({ drafts: [replacement] });
+    api.prepareMusicVideoPublishDraft.mockReturnValueOnce(olderFill.promise);
+    render(<Posting id="project-a" />);
+    await screen.findByText(rowLabel('YouTube'));
+    fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
+
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    await act(async () => {
+      onDraft({ projectId: 'project-a', target: 'youtube', draftId: 'first', state: 'open' });
+      onDraft({ projectId: 'project-a', target: 'youtube', draftId: 'second', state: 'open' });
+    });
+    expect(screen.getByText('Second draft')).toBeInTheDocument();
+    await act(async () => {
+      olderFill.resolve(original);
+      olderOpen.resolve({ drafts: [original] });
+      initial.resolve({ drafts: [original] });
+    });
+    expect(screen.getByText('Second draft')).toBeInTheDocument();
+    expect(screen.queryByText('First draft')).toBeNull();
+    expect(api.getMusicVideoPublishDrafts).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a close during rehydration even when the list still says the draft is open', async () => {
+    const initial = deferred();
+    api.getMusicVideoPublishDrafts.mockReturnValueOnce(initial.promise);
+    render(<Posting id="project-a" />);
+    await screen.findByText(rowLabel('YouTube'));
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    act(() => onDraft({ projectId: 'project-a', target: 'youtube', draftId: 'first', state: 'closed' }));
+    await act(async () => {
+      initial.resolve({ drafts: [{ draftId: 'first', target: 'youtube', state: 'open', summary: { title: 'First draft' } }] });
+    });
+    expect(screen.getByText('Tab closed — Fill again')).toBeInTheDocument();
+    expect(screen.queryByText('First draft')).toBeNull();
+  });
+
+  it('ignores an open read from a previous selection of the same project', async () => {
+    const oldRead = deferred();
+    const view = render(<Posting id="project-a" />);
+    await screen.findByText(rowLabel('YouTube'));
+    api.getMusicVideoPublishDrafts.mockReturnValueOnce(oldRead.promise);
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    act(() => onDraft({ projectId: 'project-a', target: 'youtube', draftId: 'old', state: 'open' }));
+    view.rerender(<Posting id="project-b" />);
+    view.rerender(<Posting id="project-a" />);
+    await act(async () => {
+      oldRead.resolve({ drafts: [{ draftId: 'old', target: 'youtube', state: 'open', summary: { title: 'Old draft' } }] });
+    });
+    expect(within(row('YouTube')).getByRole('button', { name: 'Fill draft' })).toBeEnabled();
+    expect(screen.queryByText('Old draft')).toBeNull();
   });
 
   it('applies the post the server detected in a filled tab: the draft goes and its recorded link arrives', async () => {

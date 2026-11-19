@@ -387,6 +387,10 @@ export const transcribeMusicVideoMidi = (id, body = {}, options = {}) =>
     method: 'POST', body: JSON.stringify(body), ...options,
   });
 
+// What shot planning and Cast & Sets read from the transcription (null facts without one).
+export const getMusicVideoMidiPlanning = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/midi-planning`, options);
+
 export const musicVideoMidiEventsUrl = (jobId) =>
   `/api/music-video/transcribe-midi/${encodeURIComponent(jobId)}/events`;
 

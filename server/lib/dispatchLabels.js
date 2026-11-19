@@ -97,9 +97,7 @@ const PREFIXED_LABEL_RE = new RegExp(`^(${LABEL_KEY})::?(.+)$`);
 export function forgeLabelName(name, { cli = 'gh' } = {}) {
   if (typeof name !== 'string') return name;
   const parts = PREFIXED_LABEL_RE.exec(name);
-  // Multiple completed reviewers must coexist: GitLab scoped labels replace
-  // other values on the same axis, so review attribution stays unscoped.
-  return parts ? `${parts[1]}${parts[1] === 'reviewer' ? ':' : labelSeparator(cli)}${parts[2]}` : name;
+  return parts ? `${parts[1]}${labelSeparator(cli)}${parts[2]}` : name;
 }
 
 export const DISPATCH_LABEL_COLORS = Object.freeze({
@@ -323,15 +321,6 @@ function implementerLabelSpec(name) {
   } : null;
 }
 
-/** Completed local review models, independent of requested forge reviewers. */
-function reviewerLabelSpec(name) {
-  if (typeof name !== 'string') return null;
-  const canonical = forgeLabelName(name);
-  if (!canonical.startsWith('reviewer:')) return null;
-  const id = normalizePlannerId(canonical.slice('reviewer:'.length));
-  return id ? { name: `reviewer:${id}`, color: '6F42C1', description: `Locally reviewed by the ${id} model` } : null;
-}
-
 /**
  * The planner-attribution instruction for one run, ready to paste into an
  * issue-filing prompt. `plannerId` is this run's own identity (see
@@ -510,12 +499,6 @@ export function jiraContributorLabels({ goodFirstIssue, helpWanted } = {}) {
 /** Both forge contributor labels, in the order they are applied and released. */
 export const CONTRIBUTOR_LABELS = Object.freeze([GOOD_FIRST_ISSUE_LABEL, HELP_WANTED_LABEL]);
 
-/** Jira-safe equivalents of `CONTRIBUTOR_LABELS`. */
-export const JIRA_CONTRIBUTOR_LABELS = Object.freeze([
-  JIRA_GOOD_FIRST_ISSUE_LABEL,
-  JIRA_HELP_WANTED_LABEL,
-]);
-
 /**
  * Forge commands that retire an issue's contributor invitations at claim time.
  * `good first issue` / `help wanted` advertise work to a *human* who might pick
@@ -637,13 +620,8 @@ export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
     }
   }
   // Attribution axes are open-ended and must not shadow fixed labels.
-  const attribution = plannerLabelSpec(name) || implementerLabelSpec(name) || reviewerLabelSpec(name);
+  const attribution = plannerLabelSpec(name) || implementerLabelSpec(name);
   return attribution ? { ...attribution, name: forgeLabelName(attribution.name, { cli }) } : null;
-}
-
-/** All slashdo dispatch-label specs, in axis-then-ramp order. */
-export function allDispatchLabelSpecs() {
-  return Object.keys(DISPATCH_LABEL_COLORS).map((name) => dispatchLabelSpec(name));
 }
 
 /**
@@ -659,14 +637,6 @@ export function formatLabelCreateCommand(name, { cli = 'gh' } = {}) {
     return `glab label create --name ${quoted} --color ${shellQuote(`#${spec.color}`)} --description ${shellQuote(spec.description)} 2>/dev/null || true`;
   }
   return `gh label create ${quoted} --color ${spec.color} --description ${shellQuote(spec.description)} 2>/dev/null || true`;
-}
-
-/** Repeated `--label <name>` flags — one per label, never a comma list. */
-export function formatRepeatedLabelFlags(labels = []) {
-  return labels
-    .filter((label) => typeof label === 'string' && label.trim())
-    .map((label) => `--label ${shellQuote(label.trim())}`)
-    .join(' ');
 }
 
 /**
@@ -726,7 +696,6 @@ export const HARDWARE_REQUIREMENT_GUIDANCE = [
   'Split independent macOS/MLX and CUDA targets. Deduplicate; keep actionable per-target criteria, provenance, blockers and sibling/successor links before closing mixed parents.',
   '`hardwareRequirements`: canonical prerequisite array ([] if none); extend vocabulary as needed. `helpWanted: true` needs requirements or `helpWantedReason: user-perspectives|hardware-alternatives` (OR with none shared). Refuse invalid/missing evidence. Never infer labels from prose/host or auto-change include/exclude selectors.',
 ].join('\n');
-const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED_CRITERIA}`;
 
 /**
  * What the `effort:` axis means, shared by the forge and Jira contracts (`p` is
@@ -746,31 +715,51 @@ const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, 
 export const LIGHT_FINDINGS_BATCH_EXCEPTION = 'findings dispatched light and low-effort (`model:light` + `effort:low`, or that tracker\'s spelling) that share an area go into ONE checklist item of up to 10 entries instead; a bug, security or data-safety finding always stays its own item';
 
 /** `source:<lane>`: which scheduled lane filed an issue; deliberately not a dispatch axis and absent from interactive filings. */
-export const SOURCE_LABEL_GUIDANCE = 'Scheduled lanes/tasks also add `source:<lane>` (lower-case lane or task type id); create it with `gh label create source:<lane> --color 0E8A16 2>/dev/null || true`. Interactive and ad-hoc filings omit it.';
+export const SOURCE_LABEL_GUIDANCE = 'Scheduled lanes/tasks also add `source:<lane>` (lower-case lane or task type id); create it (color 0E8A16) only if the forge rejects it as missing. Interactive and ad-hoc filings omit it.';
 
-/** Canonical filing contract for every autonomous issue producer. */
-export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
-  'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
-  'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read. If evidence is insufficient, investigate before filing rather than guessing or omitting an axis.',
-  '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
-  `- ${effortAxisGuidance('effort:', `effort:${DISPATCH_EFFORT_LEVELS.join('|')}`)}`,
-  'Never derive one axis from the other, and choose `model:` from the evidence rather than defaulting to `medium`. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
-  'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`), its native scoped-label form; GitHub keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
-  // Whole commands, not a `name color` list: an agent copying `model:light D4C5F9`
-  // out of a list minted that string as a label name (#9056).
-  `Create each label immediately before applying it, passing the name and \`--color\` as separate arguments: ${Object.entries(DISPATCH_LABEL_COLORS).map(([name, color]) => `\`gh label create ${name} --color ${color} 2>/dev/null || true\``).join(', ')}. glab needs \`--name <name>\` and \`--color "#<hex>"\`.`,
-  'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
-  HELP_WANTED_GUIDANCE,
-  HARDWARE_REQUIREMENT_GUIDANCE,
-  'Planner attribution: also apply the `planner:<model>` label your run\'s "Planner attribution" instruction gives, never a self-guess (omit it if none). It records the AUTHOR.',
-  // Lets each audit lane's value be measured; an interactive filing has no lane (#16571).
-  SOURCE_LABEL_GUIDANCE,
-  // A separate issue per light finding cost each one a full claim/review/CI/merge
-  // cycle for a ~30-line PR (#16569); batching changes the shipping unit only.
-  'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue (up to 10 `- [ ]` items, one PR), since every issue costs a full claim-to-merge cycle. `bug`, security and data-safety findings stay standalone; every finding is still fixed.',
-  'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick and read back again. Do not report filing complete until both axes are present; report a labeling failure explicitly if repair fails. Never relabel a deduplicated existing issue.',
-  ISSUE_QUALITY_GUIDANCE,
-].join('\n');
+const GITLAB_SEPARATOR_GUIDANCE = 'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`), its native scoped-label form; GitHub keeps the single colon. Match the repo tracker\'s own separator, and an existing `area` label\'s spelling: a mismatched separator is a different, unfilterable label.';
+
+const COLOR_REFERENCE = Object.entries(DISPATCH_LABEL_COLORS).map(([name, color]) => `${name}=${color}`).join(' ');
+
+/**
+ * Canonical filing contract for every autonomous issue producer, a function of
+ * the forge CLI so the GitLab separator paragraph renders only for `glab`.
+ *
+ * Deliberately no create-every-label command list and no read-back loop: the
+ * routing labels already exist on the forge, `gh issue create --label <missing>`
+ * fails before any issue exists (so a created issue always carries every
+ * requested label), and agents scripting a `name color` loop minted malformed
+ * labels such as `effort:high 1D7874` (#9056, #16814). This text rides in every
+ * agent prompt, so keep it small (a test pins the ceiling).
+ */
+export function mandatoryDispatchHintGuidance({ cli = 'gh' } = {}) {
+  return [
+    'If you file issues, follow this contract even when older task text describes dispatch labels as optional. This does not authorize issue creation on its own.',
+    'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read. If evidence is insufficient, investigate rather than guess or omit an axis.',
+    '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
+    `- ${effortAxisGuidance('effort:', `effort:${DISPATCH_EFFORT_LEVELS.join('|')}`)}`,
+    'Never derive one axis from the other, and choose `model:` from the evidence rather than defaulting to `medium`. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
+    ...(cli === 'glab' ? [GITLAB_SEPARATOR_GUIDANCE] : []),
+    // Name and colour as separate arguments: an agent copying `model:light D4C5F9`
+    // out of a list minted that string as a label name (#9056).
+    `The labels already exist: apply them with one \`--label\` flag per label, never a comma list. Only if the create call rejects a label as not found, create that one label with \`gh label create <name> --color <hex>\` (name and colour as separate arguments; glab: \`--name <name> --color "#<hex>"\`) and retry. Colours: ${COLOR_REFERENCE}.`,
+    'Contributor labels stay OPTIONAL: `good first issue` (7057FF) when the work is self-contained enough for a new contributor with no deep repo context (a `model:light` 40-file sweep is NOT a good first issue). For `help wanted` and hardware labels follow the `portos-file-issue` skill.',
+    'Planner attribution: also apply the `planner:<model>` label your run\'s "Planner attribution" instruction gives, never a self-guess (omit it if none). It records the AUTHOR.',
+    // Lets each audit lane's value be measured; an interactive filing has no lane (#16571).
+    SOURCE_LABEL_GUIDANCE,
+    // A separate issue per light finding cost each one a full claim/review/CI/merge
+    // cycle for a ~30-line PR (#16569); batching changes the shipping unit only.
+    'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue (up to 10 `- [ ]` items, one PR), `bug`, security and data-safety findings stay standalone; every finding is still fixed.',
+    'Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). Never relabel a deduplicated existing issue.',
+    ISSUE_QUALITY_GUIDANCE,
+  ].join('\n');
+}
+
+/** The GitHub-form contract, the one task templates embed. */
+export const MANDATORY_DISPATCH_HINT_GUIDANCE = mandatoryDispatchHintGuidance();
+
+/** The one paragraph the GitLab form adds, for a prompt that already embeds the GitHub form. */
+export const GITLAB_DISPATCH_SEPARATOR_GUIDANCE = GITLAB_SEPARATOR_GUIDANCE;
 
 /** Backward-compatible export: all forge filing callers now require both axes. */
 export const DISPATCH_HINT_GUIDANCE = MANDATORY_DISPATCH_HINT_GUIDANCE;

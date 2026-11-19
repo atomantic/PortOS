@@ -14,10 +14,13 @@ import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './p
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cos/cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
+import { settingsSlicePatchSchema } from './settingsValidation.js';
 import {
-  settingsSlicePatchSchema, gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
-  logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
-} from './validation.js';
+  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema,
+  gitDeleteBranchBodySchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema,
+  gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema
+} from './gitValidation.js';
+import { logsQuerySchema, pm2ProcessNameSchema } from './sharedSchemas.js';
 
 const jsonBody = (schema, required = true) => ({
   required,

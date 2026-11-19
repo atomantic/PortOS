@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { getAccelerandoBook } from '../services/rapidReader.js';
-import { validateRequest, rapidReaderLibraryParamsSchema, rapidReaderLibraryCreateSchema, rapidReaderLibraryFetchSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { listRapidReaderLibrary, getRapidReaderLibraryEntry, createPastedRapidReaderEntry, fetchRapidReaderEntry, deleteRapidReaderLibraryEntry } from '../services/rapidReaderLibrary.js';
+import { rapidReaderLibraryParamsSchema, rapidReaderLibraryCreateSchema, rapidReaderLibraryFetchSchema } from '../lib/rapidReaderValidation.js';
 
 const router = Router();
 

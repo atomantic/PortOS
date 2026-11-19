@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 
 // vi.hoisted lets us share this constant with the hoisted vi.mock factory.
@@ -16,6 +15,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return {
     ...actual,
     atomicWrite: vi.fn(actual.atomicWrite),
+    readJSONFile: vi.fn(actual.readJSONFile),
     PATHS: { ...actual.PATHS, brain: TEMP_ROOT },
   };
 });
@@ -89,7 +89,7 @@ vi.mock('./brainStorage.js', () => ({
 
 import * as journal from './brainJournal.js';
 import { brainEvents, getAll } from './brainStorage.js';
-import { atomicWrite } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import * as obsidian from './obsidian.js';
 
 // Pull the payload of the last emit of `name`, or undefined if it never fired.
@@ -340,15 +340,13 @@ describe('brainJournal', () => {
       obsidian.upsertNote.mockResolvedValue('Daily Log/2026-04-17.md');
 
       await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
+      const entry = await journal.appendJournal('2026-04-17', 'hi');
       // Regular syncToObsidian() still no-ops without force.
-      await journal.syncToObsidian({ id: 'j1', date: '2026-04-17', content: 'hi', segments: [] });
+      await journal.syncToObsidian(entry);
       expect(obsidian.upsertNote).not.toHaveBeenCalled();
 
       // force bypasses autoSync so the manual "Re-sync all" action works.
-      await journal.syncToObsidian(
-        { id: 'j1', date: '2026-04-17', content: 'hi', segments: [] },
-        { force: true },
-      );
+      await journal.syncToObsidian(entry, { force: true });
       expect(obsidian.upsertNote).toHaveBeenCalled();
     });
 
@@ -361,9 +359,11 @@ describe('brainJournal', () => {
       obsidian.upsertNote.mockResolvedValue('Daily Log/2026-04-17.md');
 
       await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true, obsidianFolder: 'Daily Log' });
-      const entry = { id: 'j1', date: '2026-04-17', content: 'first', segments: [] };
+      const entry = { date: '2026-04-17', content: 'first', segments: [] };
+      journalRecords.set(entry.date, entry);
       await journal.syncToObsidian(entry);
-      await journal.syncToObsidian({ ...entry, content: 'first\n\nsecond' });
+      journalRecords.set(entry.date, { ...entry, content: 'first\n\nsecond' });
+      await journal.syncToObsidian(entry);
 
       // Both syncs go through the SAME call — whether the note already existed
       // is upsertNote's problem (covered against a real vault in obsidian.test.js),
@@ -410,11 +410,153 @@ describe('brainJournal', () => {
 
       // A deferred sync for the now-deleted day must NOT re-create the sidecar
       // entry (which would reattach if the date were recreated).
-      await journal.syncToObsidian({ id: 'j1', date: '2026-04-17', content: 'content', segments: [] });
+      obsidian.upsertNote.mockClear();
+      expect(await journal.syncToObsidian({ date: '2026-04-17' })).toBeNull();
+      expect(obsidian.upsertNote).not.toHaveBeenCalled();
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({});
+    });
 
-      const { records } = await journal.listJournals();
-      const revived = records.find((r) => r.date === '2026-04-17');
-      expect(revived).toBeUndefined();
+    it.each(['manual', 'bulk'])('preserves a recreated day mirrored by %s sync during deletion', async (mode) => {
+      const date = '2026-04-17';
+      const path = `Daily Log/${date}.md`;
+      const vault = new Map();
+      const entered = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      obsidian.upsertNote.mockImplementation(async (_vault, notePath, markdown) => {
+        vault.set(notePath, markdown);
+        return notePath;
+      });
+      obsidian.deleteNote.mockImplementationOnce(async (_vault, notePath) => {
+        entered.resolve();
+        await release.promise;
+        return vault.delete(notePath);
+      });
+      await journal.updateSettings({ obsidianVaultId: 'v1', obsidianFolder: 'Daily Log', autoSync: false });
+      const original = await journal.appendJournal(date, 'old day');
+      await journal.syncToObsidian(original, { force: true });
+
+      const deletion = journal.deleteJournal(date);
+      await entered.promise;
+      const replacement = await journal.appendJournal(date, 'replacement day');
+      const settings = await journal.getSettings();
+      // Resolve settings reads in memory so one event-loop turn drains all
+      // runnable mirror work while the adapter still holds the old unlink.
+      const readFile = readJSONFile.getMockImplementation();
+      const readSettings = (file, ...args) => file.endsWith('journal-settings.json') ? settings : readFile(file, ...args);
+      await readJSONFile.withImplementation(readSettings, async () => {
+        const sync = mode === 'bulk'
+          ? journal.resyncAllToObsidian()
+          : journal.syncToObsidian(replacement, { force: true });
+        await new Promise(resolve => setImmediate(resolve));
+        release.resolve();
+        await Promise.all([deletion, sync]);
+      });
+
+      expect(vault.get(path)).toContain('replacement day');
+      expect((await journal.getJournal(date)).content).toBe('replacement day');
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({
+        [date]: { obsidianPath: path, obsidianVaultId: 'v1' },
+      });
+    });
+
+    it('unlinks a first mirror that finishes after its day was tombstoned', async () => {
+      const date = '2026-04-17';
+      const entered = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      const tombstoned = Promise.withResolvers();
+      const vault = new Map();
+      await journal.updateSettings({ obsidianVaultId: 'v1', obsidianFolder: 'Daily Log', autoSync: false });
+      const entry = await journal.appendJournal(date, 'old day');
+      obsidian.upsertNote.mockImplementationOnce(async (_vault, path, markdown) => {
+        entered.resolve();
+        await release.promise;
+        vault.set(path, markdown);
+        return path;
+      });
+      obsidian.deleteNote.mockImplementationOnce(async (_vault, path) => vault.delete(path));
+      const sync = journal.syncToObsidian(entry, { force: true });
+      await entered.promise;
+      brainEvents.emit.mockImplementationOnce(() => tombstoned.resolve());
+      const deletion = journal.deleteJournal(date);
+      await tombstoned.promise;
+      release.resolve();
+      await Promise.all([deletion, sync]);
+
+      expect(vault.size).toBe(0);
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({});
+    });
+
+    it('deletes a bulk mirror before its sidecar batch flushes and keeps the recreated day unmirrored', async () => {
+      const date = '2026-04-18';
+      const other = '2026-04-17';
+      const entered = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      const vault = new Map();
+      await journal.updateSettings({ obsidianVaultId: 'v1', obsidianFolder: 'Daily Log', autoSync: false });
+      await journal.appendJournal(date, 'old day');
+      await journal.appendJournal(other, 'other day');
+      obsidian.upsertNote.mockImplementation(async (_vault, path, markdown) => {
+        if (path.endsWith(`${other}.md`)) {
+          entered.resolve();
+          await release.promise;
+        }
+        vault.set(path, markdown);
+        return path;
+      });
+      obsidian.deleteNote.mockImplementationOnce(async (_vault, path) => vault.delete(path));
+
+      const bulk = journal.resyncAllToObsidian();
+      await entered.promise;
+      try {
+        await journal.deleteJournal(date);
+        await journal.appendJournal(date, 'replacement day');
+      } finally {
+        release.resolve();
+      }
+      await bulk;
+
+      expect([...vault.keys()]).toEqual([`Daily Log/${other}.md`]);
+      expect(await journal.getJournal(date)).toMatchObject({ content: 'replacement day', obsidianPath: null });
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({
+        [other]: { obsidianPath: `Daily Log/${other}.md`, obsidianVaultId: 'v1' },
+      });
+    });
+
+    it('preserves another date mirrored during sidecar deletion (#16765)', async () => {
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
+      const removed = await journal.appendJournal('2026-04-17', 'remove');
+      const surviving = await journal.appendJournal('2026-04-18', 'keep');
+      obsidian.upsertNote.mockImplementation(async (_vault, path) => path);
+      await journal.syncToObsidian(removed, { force: true });
+
+      const actual = await vi.importActual('../lib/fileUtils.js');
+      let releaseCleanup;
+      let cleanupStarted;
+      const gate = new Promise((resolve) => { releaseCleanup = resolve; });
+      const started = new Promise((resolve) => { cleanupStarted = resolve; });
+      atomicWrite.mockImplementationOnce(async (...args) => {
+        cleanupStarted();
+        await gate;
+        return actual.atomicWrite(...args);
+      });
+      const deletion = journal.deleteJournal(removed.date);
+      await started;
+      let mirrorStarted;
+      const mirrored = new Promise((resolve) => { mirrorStarted = resolve; });
+      obsidian.upsertNote.mockImplementationOnce(async (_vault, path) => {
+        mirrorStarted();
+        return path;
+      });
+      const sync = journal.syncToObsidian(surviving, { force: true });
+      await mirrored;
+      // Let persistence reach the mutex while the deletion write is held.
+      await new Promise((resolve) => setImmediate(resolve));
+      releaseCleanup();
+      await Promise.all([deletion, sync]);
+
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({
+        '2026-04-18': { obsidianPath: 'Daily Log/2026-04-18.md', obsidianVaultId: 'v1' },
+      });
     });
 
     it('serializes obsidian syncs per date in strict sequential order', async () => {

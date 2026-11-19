@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
-import { Download, Film, Loader2, Trash2, ExternalLink, Video } from 'lucide-react';
+import { Download, Film, Loader2, Trash2, ExternalLink, Video, Copy } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
@@ -14,6 +14,7 @@ import { cancelVideoPendingDelete } from '../services/apiImageVideo.js';
 import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames.js';
 import { timeAgo, formatTimecode } from '../utils/formatters';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
+import { copyToClipboard } from '../lib/clipboard';
 
 const loadVideoDownloads = () => listVideoDownloads({ silent: true });
 
@@ -182,6 +183,16 @@ export default function VideoDownloaderPage() {
                     <span>{timeAgo(d.createdAt)}</span>
                     {d.durationSec != null && <span>· {formatTimecode(d.durationSec)}</span>}
                   </div>
+                  {d.filePath && (
+                    <div className="flex items-center gap-2 mt-1 min-w-0">
+                      <span className="text-[11px] text-gray-400 break-all" title={d.filePath}>File: {d.filePath}</span>
+                      <button type="button" onClick={() => copyToClipboard(d.filePath, 'Path copied')}
+                        aria-label={`Copy file path for ${d.title || 'video'}`}
+                        className="shrink-0 inline-flex items-center gap-1 border border-port-border rounded px-2 py-1 text-xs text-gray-300 hover:text-white">
+                        <Copy size={12} /> Copy path
+                      </button>
+                    </div>
+                  )}
                   {d.sourceUrl && (
                     <a
                       href={d.sourceUrl}

@@ -90,6 +90,7 @@ PortOS/
 │   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
 │   │   ├── agent/             # Agent orchestration and execution
 │   │   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
+│   │   │   ├── agentCliOutputStream.js # Headless CLI stdout/stderr pipeline and transcript persistence
 │   │   │   └── agentOrchestrator.js # Agent lifecycle-transition facade
 │   │   ├── pm2.js             # PM2 process management
 │   │   ├── runner.js          # AI execution engine
@@ -97,7 +98,7 @@ PortOS/
 │   │   └── browserService.js  # Browser CDP/health/PM2 control
 │   ├── lib/                   # Shared utilities
 │   │   ├── errorHandler.js    # Error normalization
-│   │   ├── validation.js      # Zod schemas
+│   │   ├── *Validation.js     # Zod schemas, one file per route family
 │   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
 │   └── cos-runner/            # Isolated agent runner
 │       └── index.js           # Standalone Express server
@@ -310,7 +311,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 
 ### Sub-Agent Spawner (`server/services/subAgentSpawner.js`)
 - `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn listener, run-directory pruning, orphan sweep
-- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
+- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentCliOutputStream.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
 
 ### Agent Orchestrator (`server/services/agent/agentOrchestrator.js`)
 - The one entry point for an agent LIFECYCLE TRANSITION (pause / kill / terminate / complete / spawn) — read its header before touching the agent cluster
@@ -375,8 +376,8 @@ model catalog and MTPLX. Add reusable raw repo metadata reads here; disk cache
 persistence remains in `huggingFaceRepoCache.js`. Model ranking, GGUF/MLX variant
 selection, fit and installability belong in `huggingFaceCatalog.js`. Consumers
 needing only metadata import its owner directly; the catalog retains its old
-`fetchRepoPublishedDates` export for compatibility. `importScoping.test.js` guards
-this boundary and the catalog workflow test checks shared request coalescing.
+`fetchRepoPublishedDates` export for compatibility. The import-growth guard in `importScoping.test.js` covers
+this boundary against fan-out and the catalog workflow test checks shared request coalescing.
 
 ### Shell Service (`server/services/shell.js`)
 - PTY-based web terminal via node-pty
@@ -435,7 +436,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 
 ### Adding an API Endpoint
 1. Create route file in `server/routes/` and mount it in `server/index.js`.
-2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in `server/lib/validation.js` or domain-specific validation modules).
+2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in the route family's domain `server/lib/*Validation.js` module, or `server/lib/sharedSchemas.js` for fragments two domains share).
 3. Register detailed API operation metadata and schemas in `server/lib/apiOperationContracts.js`. Add `x-portos-tool` if the operation should be exposed as an agent-callable tool, and declare thrown error codes in `x-portos-error-codes`.
 4. If the endpoint or domain emits real-time Socket.IO events, declare their payload contracts in `server/lib/socketEventContracts.js`.
 

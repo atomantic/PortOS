@@ -20,9 +20,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, harnessActionSchema, harnessRefreshSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
+import { harnessActionSchema, harnessRefreshSchema } from '../lib/providerValidation.js';
 
 const router = Router();
 const listQuerySchema = z.object({ fresh: z.string().optional() });

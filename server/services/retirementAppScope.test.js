@@ -5,7 +5,6 @@ import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { PATHS } from '../lib/paths.js';
@@ -76,7 +75,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${release.branch}`], repo, { ignoreExitCode: true })).exitCode).toBe(1);
     const first = await getBranchReconcileOutcome('app-1');
     expect(first.retired).toEqual([expect.objectContaining({ branch: release.branch, path: release.path, head: release.head,
-      checkoutIdentity: release.checkoutIdentity, branchDeleted: true, archiveDir: null })]);
+      branchDeleted: true, archiveDir: null })]);
     expect(existsSync(join(PATHS.cos, 'branch-retirement-archives'))).toBe(false);
     expect(existsSync(join(PATHS.cos, 'initialized-checkout-retirements'))).toBe(false);
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });
@@ -97,8 +96,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     await execGit(['commit', '-m', 'feat: outside cleanup work'], path);
     await execGit(['cherry-pick', '-x', branch], repo);
     const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
-    const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null,
-      checkoutIdentity: await readRetirementCheckoutIdentity(path) };
+    const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
     const unrelated = { branch: 'feature/unexplained', head: holder.head, reason: 'branch-held' };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
     if (entryPoint === 'Git UI') {
@@ -137,15 +135,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     const retired = await getBranchReconcileOutcome('app-1');
     expect(retired.retired).toEqual([expect.objectContaining({
       path: release.path, branch: release.branch, head: release.head,
-      checkoutIdentity: release.checkoutIdentity, branchDeleted: true, archiveDir: null,
+      branchDeleted: true, archiveDir: null,
     })]);
     await execGit(['worktree', 'add', '-b', release.branch, release.path, release.head], repo);
-    const recreated = {
-      ...release,
-      checkoutIdentity: await readRetirementCheckoutIdentity(release.path),
-      reason: 'retirement-receipt-unverified',
-    };
-    expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
+    const recreated = { ...release, reason: 'retirement-receipt-unverified' };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
     const next = await (await import('./branchReconcileOutcome.js')).getBranchReconcileInventory('app-1');
     expect(next.retired).toEqual(retired.retired);
@@ -168,8 +161,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     await mkdir(dirname(path), { recursive: true });
     await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
     const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.detached && tree.path.endsWith(agentId));
-    const release = { path: holder.path, head: holder.head, detached: true, managed: true,
-      checkoutIdentity: await readRetirementCheckoutIdentity(path) };
+    const release = { path: holder.path, head: holder.head, detached: true, managed: true };
     const unrelated = { branch: 'feature/unexplained', head: holder.head, reason: 'branch-held' };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
     return { agentId, path, release, unrelated };
@@ -181,7 +173,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     expect(await removeWorktree(agentId, repo, 'cos/detached-follow-up')).toMatchObject({ removed: true });
     expect(existsSync(path)).toBe(false);
     const first = await getBranchReconcileOutcome('app-1');
-    expect(first.retired).toEqual([expect.objectContaining({ path: release.path, head: release.head, checkoutIdentity: release.checkoutIdentity,
+    expect(first.retired).toEqual([expect.objectContaining({ path: release.path, head: release.head,
       branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
     expect(first.retired[0]).not.toHaveProperty('branch');
     const next = await recordBranchReconcileOutcome('app-1', { status: 'complete', remaining: [] });

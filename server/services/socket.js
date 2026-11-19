@@ -47,6 +47,7 @@ import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './provider/providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import { callStateEvents } from './voice/callSession.js';
+import { codeAnimationEvents, emitCodeAnimationChanged as emitCodeAnimationChangedToBus } from './codeAnimation/events.js';
 import {
   validateSocketData,
   errorRecoverSchema
@@ -107,7 +108,7 @@ export function getIo() {
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers];
 
 export function emitCodeAnimationChanged(id, kind) {
-  broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', kind ? { id, kind } : { id });
+  emitCodeAnimationChangedToBus(id, kind);
 }
 
 /** Emit a `command:<id>:*` frame to sockets that sent `command:subscribe`. */
@@ -409,6 +410,7 @@ function setupEventForwarding() {
   setupMediaGenEventForwarding();
   setupProactiveSpeechForwarding();
   setupBeeperEventForwarding();
+  setupCodeAnimationEventForwarding();
   setupRecordEventForwarding();
   setupFableLoomRunForwarding();
   setupPeerSyncEventForwarding();
@@ -830,6 +832,12 @@ function broadcastToBeeper(event, data) { broadcastToSet(beeperSubscribers, even
 function setupBeeperEventForwarding() {
   beeperSocketEvents.on('invalidate', (data) => broadcastToBeeper('beeper:invalidate', data));
   beeperSocketEvents.on('state', (data) => broadcastToBeeper('beeper:realtime', data));
+}
+
+function setupCodeAnimationEventForwarding() {
+  codeAnimationEvents.on('changed', (payload) => {
+    broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', payload);
+  });
 }
 
 // Set up loop event forwarding

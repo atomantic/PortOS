@@ -15,7 +15,7 @@ import { processAuditRecoveryOriginSchema } from '../persistent/persistentMindPr
  * local-endpoint graphs.
  */
 
-// Import from the declaring module, not the `validation.js` barrel (server/AGENTS.md, "Import scoping").
+// Import from the declaring module, not a barrel (server/AGENTS.md, "Import scoping").
 import { normalizeReviewers } from '../reviewerConfig.js';
 import { quotaBurnAgentMetadata } from '../quotaBurnOrigin.js';
 import { claimOwnershipBinding, reconcileAssignmentForTask } from '../claimContinuation.js';

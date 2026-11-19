@@ -80,7 +80,9 @@ export async function screenForgeMaintenance({ records, kind, host, repoFullName
       const requirements = await loadTrustedIssueEvidence({ record, item, read, trust, repoFullName });
       if (!requirements.ok) return requirements;
       maintenanceEvidence = requirements.evidence;
-      evidence.trustedRequirements = maintenanceEvidence;
+      // The issue title/body are already in evidence; do not send a second
+      // copy of the requirements to the guard. Keep merge identity for the
+      // downstream maintenance result, outside the discussion scan.
     }
 
     if (kind === 'pr') {

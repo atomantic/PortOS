@@ -6,7 +6,6 @@
  */
 
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, readJSONFileStrict } from '../lib/fileUtils.js';
 import { queueConfigWrite } from './meatspaceWriteQueues.js';

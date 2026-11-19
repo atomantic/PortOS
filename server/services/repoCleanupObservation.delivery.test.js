@@ -77,6 +77,27 @@ describe('open delivery relationship from exact local Git history', () => {
     expect((await execGit(['show-ref'], root)).stdout).toBe(before);
   });
 
+  // Regression: a completed claim's green PR held only by branch protection's
+  // required approval was handed to a review/merge follow-up that could never
+  // merge it, which then exhausted its own budget and blocked for the operator.
+  it('holds a green PR waiting only on a required human approval without naming a review or repair target', async () => {
+    forge.view.reviewDecision = 'REVIEW_REQUIRED';
+    forge.view.statusCheckRollup = [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+    const result = await inspect();
+    expect(result).toMatchObject({ reason: 'delivery-human-review-pending', ancestry: { relation: 'equal' } });
+    expect(result.headSha).toBeUndefined();
+    expect(result.actionable).not.toBe(true);
+    // Once someone approves, the same PR is the ordinary CI/review wait again.
+    forge.view.reviewDecision = 'APPROVED';
+    expect(await inspect()).toMatchObject({ headSha: two, reason: 'delivery-ci-or-review-pending' });
+  });
+
+  it('keeps red CI on a review-required PR actionable for repair', async () => {
+    forge.view.reviewDecision = 'REVIEW_REQUIRED';
+    forge.view.statusCheckRollup = [{ name: 'CI', conclusion: 'FAILURE' }];
+    expect(await inspect()).toMatchObject({ actionable: true, headSha: two });
+  });
+
   it('retains unknown for an unavailable published object without fetching it', async () => {
     forge.view.headRefOid = 'a'.repeat(40);
     expect(await inspect()).toMatchObject({ reason: 'delivery-head-unverified' });

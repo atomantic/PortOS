@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../../lib/mockPathsDataRoot.js';
 

@@ -145,7 +145,6 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
     task: originalTask,
     agentState,
     success,
-    prExpected: isTruthyMeta(originalTask?.metadata?.openPR),
     cleanupWarnings: warnings || [],
   });
 }
@@ -390,7 +389,7 @@ async function probeWorktreePr(context, success) {
   if (!context.isWorktree || context.discardWorktree || context.prCreation !== PR_CREATION.IF_MISSING) return null;
   const { worktreePath, worktreeBranch, agentOutput } = context;
   if (success) {
-    const { verifyPrClaim } = await import('./agentFinalization.js');
+    const { verifyPrClaim } = await import('./agentPrVerification.js');
     // `agentOutput` (the run's output buffer) rides along so the probe can
     // recognize the parallel-claim stand-down the same way finalize did —
     // without it, cleanup would re-ask the forge, see "no PR", and open a
@@ -572,7 +571,7 @@ async function openWorktreePullRequest(context) {
 
   if (!prResult?.success) return handlePrCreationFailure(context, prResult, targetBranch);
   if (context.originalTask?.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) {
-    const { verifyPrClaim } = await import('./agentFinalization.js');
+    const { verifyPrClaim } = await import('./agentPrVerification.js');
     const verdict = await verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true })
       .catch(() => ({ ok: false }));
     if (!verdict?.ok || !verdict.branch) {

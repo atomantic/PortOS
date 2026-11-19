@@ -58,7 +58,6 @@
 import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from './childProcess.js';
 import { readFileSync } from 'fs';
 import { join, dirname, relative, sep } from 'path';
 import { fileURLToPath } from 'url';

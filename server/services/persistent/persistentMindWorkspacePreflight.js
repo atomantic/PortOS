@@ -23,7 +23,7 @@ import {
   isCliReviewer,
   isReviewer,
 } from '../../lib/cos/cosValidation.js';
-import { compareVersions, satisfiesVersionRequirement } from '../../../scripts/checkNodeVersion.js';
+import { satisfiesVersionRequirement } from '../../../scripts/checkNodeVersion.js';
 import * as codeReview from '../codeReview.js';
 
 const execFileAsync = promisify(execFile);

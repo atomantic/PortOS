@@ -106,7 +106,7 @@ vi.mock('./cos/cosState.js', async () => {
   }
 })
 
-import { INTERVAL_TYPES, INSTALL_WIDE_TASK_TYPES, SELF_IMPROVEMENT_TASK_TYPES, loadSchedule, getTaskInterval, updateTaskInterval, recordExecution, recordRecommendedAudits, getExecutionHistory, shouldRunTask, shouldContinuePerpetualDrain, getDueTasks, getNextTaskType, getUpcomingTasks, addTemplateTask, getTemplateTasks, deleteTemplateTask, resetExecutionHistory, triggerOnDemandTask, getOnDemandRequests, clearOnDemandRequest, getScheduleStatus, computePerpetualRecheckAt, parkPerpetual, resetPerpetualForManualRun, getPerpetualParkInfo, recordPerpetualStall, isPerpetualParkActive, getPerpetualDrainState, recordPerpetualDispatch, applyOnDemandRunResets, queuePerpetualRefill, acknowledgeSwarmCleanupRefill, ON_DEMAND_ORIGINS, recordTaskTypeFailure, recordTaskTypeSuccess, PROMPT_VERSIONS, DEFAULT_TASK_INTERVALS, stripManagedAgentOptionsFromOverride, getTaskTypeInvocation, requiresManagedAppTarget, requiresInstallWideTarget, REFERENCE_WATCH_AUDITED_VERSION, boundParkedUntil } from './taskSchedule.js';
+import { INTERVAL_TYPES, INSTALL_WIDE_TASK_TYPES, SELF_IMPROVEMENT_TASK_TYPES, loadSchedule, getTaskInterval, updateTaskInterval, recordExecution, recordRecommendedAudits, shouldRunTask, shouldContinuePerpetualDrain, getDueTasks, getNextTaskType, getUpcomingTasks, resetExecutionHistory, triggerOnDemandTask, getOnDemandRequests, clearOnDemandRequest, getScheduleStatus, computePerpetualRecheckAt, parkPerpetual, resetPerpetualForManualRun, getPerpetualParkInfo, recordPerpetualStall, isPerpetualParkActive, getPerpetualDrainState, recordPerpetualDispatch, applyOnDemandRunResets, queuePerpetualRefill, acknowledgeSwarmCleanupRefill, ON_DEMAND_ORIGINS, recordTaskTypeFailure, recordTaskTypeSuccess, PROMPT_VERSIONS, DEFAULT_TASK_INTERVALS, stripManagedAgentOptionsFromOverride, getTaskTypeInvocation, requiresManagedAppTarget, requiresInstallWideTarget, REFERENCE_WATCH_AUDITED_VERSION, boundParkedUntil } from './taskSchedule.js';
 import { isRefillRequest } from './taskScheduleConstants.js';
 import { clearTaskTypeFailurePark, computeFailureBackoffMs, FAILURE_BACKOFF_BASE_MS, FAILURE_BACKOFF_CAP_MS, FAILURE_PARK_THRESHOLD } from './taskScheduleBackoff.js';
 import { MANAGED_APP_TARGET_TASK_TYPES, MANAGED_AGENT_OPTIONS, TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO, getTaskTypePromptInfo, PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskScheduleRegistry.js';
@@ -1122,24 +1122,6 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('getExecutionHistory', () => {
-    it('should return empty history for unexecuted task', async () => {
-      mockSchedule()
-      const history = await getExecutionHistory('never-ran-task')
-      expect(history.lastRun).toBeNull()
-      expect(history.count).toBe(0)
-      expect(history.perApp).toEqual({})
-    })
-
-    it('should return existing execution data', async () => {
-      mockSchedule({
-        executions: { 'task:my-task': { lastRun: '2025-06-01T00:00:00Z', count: 3, perApp: {} } }
-      })
-      const history = await getExecutionHistory('my-task')
-      expect(history.lastRun).toBe('2025-06-01T00:00:00Z')
-      expect(history.count).toBe(3)
-    })
-  })
 
   describe('shouldRunTask', () => {
     it('keeps invalid cron verdicts one shape before and after cron parsing', async () => {
@@ -3983,7 +3965,7 @@ describe('recordRecommendedAudits', () => {
     ])
     expect(recorded).toMatchObject({ appId: 'app-1', items: [expect.stringContaining('better-structural-drift'), expect.stringContaining('ux —')] })
     expect(Date.parse(recorded.at)).toBeGreaterThan(0)
-    const history = await getExecutionHistory('code-quality')
+    const history = (await loadSchedule()).executions['task:code-quality']
     expect(history.count).toBe(2)
     expect(history.recommendedAudits.items).toHaveLength(2)
     const status = await getScheduleStatus()
@@ -3995,6 +3977,6 @@ describe('recordRecommendedAudits', () => {
     const previous = { at: '2026-10-01T00:00:00Z', appId: 'app-1', items: ['ux — one'] }
     mockSchedule({ tasks: {}, executions: { 'task:code-quality': { lastRun: '2026-10-01T00:00:00Z', count: 1, perApp: {}, recommendedAudits: previous } } })
     expect(await recordRecommendedAudits('code-quality', 'app-1', [])).toBeNull()
-    expect((await getExecutionHistory('code-quality')).recommendedAudits).toEqual(previous)
+    expect((await loadSchedule()).executions['task:code-quality'].recommendedAudits).toEqual(previous)
   })
 })

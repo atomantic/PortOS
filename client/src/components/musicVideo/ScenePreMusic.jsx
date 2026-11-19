@@ -19,14 +19,14 @@ const control = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs 
 const percent = (v) => `${Math.round(v * 100)}%`;
 
 /** A level slider that keeps its own value while dragging and saves once it is let go. */
-function LevelSlider({ id, label, value, onCommit, disabled }) {
+export function LevelSlider({ id, label, value, onCommit, disabled, min = 0, max = 2 }) {
   const [level, setLevel] = useState(value);
   useEffect(() => { setLevel(value); }, [value]);
   const commit = () => { if (level !== value) onCommit(level); };
   return (
     <span className="flex min-w-[7rem] flex-1 items-center gap-1">
       <label htmlFor={id} className="shrink-0 tabular-nums text-port-text-muted">{label} {percent(level)}</label>
-      <input id={id} type="range" min="0" max="2" step="0.05" value={level} disabled={disabled}
+      <input id={id} type="range" min={min} max={max} step="0.05" value={level} disabled={disabled}
         onChange={(e) => setLevel(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit}
         className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
     </span>

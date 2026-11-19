@@ -500,6 +500,8 @@ const mockPeerRejecting = (key) => {
     key in JSON.parse(init.body) ? legacyRejectsKey(key) : acceptsPush()
   ));
 };
+const CURRENT_PORTOS_META = { schemaVersions: PORTOS_SCHEMA_VERSIONS };
+
 // The default peer fixture carries no musicVideoProjects category; music-video
 // pushes need this opt-in or peerHasCategory short-circuits them.
 const enableMusicVideoPeer = () => {
@@ -3682,6 +3684,7 @@ describe('peerSync', () => {
       await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-1', name: 'Linked', trackId: 'track-9', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack,
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -3704,6 +3707,7 @@ describe('peerSync', () => {
       await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-2', trackId: 'track-9', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
@@ -3722,6 +3726,7 @@ describe('peerSync', () => {
       await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-5', trackId: 'track-A', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-SMUGGLED', audioFilename: 'x.mp3' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -3953,6 +3958,7 @@ describe('peerSync', () => {
       it('refuses a linkedCollection on a kind that has no collection parent', async () => {
         await applyIncomingPush({
           kind: 'musicVideoProject', record: { id: 'mv-1', ...live },
+          portosMeta: CURRENT_PORTOS_META,
           linkedCollection: { id: 'col-1', universeId: 'mv-1', items: [] },
           assetManifest: [], sourceInstanceId: 'peer-a',
         });
@@ -4032,6 +4038,7 @@ describe('peerSync', () => {
         const linkedTrack = { id: 'track-victim', title: 'Hijacked', ...live };
         const push = (record) => applyIncomingPush({
           kind: 'musicVideoProject', record: { ...record, ...live }, linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
+          portosMeta: CURRENT_PORTOS_META,
         });
         vi.mocked(getTrack).mockResolvedValue({ id: 'track-victim', title: 'Mine' });
 
@@ -4047,6 +4054,7 @@ describe('peerSync', () => {
         const linkedTrack = { id: 'track-new', title: 'Fresh', ...live };
         await applyIncomingPush({
           kind: 'musicVideoProject', record: { id: 'mv-fresh', trackId: 'track-new', ...live },
+          portosMeta: CURRENT_PORTOS_META,
           linkedTrack, assetManifest: [], sourceInstanceId: 'peer-a',
         });
         expect(mergeTracksFromSync).toHaveBeenCalledWith([linkedTrack], SOURCE);
@@ -4056,6 +4064,7 @@ describe('peerSync', () => {
         vi.mocked(getTrack).mockRejectedValue(new Error('db unavailable'));
         const result = await applyIncomingPush({
           kind: 'musicVideoProject', record: { id: 'mv-err', trackId: 'track-new', ...live },
+          portosMeta: CURRENT_PORTOS_META,
           linkedTrack: { id: 'track-new', title: 'Fresh', ...live }, assetManifest: [], sourceInstanceId: 'peer-a',
         });
         expect(mergeTracksFromSync).not.toHaveBeenCalled();
@@ -4241,6 +4250,7 @@ describe('peerSync', () => {
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-12', trackId: 'track-12', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-12', deleted: true, deletedAt: '2026-04-01T00:00:00Z' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -4252,6 +4262,7 @@ describe('peerSync', () => {
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-13', trackId: 'track-13', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-13', deleted: false, deletedAt: null },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -4268,6 +4279,7 @@ describe('peerSync', () => {
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-14', trackId: 'track-A', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-SMUGGLED', deleted: true, deletedAt: '2026-04-02T00:00:00Z' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -4285,6 +4297,7 @@ describe('peerSync', () => {
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-15', trackId: 'track-15', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-15', deleted: true, deletedAt: '2026-04-03T00:00:00Z' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -4308,6 +4321,7 @@ describe('peerSync', () => {
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
         record: { id: 'mv-16', trackId: 'track-16', deleted: false, deletedAt: null },
+        portosMeta: CURRENT_PORTOS_META,
         linkedTrack: { id: 'track-16', deleted: true, deletedAt: '2026-04-04T00:00:00Z' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -4695,6 +4709,59 @@ describe('peerSync', () => {
     });
 
     describe('receiver — applyIncomingPush', () => {
+      describe('Music Video previz compatibility', () => {
+        const push = (record, version) => applyIncomingPush({
+          kind: 'musicVideoProject',
+          record,
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+          ...(version === undefined ? {} : { portosMeta: { schemaVersions: { musicVideoProjects: version } } }),
+        });
+        const updatedAt = '2026-06-29T00:00:00Z';
+
+        it.each([53, undefined])('rejects a later legacy project edit before it can replace migrated previz (sender v%s)', async (version) => {
+          await expect(push({
+            id: 'mv-1',
+            name: 'Renamed on the old peer',
+            updatedAt,
+            previz: { night: { startClock: 900, lengthMin: 60, beats: [] } },
+          }, version)).rejects.toMatchObject({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            details: {
+              ahead: [],
+              behind: [{ category: 'musicVideoProjects', senderV: version ?? 0, receiverV: PORTOS_SCHEMA_VERSIONS.musicVideoProjects }],
+            },
+          });
+          expect(mergeMusicVideoProjectsFromSync).not.toHaveBeenCalled();
+        });
+
+        it('merges a live project edit from the first timeline-capable sender', async () => {
+          const project = {
+            id: 'mv-1',
+            name: 'Renamed on a compatible peer',
+            updatedAt,
+            concept: { subjects: [{ id: 'car', kind: 'object', name: 'Car' }] },
+            previz: { timeline: { startClock: 480, lengthMin: 60, beats: [] }, vehicles: [{ subjectId: 'car', speedMetersPerMin: 300 }] },
+          };
+
+          await push(project, 54);
+
+          expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith([project], {
+            source: { via: 'peer-push', peerId: 'peer-a' },
+            senderSchemaVersions: { musicVideoProjects: 54 },
+          });
+        });
+
+        it.each([53, undefined, PORTOS_SCHEMA_VERSIONS.musicVideoProjects + 1])('merges and acknowledges a project tombstone (sender v%s)', async (version) => {
+          const tombstone = { id: 'mv-1', deleted: true, deletedAt: updatedAt, updatedAt };
+
+          const result = await push(tombstone, version);
+
+          expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith([tombstone], expect.any(Object));
+          expect(result.ackedDeletesUpTo).toBe(Date.parse(updatedAt));
+        });
+      });
+
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
         // A push from a sender one universes version ahead of local code must NOT touch local state.
         const rejection = await applyIncomingPush({
@@ -4740,11 +4807,11 @@ describe('peerSync', () => {
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4 } },
+          portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 4, musicVideoProjects: 53 } },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 4 } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 4, musicVideoProjects: 53 } },
         );
       });
 
@@ -5043,7 +5110,7 @@ describe('peerSync', () => {
         expect(after.lastPushedHash).toBeFalsy();
       });
 
-      it('persists the receiver-side gap (`behind`) the 409 reports', async () => {
+      it('points to the peer on a mixed refusal and preserves the behind diagnostic', async () => {
         vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
         vi.mocked(peerFetch).mockResolvedValue({
           ok: false,
@@ -5061,11 +5128,61 @@ describe('peerSync', () => {
         const sub = await subscribePeer({
           peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
         }, { adoptedFromReverse: true });
-        await pushRecordToPeer(sub);
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          expect(await pushRecordToPeer(sub)).toMatchObject({ reason: 'peer-schema-behind', blockedBySchema: true });
+          expect(log).toHaveBeenCalledWith(expect.stringContaining('Update the peer’s PortOS to resume sync. sender ahead of receiver on universes'));
+          expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Update this PortOS'));
+        } finally {
+          log.mockRestore();
+        }
         const after = await findPeerSubscription('peer-a', 'universe', 'u1');
         expect(after.blockedBySchema.behind).toEqual([{ category: 'series', senderV: 2, receiverV: 3 }]);
         expect(after.blockedBySchema.peerPortosVersion).toBeNull();
         expect(after.blockedBySchema.peerSchemaVersions).toBeNull();
+      });
+
+      it('points to this install when the peer refuses a universe push over a behind-only catalog gap', async () => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+          ingredients: [{ id: 'example-object', type: 'object', payload: { name: 'Example' } }],
+          refs: [],
+        });
+        const senderV = PORTOS_SCHEMA_VERSIONS.catalog;
+        const receiverV = senderV + 1;
+        const behind = [{ category: 'catalog', senderV, receiverV }];
+        vi.mocked(peerFetch).mockResolvedValue({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+            context: { details: { ahead: [], behind, receiverPortosVersion: '3.0.0' } },
+          }),
+        });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+          expect(await pushRecordToPeer(sub)).toEqual({
+            pushed: false, reason: 'local-schema-behind', blockedBySchema: true,
+          });
+          expect(log).toHaveBeenCalledWith(expect.stringContaining(
+            `Update this PortOS to resume sync. sender behind receiver on catalog (v${senderV} vs v${receiverV})`,
+          ));
+        } finally {
+          log.mockRestore();
+        }
+        const payload = JSON.parse(vi.mocked(peerFetch).mock.calls[0][1].body);
+        expect(payload.catalogBundle.ingredients).toHaveLength(1);
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(blocked.blockedBySchema).toMatchObject({ ahead: [], behind, peerPortosVersion: '3.0.0' });
+        expect(blocked.lastPushedHash).toBeFalsy();
+        expect(await pushRecordToPeer(blocked)).toEqual({
+          pushed: false, reason: 'local-schema-behind-cooldown', blockedBySchema: true,
+        });
+        expect(peerFetch).toHaveBeenCalledTimes(1);
       });
 
       it('reports a 409 without the schema code as a plain http-409 (no schema block)', async () => {
@@ -5647,6 +5764,7 @@ describe('peerSync', () => {
           payload: () => ({
             kind: 'musicVideoProject',
             record: { id: 'mv-9', trackId: 'track-9', deleted: false, deletedAt: null },
+            portosMeta: CURRENT_PORTOS_META,
             linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
             assetManifest: [],
             sourceInstanceId: 'peer-a',
@@ -5884,7 +6002,7 @@ describe('peerSync', () => {
 
   describe('peerSyncPushSchema — mediaCollection validation', () => {
     it('accepts a valid mediaCollection push payload', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       expect(() => peerSyncPushSchema.parse({
         kind: 'mediaCollection',
         record: { id: 'col-x', name: 'My Collection', items: [] },
@@ -5894,7 +6012,7 @@ describe('peerSync', () => {
     });
 
     it('rejects a mediaCollection push payload missing sourceInstanceId', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       expect(() => peerSyncPushSchema.parse({
         kind: 'mediaCollection',
         record: { id: 'col-x' },
@@ -5903,7 +6021,7 @@ describe('peerSync', () => {
     });
 
     it('accepts music push payloads and music asset manifests', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       for (const kind of ['artist', 'album', 'track']) {
         expect(() => peerSyncPushSchema.parse({
           kind,
@@ -6238,7 +6356,7 @@ describe('media-library federation (#1566)', () => {
       // Satisfies universe/series' local-ephemeral lookup (the only two kinds
       // that read `desc.load` before merging) — a non-ephemeral local match.
       vi.mocked(get).mockResolvedValue(record);
-      await applyIncomingPush({ kind, record, assetManifest: [], sourceInstanceId: 'peer-a' });
+      await applyIncomingPush({ kind, record, assetManifest: [], sourceInstanceId: 'peer-a', portosMeta: CURRENT_PORTOS_META });
       expect(merge).toHaveBeenCalledWith(
         [expect.objectContaining({ id: record.id })],
         expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
@@ -6251,14 +6369,14 @@ describe('media-library federation (#1566)', () => {
       const presentRecord = { id: `ak-present-${kind}`, name: 'AK', deleted: false, deletedAt: null };
       vi.mocked(get).mockResolvedValue(presentRecord);
       const presentResult = await applyIncomingPush({
-        kind, record: presentRecord, assetManifest: [], sourceInstanceId: 'peer-a',
+        kind, record: presentRecord, assetManifest: [], sourceInstanceId: 'peer-a', portosMeta: CURRENT_PORTOS_META,
       });
       expect(presentResult.reverseSubscriptionCreated).toBe(true);
 
       const missingRecord = { id: `ak-missing-${kind}`, name: 'AK', deleted: false, deletedAt: null };
       vi.mocked(get).mockResolvedValue(undefined);
       const missingResult = await applyIncomingPush({
-        kind, record: missingRecord, assetManifest: [], sourceInstanceId: 'peer-a',
+        kind, record: missingRecord, assetManifest: [], sourceInstanceId: 'peer-a', portosMeta: CURRENT_PORTOS_META,
       });
       expect(missingResult.reverseSubscriptionCreated).toBe(false);
     });

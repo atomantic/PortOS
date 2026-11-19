@@ -1,17 +1,21 @@
 import PageLayout from '../components/PageLayout';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, FileCode2, GitFork, Film, Globe, Images, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
-import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
 import CodeAnimationSoundtrack from '../components/codeAnimation/CodeAnimationSoundtrack';
 import FilmStylePicker from '../components/codeAnimation/FilmStylePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
-import ProductionProjects from '../components/codeAnimation/ProductionProjects';
-import CodeAnimationGallery from '../components/codeAnimation/CodeAnimationGallery';
+import { lazyWithReload } from '../utils/lazyWithReload';
+
+const CodeAnimationPreview = lazyWithReload(() => import('../components/codeAnimation/CodeAnimationPreview'));
+const ProductionProjects = lazyWithReload(() => import('../components/codeAnimation/ProductionProjects'));
+const CodeAnimationGallery = lazyWithReload(() => import('../components/codeAnimation/CodeAnimationGallery'));
 import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
 import useProviderModels from '../hooks/useProviderModels';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -828,15 +832,17 @@ function FastCodeAnimation() {
               </div>
             </details>
             {preview && options && (
-              <CodeAnimationPreview
-                html={preview.html}
-                audioUrl={preview.audioUrl}
-                frame={preview.frame}
-                jobId={preview.jobId}
-                messages={options.messages}
-                audioGlobal={options.audioGlobal}
-                title={draft.title || draft.concept.slice(0, 40)}
-              />
+              <Suspense fallback={<BrailleSpinner text="Loading preview" />}>
+                <CodeAnimationPreview
+                  html={preview.html}
+                  audioUrl={preview.audioUrl}
+                  frame={preview.frame}
+                  jobId={preview.jobId}
+                  messages={options.messages}
+                  audioGlobal={options.audioGlobal}
+                  title={draft.title || draft.concept.slice(0, 40)}
+                />
+              </Suspense>
             )}
             {preview?.jobId && job?.id === preview.jobId && job.status === 'completed' && (
               <button type="button" onClick={handleFork} className={buttonSecondary}>
@@ -910,7 +916,9 @@ export default function CodeAnimation() {
       />}
     >
       <div className="mx-auto max-w-7xl">
-        {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : pathname === '/code-animation' && !new URLSearchParams(search).get('job') ? <NewCodeAnimation /> : <FastCodeAnimation />}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading animation workspace" cards={3} sidebar={false} />}>
+          {mode === 'production' ? <ProductionProjects /> : mode === 'gallery' ? <CodeAnimationGallery /> : pathname === '/code-animation' && !new URLSearchParams(search).get('job') ? <NewCodeAnimation /> : <FastCodeAnimation />}
+        </Suspense>
       </div>
     </PageLayout>
   );

@@ -7,6 +7,7 @@ import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { isRetryHeld } from '../../lib/taskRetryHold.js';
+import { MAX_SPAWNS_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { getAppWorkspace } from './agentPromptBuilder.js';
 import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/provider/providerVendors.js';
@@ -14,7 +15,6 @@ import { ensureInstanceId } from '../instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from '../cos/cosTaskClaim.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
-import { spawnBudgetHoldReason } from '../spawnBudgetProof.js';
 import { isExpectedUnpersistedMiss } from '../../lib/autonomousJobTask.js';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -55,9 +55,9 @@ export function createAgentSpawnContext(task) {
     if (context.spawnClaimCheckout) {
       const { repoPath, worktreePath, branchName } = context.spawnClaimCheckout;
       context.spawnClaimCheckout = null;
-      const { removeWorktree } = await import('../worktreeManager.js');
+      const { removeWorktreeAtPath } = await import('../worktreeManager.js');
       // Nothing has run in it yet, so the fresh branch carries no work to keep.
-      await removeWorktree(repoPath, worktreePath, { branchName, deleteBranch: true, force: true }).catch((cleanupErr) => {
+      await removeWorktreeAtPath(repoPath, worktreePath, { branchName, deleteBranch: true, force: true }).catch((cleanupErr) => {
         emitLog('warn', `Failed to remove the claim checkout of failed spawn ${context.agentId}: ${cleanupErr.message}`, { agentId: context.agentId, taskId: context.task.id });
       });
     }
@@ -152,18 +152,12 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     return null;
   }
 
-  if (checkedTask && await spawnBudgetHoldReason(checkedTask)) {
-    emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
-    await context.cleanupOnError('spawn budget reconciliation required');
-    return null;
-  }
-
   const totalSpawns = Number(checkedTask?.metadata?.totalSpawnCount ?? task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     return context.blockAndBail({
       reason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`,
-      category: 'max-spawns',
+      category: MAX_SPAWNS_BLOCKED_CATEGORY,
       emit: 'none',
     });
   }

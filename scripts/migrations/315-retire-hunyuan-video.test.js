@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { repoRoot } from './_testHelpers.js';
 import { RETIRED_VIDEO_MODELS, getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import migration, { REPLACEMENT_ID, RETIRED_ID, SHIPPED_REPO } from './315-retire-hunyuan-video.js';
 

@@ -34,12 +34,11 @@ import {
   forgeIssueLabels,
   jiraIssueLabels,
   dispatchLabelSpec,
-  allDispatchLabelSpecs,
   formatLabelCreateCommand,
   IN_PROGRESS_LABEL,
-  formatRepeatedLabelFlags,
   CONTRIBUTOR_LABELS,
-  JIRA_CONTRIBUTOR_LABELS,
+  mandatoryDispatchHintGuidance,
+  GITLAB_DISPATCH_SEPARATOR_GUIDANCE,
   formatContributorLabelReleaseCommands,
   formatVolunteerClaimCommands,
   volunteerClaimLabels,
@@ -201,13 +200,6 @@ describe('label specs and CLI formatting', () => {
     expect(formatLabelCreateCommand(IN_PROGRESS_LABEL)).toContain('gh label create in-progress');
   });
 
-  it('lists all nine specs without dropping an axis', () => {
-    const specs = allDispatchLabelSpecs();
-    expect(specs).toHaveLength(9);
-    expect(specs.map((s) => s.name)).toEqual(Object.keys(DISPATCH_LABEL_COLORS));
-    expect(specs.every((s) => /^[0-9A-F]{6}$/.test(s.color))).toBe(true);
-  });
-
   it('formats idempotent gh / glab create commands with slashdo colors', () => {
     expect(formatLabelCreateCommand('model:light')).toBe(
       "gh label create model:light --color D4C5F9 --description 'Dispatch capability: cheapest capable coding model' 2>/dev/null || true",
@@ -249,7 +241,6 @@ describe('label specs and CLI formatting', () => {
   // the common case, which must never abort a claim.
   it('releases both contributor labels one best-effort command at a time', () => {
     expect(CONTRIBUTOR_LABELS).toEqual([GOOD_FIRST_ISSUE_LABEL, HELP_WANTED_LABEL]);
-    expect(JIRA_CONTRIBUTOR_LABELS).toEqual([JIRA_GOOD_FIRST_ISSUE_LABEL, JIRA_HELP_WANTED_LABEL]);
     expect(formatContributorLabelReleaseCommands('"${NUM}"')).toEqual([
       `gh issue edit "\${NUM}" --remove-label 'good first issue' 2>/dev/null`,
       `gh issue edit "\${NUM}" --remove-label 'help wanted' 2>/dev/null`,
@@ -304,14 +295,6 @@ describe('label specs and CLI formatting', () => {
     ]);
   });
 
-  it('emits repeated --label flags, never a comma list', () => {
-    expect(formatRepeatedLabelFlags(['plan', 'model:light', 'effort:max']))
-      .toBe('--label plan --label model:light --label effort:max');
-    expect(formatRepeatedLabelFlags(['ux', '', null, 'plan'])).toBe('--label ux --label plan');
-    expect(formatRepeatedLabelFlags([])).toBe('');
-    expect(formatRepeatedLabelFlags([GOOD_FIRST_ISSUE_LABEL, HELP_WANTED_LABEL]))
-      .toBe("--label 'good first issue' --label 'help wanted'");
-  });
 });
 
 describe('shared guidance', () => {
@@ -322,18 +305,16 @@ describe('shared guidance', () => {
     expect(DISPATCH_HINT_GUIDANCE).toContain('model:light|medium|heavy');
     expect(DISPATCH_HINT_GUIDANCE).toContain('effort:low|medium|high|xhigh|max');
     expect(DISPATCH_HINT_GUIDANCE).toBe(MANDATORY_DISPATCH_HINT_GUIDANCE);
-    expect(DISPATCH_HINT_GUIDANCE).toContain('specific hardware');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('multiple real users');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('read back again');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('`portos-file-issue` skill');
     expect(DISPATCH_HINT_GUIDANCE).toContain('`effort:medium` is normal');
     expect(DISPATCH_HINT_GUIDANCE).toContain('Breadth is not effort');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('`effort-medium` is normal');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('repeated `--label`');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('one `--label` flag per label');
     expect(DISPATCH_HINT_GUIDANCE).toContain('Never relabel a deduplicated existing issue');
     expect(DISPATCH_HINT_GUIDANCE).toContain('good first issue');
     expect(DISPATCH_HINT_GUIDANCE).toContain('help wanted');
     expect(DISPATCH_HINT_GUIDANCE).toContain('NOT a good first issue');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('glab label create');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('glab: `--name <name> --color "#<hex>"`');
     expect(DISPATCH_HINT_GUIDANCE).toContain('Issue-quality gate');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('model-light|model-medium|model-heavy');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('effort-low|effort-medium|effort-high|effort-xhigh|effort-max');
@@ -368,7 +349,6 @@ describe('shared guidance', () => {
 
   it('tells lane-filed issues to carry source:<lane> and interactive filings to omit it (#16571)', () => {
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`source:<lane>`');
-    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`gh label create source:<lane> --color');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Interactive and ad-hoc filings omit it');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('lower-case lane or task type id');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('`source-<lane>`');
@@ -383,9 +363,10 @@ describe('shared guidance', () => {
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('good first issue');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('help wanted');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Issue-quality gate');
+    // Colours ride as one compact `name=hex` line, never a `name hex` pair an agent could
+    // copy into a malformed label name (#9056).
     for (const name of Object.keys(DISPATCH_LABEL_COLORS)) {
-      // A `name hex` pair is what agents copied into malformed label names (#9056).
-      expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain(`gh label create ${name} --color ${DISPATCH_LABEL_COLORS[name]}`);
+      expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain(`${name}=${DISPATCH_LABEL_COLORS[name]}`);
       expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain(`${name} ${DISPATCH_LABEL_COLORS[name]}`);
     }
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
@@ -393,6 +374,24 @@ describe('shared guidance', () => {
     // Contributor labels stay optional in BOTH forms — requiring them would
     // advertise unattended-agent work to humans who never asked for it.
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('stay OPTIONAL');
+  });
+
+  // This text rides in every agent run (#16814): the ceiling is the regression pin.
+  it('stays under the 3,000-byte ceiling on GitHub and drops the create-loop and read-back ceremony', () => {
+    expect(Buffer.byteLength(MANDATORY_DISPATCH_HINT_GUIDANCE)).toBeLessThanOrEqual(3000);
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toMatch(/gh label create \S+ --color \w+ 2>/);
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('|| true');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toMatch(/read (its|the|their) labels back|read back/i);
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Only if the create call rejects a label as not found');
+  });
+
+  it('renders the GitLab double-colon paragraph only for glab', () => {
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).not.toContain('DOUBLE colon');
+    expect(mandatoryDispatchHintGuidance({ cli: 'gh' })).toBe(MANDATORY_DISPATCH_HINT_GUIDANCE);
+    const glab = mandatoryDispatchHintGuidance({ cli: 'glab' });
+    expect(glab).toContain(GITLAB_DISPATCH_SEPARATOR_GUIDANCE);
+    expect(glab).toContain('DOUBLE colon');
+    expect(glab.replace(`${GITLAB_DISPATCH_SEPARATOR_GUIDANCE}\n`, '')).toBe(MANDATORY_DISPATCH_HINT_GUIDANCE);
   });
 
   it('batches light same-area findings into one checklist issue, with standalone exceptions', () => {

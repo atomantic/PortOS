@@ -29,19 +29,11 @@ import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibra
 import { projectPreflightSource, projectPreflightTask } from '../services/preflightActivity.js';
 import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
 import {
-  createCosTaskSchema,
-  slashdoTaskSchema,
-  updateCosTaskSchema,
-  challengeTaskSchema,
-  resolveChallengeSchema,
-  goalFidelityFalsePositiveSchema,
-  validateRequest,
-  cosTaskReorderBodySchema,
-  cosTaskSpawnBodySchema,
-  cosTaskDeleteQuerySchema,
-  isPaginationRequested,
-  parsePagination,
-} from '../lib/validation.js';
+  createCosTaskSchema, slashdoTaskSchema, updateCosTaskSchema, challengeTaskSchema, resolveChallengeSchema,
+  goalFidelityFalsePositiveSchema, cosTaskDeleteQuerySchema, cosTaskReorderBodySchema, cosTaskSpawnBodySchema
+} from '../lib/cos/cosValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { isPaginationRequested, parsePagination } from '../lib/queryValidation.js';
 
 const enhanceTaskSchema = z.object({
   description: z.string().min(1),
@@ -737,7 +729,7 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
     const message = String(result.error);
     let status = 400;
     let code = 'SPAWN_FAILED';
-    if (result.code === 'TASK_OWNER_HELD') {
+    if (result.code === 'TASK_OWNER_HELD' || result.code === 'SPAWN_BUDGET_EXHAUSTED') {
       status = 409;
       code = result.code;
     } else if (/not found/i.test(message)) {

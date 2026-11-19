@@ -9,7 +9,7 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 - **CoS Service** (`server/services/cos/cos.js`): State management, health monitoring, task evaluation
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
-- **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
+- **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs; page state, reads and socket wiring live in `components/cos/useCosPageData.js`, the avatar panel in `CosAgentPanel.jsx`, the stat tiles in `CosStatsCards.jsx`
 
 ### Execution and delivery outcomes
 
@@ -199,6 +199,20 @@ task prepares preservation prerequisites; the coordinator makes one final retire
 attempt after that task completes. A further refusal remains held with its reason
 and recovery task, without creating a loop.
 
+### Comment-triggered review in GitHub issue claims
+
+On a GitHub repository with the CodeIQ app installed, add `@codeiq-aix` to the
+app's claim reviewer roster. Dispatch checks for the app's actual account,
+`aix-codeiq[bot]`, on the target forge. A verified 404 for a required reviewer
+blocks dispatch with the setting to repair. An authentication or transport
+failure leaves the identity unverified.
+
+The claim can use a CodeIQ review already submitted when the PR opens. It posts
+`@codeiq` after a subsequent push and checks that the bot's review matches the
+new head. A submitted `COMMENTED` review satisfies the roster entry once its
+summary and inline threads have no unresolved findings. GitHub still enforces
+its own branch rules. [GitHub review API](https://docs.github.com/en/rest/pulls/reviews)
+
 ### Pending-merge handoff (#12247)
 
 Runs default to owning delivery through CI, confirmed merge and safe cleanup.
@@ -295,7 +309,7 @@ the coordinator removes that exact merged
 clean checkout and local branch without copying either one. A cleanup refusal
 remains on the receipt as `cleanup.status` and `reason`; transient failures
 retry every 30 minutes, at most 12 times.
-Locks, initialized submodules, changed checkout identity and supersession need
+Locks, initialized submodules, a changed checkout head, branch or lock, and supersession need
 explicit recovery and remain held. No worker waits for this cleanup, no lock is
 silently released, and no initialized submodule is discarded. Older receipts
 without a checkout binding retain the existing branch-reconciliation fallback.

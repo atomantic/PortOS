@@ -4,15 +4,10 @@
  * What this guard cannot see:
  *   - Nested helpers, member-access calls (`obj.run()`), namespace imports, and re-exports are not resolved.
  */
-import { existingPaths } from '../scripts/lib/trackedFiles.js';
-import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync, mkdtempSync, rmSync } from 'fs';
-import { dirname, join, resolve, sep } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { parse } from '@babel/parser';
 
@@ -123,72 +118,15 @@ function relativeLiteralValues(src) {
   return values;
 }
 
-// Bump whenever recognition or parser options change; summaries never contain verdicts.
-const SUMMARY_VERSION = 1;
-const PARSER_VERSION = createRequire(import.meta.url)('@babel/parser/package.json').version;
-const SUMMARY_CACHE_FILE = join(SERVER_ROOT, '../.cache/floating-async/summaries.json');
-const blobSha = (src, algorithm = 'sha1') => createHash(algorithm).update(`blob ${Buffer.byteLength(src)}\0`).update(src).digest('hex');
-
-function validSummary(value) {
-  const strings = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
-  return value && strings(value.local) && strings(value.exported)
-    && Array.isArray(value.imports) && value.imports.every((i) => i && typeof i.source === 'string'
-      && Array.isArray(i.names) && i.names.every((n) => n && typeof n.imported === 'string' && typeof n.local === 'string'))
-    && Array.isArray(value.calls) && value.calls.every((c) => c && typeof c.name === 'string' && Number.isInteger(c.line) && c.line > 0);
-}
-
-function createSummaryCache(file, blobs) {
-  let entries = {};
-  try {
-    const saved = JSON.parse(readFileSync(file, 'utf8'));
-    if (saved.version === SUMMARY_VERSION && saved.parser === PARSER_VERSION && saved.entries
-      && typeof saved.entries === 'object' && !Array.isArray(saved.entries)
-      && Object.entries(saved.entries).every(([sha, summary]) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha) && validSummary(summary))) {
-      entries = saved.entries;
-    }
-  } catch {
-    // Missing or corrupt optimization data always falls back to recognition.
-  }
-  const used = {};
-  return {
-    summarize: (path, src, recognize) => {
-      const indexed = blobs.get(path);
-      // The index alone cannot identify dirty working bytes (including CRLF checkouts).
-      const sha = indexed && blobSha(src, indexed.length === 64 ? 'sha256' : 'sha1') === indexed ? indexed : null;
-      if (sha && entries[sha]) {
-        const saved = entries[sha];
-        used[sha] = saved;
-        return { ...saved, local: new Set(saved.local), exported: new Set(saved.exported) };
-      }
-      const summary = recognize(src);
-      if (sha) used[sha] = { ...summary, local: [...summary.local], exported: [...summary.exported] };
-      return summary;
-    },
-    save: () => {
-      mkdirSync(dirname(file), { recursive: true });
-      const temporary = `${file}.${randomUUID()}.tmp`;
-      try {
-        const currentBlobs = new Set(blobs.values());
-        const retained = Object.fromEntries(Object.entries({ ...entries, ...used }).filter(([sha]) => currentBlobs.has(sha)));
-        writeFileSync(temporary, JSON.stringify({ version: SUMMARY_VERSION, parser: PARSER_VERSION, entries: retained }));
-        renameSync(temporary, file);
-      } finally {
-        if (existsSync(temporary)) unlinkSync(temporary);
-      }
-    },
-  };
-}
-
-/** One scan owns its cache; import spellings share the resolved file's summary. */
-function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'utf8'), cache = null, recognize = summarizeSource) {
-  const summarize = (file, src) => cache ? cache.summarize(file, src, recognize) : recognize(src);
+// Import spellings share the resolved file's summary within a scan.
+function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'utf8')) {
   const summaries = new Map();
   const resolutions = new Map();
   const summaryOf = (file) => {
     if (!summaries.has(file)) {
       const src = readSource(file);
       // Nothing here is async; a visit still needs the text to check what it imports.
-      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarize(file, src) : { exported: new Set(), src });
+      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarizeSource(src) : { exported: new Set(), src });
     }
     return summaries.get(file);
   };
@@ -229,7 +167,7 @@ function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'u
           summaries.set(file, { exported: summary.exported, hits: [] });
           return [];
         }
-        summary = summarize(file, summary.src);
+        summary = summarizeSource(summary.src);
       }
       const hits = findCalls(summary, dirname(file));
       // After visiting a file, only its exports and verdict can be needed again.
@@ -244,34 +182,17 @@ export function findFloatingAsyncCalls(src, dir = null) {
   return createFloatingAsyncScanner().findInSource(src, dir);
 }
 
-// One index read supplies both the scan inventory and identities for imported targets.
-function trackedInventory() {
-  const root = resolve(SERVER_ROOT, '..');
-  const records = execFileSync('git', ['ls-files', '-s', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean);
-  const blobs = new Map();
-  const paths = new Set();
-  for (const record of records) {
-    const [metadata, path] = [record.slice(0, record.indexOf('\t')), record.slice(record.indexOf('\t') + 1)];
-    const [mode, sha, stage] = metadata.split(' ');
-    paths.add(join(root, path));
-    if (stage === '0' && (mode === '100644' || mode === '100755')) blobs.set(join(root, path), sha);
-  }
-  const files = existingPaths(SERVER_ROOT, [...paths].filter((p) => p.startsWith(`${SERVER_ROOT}${sep}`))
-    .map((p) => p.slice(SERVER_ROOT.length + 1)).filter((p) => /\.(?:js|mjs|cjs)$/.test(p) && !p.includes('.test.')));
-  return { files, blobs };
-}
-const inventory = trackedInventory();
+const files = trackedFiles(SERVER_ROOT, ['*.js', '*.mjs', '*.cjs']).filter((file) => !file.includes('.test.'));
 
 describe('async calls own their rejections (#12978)', () => {
   it('scans the server tree', () => {
-    expect(inventory.files.length).toBeGreaterThan(200);
+    expect(files.length).toBeGreaterThan(200);
   });
 
   it('has no bare statement-level call to an async function', () => {
     const violations = [];
-    const cache = createSummaryCache(SUMMARY_CACHE_FILE, inventory.blobs);
-    const scanner = createFloatingAsyncScanner(undefined, cache);
-    for (const file of inventory.files) {
+    const scanner = createFloatingAsyncScanner();
+    for (const file of files) {
       for (const hit of scanner.findInFile(join(SERVER_ROOT, file))) {
         violations.push(`server/${file} ${hit}`);
       }
@@ -283,7 +204,6 @@ describe('async calls own their rejections (#12978)', () => {
       + 'an AI task). Fix: make the callee own its rejections and prefix the call with `void`, or '
       + `append \`.catch(…)\`.\nOffenders:\n  ${violations.join('\n  ')}`,
     ).toEqual([]);
-    cache.save();
   });
 });
 
@@ -354,105 +274,5 @@ describe('the floating-async recognizer', () => {
     expect(scanFile(String.raw`import { logAction as log } from '.\/services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
     // Unparsable on purpose: a skipped caller is never handed to Babel.
     expect(scanFile("import { getAllowedCommands } from './services/commands.js';\nfunction (")).toEqual([]);
-  });
-});
-
-describe('floating-async persistent summaries (#16626)', () => {
-  function fixture(run) {
-    const root = mkdtempSync(join(tmpdir(), 'floating-async-'));
-    const file = join(root, 'caller.js');
-    const target = join(root, 'target.js');
-    const cacheFile = join(root, 'cache.json');
-    const caller = "import { run } from './target.js';\nrun();";
-    const source = 'export async function run() {}';
-    writeFileSync(file, caller);
-    writeFileSync(target, source);
-    const blobs = new Map([[file, blobSha(caller)], [target, blobSha(source)]]);
-    const parsed = [];
-    const scan = (index = blobs) => {
-      const cache = createSummaryCache(cacheFile, index);
-      const scanner = createFloatingAsyncScanner(undefined, cache, (src) => {
-        parsed.push(src);
-        return summarizeSource(src);
-      });
-      const hits = scanner.findInFile(file);
-      cache.save();
-      return hits;
-    };
-    try { run({ file, target, cacheFile, blobs, parsed, scan, caller, source }); }
-    finally { rmSync(root, { recursive: true, force: true }); }
-  }
-
-  it('reuses warm blobs, re-parses changed indexed and dirty bytes, and resolves new exports', () => {
-    fixture(({ file, target, blobs, parsed, scan, caller }) => {
-      expect(scan()).toEqual(['line 2: run()']);
-      expect(parsed).toHaveLength(2);
-      parsed.length = 0;
-      expect(scan()).toEqual(['line 2: run()']);
-      expect(parsed).toHaveLength(0);
-      const sync = 'export function run() {}';
-      writeFileSync(target, sync);
-      // No async token: the changed export must still invalidate the cached caller's verdict.
-      expect(scan()).toEqual([]);
-      const changed = 'export async function other() {}';
-      writeFileSync(target, changed);
-      blobs.set(target, blobSha(changed));
-      expect(scan()).toEqual([]);
-      expect(parsed).toEqual([changed]);
-      parsed.length = 0;
-      const dirty = `${caller}\nasync function local() {}\nlocal();`;
-      writeFileSync(file, dirty);
-      expect(scan()).toEqual(['line 4: local()']);
-      expect(parsed).toEqual([dirty]);
-    });
-  });
-
-  it.each(['corrupt', 'scanner-version', 'parser-version', 'invalid-summary'])('fully re-parses a %s cache with identical findings', (kind) => {
-    fixture(({ cacheFile, parsed, scan }) => {
-      const cold = scan();
-      const saved = JSON.parse(readFileSync(cacheFile, 'utf8'));
-      if (kind === 'scanner-version') saved.version++;
-      if (kind === 'parser-version') saved.parser = '0.0.0';
-      if (kind === 'invalid-summary') Object.values(saved.entries)[0].calls = null;
-      writeFileSync(cacheFile, kind === 'corrupt' ? '{' : JSON.stringify(saved));
-      parsed.length = 0;
-      expect(scan()).toEqual(cold);
-      expect(parsed).toHaveLength(2);
-    });
-  });
-
-  it.each([
-    'async function f() {}\nfunction g() { f(); }',
-    'const f = async () => {};\nf();',
-    'async function f() {}\nasync function g() { await f(); void f(); f().catch(() => {}); return f(); }\nconst p = f();',
-    'function f() {}\nf();\nobj.run();',
-    'const f = async function() {}; export { f as other }; f();',
-    "import { run as log } from './target.js';\nlog();",
-    String.raw`import { run } from '\x2e/target.js';` + '\nrun();',
-  ])('matches cold, warm and uncached recognition of %s', (source) => {
-    fixture(({ file, blobs, parsed, scan }) => {
-      writeFileSync(file, source);
-      blobs.set(file, blobSha(source));
-      const uncached = createFloatingAsyncScanner().findInFile(file);
-      expect(scan()).toEqual(uncached);
-      parsed.length = 0;
-      expect(scan()).toEqual(uncached);
-      expect(parsed).toHaveLength(0);
-    });
-  });
-
-  it('never persists untracked sources or import targets', () => {
-    fixture(({ file, target, blobs, parsed, scan, cacheFile }) => {
-      blobs.delete(target);
-      expect(scan()).toEqual(['line 2: run()']);
-      parsed.length = 0;
-      expect(scan()).toEqual(['line 2: run()']);
-      expect(parsed).toHaveLength(1);
-      blobs.delete(file);
-      parsed.length = 0;
-      expect(scan()).toEqual(['line 2: run()']);
-      expect(parsed).toHaveLength(2);
-      expect(JSON.parse(readFileSync(cacheFile, 'utf8')).entries).toEqual({});
-    });
   });
 });

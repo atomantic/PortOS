@@ -8,11 +8,11 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray, parsePagination } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   deleteLora,
   getLora,
@@ -31,6 +31,7 @@ import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
 import { HF_LORA_FAMILIES } from '../lib/huggingfaceLora.js';
 import { openSseStream } from '../lib/sseDownload.js';
+import { emptyToUndefined } from '../lib/zodCompat.js';
 
 const router = Router();
 

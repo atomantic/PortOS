@@ -140,7 +140,7 @@ const audioAssessmentCases = [
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
-// test exercises the resolver's own model-map assembly, not validation.js.
+// test exercises the resolver's own model-map assembly, not the validation schemas.
 const testDeps = {
   normalize: (meta, fallback) => (Array.isArray(meta?.reviewers) && meta.reviewers.length ? meta.reviewers : (fallback || ['copilot'])),
   isTruthyMeta: (v) => v === true,

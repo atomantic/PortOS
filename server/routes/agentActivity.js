@@ -6,18 +6,15 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  agentActivityQuerySchema,
-  agentActivityTimelineQuerySchema,
-  agentActivityAgentParamsSchema,
-  agentActivityAgentQuerySchema,
-  agentActivityStatsQuerySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cos/cosValidation.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
 import * as runEventLog from '../services/agent/agentRunEventLog.js';
 import * as runReconciler from '../services/agent/agentRunReconciler.js';
+import {
+  agentActivityQuerySchema, agentActivityTimelineQuerySchema, agentActivityAgentParamsSchema,
+  agentActivityAgentQuerySchema, agentActivityStatsQuerySchema
+} from '../lib/agentActivityValidation.js';
 
 const router = Router();
 

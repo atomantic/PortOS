@@ -21,6 +21,7 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
     matches,
     selectedId,
     resetOnMembershipChange,
+    statusFilter,
     reconcileFirst: summaries.reconcileFirst,
     items: summaries.items,
     refreshFirst: summaries.refreshFirst,
@@ -31,19 +32,26 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
     if (!enabled) return undefined;
     let active = true;
     const inflight = new Map();
-    const readListed = (id) => {
+    const unlistedMembership = new Map();
+    const readListed = (id, checkUnlisted = false) => {
       const slot = inflight.get(id);
-      if (slot) { slot.queued = true; return; }
-      inflight.set(id, { queued: false });
+      if (slot) { slot.queued = true; slot.checkUnlisted ||= checkUnlisted; return; }
+      inflight.set(id, { queued: false, checkUnlisted });
       getMusicVideoProject(id, { silent: true })
         .then((fresh) => {
           if (!active || !fresh) return;
           const current = summarySyncRef.current;
           const previous = current.items.find((p) => p.id === id);
+          if (previous) unlistedMembership.delete(id);
           if (previous && ((current.resetOnMembershipChange && isMusicVideoCompleted(previous) !== isMusicVideoCompleted(fresh)) || (current.matches && !current.matches(fresh)))) {
             current.setItems((items) => items.filter((p) => p.id !== id));
             current.reconcileFirst();
-          } else current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+          } else if (previous) current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+          else if (inflight.get(id)?.checkUnlisted && current.resetOnMembershipChange) {
+            const matches = isMusicVideoCompleted(fresh) === (current.statusFilter === 'completed') && (!current.matches || current.matches(fresh));
+            if (!unlistedMembership.has(id) || unlistedMembership.get(id) !== matches) current.reconcileFirst();
+            unlistedMembership.set(id, matches);
+          }
         })
         .catch((err) => {
           if (active && err?.status === 404) {
@@ -56,7 +64,7 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
         .finally(() => {
           const current = inflight.get(id);
           inflight.delete(id);
-          if (active && current?.queued) readListed(id);
+          if (active && current?.queued) readListed(id, current.checkUnlisted);
         });
     };
     const onChanged = (data) => {
@@ -69,9 +77,21 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
       else if (!listed) summarySyncRef.current.refreshFirst();
       else readListed(id);
     };
+    const onFilm = (data) => {
+      if (summarySyncRef.current.statusFilter == null || data?.kind !== 'state' || !data.projectId || data.projectId === summarySyncRef.current.selectedId) return;
+      if (!summarySyncRef.current.resetOnMembershipChange && !summarySyncRef.current.items.some((project) => project.id === data.projectId)) return;
+      readListed(data.projectId, true);
+    };
+    const onRun = (data) => {
+      if (!summarySyncRef.current.resetOnMembershipChange || !data?.projectId || data.projectId === summarySyncRef.current.selectedId) return;
+      if (summarySyncRef.current.items.some((project) => project.id === data.projectId)) readListed(data.projectId);
+    };
     socket.on('music-video:project:changed', onChanged);
-    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
-  }, [enabled]);
+    socket.on('music-video:blender', onFilm);
+    socket.on('music-video:production', onRun);
+    socket.on('music-video:autonomous', onRun);
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); socket.off('music-video:blender', onFilm); socket.off('music-video:production', onRun); socket.off('music-video:autonomous', onRun); };
+  }, [enabled, statusFilter]);
 
   const { reconcileFirst } = summaries;
   useEffect(() => {

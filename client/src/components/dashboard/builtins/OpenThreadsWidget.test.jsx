@@ -8,10 +8,10 @@ const mockUseSocketResource = vi.fn();
 vi.mock('../../../hooks/useSocketResource', () => ({
   useSocketResource: (...args) => mockUseSocketResource(...args),
 }));
-vi.mock('../../../services/api', () => ({ listThreads: vi.fn(), updateThread: vi.fn() }));
+vi.mock('../../../services/apiBrainThreads.js', () => ({ listThreads: vi.fn(), updateThread: vi.fn() }));
 vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn() } }));
 
-import * as api from '../../../services/api';
+import * as api from '../../../services/apiBrainThreads.js';
 import toast from '../../ui/Toast';
 import OpenThreadsWidget from './OpenThreadsWidget';
 

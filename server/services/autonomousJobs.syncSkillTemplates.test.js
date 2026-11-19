@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync } from 'fs'
+import { rmSync } from 'fs'
 import { writeFile, readFile } from 'fs/promises'
-import { tmpdir } from 'os'
 import { join } from 'path'
 
 // Create a real tmpdir sandbox hoisted so vi.mock factories can see it

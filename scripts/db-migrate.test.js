@@ -47,6 +47,12 @@ const PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
 echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}|\${PGOPTIONS-unset}|tls=\${PGSSLMODE-unset}" >> "$STUB_LOG"
 case "$*" in *--single-transaction*) cat >> "$IMPORT_LOG"; exit "\${IMPORT_EXIT:-0}" ;; esac
+case "$*" in
+  *transaction_read_only*)
+    [ "$PGPASSWORD" = 'test-only' ] || exit 2
+    printf '%s\n' "\${PROBE_RESULT:-t}"
+    exit "\${PROBE_EXIT:-0}" ;;
+esac
 if [ -n "\${PORTOS_BOOTSTRAP_ROLE:-}" ]; then cat > "$ROLE_INPUT_LOG"; fi
 case "$*" in *count*) echo 3 ;; esac
 exit 0
@@ -139,6 +145,21 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
 
   const tempArtifacts = () => (existsSync(dumpDir) ? readdirSync(dumpDir).filter(f => f.startsWith('portos-export.')) : []);
   const dumps = () => (existsSync(dumpDir) ? readdirSync(dumpDir).filter(f => f.endsWith('.sql')) : []);
+
+  it('checks the explicit cutover endpoint with a read-only host psql session', () => {
+    const args = ['probe-target', '--endpoint', 'example.test', '6543', 'example_role', 'example_test'];
+    const result = run(args, 'ok', { PGHOSTADDR: '192.0.2.10', PGSERVICE: 'wrong', PGOPTIONS: 'wrong' });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('t');
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('psql -h example.test -p 6543 -U example_role -d example_test -X -w -At -v ON_ERROR_STOP=1 -c SELECT');
+    expect(log).toContain("has_schema_privilege('public', 'CREATE')");
+    expect(log).toContain('endpoint-env unset|unset|unset|unset|tls=unset');
+    expect(log).not.toMatch(/docker|pg_dump|SOURCE_STOP|IMPORT|test-only/);
+    expect(run(args, 'ok', { PROBE_EXIT: '2' }).status).toBe(2);
+    expect(run(['probe-target'], 'ok').status).not.toBe(0);
+    expect(existsSync(dumpDir)).toBe(false);
+  });
 
   it.each(['partial', 'empty'])('refuses to publish a %s failed export', (mode) => {
     const result = run(['export', 'failed'], mode);
@@ -357,12 +378,20 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
       for (const command of ['migrate', 'use-native', 'use-docker']) {
         const result = run([command], 'ok');
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toMatch(/migration and switching are temporarily unavailable/);
+        expect(result.stderr).toContain('Use Settings → Database for a coordinated cutover.');
         expect(readFileSync(stubLog, 'utf8')).toBe('');
         expect(existsSync(importLog)).toBe(false);
         expect(existsSync(dumpDir)).toBe(false);
         expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
       }
+    }
+  });
+
+  it('directs operators to the coordinated cutover in help for all legacy commands', () => {
+    const result = run(['--help'], 'ok');
+    expect(result.status).toBe(0);
+    for (const command of ['migrate', 'use-native', 'use-docker']) {
+      expect(result.stdout).toMatch(new RegExp(`^  ${command} +Legacy command\\. Use Settings → Database$`, 'm'));
     }
   });
 
@@ -373,7 +402,9 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     const log = readFileSync(stubLog, 'utf8');
     expect(log).toContain('--single-transaction');
     expect(log).not.toMatch(/SOURCE_STOP|docker compose stop/);
-    expect(result.stdout).toContain('selected mode is unchanged');
+    expect(result.stdout).toContain('Native PostgreSQL is ready!');
+    expect(result.stdout).toContain('selected mode is unchanged; Docker data has not been migrated.');
+    expect(result.stdout).toContain('To move existing data, use Settings → Database for a coordinated cutover.');
   });
 
   // #10757: every host libpq client the script starts — readiness, bootstrap

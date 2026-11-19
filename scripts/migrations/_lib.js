@@ -1,9 +1,9 @@
 /**
  * Shared scaffolding for migrations. Several families live here:
  *
- *   1. Hash-driven prompt-replace migrations — every one from 003 onward uses
- *      `makePromptReplaceMigration` to collapse onto ~50 lines (hash table +
- *      label + customized-skip hint).
+ *   1. Hash-driven prompt-replace migrations — `makePromptReplaceMigration`
+ *      (hash table + label + customized-skip hint). Only 003 and 005 remain;
+ *      a template edit needs no migration (`shippedPromptHashes.js`).
  *   2. Dashboard-layout seeding migrations — `readLayoutsDoc` /
  *      `writeLayoutsDoc` collapse the read → JSON.parse → `Array.isArray`
  *      guard → write shell shared by every migration that mutates built-in
@@ -17,25 +17,11 @@
  *      `writeMediaRegistry` collapse the strict-read → absent/unreadable skip →
  *      bucket-array guard shell shared by every migration that patches
  *      `data/media-models.json` (244, 247, …).
- *   7. Seeded-provider-tier bumps — `makeSeededProviderTierMigration` collapses
- *      the exact-match → rewrite-models → swap-retired-pointers shell that
- *      032 / 058 / 153 / 206 each hand-copied. Those four stay frozen; the
- *      factory is for the next RETIREMENT bump. It expresses id→id retirement
- *      only: `idMap` maps 1:1 over `oldModels`, and `swapTierPointers` moves
- *      EVERY pointer off a retired id. This is a **pristine-list rewrite** —
- *      only an EXACT match of the prior seeded `models` array qualifies, so a
- *      curated list is left alone rather than reset.
- *   7b. Additive provider-model inserts — `makeAdditiveProviderInsertMigration`
- *       (337 is the first and, so far, only member) is the opposite policy for
- *       the SAME `data/providers.json` targets: it runs against a list the user
- *       may have curated, so it never rewrites or drops anything — it only
- *       splices `current` in immediately after `retired` when `retired` is
- *       listed and `current` is not, regardless of what else the list holds.
- *       Tier pointers are left alone (a curated list is exactly where
- *       re-pointing would override a deliberate choice). Reach for family 7
- *       when retiring an id from the shipped seed; reach for 7b when a later
- *       tier needs to be OFFERED without disturbing whatever the user already
- *       has listed.
+ *   7. Additive provider-model inserts — `makeAdditiveProviderInsertMigration`
+ *      (337 is the first member) splices `current` in immediately after `retired`
+ *      when `retired` is listed and `current` is not, regardless of what else the
+ *      list holds. It runs against a list the user may have curated, so it never
+ *      rewrites or drops anything, and tier pointers are left alone.
  *   8. CoS config reads — `readCosConfig` resolves the durable CoS settings a
  *      migration needs to honour an install-specific path, across both the
  *      pre- and post-339 layouts (`data/cos/state.json`'s `config` slice and
@@ -396,10 +382,10 @@ export const md5 = (str) => {
  *   003 to handle the `pipeline-tv-script.md` → `pipeline-teleplay.md`
  *   rename.
  *
- * `subdirs` mirrors a migration's `DRIFT_SUBDIRS` export: a per-filename
- * override of the `prompts/<subdir>/` directory both sides resolve under.
- * Stage prompts (the default, `'stages'`) need no entry; prompt fragments in
- * `prompts/_partials/` do.
+ * Both sides resolve under `prompts/stages/`: 003 and 005 are the only
+ * callers left. Every migration that used this for the swap alone was deleted
+ * in #16827, because `reconcileShippedPrompts` makes that swap after each full
+ * pass; a new one is refused by `shippedPromptHashes.guard.test.js`.
  *
  * "Current" is the live reference body, not the migration's declared
  * `current` hash (#16090): a later template edit would otherwise make this
@@ -415,11 +401,9 @@ export async function applyPromptReplaceMigration({
   customizedHint,
   createIfMissing = false,
   retireOnSampleMissing = false,
-  subdirs = {},
 }) {
-  const subdirFor = (filename) => subdirs[filename] || 'stages';
-  const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', subdirFor(filename), filename);
-  const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', subdirFor(filename), filename);
+  const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', 'stages', filename);
+  const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', 'stages', filename);
   const filenames = Object.keys(accepted);
   // Lazy: shippedPromptHashes.js imports this module.
   const { readShippedHashes } = await import('./shippedPromptHashes.js');
@@ -465,7 +449,7 @@ export async function applyPromptReplaceMigration({
     const shipped = new Set([
       ...accepted[filename],
       current[filename],
-      ...(shippedHashes[`${subdirFor(filename)}/${filename}`]?.retired || []),
+      ...(shippedHashes[`stages/${filename}`]?.retired || []),
     ]);
     const matchesCurrent = sampleContent === null
       ? existingMd5 === current[filename]
@@ -484,7 +468,7 @@ export async function applyPromptReplaceMigration({
         return {
           counter: 'skipped',
           warn: `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
-            `   Check data.reference/prompts/${subdirFor(filename)}/ for the replacement file and merge any custom edits manually.`,
+            `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
         };
       }
     }
@@ -532,7 +516,6 @@ export function makePromptReplaceMigration({
   skipFooter,
   createIfMissing = false,
   retireOnSampleMissing = false,
-  subdirs = {},
 }) {
   const applyMigration = (opts = {}) =>
     applyPromptReplaceMigration({
@@ -542,7 +525,6 @@ export function makePromptReplaceMigration({
       customizedHint,
       createIfMissing,
       retireOnSampleMissing,
-      subdirs,
       ...opts,
     });
 
@@ -1051,174 +1033,9 @@ export function makeProviderSeedMigration({ label, defs }) {
   return { up };
 }
 
-// ---- seeded-provider-tier bump migration family ----
+// ---- additive provider-model insert migration family (7) ----
 //
-// Migrations 032 / 058 / 153 / 206 each bump ONE model tier of the seeded
-// Claude provider entries (`claude-code`, `claude-code-tui`, and their
-// `-bedrock` twins) from a retired model id to its replacement. `setup-data.js`
-// merges *missing* provider entries but never updates existing ones, so an
-// existing install only picks a new default up when a migration rewrites its
-// `data/providers.json`.
-//
-// All four are the same shell with different data, and it is a deliberately
-// conservative shell:
-//   - `models` is rewritten only when it matches the prior seeded list EXACTLY
-//     (order-sensitive). A curated list — reordered, trimmed, extended — is left
-//     alone rather than silently reset to the shipped default.
-//   - On a rewrite, every retired id is swapped to its mapped replacement
-//     wherever it appears (the `models` array and any tier pointer). Pointers
-//     parked on still-current models are preserved.
-//   - Bedrock ids map like-for-like, so a long-context `…[1m]` pin lands on the
-//     new `…[1m]` id instead of silently dropping to the standard-context id.
-//   - The "already-new models but stale pointer" case is repaired: an install
-//     freshly seeded from the new data.reference can still carry a tier pointer
-//     at a now-absent id, which would leave it requesting a model it no longer
-//     lists.
-//
-// The four shipped copies stay FROZEN and do not consume this factory. A
-// migration is the historical record of what it did to an install; rewriting an
-// applied one to route through shared code would change that record and risk
-// changing its behavior for anyone who has not run it yet. This factory is the
-// shell the NEXT tier bump uses, and `_testHelpers.js#runSeededProviderTierMigrationTests`
-// is its companion test runner.
-
-// The four tier pointers a provider entry can park on a model id. A bump must
-// consider all of them, not just `defaultModel` — an install that pinned
-// `heavyModel` to the retired id would otherwise be left pointing at a model
-// that is no longer in its `models` list.
-const TIER_POINTER_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
-
-/**
- * The post-bump `models` array for one target, derived from its prior seeded
- * list plus its id map — so the two can never drift apart in a caller's data
- * table. Exported for the shared test runner (and for a migration that wants to
- * assert the shape it is about to ship).
- */
-export const seededProviderTierModels = ({ oldModels, idMap }) =>
-  oldModels.map((id) => (Object.hasOwn(idMap, id) ? idMap[id] : id));
-
-// Order-sensitive equality. Reordering the seeded list counts as customization
-// (skipped) — that is the "left alone" promise 032/058/153/206 all made.
-const sameModelList = (a, b) =>
-  Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => v === b[i]);
-
-// Swap any tier pointer still referencing a retired id to its replacement.
-// `Object.hasOwn` before the lookup: a bare `idMap[provider[key]]` would inherit
-// an Object.prototype member for a pointer literally named `constructor` /
-// `toString`. Unreachable via the UI or any seed, but the guard costs nothing.
-// Mutates in place; returns true if any pointer changed.
-const swapTierPointers = (provider, idMap) => {
-  let changed = false;
-  for (const key of TIER_POINTER_KEYS) {
-    const mapped = Object.hasOwn(idMap, provider[key]) ? idMap[provider[key]] : null;
-    if (mapped) {
-      provider[key] = mapped;
-      changed = true;
-    }
-  }
-  return changed;
-};
-
-/**
- * Build a seeded-provider-tier bump migration's `up()`. Returns `{ up }`, so a
- * migration collapses to `export default makeSeededProviderTierMigration({…})`
- * over a small data table.
- *
- *   - `targets`   — `{ [providerId]: { oldModels, idMap } }`.
- *       - `oldModels` — the EXACT prior seeded `models` array, in order. Only an
- *         exact match is rewritten.
- *       - `idMap` — retired id → replacement id, for every id this bump
- *         retires. Bedrock targets list the plain and `[1m]` ids separately so
- *         each maps like-for-like. Ids absent from the map are still-current
- *         tiers and are carried through untouched.
- *     Sibling providers that ship identical lists (the CLI/TUI pair, the two
- *     Bedrock entries) should share one spec object.
- *   - `tierLabel` — the human phrase for the tier being bumped, used in the log
- *     lines (e.g. `'opus tier claude-opus-5'`).
- *
- * The summary log reports each touched provider's resulting `defaultModel` —
- * the "what will this install actually run now" value — regardless of which
- * tier was bumped.
- *
- * Resolves to `{ ok, reason: 'no-file' | 'unreadable' | 'bad-shape' |
- * 'no-change' | 'bumped', touched, alreadyCurrent, customized }`, where the
- * three arrays hold provider ids.
- */
-export function makeSeededProviderTierMigration({ targets, tierLabel }) {
-  // Derive each target's post-bump list once, at build time.
-  const plans = Object.entries(targets).map(([id, target]) => ({
-    id,
-    idMap: target.idMap,
-    oldModels: target.oldModels,
-    newModels: seededProviderTierModels(target),
-  }));
-
-  async function up({ rootDir }) {
-    const doc = await readProvidersDoc({ rootDir });
-    if (!doc.ok) {
-      if (doc.reason === 'no-file') console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds from data.reference with the new defaults)`);
-      else if (doc.reason === 'unreadable') console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${doc.err.message})`);
-      else console.log(`⚠️ ${PROVIDERS_REL_PATH}: no providers map — skipping`);
-      return { ok: false, reason: doc.reason, touched: [], alreadyCurrent: [], customized: [] };
-    }
-
-    const { config, providers, path: providersPath } = doc;
-
-    const touched = [];
-    const alreadyCurrent = [];
-    const customized = [];
-
-    for (const plan of plans) {
-      // `Object.hasOwn` rather than a bare `providers[plan.id]` probe: every
-      // plain object inherits `constructor` / `toString`, so a target id
-      // colliding with one would read as present and get "bumped" on the
-      // prototype. No seeded provider id is one of those, but the probe stays
-      // honest for free.
-      if (!Object.hasOwn(providers, plan.id)) continue;
-      const provider = providers[plan.id];
-      if (!provider || typeof provider !== 'object') continue;
-
-      if (sameModelList(provider.models, plan.oldModels)) {
-        // Prior seeded list → rewrite models + swap retired pointers.
-        provider.models = [...plan.newModels];
-        swapTierPointers(provider, plan.idMap);
-        touched.push(plan.id);
-        continue;
-      }
-
-      if (sameModelList(provider.models, plan.newModels)) {
-        // Models already current — only act if a tier pointer is still orphaned
-        // at a now-absent retired id.
-        if (swapTierPointers(provider, plan.idMap)) touched.push(plan.id);
-        else alreadyCurrent.push(plan.id);
-        continue;
-      }
-
-      customized.push(plan.id);
-    }
-
-    if (touched.length === 0) {
-      const notes = [];
-      if (alreadyCurrent.length > 0) notes.push(`already current: ${alreadyCurrent.join(', ')}`);
-      if (customized.length > 0) notes.push(`customized: ${customized.join(', ')}`);
-      console.log(`✅ ${PROVIDERS_REL_PATH}: nothing to bump for ${tierLabel}${notes.length ? ` (${notes.join('; ')})` : ''}`);
-      return { ok: true, reason: 'no-change', touched, alreadyCurrent, customized };
-    }
-
-    await writeJsonAtomic(providersPath, config);
-    const summary = touched.map((id) => `${id} (default: ${providers[id].defaultModel})`).join(', ');
-    console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → ${tierLabel}`);
-    return { ok: true, reason: 'bumped', touched, alreadyCurrent, customized };
-  }
-
-  return { up };
-}
-
-// ---- additive provider-model insert migration family (7b) ----
-//
-// The opposite policy from family 7, for the same `data/providers.json`
-// targets: family 7 rewrites a PRISTINE seeded list wholesale; this one splices
-// a new id into a list the user may have curated, touching nothing else.
+// Splices a new id into a list the user may have curated, touching nothing else.
 // 337 is the first member and the shell every future "offer a model without
 // disturbing what's already listed" migration should reach for instead of
 // hand-copying it a fourth time.

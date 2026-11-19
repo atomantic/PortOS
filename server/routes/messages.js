@@ -2,10 +2,7 @@ import { messageInboxRead, messageDetailRead, messageParamsSchema } from './mess
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest, MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema,
-  messageActionBodySchema, messageTokenProviderBodySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';
@@ -16,6 +13,10 @@ import { getSelectors, updateSelectors, testSelectors, launchProvider } from '..
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { executeAction } from '../services/messageActions.js';
 import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
+import {
+  MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema, messageActionBodySchema,
+  messageTokenProviderBodySchema
+} from '../lib/messageValidation.js';
 
 const router = express.Router();
 

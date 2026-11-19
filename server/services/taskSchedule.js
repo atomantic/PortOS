@@ -46,7 +46,6 @@ import {
   DEFAULT_TASK_INTERVALS,
   TASK_INPUT_PATHS,
   INSTALL_WIDE_TASK_TYPES,
-  MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
   getTaskTypeDescription,
   getTaskTypeInvocation,
@@ -256,12 +255,6 @@ export async function recordExecution(taskType, appId = null) {
 
     return { result: schedule.executions[key], changed: true };
   });
-}
-
-export async function getExecutionHistory(taskType) {
-  const schedule = await loadSchedule();
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
-  return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
 }
 
 /**

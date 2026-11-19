@@ -19,10 +19,9 @@
  * Wired into server/index.js at boot, after `ensureSchema()` + the bible→
  * catalog backfill, so promoted rows exist before this runs.
  *
- * The corresponding `scripts/migrations/053-catalog-friendly-universe-tags.js`
- * is a registration stub for the migration ledger — the actual repair runs
- * here (boot-time) because the `scripts/migrations/` runner executes before the
- * DB pool is up, the same reason migrations 048–052 are boot-time + stubbed.
+ * This repair runs at boot rather than as a migration because the
+ * `scripts/migrations/` runner executes before the DB pool is up. No ledger
+ * entry exists for it (the log-only stub was deleted in #16815).
  */
 
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';

@@ -33,7 +33,7 @@ vi.mock('./mortalLoomStore.js', () => ({
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
-import { DAILY_LOG_FILE, readLocalDailyLog, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
+import { readLocalDailyLog, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
 import { getAlcoholSummary, getDailyAlcohol, logDrink, removeDrink, updateDrink } from './meatspaceAlcohol.js';
 import { getDailyNicotine, getNicotineSummary, logNicotine } from './meatspaceNicotine.js';
 import { addBodyEntry, getBodyHistory } from './meatspaceHealth.js';

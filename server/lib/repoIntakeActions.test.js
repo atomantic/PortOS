@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { REPO_INTAKE_KEYS, normalizeRepoIntake } from './repoIntakeActions.js';
+import { normalizeRepoIntake } from './repoIntakeActions.js';
 
 describe('normalizeRepoIntake', () => {
   it('returns null when nothing was ticked, so no-intake is never persisted', () => {

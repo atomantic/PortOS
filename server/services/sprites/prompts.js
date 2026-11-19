@@ -8,14 +8,13 @@
  * per-character key selected at lock time flows into every later prompt.
  *
  * Pure module — no I/O, no imports outside the sibling pure sprite modules —
- * so validation.js and the client can lean on its constants safely.
+ * so spriteValidation.js and the client can lean on its constants safely.
  */
 
 // Canonical 8-direction order (the source pipeline's RUNTIME_DIRECTION_ORDER)
 // — atlas row order in later phases depends on this, so keep it stable.
 // Moved to lib/spriteVocabulary.js in #4901; re-exported for existing callers.
 export { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } from '../../lib/spriteVocabulary.js';
-import { SPRITE_DIRECTIONS } from '../../lib/spriteVocabulary.js';
 
 // Directions that get a derived anchor. `south` is never generated — the
 // frozen main reference IS the south anchor.
@@ -128,7 +127,7 @@ export function viewGeometryClause(direction) {
 
 // The sheet's candidate/asset id — the `anchorIdForDirection` analogue for the
 // one reference artifact that has no direction. Lives here with the other
-// target vocabulary so validation.js and the services share one spelling.
+// target vocabulary so spriteValidation.js and the services share one spelling.
 export { TURNAROUND_ID } from '../../lib/spriteVocabulary.js';
 
 // --- Corrections (#2964 / #3134, made to actually land by #3216) -------------

@@ -7,31 +7,17 @@ import { Router } from 'express';
 import { writersRoomExercisesQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
-  writersRoomFolderCreateSchema,
-  writersRoomWorkCreateSchema,
-  writersRoomWorkUpdateSchema,
-  writersRoomDraftSaveSchema,
-  writersRoomSnapshotSchema,
-  writersRoomExerciseCreateSchema,
-  writersRoomExerciseFinishSchema,
-  writersRoomAnalysisCreateSchema,
-  writersRoomPolishStartSchema,
-  writersRoomPolishRevertSchema,
-  writersRoomLiveSuggestSchema,
-  writersRoomLiveRenderPreviewSchema,
-  writersRoomCdBridgeSuggestSchema,
-  writersRoomCdBridgeSendSchema,
-  writersRoomCharacterCreateSchema,
-  writersRoomCharacterUpdateSchema,
-  writersRoomPlaceCreateSchema,
-  writersRoomPlaceUpdateSchema,
-  writersRoomObjectCreateSchema,
-  writersRoomObjectUpdateSchema,
-  writersRoomWorksQuerySchema,
-  writersRoomSceneImageBodySchema,
-} from '../lib/validation.js';
+  writersRoomFolderCreateSchema, writersRoomWorkCreateSchema, writersRoomWorkUpdateSchema,
+  writersRoomDraftSaveSchema, writersRoomSnapshotSchema, writersRoomExerciseCreateSchema,
+  writersRoomExerciseFinishSchema, writersRoomAnalysisCreateSchema, writersRoomPolishStartSchema,
+  writersRoomPolishRevertSchema, writersRoomLiveSuggestSchema, writersRoomLiveRenderPreviewSchema,
+  writersRoomCdBridgeSuggestSchema, writersRoomCdBridgeSendSchema, writersRoomCharacterCreateSchema,
+  writersRoomCharacterUpdateSchema, writersRoomPlaceCreateSchema, writersRoomPlaceUpdateSchema,
+  writersRoomObjectCreateSchema, writersRoomObjectUpdateSchema, writersRoomWorksQuerySchema,
+  writersRoomSceneImageBodySchema
+} from '../lib/pipelineValidation.js';
 import {
   listFolders, createFolder, deleteFolder,
   listWorks, listWorksPage, getWorkWithBody, createWork, updateWork, deleteWork,

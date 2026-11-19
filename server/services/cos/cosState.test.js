@@ -65,7 +65,7 @@ describe('cosState persistence', () => {
   });
 
   it('loads and re-saves a stored config that still carries retired keys', async () => {
-    writeConfig({ maxConcurrentAgents: 7, rehabilitationGracePeriodDays: 14, goalsFile: 'GOALS.md', maxProcessMemoryMb: 4096, autoFixThresholds: { maxLinesChanged: 10 } });
+    writeConfig({ maxConcurrentAgents: 7, rehabilitationGracePeriodDays: 14, goalsFile: 'GOALS.md', maxProcessMemoryMb: 4096, autoFixThresholds: { maxLinesChanged: 10 }, mcpServers: [{ name: 'filesystem', command: 'npx' }] });
     const store = await freshModule();
     const config = await store.getConfig();
     expect(config.maxConcurrentAgents).toBe(7);

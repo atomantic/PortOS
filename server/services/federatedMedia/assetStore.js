@@ -28,11 +28,11 @@ import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   atomicWrite,
-  detectImageFormat,
   PATHS,
   resolveFederatedMediaAsset,
   sha256Text,
 } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import {
   FEDERATED_MEDIA_ASSET_EXTENSION,
   FEDERATED_MEDIA_ASSET_MAX_BYTES,

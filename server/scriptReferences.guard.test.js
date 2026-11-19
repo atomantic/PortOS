@@ -1,13 +1,15 @@
 /**
- * Tree-wide guard: every top-level scripts/ file must be referenced by something
- * live in the repo (code, a workflow, package.json or a doc), so a script no one
- * can find or run is either documented in docs/SCRIPTS.md or deleted (#16089).
+ * Tree-wide guard: every top-level and fixture/experiment scripts/ file must be
+ * referenced by something live in the repo (code, a workflow, package.json or a doc),
+ * so a script no one can find or run is either documented in docs/SCRIPTS.md or
+ * deleted (#16089, #16909).
  *
  * A file is referenced when another tracked file contains its name as a whole
  * token, or, for a Python module, its stem (`import ltx25_reference`). Exempt:
  * `*.test.js`, which the server Vitest run collects through `../scripts/**` globs.
- * Changelogs and decision records (ADRs) do not count:
- * a historical mention is not a pointer for the next reader.
+ * Sibling tests (`<stem>.test.js`, `<stem>_test.py`), migrations (`scripts/migrations/*`),
+ * changelogs, decision records (ADRs), concluded plans, and research docs do not count:
+ * a historical mention or self-test is not a pointer for the next reader.
  * No allowlist: document the script or delete it.
  */
 import { lstatSync, readFileSync } from 'fs';
@@ -17,10 +19,23 @@ import { describe, expect, it } from 'vitest';
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const TOP_LEVEL_SCRIPT = /^scripts\/[^/]+$/;
-const VITEST_COLLECTED = /\.test\.js$/;
-const HISTORICAL = /^docs\/decisions\//;
+export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:fixtures|experiments)\/.+)$/;
+export const VITEST_COLLECTED = /\.test\.js$/;
+export const HISTORICAL = /^docs\/(?:decisions|plans|research)\/|^scripts\/migrations\//;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function isSiblingTest(candidate, file) {
+  if (dirname(candidate) !== dirname(file)) return false;
+  const fileBase = basename(file);
+  const candBase = basename(candidate);
+  const candStem = candBase.replace(/\.[^.]+$/, '');
+  return (
+    fileBase === `${candStem}.test.js` ||
+    fileBase === `${candBase}.test.js` ||
+    fileBase === `${candStem}_test.py` ||
+    fileBase === `${candBase}_test.py`
+  );
+}
 
 // A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.
 // One scan for the known keys instead of tokenizing ~47 MB into per-file sets
@@ -31,7 +46,7 @@ const keyPattern = (keys) => new RegExp(
 );
 
 /** Map each candidate's referencing key (file name, plus stem for Python) to its owner path. */
-function referenceKeys(candidates) {
+export function referenceKeys(candidates) {
   const keys = new Map();
   for (const path of candidates) {
     const name = basename(path);
@@ -55,18 +70,53 @@ export function unreferencedScripts(candidates, corpus) {
     if (bytes.subarray(0, 8000).includes(0)) continue;
     for (const [token] of bytes.toString('utf8').matchAll(pattern)) {
       const owner = keys.get(token);
-      if (owner && owner !== path) referenced.add(owner);
+      if (owner && owner !== path && !isSiblingTest(owner, path)) referenced.add(owner);
     }
   }
   return candidates.filter((path) => !referenced.has(path));
 }
 
-describe('top-level scripts/ reference guard (#16089)', () => {
-  it('every top-level scripts/ file is referenced by code, a workflow, package.json or a live doc', () => {
+describe('scripts/ reference guard (#16089, #16909)', () => {
+  it('identifies sibling tests accurately', () => {
+    expect(isSiblingTest('scripts/foo.js', 'scripts/foo.test.js')).toBe(true);
+    expect(isSiblingTest('scripts/foo.py', 'scripts/foo_test.py')).toBe(true);
+    expect(isSiblingTest('scripts/foo.py', 'scripts/foo.test.js')).toBe(true);
+    expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.ps1.test.js')).toBe(true);
+    expect(isSiblingTest('scripts/setup-voice.ps1', 'scripts/setup-voice.test.js')).toBe(true);
+    expect(isSiblingTest('scripts/fixtures/minimax_h3_history.py', 'scripts/_minimax_h3_mlx_history.test.js')).toBe(false);
+    expect(isSiblingTest('scripts/foo.js', 'server/foo.test.js')).toBe(false);
+  });
+
+  it('filters historical documents and migrations out of the live reference corpus', () => {
+    expect(HISTORICAL.test('docs/decisions/2026-09-19-federation.md')).toBe(true);
+    expect(HISTORICAL.test('docs/plans/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
+    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
+    expect(HISTORICAL.test('scripts/migrations/444-minimax-h3-cuda-lightx2v.js')).toBe(true);
+    expect(HISTORICAL.test('docs/SCRIPTS.md')).toBe(false);
+    expect(HISTORICAL.test('server/index.js')).toBe(false);
+  });
+
+  it('catches scripts only referenced by their own sibling test or concluded plans, and covers scripts/{fixtures,experiments}/**', () => {
+    // Sibling test reference is ignored by isSiblingTest
+    expect(isSiblingTest('scripts/orphan.js', 'scripts/orphan.test.js')).toBe(true);
+    expect(isSiblingTest('scripts/orphan.py', 'scripts/orphan_test.py')).toBe(true);
+    // Historical paths and migrations are rejected by the corpus filter
+    expect(HISTORICAL.test('docs/plans/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
+    expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
+    expect(HISTORICAL.test('scripts/migrations/001-init.js')).toBe(true);
+    // Candidate pattern covers subdirectories fixtures and experiments
+    expect(CANDIDATE_SCRIPT.test('scripts/fixtures/minimax_h3_history.py')).toBe(true);
+    expect(CANDIDATE_SCRIPT.test('scripts/experiments/synthid_jamming_eval.py')).toBe(true);
+    expect(CANDIDATE_SCRIPT.test('scripts/lib/directInvocation.js')).toBe(false);
+  });
+
+  it('every top-level and fixture/experiment scripts/ file is referenced by code, a workflow, package.json or a live doc', () => {
     const files = trackedFiles(REPO_ROOT);
     expect(files.length).toBeGreaterThan(100);
-    const candidates = files.filter((path) => TOP_LEVEL_SCRIPT.test(path) && !VITEST_COLLECTED.test(path));
+    const candidates = files.filter((path) => CANDIDATE_SCRIPT.test(path) && !VITEST_COLLECTED.test(path));
     expect(candidates.length).toBeGreaterThan(100);
+    // scripts/fixtures/** and scripts/experiments/** are covered
+    expect(candidates.some((path) => path.startsWith('scripts/fixtures/'))).toBe(true);
     const corpus = files.filter((path) => !HISTORICAL.test(path));
     expect(unreferencedScripts(candidates, corpus), 'document in docs/SCRIPTS.md or delete').toEqual([]);
   }, 60_000); // reads every tracked file once; slower than the default 5 s on a loaded machine

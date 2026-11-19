@@ -1,6 +1,5 @@
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { createHash } from 'node:crypto';
-import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';

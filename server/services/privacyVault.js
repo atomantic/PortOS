@@ -29,7 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
-import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES } from '../lib/privacyValidation.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES } from '../lib/privacyConstants.js';
 import { resolveSubjectId, assertSubject, recordConsent } from './privacySubjects.js';
 
 // Re-exported so the pre-#3658 deep import `privacyVault.recordConsent` keeps

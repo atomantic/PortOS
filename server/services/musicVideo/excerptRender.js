@@ -37,6 +37,7 @@ import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
+import { SOCIAL_VIDEO_ARGS } from './socialCuts.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
@@ -117,10 +118,10 @@ const SEEKED_EXCERPTS = Object.freeze({
       const full = prepareCodeRender(project);
       return { full, totalSec: full.durationSec, songSections: full.song.sections.map((s) => ({ sceneId: s.sceneId || s.id, startSec: s.startSec, endSec: s.endSec })) };
     },
-    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec, fade }) => {
+    encode: async ({ project, projectId, jobId, audioPath, outputPath, signal, onProgress, startSec, endSec, fade, videoArgs }) => {
       const plan = prepareCodeRender(project, { windowStart: startSec, windowEnd: endSec });
       await encodeCodeComposition({
-        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress, fade,
+        ...plan, audioPath, audioStartSec: startSec, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress, fade, videoArgs,
       });
       return { width: plan.width, height: plan.height, fps: plan.fps, boundaryTimes: plan.sectionTimes };
     },
@@ -136,8 +137,8 @@ const SEEKED_EXCERPTS = Object.freeze({
         .map((s) => ({ sceneId: s.sceneId, layer: documentSceneVisualLayer(project, s, { generated: project.composition?.document?.source?.kind === 'generated' }), startSec: s.startSec, endSec: s.endSec }));
       return { plan, totalSec: plan.durationSec, songSections };
     },
-    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade }) => encodeDocumentComposition({
-      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade, collectFootageVisibility: true,
+    encode: ({ prepared, project, jobId, audioPath, soundBed, outputPath, signal, onProgress, startSec, endSec, fade, videoArgs }) => encodeDocumentComposition({
+      project, plan: prepared.plan, jobId, audioPath, soundBed, outputPath, signal, onProgress, windowStart: startSec, windowEnd: endSec, fade, videoArgs, collectFootageVisibility: true,
     }),
   },
 });
@@ -212,6 +213,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(() => renderer.encode({
     prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade, lookPass: finishing,
+    videoArgs: aspect === '9:16' && !renderer.fixedFrame ? SOCIAL_VIDEO_ARGS : undefined,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
   })).then(async (encoded) => {
     if (!finishing) return encoded;
@@ -262,7 +264,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
  * COMPOSITION_DOCUMENT_FORMAT, which the caller takes as "not available".
  * `deps` (tests): `renderers` stands in for the seeked renderers, `resolveAudio` for the master lookup.
  */
-export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
+export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, videoArgs, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
   const renderer = renderers[stored?.composition?.mode];
   // A fixed-frame renderer (a Blender film) cannot draw itself at another aspect: the caller fits the master.
   if (!renderer || renderer.fixedFrame) return null;
@@ -275,7 +277,7 @@ export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fad
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   return renderer.encode({
     prepared, project, projectId: project.id, jobId, audioPath, soundBed, outputPath, signal,
-    startSec, endSec: Math.min(endSec, prepared.totalSec), fade, onProgress,
+    startSec, endSec: Math.min(endSec, prepared.totalSec), fade, videoArgs, onProgress,
   });
 }
 

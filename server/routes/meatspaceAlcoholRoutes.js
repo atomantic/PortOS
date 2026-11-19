@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseIndexParam, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   drinkLogSchema,
   drinkUpdateSchema,
@@ -16,6 +16,7 @@ import {
   substanceEventQuerySchema,
 } from '../lib/meatspaceValidation.js';
 import * as alcoholService from '../services/meatspaceAlcohol.js';
+import { parseIndexParam } from '../lib/queryValidation.js';
 
 const router = Router();
 

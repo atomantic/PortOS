@@ -24,7 +24,8 @@
 
 import { getAllTasks, reviveBlockedTask, updateTask } from './cos/cosTaskStore.js';
 import { emitLog } from './cos/cosEvents.js';
-import { matchesSpawnBudgetProof, spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
+import { spawnBudgetCount } from './cos/cosSpawnBudget.js';
+import { matchesLatestTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import {
   MAX_AUTO_RETRIES_PER_TASK,
   RETRY_SKIP_REASONS,
@@ -34,7 +35,6 @@ import {
   resolveInvestigationRetryTargets,
 } from '../lib/investigationTasks.js';
 import { readAgentsStateForSafetyCheck } from './cos/cosState.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 // What a task's `blockedReason` becomes once the auto-retry loop gives up on it,
 // so the queue says "the loop stopped trying" rather than still showing whatever
@@ -75,26 +75,15 @@ export async function retryTasksResolvedByInvestigation(investigation, { now = D
 
   const retried = [];
   for (const task of targets) {
-    if (isTruthyMeta(task.metadata?.spawnBudgetReconciledHold)) {
-      skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciled-held' });
-      continue;
-    }
+    // The revive grants a fresh spawn budget, so it needs the run that spent the
+    // current one: the completed agent that is still the task's latest dispatch.
+    // A task with no charged spawn has nothing to refund and needs no such owner.
     const state = await readAgentsStateForSafetyCheck().catch(() => null);
-    const owner = state?.trusted ? state.agents?.[task.metadata?.spawnBudgetProof?.dispatch?.agentId] : null;
-    const count = spawnBudgetCount(task.metadata?.totalSpawnCount);
-    const charged = spawnBudgetCount(task.metadata?.spawnBudgetProof?.dispatch?.totalSpawnCount);
-    const undispatched = state?.trusted && validSpawnBudgetEpisode(task.metadata?.spawnBudgetProof)
-      && task.metadata.spawnBudgetProof.dispatch === null
-      && spawnBudgetCount(task.metadata.totalSpawnCount ?? 0) === spawnBudgetCount(task.metadata.spawnBudgetProof.baseline ?? 0);
-    if (owner?.status === 'completed' && matchesSpawnBudgetProof(task, owner) && count !== null && charged !== null && count < charged) {
-      const { reconcileSpawnBudget } = await import('./spawnBudgetReconciliation.js');
-      const result = await reconcileSpawnBudget(task.id).catch(() => null);
-      skipped.push({ taskId: task.id, reason: result?.reconciled ? 'spawn-budget-reconciled-held' : 'spawn-budget-reconciliation-required' });
-      continue;
-    }
-    if (!undispatched && (!owner || owner.status !== 'completed' || !owner.startedAt || !matchesSpawnBudgetProof(task, owner)
-      || count === null || count !== charged)) {
-      skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciliation-required' });
+    const undispatched = spawnBudgetCount(task.metadata?.totalSpawnCount ?? 0) === 0;
+    const owner = state?.trusted && !undispatched ? Object.values(state.agents || {}).find(agent => agent.taskId === task.id
+      && agent.status === 'completed' && !!agent.startedAt && matchesLatestTaskDispatch(agent, task)) : null;
+    if (!state?.trusted || (!undispatched && !owner)) {
+      skipped.push({ taskId: task.id, reason: 'dispatch-owner-unverified' });
       continue;
     }
     // `reviveBlockedTask` clears the block + failure/spawn budgets and emits

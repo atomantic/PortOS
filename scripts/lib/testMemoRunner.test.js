@@ -209,6 +209,27 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
+  // A gate-tooling test never earns a narrowing record, so its unresolved edge selects it on
+  // every diff unless the runner narrows it (#16798). `dynamic.test.js` has the same shape
+  // without being a tooling test, which pins that the narrowing is the list's doing.
+  it('keeps a gate-tooling test out of a related plan until a changed source reaches its closure', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-tooling-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-tooling-memo-store-'));
+    const tooling = 'scripts/pregate.test.js';
+    const control = 'server/lib/dynamic.test.js';
+    const failsClosed = "import { it } from 'vitest';\nimport { a } from '../server/lib/a.js';\nit('x', async () => { await import(process.env.LOAD); });\n";
+    writeRepo(root, { ...FILES, [tooling]: failsClosed, [control]: failsClosed.replace('../server/lib/a.js', './a.js') });
+    const related = (repoSources, repoFiles = []) => plan({
+      mode: 'related', repoFiles, repoSources, listTests: () => [...TESTS, '../scripts/pregate.test.js', 'lib/dynamic.test.js'],
+    }).selected;
+
+    const unrelated = related(['server/lib/lazy.js']);
+    expect(unrelated).toContain(control);
+    expect(unrelated).not.toContain(tooling);
+    expect(related(['server/lib/a.js'])).toContain(tooling);
+    expect(related(['server/lib/lazy.js'], [tooling])).toContain(tooling);
+  });
+
   it.each([
     { mode: 'full', partition: 'unit' },
     { mode: 'files', partition: 'unit' },

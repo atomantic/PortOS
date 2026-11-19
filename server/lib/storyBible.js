@@ -18,10 +18,10 @@
 import { randomUUID } from 'crypto';
 import { LEGACY_SHEET_VARIANT_ID, readSheetPointer, listSheetPointers, applySheetPointerToCharacter } from './sheetPointers.js';
 import { normalizeSlugline } from './scenePrompt.js';
-import { PATHS, resolveImageRef } from './fileUtils.js';
+import { resolveImageRef } from './fileUtils.js';
 import { isPlainObject, isEmptyScalar } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
-import { isStr, trimTo, trimToClause } from './textUtils.js';
+import { isStr, trimTo, } from './textUtils.js';
 import { BIBLE_LIMITS } from './bibleLimits.js';
 import {
   CHARACTER_ARC_TYPES,

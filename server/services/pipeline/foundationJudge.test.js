@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SERIES_AUTOPILOT_DEFAULTS } from '../../lib/seriesAutopilotDefaults.js';
 import { sanitizeCharacter } from '../../lib/storyBible.js';
 
 // I/O is the only thing mocked in fileUtils — PATHS/safeJSONParse stay real so

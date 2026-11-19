@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { join, dirname, extname, resolve } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublishSchema, validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { pullRequestProviderOverrideSchema } from '../../lib/cos/cosValidation.js';
-import { PATHS, detectImageFormat } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { copyFileGuarded } from '../../lib/fileCore.js';
 import { PORTOS_API_URL_TOKEN } from '../../lib/portosUrls.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideo.js';
@@ -13,6 +14,7 @@ import { APP_LAUNCH_VIDEO_PUBLISH_PROMPT } from '../../services/taskPromptDefaul
 import { renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 import { loadApp, pathExists } from './shared.js';
 import { installMotionKit, MOTION_KIT_FILENAME } from '../../services/htmlComposition/motionKit.js';
+import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublishSchema } from '../../lib/htmlCompositionValidation.js';
 
 const router = Router();
 

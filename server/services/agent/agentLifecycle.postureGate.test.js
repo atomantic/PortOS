@@ -70,7 +70,6 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./agentFinalization.js', () => ({
-  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
@@ -150,7 +149,6 @@ import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from '../cos/cosRunnerClient.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
-import { newSpawnBudgetEpisode } from '../spawnBudgetProof.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 
 // The provider every install actually runs its CoS agents on, and the one named
@@ -159,10 +157,10 @@ const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', command: 'claude', envV
 // A TUI record whose vendor declares no public-review recipe at all.
 const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', envVars: {} };
 
-// Queue intake assigns a server-owned episode to a new task before dispatch.
-// Supply the same persisted snapshot so each case reaches its intended gate.
+// The spawn gate re-reads the queued task before dispatch. Supply the snapshot
+// the queue would hold so each case reaches its intended gate.
 function spawnAgentForTask(task) {
-  let persisted = { ...task, status: 'pending', metadata: { ...task.metadata, spawnBudgetProof: newSpawnBudgetEpisode() } };
+  let persisted = { ...task, status: 'pending', metadata: { ...task.metadata } };
   vi.mocked(getTaskById).mockImplementation(async () => structuredClone(persisted));
   vi.mocked(updateTask).mockImplementation(async (_id, patch) => {
     persisted = { ...persisted, ...patch, metadata: { ...persisted.metadata, ...patch.metadata } };

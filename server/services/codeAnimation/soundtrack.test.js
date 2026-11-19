@@ -7,7 +7,6 @@ vi.mock('./jobStore.js', () => ({
   getCodeAnimationJobRecord: vi.fn(async (id) => store.jobs.get(id) ?? null),
   saveCodeAnimationJobRecord: vi.fn(async (job) => { store.jobs.set(job.id, job); return job; }),
 }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 
 import { ensureCodeAnimationSoundtrackTrack, startCodeAnimationSoundtrack } from './soundtrack.js';
 

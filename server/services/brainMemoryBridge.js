@@ -24,6 +24,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
 import { iterateJournals, getJournal } from './brainJournal.js';
 
@@ -66,6 +67,11 @@ const BRIDGED_ENTITY_TYPES = Object.keys(TYPE_MAP)
 // reconcile walk. (JSONL stores are append-only, so they can never orphan a
 // mapped memory entry.)
 const RECONCILABLE_TYPES = [...BRIDGED_ENTITY_TYPES, 'journals'];
+const queueBridgeCommit = createKeyedFileWriteQueue();
+
+function readCanonicalRecord(brainType, id) {
+  return brainType === 'journals' ? getJournal(id) : brainStorage.getById(brainType, id);
+}
 
 // ─── Bridge Map ─────────────────────────────────────────────────────────────
 // Maps "brainType:brainId" → memoryId so updates hit the same memory entry
@@ -271,13 +277,14 @@ export function brainRecordToMemory(brainType, record) {
  * Upsert a single brain record into the memory system.
  * Creates a new memory or updates the existing one based on the bridge map.
  */
-export async function syncBrainRecord(brainType, record, { deferMapSave = false, onMapChanged } = {}) {
+export async function syncBrainRecord(brainType, record, {
+  deferMapSave = false, onMapChanged, onInactive,
+} = {}) {
   const memoryData = brainRecordToMemory(brainType, record);
   if (!memoryData) return null;
 
   const map = await loadBridgeMap();
   const key = bridgeKey(brainType, record.id);
-  const existingMemoryId = map[key];
 
   // Generate embedding. Pass the source hints (NOT persisted on memoryData —
   // the memory schema has no such columns) so the embedder can summarize the
@@ -287,14 +294,35 @@ export async function syncBrainRecord(brainType, record, { deferMapSave = false,
     .generateMemoryEmbedding(memoryData, { source: record.source, sourceRef: record.sourceRef })
     .catch(() => null);
 
-  const saved = await memory.upsertBrainMemory(key, memoryData, embedding, existingMemoryId);
-  if (map[key] !== saved.id) {
-    map[key] = saved.id;
-    onMapChanged?.();
-    if (!deferMapSave) await saveBridgeMap();
-  }
-  console.log(`🧠🔗 Synced brain→memory: ${brainType}/${record.id} → ${saved.id}`);
-  return saved.id;
+  // An embedding may finish after a newer edit, archive, or delete. Check
+  // canonical state at commit time without making those writes wait for it.
+  return queueBridgeCommit(key, async () => {
+    if (RECONCILABLE_TYPES.includes(brainType)) {
+      const current = await readCanonicalRecord(brainType, record.id);
+      if (!current || current.archived) {
+        const archived = await reconcileInactiveMemory(brainType, record.id, map, key, current, {
+          purgeMissing: true,
+        });
+        onInactive?.(key, archived);
+        return null;
+      }
+      // Legacy unstamped records get a timestamp on their first edit.
+      if ((current.updatedAt ?? null) !== (record.updatedAt ?? null)) {
+        if (brainType !== 'journals' || !journalResyncTimers.has(record.id)) {
+          queueResync([{ type: brainType, id: record.id }]);
+        }
+        return null;
+      }
+    }
+    const saved = await memory.upsertBrainMemory(key, memoryData, embedding, map[key]);
+    if (map[key] !== saved.id) {
+      map[key] = saved.id;
+      onMapChanged?.();
+      if (!deferMapSave) await saveBridgeMap();
+    }
+    console.log(`🧠🔗 Synced brain→memory: ${brainType}/${record.id} → ${saved.id}`);
+    return saved.id;
+  });
 }
 
 /**
@@ -329,9 +357,15 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
     await loadBridgeMap({ readOnly: dryRun }), { readOnly: dryRun });
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
   let bridgeMapChanged = false;
+  const inactiveKeys = new Set();
   const deferredMapSave = {
     deferMapSave: true,
     onMapChanged: () => { bridgeMapChanged = true; },
+    onInactive: (key, archived) => {
+      inactiveKeys.add(key);
+      stats.skipped++;
+      if (archived) stats.archived++;
+    },
   };
 
   try {
@@ -445,29 +479,16 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
     const reconcilableTypes = new Set(RECONCILABLE_TYPES);
     for (const mapKey of Object.keys(map)) {
       const sep = mapKey.indexOf(':');
-      if (sep === -1) continue;
+      if (sep === -1 || inactiveKeys.has(mapKey)) continue;
       const type = mapKey.slice(0, sep);
       const id = mapKey.slice(sep + 1);
       if (!reconcilableTypes.has(type)) continue;
-      const record = type === 'journals'
-        ? await getJournal(id)
-        : await brainStorage.getById(type, id);
-      if (record && !record.archived) continue; // still live — already re-embedded above
-      // No stored file at all (tombstone pruned): nothing can resurrect it, so
-      // purge instead of archiving. A tombstone or archived record still archives.
-      if (!(await brainStorage.hasStoredRecord(type, id))) {
-        await hardDeleteMappedMemory(type, id).catch(err => {
-          console.error(`❌ Failed to purge orphaned ${type}/${id}: ${err.message}`);
-          stats.errors++;
-        });
-        continue;
-      }
-      const archived = await archiveMappedMemory(type, id).catch(err => {
-        console.error(`❌ Failed to archive stale ${type}/${id}: ${err.message}`);
+      const outcome = await reconcileBrainRecord(type, id, { purgeMissing: true }).catch(err => {
+        console.error(`❌ Failed to reconcile stale ${type}/${id}: ${err.message}`);
         stats.errors++;
-        return false;
+        return null;
       });
-      if (archived) stats.archived++;
+      if (outcome?.archived) stats.archived++;
     }
   }
 
@@ -619,13 +640,9 @@ export async function replayPersistedResync() {
  * canonical record is gone (tombstoned), archived, or otherwise should no
  * longer be searchable.
  */
-async function archiveMappedMemory(brainType, id) {
-  const map = await loadBridgeMap();
-  const memoryId = map[bridgeKey(brainType, id)];
-  if (!memoryId) return false;
+async function archiveMappedMemory(brainType, id, memoryId) {
   await memory.updateMemory(memoryId, { status: 'archived' });
   console.log(`🧠🔗 Archived brain→memory: ${brainType}/${id} → ${memoryId}`);
-  return true;
 }
 
 /**
@@ -637,16 +654,37 @@ async function archiveMappedMemory(brainType, id) {
  * with a stale mapping. NOT used for synced-in deletes — those stay soft-
  * archived (see resyncBrainRecord) so a peer un-delete can resurrect them.
  */
-async function hardDeleteMappedMemory(brainType, id) {
-  const map = await loadBridgeMap();
-  const key = bridgeKey(brainType, id);
-  const memoryId = map[key];
-  if (!memoryId) return false;
+async function hardDeleteMappedMemory(brainType, id, map, key, memoryId) {
   await memory.purgeMemory(memoryId);
   delete map[key];
   await saveBridgeMap();
   console.log(`🧠🔗 Hard-deleted brain→memory: ${brainType}/${id} → ${memoryId}`);
+}
+
+// Only call from the keyed commit queue with the canonical state read in
+// that same turn. Peer tombstones retain their recoverable memory and link.
+async function reconcileInactiveMemory(brainType, id, map, key, record, { hardDelete, purgeMissing }) {
+  const memoryId = map[key];
+  if (!memoryId) return false;
+  if (!record && (hardDelete || (purgeMissing && !(await brainStorage.hasStoredRecord(brainType, id))))) {
+    await hardDeleteMappedMemory(brainType, id, map, key, memoryId);
+    return false;
+  }
+  await archiveMappedMemory(brainType, id, memoryId);
   return true;
+}
+
+function reconcileBrainRecord(brainType, id, options = {}) {
+  const key = bridgeKey(brainType, id);
+  return queueBridgeCommit(key, async () => {
+    const map = await loadBridgeMap();
+    const record = JSONL_TYPES.includes(brainType)
+      ? (await readJsonlStore(brainType)).find(entry => entry.id === id)
+      : await readCanonicalRecord(brainType, id);
+    if (record && !record.archived) return { record, archived: false };
+    const archived = await reconcileInactiveMemory(brainType, id, map, key, record, options);
+    return { record: null, archived };
+  });
 }
 
 /**
@@ -669,27 +707,8 @@ async function hardDeleteMappedMemory(brainType, id) {
  */
 export async function resyncBrainRecord(brainType, id, { hardDelete = false } = {}) {
   if (!id || !TYPE_MAP[brainType]) return;
-  // getById returns null for tombstones (deleted records), so a synced-in
-  // delete naturally lands in the archive/hard-delete branch.
-  const record = brainType === 'journals'
-    ? await getJournal(id)
-    : JSONL_TYPES.includes(brainType)
-      ? (await readJsonlStore(brainType)).find(record => record.id === id)
-      : await brainStorage.getById(brainType, id);
-  if (!record) {
-    // Truly gone (tombstoned). A genuine local user delete hard-prunes the row;
-    // a sync-driven delete stays soft so a peer un-delete can resurrect it.
-    if (hardDelete) await hardDeleteMappedMemory(brainType, id);
-    else await archiveMappedMemory(brainType, id);
-    return;
-  }
-  if (record.archived) {
-    // Present but archived (not deleted) — always soft, never hard-delete, even
-    // if the queued trigger carried a hardDelete intent.
-    await archiveMappedMemory(brainType, id);
-    return;
-  }
-  await syncBrainRecord(brainType, record);
+  const { record } = await reconcileBrainRecord(brainType, id, { hardDelete });
+  if (record) await syncBrainRecord(brainType, record);
 }
 
 /**
@@ -714,9 +733,13 @@ export async function flushPendingResync() {
       const batch = [...pendingResync.values()];
       pendingResync.clear();
       for (const { type, id, hardDelete } of batch) {
-        await resyncBrainRecord(type, id, { hardDelete }).catch((err) => {
+        try {
+          await resyncBrainRecord(type, id, { hardDelete });
+        } catch (err) {
+          // Keep the failed entry durable for replay without retrying in this flush.
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
-        });
+          continue;
+        }
         settleDurable(bridgeKey(type, id), type === 'journals' ? id : null);
       }
     }
@@ -743,7 +766,7 @@ export function queueResync(records) {
     // a soft archive, or the dead embedding lingers. Safe to keep sticky because
     // resyncBrainRecord's record-present branch upserts a resurrected record
     // regardless of the flag, so a true intent can never hard-delete a live row.
-    const prevHardDelete = pendingResync.get(key)?.hardDelete;
+    const prevHardDelete = durablePending.get(key)?.hardDelete;
     const entry = { type, id, hardDelete: !!hardDelete || !!prevHardDelete };
     pendingResync.set(key, entry);
     durablePending.set(key, entry);
@@ -839,7 +862,7 @@ export function initBridge() {
   // memory copy (text + embedding) kept for resurrection is purged now.
   brainEvents.on('tombstone:pruned', ({ type, id } = {}) => {
     if (!id || !RECONCILABLE_TYPES.includes(type)) return;
-    hardDeleteMappedMemory(type, id).catch((err) => {
+    reconcileBrainRecord(type, id, { purgeMissing: true }).catch((err) => {
       console.error(`❌ Brain bridge tombstone purge failed for ${type}/${id}: ${err.message}`);
     });
   });
@@ -886,5 +909,5 @@ async function handleJournalDeleted(entry) {
   // 'journals:deleted'; synced-in journal deletes flow through sync:applied →
   // resyncBrainRecord and stay soft-archived. So a local journal delete hard-
   // prunes the mapped memory row + embedding (issue #1318).
-  await hardDeleteMappedMemory('journals', entry.id);
+  await reconcileBrainRecord('journals', entry.id, { hardDelete: true });
 }

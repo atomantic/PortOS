@@ -19,15 +19,15 @@ const { mockGetSystemActivity, mockGetGpuTelemetry, mockCancelMediaJob } = vi.ho
   mockCancelMediaJob: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('../../services/api', () => ({
-  getSystemActivity: (...args) => mockGetSystemActivity(...args),
-  getGpuTelemetry: (...args) => mockGetGpuTelemetry(...args),
-  cancelMediaJob: (...args) => mockCancelMediaJob(...args),
-}));
-// useSystemActivity reads apiSystem.js directly (#16562), so wire the same mock there.
+// The widget imports apiSystem.js and apiMediaJobs.js directly, not the api barrel (#16813).
+// useSystemActivity reads apiSystem.js too, so the same mock serves both.
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getSystemActivity: (...args) => mockGetSystemActivity(...args),
+  getGpuTelemetry: (...args) => mockGetGpuTelemetry(...args),
+}));
+vi.mock('../../services/apiMediaJobs.js', () => ({
+  cancelMediaJob: (...args) => mockCancelMediaJob(...args),
 }));
 
 let intersecting = true;

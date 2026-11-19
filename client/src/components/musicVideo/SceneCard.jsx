@@ -74,6 +74,8 @@ import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { shotEffectLabel, shotEffects } from '../../lib/musicVideoShotEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
 import { PreMusicSound, PreMusicTiming } from './ScenePreMusic.jsx';
+import SceneClipSound from './SceneClipSound.jsx';
+import { clipSoundSummary } from '../../../../server/lib/musicVideo/musicVideoClipSound.js';
 import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 import SceneLyricType from './SceneLyricType.jsx';
@@ -585,6 +587,12 @@ export default function SceneCard({
       {preMusic && (
         <ShotEditorGroup title="Sound" summary={preMusicSoundSummary(scene.preMusic).toLowerCase()} testId="shot-group-sound">
           <PreMusicSound fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        </ShotEditorGroup>
+      )}
+      {!preMusic && layer === 'footage' && (
+        <ShotEditorGroup title="Sound" summary={(clipSoundSummary(scene) || 'silent under the song').toLowerCase()} testId="shot-group-sound">
+          <SceneClipSound fieldId={fieldId} scene={scene} onChange={applyPatch} documentComposition={documentComposition}
+            hasSelectedTake={Boolean(sourceWindow?.videoHistoryId || scene.videoHistoryId)} />
         </ShotEditorGroup>
       )}
       <ShotEditorGroup title="Transitions & effects" summary={effectsSummary} testId="shot-group-effects">

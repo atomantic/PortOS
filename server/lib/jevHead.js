@@ -211,7 +211,7 @@ export function headAdoptionBlocker(metrics) {
 
 /**
  * Route input for starting a training run. Validated from HERE, not through
- * `lib/validation.js`, whose barrel would drag this module into every suite's
+ * a shared validation module, which would drag this module into every suite's
  * static import closure (`server/lib/importScoping.test.js`).
  *
  * `.strict()` and deliberately NO repository path: a client-supplied path would

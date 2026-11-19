@@ -314,6 +314,15 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
     { forgeAccount: app?.forgeAccount }
   );
 
+  let accountLookup;
+  const readAccount = async () => {
+    const account = tracker === 'github'
+      ? (await execGh(['api', 'user', '--hostname', target.apiHost, '--jq', '.login'], undefined, { cwd, env })).trim()
+      : safeJSONParse(await execGlab(['api', 'user'], app.repoPath, undefined, { rejectOnError: true }), null)?.username;
+    if (typeof account !== 'string' || !account.trim()) throw new Error('Missing forge account');
+    return account.toLowerCase();
+  };
+
   let epic = false;
   const readLabels = async () => {
     const raw = tracker === 'github'
@@ -327,9 +336,21 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
     if (!Array.isArray(issue.assignees) || typeof issue.state !== 'string') {
       throw new ServerError('Could not read issue claim state', { status: 502, code: 'CLAIM_STATE_UNAVAILABLE' });
     }
-    if (issue.assignees.length || names.some(name => name.toLowerCase() === 'in-progress')
+    if (names.some(name => name.toLowerCase() === IN_PROGRESS_LABEL)
       || !['open', 'opened'].includes(issue.state.toLowerCase())) {
       throw new ServerError('Issue is already claimed or closed', { status: 409, code: 'ISSUE_IN_FLIGHT' });
+    }
+    if (issue.assignees.length) {
+      const account = await (accountLookup ??= readAccount().catch(() => {
+        throw new ServerError('Could not verify the authenticated forge account before claiming', { status: 502, code: 'CLAIM_STATE_UNAVAILABLE' });
+      }));
+      const field = tracker === 'github' ? 'login' : 'username';
+      if (issue.assignees.some(assignee => {
+        const login = assignee?.[field];
+        return typeof login !== 'string' || login.toLowerCase() !== account;
+      })) {
+        throw new ServerError('Issue is already claimed by another assignee', { status: 409, code: 'ISSUE_IN_FLIGHT' });
+      }
     }
     epic = names.some(name => name.toLowerCase() === EPIC_LABEL) || titleMarksEpic(issue.title);
     return names.filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));

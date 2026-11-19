@@ -25,7 +25,7 @@ vi.mock('../services/taskSchedule.js', () => ({
   INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
-vi.mock('../lib/validation.js', async (importOriginal) => ({
+vi.mock('../lib/cos/cosValidation.js', async (importOriginal) => ({
   ...(await importOriginal()),
   sanitizeTaskMetadata: vi.fn((meta) => meta),
 }));

@@ -15,8 +15,9 @@ import { AlertTriangle, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
  *   - `peerSubs[].blockedBySchema`: per-(record-subscription) gaps detected
  *     by the per-record push pipeline. Shape:
  *       { ahead, behind, peerPortosVersion, peerSchemaVersions, detectedAt }
- *     Set when WE pushed to the peer and got a 409 back because the peer's
- *     code is BEHIND ours.
+ *     Set when the peer refused our push. The gap arrays are relative to
+ *     this install as the sender. An empty gap covers the pre-feature
+ *     case where the peer did not recognize the record kind.
  *
  * Both are rendered as a compact warning block at the top of the peer card.
  * Empty / absent gaps render nothing — peers without a mismatch keep their
@@ -43,11 +44,13 @@ export function SchemaGapBadge({ peer, peerSubs = [] }) {
     .filter((s) => s?.blockedBySchema)
     .map((s) => ({
       category: recordKindToCategory(s.recordKind),
-      ahead: s.blockedBySchema.ahead || [],
-      behind: s.blockedBySchema.behind || [],
       peerPortosVersion: s.blockedBySchema.peerPortosVersion,
       detectedAt: s.blockedBySchema.detectedAt,
-      direction: 'peer-behind',
+      // An ahead gap is sufficient to block the push. A mixed response can
+      // include behind diagnostics that the peer would ordinarily accept.
+      direction: !s.blockedBySchema.ahead?.length && s.blockedBySchema.behind?.length > 0
+        ? 'sender-behind'
+        : 'peer-behind',
     }));
 
   if (snapshotGaps.length === 0 && pushGaps.length === 0) return null;
@@ -82,6 +85,12 @@ export function SchemaGapBadge({ peer, peerSubs = [] }) {
                   <span className="text-white">{peer?.name || 'Peer'}</span> is on an older PortOS
                   {row.peerPortosVersion ? <> (<span className="font-mono">{row.peerPortosVersion}</span>)</> : null}
                   {' '}— they need to update before we can sync <span className="font-mono">{row.category}</span>.
+                </>
+              ) : row.direction === 'sender-behind' ? (
+                <>
+                  Update this PortOS to send <span className="font-mono">{row.category}</span> updates to{' '}
+                  <span className="text-white">{peer?.name || 'Peer'}</span>
+                  {row.peerPortosVersion ? <> (<span className="font-mono">{row.peerPortosVersion}</span>)</> : null}.
                 </>
               ) : (
                 <>

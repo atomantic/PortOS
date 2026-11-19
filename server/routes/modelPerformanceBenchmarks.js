@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, modelComparisonDiscoverySchema, modelComparisonBenchmarkRunSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { getPortosModelBenchmarkObservations } from '../services/modelComparison.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/provider/providerModels.js';
@@ -9,6 +9,7 @@ import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
 import { isCodexTextTransportEnabled } from '../lib/codexTurn.js';
 import { modelComparisonBilling, runPortosModelBenchmark } from '../services/portosModelBenchmarks.js';
+import { modelComparisonDiscoverySchema, modelComparisonBenchmarkRunSchema } from '../lib/modelComparisonValidation.js';
 
 const eligibleBenchmarkProvider = provider => Boolean(familyForProvider(provider) || isFreeProvider(provider));
 const supportsBenchmarkText = provider => provider.type === 'api' || isCodexTextTransportEnabled(provider);

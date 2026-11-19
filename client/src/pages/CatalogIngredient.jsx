@@ -8,7 +8,7 @@
  * panels live in components/catalog/ingredient/.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router';
 import { Image as ImageIcon, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2, Aperture, Map as MapIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -24,7 +24,8 @@ import CatalogIdentityPanel from '../components/catalog/CatalogIdentityPanel';
 import CatalogIdentityNotice from '../components/catalog/CatalogIdentityNotice';
 import IngredientHeader from '../components/catalog/ingredient/IngredientHeader';
 import IngredientProfileTab from '../components/catalog/ingredient/IngredientProfileTab';
-import IngredientMediaTabs from '../components/catalog/ingredient/IngredientMediaTabs';
+import { lazyWithReload } from '../utils/lazyWithReload';
+const IngredientMediaTabs = lazyWithReload(() => import('../components/catalog/ingredient/IngredientMediaTabs'));
 import RevisionsPanel from '../components/catalog/ingredient/RevisionsPanel';
 import useIngredientEditor from '../components/catalog/ingredient/useIngredientEditor';
 import useIngredientMediaActions from '../components/catalog/ingredient/useIngredientMediaActions';
@@ -207,16 +208,20 @@ function IngredientEditor() {
             onCanonChanged={() => reloadDetails().catch(error => toast.error(error.message || 'Could not refresh the character.'))} />
         )}
 
-        <IngredientMediaTabs record={record} draft={draft} activeTab={activeTab} hasTabs={!!tabs}
-          generateProfilePath={record.type === 'character' && tabs ? `${detailTabPath(library, record.id, 'profile')}${search}` : null}
-          mediaState={{ media, setMedia: editor.setMedia, missingMedia: editor.missingMedia, ready: mediaReady, loading: editor.mediaLoading, error: mediaError, refresh: refreshMedia }}
-          actions={actions} saved={saved} gates={gates} rows={rows} renderBlockedReason={renderBlockedReason}
-          canonRemoval={universeRef && FORM_TYPES.has(record.type) ? {
-            recordId: record.id, universeId: universeRef.refId, kind: record.type,
-            disabled: identityReadOnly || saving || isDirty || lookSaving || unlocking,
-            onRemoved: () => { reloadDetails({ withMedia: true }).catch(error => toast.error(error.message)); },
-          } : null}
-          genDescription={genDescription} onUnlocked={editor.applyLock} />
+        {(!tabs || activeTab !== 'profile') && (
+          <Suspense fallback={<PageSkeleton header="none" label="Loading media" cards={2} sidebar={false} />}>
+            <IngredientMediaTabs record={record} draft={draft} activeTab={activeTab} hasTabs={!!tabs}
+              generateProfilePath={record.type === 'character' && tabs ? `${detailTabPath(library, record.id, 'profile')}${search}` : null}
+              mediaState={{ media, setMedia: editor.setMedia, missingMedia: editor.missingMedia, ready: mediaReady, loading: editor.mediaLoading, error: mediaError, refresh: refreshMedia }}
+              actions={actions} saved={saved} gates={gates} rows={rows} renderBlockedReason={renderBlockedReason}
+              canonRemoval={universeRef && FORM_TYPES.has(record.type) ? {
+                recordId: record.id, universeId: universeRef.refId, kind: record.type,
+                disabled: identityReadOnly || saving || isDirty || lookSaving || unlocking,
+                onRemoved: () => { reloadDetails({ withMedia: true }).catch(error => toast.error(error.message)); },
+              } : null}
+              genDescription={genDescription} onUnlocked={editor.applyLock} />
+          </Suspense>
+        )}
 
         {activeTab === 'profile' && (
           <CatalogMergePanel record={record}

@@ -10,14 +10,21 @@
  * is left alone. A template edit therefore needs no numbered migration: edit
  * the `.md`, then run `node scripts/regen-shipped-prompt-hashes.js`, which
  * retires the outgoing hash. `shippedPromptHashes.guard.test.js` fails on a
- * body changed without the regen and on any retired hash removed since the
- * merge base: a dropped hash strands every install still holding that body.
+ * body changed without the regen and on any current or retired hash lost
+ * since the comparison base: a dropped hash strands installs still holding it.
+ *
+ * The same pass also seeds what an install lacks, so a newly shipped template
+ * needs no first-shipment migration either: when `data/prompts/` exists, every
+ * table-listed prompt absent from it is copied from the reference, and every
+ * `stages[key]` entry in the reference `stage-config.json` that the installed
+ * config lacks is merged in (an existing entry is never touched). A missing
+ * `data/prompts/` is a fresh install that `setup-data.js` populates.
  *
  * `prompts/skills/jobs/` is excluded: the autonomous-job store keeps its own
  * `.shipped` snapshot for those templates (`syncSkillTemplatesFromSample`).
  */
-import { readdir, readFile } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, readdir, readFile, stat } from 'fs/promises';
+import { dirname, join } from 'path';
 
 import { md5, readJsonOrNull, writeJsonAtomic, writeTextAtomic } from './_lib.js';
 
@@ -126,12 +133,69 @@ export async function inspectInstalledPrompts(rootDir) {
   return results;
 }
 
+const STAGE_CONFIG_RELPATH = 'prompts/stage-config.json';
+
+const isDirectory = (path) => stat(path).then((info) => info.isDirectory(), (err) => {
+  if (err.code === 'ENOENT') return false;
+  throw err;
+});
+
+/** Copy every table-listed reference prompt that `data/prompts/` lacks. */
+async function seedMissingPrompts(rootDir) {
+  const table = await readShippedHashes(rootDir);
+  const seeded = [];
+  for (const key of Object.keys(table).sort()) {
+    if (!table[key].current) continue;
+    const reference = await readOptional(referencePath(rootDir, key));
+    if (reference === null) continue;
+    if (await readOptional(installedPath(rootDir, key)) !== null) continue;
+    await mkdir(dirname(installedPath(rootDir, key)), { recursive: true });
+    await writeTextAtomic(installedPath(rootDir, key), reference);
+    seeded.push(key);
+    console.log(`✅ Seeded missing shipped prompt: data/prompts/${key}`);
+  }
+  return seeded;
+}
+
+/**
+ * Merge reference `stages[key]` entries the installed config lacks, writing
+ * once. An unreadable installed config is left alone: overwriting it would
+ * discard the user's stage customizations.
+ */
+async function seedMissingStageConfig(rootDir) {
+  const referenceRaw = await readOptional(join(rootDir, 'data.reference', ...STAGE_CONFIG_RELPATH.split('/')));
+  if (referenceRaw === null) return [];
+  const reference = JSON.parse(referenceRaw);
+  const installedFile = join(rootDir, 'data', ...STAGE_CONFIG_RELPATH.split('/'));
+  const installedRaw = await readOptional(installedFile);
+  let installed = { stages: {} };
+  if (installedRaw !== null) {
+    try {
+      installed = JSON.parse(installedRaw);
+    } catch (err) {
+      console.warn(`⚠️ data/${STAGE_CONFIG_RELPATH} is unreadable (${err.message}); stage entries were not seeded`);
+      return [];
+    }
+  }
+  if (!installed || typeof installed !== 'object' || Array.isArray(installed)) return [];
+  const stages = installed.stages && typeof installed.stages === 'object' && !Array.isArray(installed.stages) ? installed.stages : {};
+  const added = Object.keys(reference.stages || {}).filter((key) => !(key in stages)).sort();
+  if (!added.length) return [];
+  for (const key of added) stages[key] = reference.stages[key];
+  await writeJsonAtomic(installedFile, { ...installed, stages });
+  console.log(`📝 Seeded ${added.length} missing stage-config entr${added.length === 1 ? 'y' : 'ies'}: ${added.join(', ')}`);
+  return added;
+}
+
 /**
  * Bring every untouched shipped prompt in `data/prompts/` up to the current
  * reference body. A customized copy is left alone and warned about once per
  * shipped body, so a boot-time pass does not repeat the same warning forever.
  */
 export async function reconcileShippedPrompts({ rootDir }) {
+  const installedPrompts = await isDirectory(join(rootDir, 'data', 'prompts'));
+  const seeded = installedPrompts ? await seedMissingPrompts(rootDir) : [];
+  const configAdded = installedPrompts ? await seedMissingStageConfig(rootDir) : [];
   const results = await inspectInstalledPrompts(rootDir);
   const updated = [];
   for (const { key, state, reference } of results) {
@@ -162,5 +226,5 @@ export async function reconcileShippedPrompts({ rootDir }) {
   }
 
   if (updated.length) console.log(`📝 Shipped prompts: ${updated.length} updated, ${customized.length} customized left as-is`);
-  return { updated, customized: customized.map(({ key }) => key) };
+  return { updated, seeded, configAdded, customized: customized.map(({ key }) => key) };
 }

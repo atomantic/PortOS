@@ -5,7 +5,6 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'path';
-import { tmpdir } from 'os';
 
 // vi.mock factories are hoisted above imports; the shared fixtures module is
 // loaded the same way so its state objects outlive vi.resetModules().

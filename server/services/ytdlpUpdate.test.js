@@ -6,12 +6,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('fs/promises', () => ({ realpath: vi.fn(async (p) => p) }));
 vi.mock('../lib/bufferedSpawn.js', () => ({ bufferedSpawn: vi.fn() }));
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
+vi.mock('../lib/processEnv.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  findCommandOnPath: vi.fn(),
+}));
 vi.mock('../lib/ytdlp.js', () => ({ findYtDlp: vi.fn(), resetYtDlpCache: vi.fn() }));
 
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-import { findYtDlp } from '../lib/ytdlp.js';
-import { getYtDlpUpdateStatus, updateYtDlp, resetYtDlpLatestCache } from './ytdlpUpdate.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
+import { findYtDlp, resetYtDlpCache } from '../lib/ytdlp.js';
+import { getYtDlpUpdateStatus, installYtDlp, updateYtDlp, resetYtDlpLatestCache } from './ytdlpUpdate.js';
 
 const BREW_PREFIX = '/opt/homebrew/opt/yt-dlp';
 const BREW_BINARY = `${BREW_PREFIX}/bin/yt-dlp`;
@@ -44,7 +49,43 @@ describe('ytdlpUpdate', () => {
     resetYtDlpLatestCache();
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tag_name: '2026.08.19' }) })));
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    findCommandOnPath.mockReset();
+  });
+
+  it('offers installation on macOS with Homebrew and verifies the installed binary', async () => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: 'darwin' } }));
+    findCommandOnPath.mockReturnValue('/opt/homebrew/bin/brew');
+    findYtDlp.mockResolvedValue(null);
+    stubProbes({ version: '2026.08.19' });
+    expect(await getYtDlpUpdateStatus()).toMatchObject({ installed: false, canInstall: true });
+    expect(runStreamingCommand).not.toHaveBeenCalled();
+
+    runStreamingCommand.mockImplementationOnce(async () => {
+      expect(await installYtDlp()).toMatchObject({ success: false, error: expect.stringMatching(/in progress/) });
+      findYtDlp.mockResolvedValue(BREW_BINARY);
+      return { success: true };
+    });
+
+    expect(await installYtDlp()).toEqual({ success: true, version: '2026.08.19' });
+    expect(runStreamingCommand).toHaveBeenCalledExactlyOnceWith(
+      '/opt/homebrew/bin/brew', ['install', 'yt-dlp'], expect.any(Function), expect.any(Object),
+    );
+    expect(resetYtDlpCache).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['linux', 'darwin'])('keeps the instructions when install is unavailable on %s', async (platform) => {
+    vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }));
+    findCommandOnPath.mockReturnValue(platform === 'linux' ? '/usr/bin/brew' : null);
+    findYtDlp.mockResolvedValue(null);
+
+    expect(await getYtDlpUpdateStatus()).toMatchObject({
+      installed: false, canInstall: false, downloadUrl: expect.stringContaining('#installation'),
+    });
+    expect(await installYtDlp()).toMatchObject({ success: false });
+    expect(runStreamingCommand).not.toHaveBeenCalled();
+  });
 
   it('reports a missing binary as not installed and not updatable', async () => {
     findYtDlp.mockResolvedValue(null);

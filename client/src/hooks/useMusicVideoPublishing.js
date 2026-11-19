@@ -19,6 +19,7 @@ import {
 } from '../services/apiMusicVideo.js';
 
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {}, progress: {} };
+const projectScope = (projectId) => ({ projectId, latestDraftIds: new Map(), finishedDraftStates: new Map() });
 
 /**
  * Music Video posting (#9282). `prepare` fills the post in the PortOS Browser
@@ -37,8 +38,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   const projectId = project?.id || null;
   // A selection lifetime, rather than just the id, also rejects an old reply
   // after switching A → B → A. Hide the previous state in the first render.
-  const selection = useRef({ projectId });
-  if (selection.current.projectId !== projectId) selection.current = { projectId };
+  const selection = useRef(null);
+  if (selection.current?.projectId !== projectId) selection.current = projectScope(projectId);
   const scope = selection.current;
   const [posting, setPosting] = useState({ ...EMPTY_POSTING, scope });
   const { drafts, busy, errors, progress } = posting.scope === scope ? posting : EMPTY_POSTING;
@@ -65,6 +66,26 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     else next[target] = value;
     return { ...state, [field]: next };
   });
+  const presentDraft = (target, draft) => {
+    if (draft.state === 'discarded' || draft.state === 'posted') return;
+    const state = scope.finishedDraftStates.get(draft.draftId) ?? draft.state;
+    if (state === 'discarded' || state === 'posted') return;
+    setFor('drafts', target, state === draft.state ? draft : { ...draft, state });
+  };
+  const finishDraft = (target, draftId, state) => {
+    // A read or fill can still return this ID after its tab closes or is removed.
+    const previous = scope.finishedDraftStates.get(draftId);
+    if (previous === state || previous === 'discarded' || previous === 'posted') return;
+    scope.finishedDraftStates.set(draftId, state);
+    setPosting((prev) => {
+      const current = selection.current === scope && prev.scope === scope ? prev.drafts[target] : null;
+      if (!current || current.draftId !== draftId) return prev;
+      const next = { ...prev.drafts };
+      if (state === 'closed') next[target] = { ...current, state };
+      else delete next[target];
+      return { ...prev, drafts: next };
+    });
+  };
   const fail = (target, err) => {
     setFor('errors', target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
   };
@@ -74,53 +95,75 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // director, in which case the server has already recorded the post's link).
   // `draftsError` is scoped to the project so a failure never shows under another one.
   const [draftsError, setDraftsError] = useState(null);
-  // Read in the async success path so a read that never failed issues no extra state update.
   const draftsErrorRef = useRef(null);
-  draftsErrorRef.current = draftsError;
   const [draftsAttempt, setDraftsAttempt] = useState(0);
   const retryDrafts = useCallback(() => setDraftsAttempt((n) => n + 1), []);
   useEffect(() => {
     if (!projectId) return undefined;
     let cancelled = false;
-    // The error clears only on success, so a slow retry never reads as "no drafts".
-    const apply = (list) => { if (cancelled) return; if (draftsErrorRef.current) setDraftsError(null); for (const d of list) if (d.state !== 'discarded') setFor('drafts', d.target, d); };
-    getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || []))
-      .catch((err) => { if (!cancelled) setDraftsError({ scope, error: err || new Error('Failed') }); });
+    const isCurrent = () => !cancelled && selection.current === scope;
+    let readNumber = 0;
+    const updateDraftsError = (next) => {
+      // A successful read with no prior error has no error state to update.
+      if (next === draftsErrorRef.current) return;
+      draftsErrorRef.current = next;
+      setDraftsError(next);
+    };
+    const readDrafts = (opened) => {
+      const snapshot = opened ? null : new Map(scope.latestDraftIds);
+      const read = ++readNumber;
+      return getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => {
+        if (!isCurrent()) return;
+        // The error clears only on success, so a slow retry never reads as "no drafts".
+        if (read === readNumber) updateDraftsError(null);
+        for (const draft of res?.drafts || []) {
+          const currentId = scope.latestDraftIds.get(draft.target);
+          if (opened) {
+            if (draft.target !== opened.target || draft.draftId !== opened.draftId || draft.draftId !== currentId) continue;
+          } else if (currentId !== snapshot.get(draft.target) && draft.draftId !== currentId) {
+            // A list begun before an open or local fill may still hold the replaced draft.
+            continue;
+          }
+          presentDraft(draft.target, draft);
+        }
+      }).catch((err) => {
+        if (isCurrent() && read === readNumber) updateDraftsError({ scope, error: err || new Error('Failed') });
+      });
+    };
     const onDraft = (e) => {
-      if (e?.projectId !== projectId) return;
+      if (!isCurrent() || e?.projectId !== projectId) return;
       // A fill still running: what it waits on or is doing (shown only while this tab's fill is busy).
       if (e.state === 'queued' || e.state === 'filling') { setFor('progress', e.target, e.message || null); return; }
+      if (e.state === 'open') {
+        scope.latestDraftIds.set(e.target, e.draftId);
+        readDrafts(e);
+        return;
+      }
       if (e.state === 'posted') {
         if (e.project) replaceProjectRef.current?.(e.project);
         loadPlatforms();
       }
-      if (e.state === 'discarded' || e.state === 'posted') {
-        setPosting((prev) => {
-          const current = prev.scope === scope ? prev.drafts[e.target] : null;
-          if (!current || current.draftId !== e.draftId) return prev;
-          const next = { ...prev.drafts };
-          delete next[e.target];
-          return { ...prev, drafts: next };
-        });
-      } else if (e.state === 'closed') {
-        setPosting((prev) => {
-          const current = prev.scope === scope ? prev.drafts[e.target] : null;
-          if (!current || current.draftId !== e.draftId) return prev;
-          return { ...prev, drafts: { ...prev.drafts, [e.target]: { ...current, state: 'closed' } } };
-        });
-      }
+      if (e.state === 'discarded' || e.state === 'posted' || e.state === 'closed') finishDraft(e.target, e.draftId, e.state);
     };
     socket.on('music-video:publish-draft', onDraft);
+    readDrafts();
     return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
     // Dependency list is intentionally partial.
   }, [projectId, scope, loadPlatforms, draftsAttempt]);
 
   const prepare = (target, options = {}) => {
+    const previousId = scope.latestDraftIds.get(target);
     setFor('busy', target, 'prepare');
     setFor('errors', target, null);
     return prepareMusicVideoPublishDraft(projectId, target, options, { silent: true })
-      .then((draft) => { setFor('drafts', target, draft); return draft; })
-      .catch((err) => { setFor('drafts', target, null); fail(target, err); return null; })
+      .then((draft) => {
+        const currentId = scope.latestDraftIds.get(target);
+        if (selection.current !== scope || (currentId !== previousId && currentId !== draft.draftId)) return null;
+        scope.latestDraftIds.set(target, draft.draftId);
+        presentDraft(target, draft);
+        return draft;
+      })
+      .catch((err) => { fail(target, err); return null; })
       .finally(() => { setFor('busy', target, null); setFor('progress', target, null); });
   };
 
@@ -129,8 +172,13 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const discard = (target) => {
     const draft = drafts[target];
-    setFor('drafts', target, null);
-    if (draft) discardMusicVideoPublishDraft(projectId, draft.draftId, { silent: true }).catch(() => {});
+    if (!draft || busy[target]) return;
+    setFor('busy', target, 'discard');
+    setFor('errors', target, null);
+    return discardMusicVideoPublishDraft(projectId, draft.draftId, { silent: true })
+      .then(() => finishDraft(target, draft.draftId, 'discarded'))
+      .catch((err) => fail(target, err))
+      .finally(() => setFor('busy', target, null));
   };
 
   const setPlatform = (target, change) => {

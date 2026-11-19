@@ -207,7 +207,7 @@ Candidate validation is the release PR's hosted CI, not a local repeat of it.
 A pull request into `release` forces the complete plan on the exact candidate
 head: full server and client suites, lint, the client build, the boot smoke,
 the DB suite against a provisioned `portos_test`, the browser suites at their
-full profile, shipped prompt history, and every native job (Windows, macOS,
+full profile, and every native job (Windows, macOS,
 Linux and Docker containment, SuperCollider, Node minimum). Step 4 requires
 that run green before promotion, and the Release workflow reruns the complete
 suite when it cannot find that green gate for the released tree. So before

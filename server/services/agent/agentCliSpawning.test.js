@@ -85,9 +85,6 @@ vi.mock('./agentState.js', () => ({
 vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: (str, fallback) => { try { return JSON.parse(str); } catch { return fallback; } },
-  // agentSentinel builds the per-agent sentinel filename with this — a mock
-  // missing it makes doneSentinelPath throw inside the close handler.
-  sanitizeFilename: (name) => String(name).replace(/[^a-zA-Z0-9._-]/g, '_'),
   writeFileGuarded: vi.fn().mockResolvedValue(undefined),
   PATHS: { root: '/tmp', cosAgents: '/tmp/agents', data: '/tmp/data' },
 }));

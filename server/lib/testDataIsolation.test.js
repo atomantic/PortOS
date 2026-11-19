@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, rmdirSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, sep } from 'path';
 import { appendFileGuarded, atomicWrite, copyFileGuarded, createWriteStreamGuarded, ensureDir, renameGuarded, rmGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
@@ -33,7 +33,26 @@ import { PATHS } from './paths.js';
 const REAL_DATA = _resolveGuardRoots(resolveCodeRootForModule(import.meta.url)).root;
 const tempRoot = mkdtempSync(join(tmpdir(), 'portos-test-isolation-'));
 
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+// Several cases need the real data root to EXIST: a symlink into it only canonicalizes
+// when it resolves, and a missing directory trips `ensureDir refused` before the
+// primitive under test is reached. A fresh CI checkout has no data/ until some
+// other suite happens to create it, so this file provisions (and afterwards removes)
+// the bare directory itself instead of depending on suite scheduling. Raw mkdirSync,
+// because the guarded `ensureDir` is exactly what is under test.
+const createdRealData = !existsSync(REAL_DATA);
+if (createdRealData) mkdirSync(REAL_DATA, { recursive: true });
+
+afterAll(() => {
+  rmSync(tempRoot, { recursive: true, force: true });
+  // Non-recursive: removes only the empty directory this file created, never data another suite wrote.
+  if (createdRealData) {
+    try {
+      rmdirSync(REAL_DATA);
+    } catch {
+      // ENOTEMPTY: a concurrent suite populated it; leave it for them.
+    }
+  }
+});
 
 afterEach(() => vi.unstubAllEnvs());
 

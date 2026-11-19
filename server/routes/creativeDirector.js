@@ -11,23 +11,8 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
-import {
-  validateRequest,
-  creativeDirectorProjectCreateSchema,
-  creativeDirectorProjectUpdateSchema,
-  creativeDirectorTreatmentSchema,
-  creativeDirectorVideoReviewActionSchema,
-  creativeDirectorVideoStartSchema,
-  creativeDirectorPlanSchema,
-  creativeDirectorPlanStepActionSchema,
-  creativeDirectorDirectiveSchema,
-  creativeDirectorSceneUpdateSchema,
-  creativeDirectorAutoCastApplySchema,
-  creativeDirectorProjectQuerySchema,
-  creativeDirectorProjectSlimQuerySchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { creativeDirectorProjectCreateSchema, creativeDirectorProjectUpdateSchema, creativeDirectorTreatmentSchema, creativeDirectorVideoReviewActionSchema, creativeDirectorVideoStartSchema, creativeDirectorPlanSchema, creativeDirectorPlanStepActionSchema, creativeDirectorDirectiveSchema, creativeDirectorSceneUpdateSchema, creativeDirectorAutoCastApplySchema, creativeDirectorProjectQuerySchema, creativeDirectorProjectSlimQuerySchema } from '../lib/creativeDirectorValidation.js';
 import {
   listProjects,
   getProjectsByIds,
@@ -53,6 +38,7 @@ import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAd
 import { getCreativeAutonomyMode } from '../lib/domainAutonomy.js';
 import { getDomainBudgetStatus } from '../services/domainUsage.js';
 import { loadState } from '../services/cos/cosState.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 const router = Router();
 
 function assertVideoDispatchAvailable(project) {

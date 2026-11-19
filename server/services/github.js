@@ -893,14 +893,10 @@ export async function findPullRequestForBranch(branch, { cwd = null, env = null,
  */
 export async function getPullRequestState(prRef, { cwd = null, env = null } = {}) {
   if (!prRef) return { status: 'unavailable', state: null, detail: 'no PR reference' };
-  const raw = await execGh(
-    ['pr', 'view', String(prRef), '--json', 'state'],
-    DEFAULT_EXEC_GH_TIMEOUT_MS,
-    { cwd, env }
-  ).catch(err => err);
-  if (raw instanceof Error) return { status: 'unavailable', state: null, detail: raw.message };
-  const parsed = safeJSONParse(raw, null);
-  const state = typeof parsed?.state === 'string' ? parsed.state.toUpperCase() : null;
+  const { readPullRequestOutcome } = await import('./prProbe.js');
+  const { view, reason } = await readPullRequestOutcome(prRef, 'state', { cwd, env, timeoutMs: DEFAULT_EXEC_GH_TIMEOUT_MS });
+  if (!view) return { status: 'unavailable', state: null, detail: reason };
+  const state = typeof view.state === 'string' ? view.state.toUpperCase() : null;
   // A zero-exit gh that emitted nothing parseable told us nothing.
   if (!state) return { status: 'unavailable', state: null, detail: 'gh returned unparseable output' };
   return { status: 'known', state, detail: null };

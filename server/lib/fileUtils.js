@@ -11,7 +11,5 @@
  */
 export * from './fileCore.js';
 export * from './jsonIo.js';
-export * from './mimeTypes.js';
 export * from './paths.js';
 export * from './pathSafety.js';
-export * from './uploads.js';

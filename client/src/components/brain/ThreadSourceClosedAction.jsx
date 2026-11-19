@@ -3,7 +3,7 @@
 import { useRef } from 'react';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import { isTerminalThreadStatus } from '../../lib/brainThreads.js';
-import * as api from '../../services/api';
+import { updateThread } from '../../services/apiBrainThreads.js';
 
 export default function ThreadSourceClosedAction({ thread, onCompleted, onPendingChange, disabled = false }) {
   const inFlight = useRef(false);
@@ -11,7 +11,7 @@ export default function ThreadSourceClosedAction({ thread, onCompleted, onPendin
     if (inFlight.current || disabled) return;
     inFlight.current = true;
     onPendingChange?.(true);
-    const updated = await api.updateThread(thread.id, { status: 'done' }, { silent: true })
+    const updated = await updateThread(thread.id, { status: 'done' }, { silent: true })
       .finally(() => {
         inFlight.current = false;
         onPendingChange?.(false);

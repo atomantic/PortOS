@@ -1,6 +1,6 @@
 /**
- * Creative-production pipeline Zod schemas (split out of validation.js,
- * issue #1831).
+ * Creative-production pipeline Zod schemas (split out of the retired validation.js
+ * catch-all, issue #1831).
  *
  * Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible
  * character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list
@@ -10,8 +10,7 @@
  * exercises, analyses), the story-bible character/place/object schemas (+ the
  * kind-neutral Pipeline re-exports), registry-driven editorial checks, storyboard
  * shot/scene shapes, the prompt-stage config, and the pipeline issue-list query.
- * validation.js re-exports everything here (flat) so existing deep imports keep
- * working.
+ * Also the Writers Room scene-image attach body.
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
@@ -36,6 +35,7 @@ import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 import { characterEvolutionSchema } from './characterEvolutionValidation.js';
+import { nullishString } from './sharedSchemas.js';
 
 // Print-PDF export options. `size` must name a catalog page size (an unknown one, including an
 // Object.prototype key, is a 400); omitted means the default. The `skip` toggles only act on the
@@ -803,3 +803,7 @@ export const writersRoomWorksResponseSchema = z.union([
     limit: z.number().int(), offset: z.number().int(), nextCursor: z.string().nullable(),
   }),
 ]);
+
+export const writersRoomSceneImageBodySchema = z.object({
+  sceneId: nullishString, filename: nullishString, jobId: nullishString, prompt: nullishString,
+});

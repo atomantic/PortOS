@@ -9,11 +9,12 @@ import { z } from 'zod';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { ServerError, createServiceErrorMapper } from '../../lib/errorHandler.js';
-import { optionalBooleanMap } from '../../lib/validation.js';
 import { BIBLE_KINDS } from '../../lib/storyBible.js';
-import { sanitizeFilename, PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { sanitizeFilename } from '../../lib/mimeTypes.js';
 import * as svc from '../../services/universeBuilder.js';
 import { buildCascadeContext } from '../../services/recordMerge.js';
+import { optionalBooleanMap } from '../../lib/zodCompat.js';
 
 const SERVICE_ERROR_STATUS = {
   [svc.ERR_NOT_FOUND]: 404,

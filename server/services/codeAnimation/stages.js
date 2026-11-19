@@ -20,8 +20,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PATHS } from '../../lib/paths.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { htmlCompositionContractSchema, validateRequest } from '../../lib/validation.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { emitCodeAnimationChanged } from './events.js';
 import { analyzeEvidence, evaluateVerdict } from './evidence.js';
 import { buildExportShim, injectExportShim } from './export.js';
 import * as store from './projectStore.js';
@@ -35,6 +35,7 @@ import { stopRun } from '../runner.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { getProviderById } from '../provider/providers.js';
 import { extractAnimationHtml } from './prompt.js';
+import { htmlCompositionContractSchema } from '../../lib/htmlCompositionValidation.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];

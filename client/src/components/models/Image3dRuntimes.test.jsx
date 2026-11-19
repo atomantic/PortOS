@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { imageTo3dTarget } from '../../lib/imageTo3dTargetFixture';
+import { imageTo3dTarget } from '../../test/imageTo3dTargetFixture';
 import Image3dRuntimes from './Image3dRuntimes';
 
 const getImageTo3dTargets = vi.fn();

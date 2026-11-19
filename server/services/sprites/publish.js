@@ -36,7 +36,6 @@ import { mkdir, readFile, realpath, stat } from 'fs/promises';
 import {
   atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
 } from '../../lib/fileUtils.js';
-import { isPathAtOrInsideDir } from '../../lib/pathContainment.js';
 import { isSymlinkFreeRepoPath } from '../../lib/repoPublishPath.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';

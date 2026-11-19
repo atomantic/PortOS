@@ -37,7 +37,7 @@ vi.mock('../services/browserStatus.js', () => ({
     downloads: { downloadDir: '/d', files: [{ name: 'secret.json' }] },
   })),
 }));
-vi.mock('../lib/safeUrlFetch.js', () => ({ assertPublicHttpUrl: vi.fn(async () => {}) }));
+vi.mock('../lib/safeUrlFetch.js', async (importOriginal) => ({ ...(await importOriginal()), assertPublicHttpUrl: vi.fn(async () => {}) }));
 
 const mounts = [['/api/browser', (await import('./browser.js')).default]];
 // The gated reads: [method, path, body, effect, success status].

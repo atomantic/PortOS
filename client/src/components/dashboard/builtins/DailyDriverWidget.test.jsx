@@ -13,7 +13,13 @@ const mocks = vi.hoisted(() => ({
   markDailyDriverHandled: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => mocks);
+// The widget imports each domain module directly, not the api barrel (#16813).
+vi.mock('../../../services/apiMeatspace.js', () => ({
+  getPostStats: mocks.getPostStats,
+  getPostRecommendations: mocks.getPostRecommendations,
+}));
+vi.mock('../../../services/apiGoals.js', () => ({ getGoals: mocks.getGoals }));
+vi.mock('../../../services/apiDashboard.js', () => ({ markDailyDriverHandled: mocks.markDailyDriverHandled }));
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),

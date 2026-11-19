@@ -51,6 +51,11 @@ const PRE_INSTALL_ENTRYPOINTS = [
  * is the whole body of the `workflow_run` recovery workflow, which does the
  * same. Both would otherwise be one careless import away from making the
  * required check — or the thing that recovers a cancelled one — unloadable.
+ *
+ * `setup.js` and the two helpers it calls (`ensure-ffmpeg.js`,
+ * `install-slashdo.js`) are the first-run install pipeline (#16820): they run
+ * on a fresh clone before `npm install` has created any node_modules, so one
+ * non-builtin import would strand a new user on a module-resolution error.
  */
 const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-gate-report.js',
@@ -59,6 +64,9 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-recover-superseded-gate.js',
   'scripts/doctor.js',
   'scripts/checkGitVersion.js',
+  'scripts/setup.js',
+  'scripts/ensure-ffmpeg.js',
+  'scripts/install-slashdo.js',
 ];
 
 const BUILTINS = new Set(builtinModules);

@@ -36,9 +36,9 @@ import { unlink, rm } from 'fs/promises';
 import { emitLog } from '../cos/cosEvents.js';
 import { updateAgent, getAgent, getAgentRecord, recordCompletionCleanup, retryCompletionCheckoutCapture } from '../cos/cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, getTaskById } from '../cos/cosTaskStore.js';
-import { SPAWN_HISTORY_METADATA_KEYS } from '../spawnBudgetProof.js';
+import { SPAWN_HISTORY_METADATA_KEYS } from '../cos/cosSpawnBudget.js';
 import { CLAIM_METADATA_KEYS } from '../cos/cosTaskClaim.js';
-import { checkStagePrecondition } from '../cos/cosTaskGenerator.js';
+import { checkStagePrecondition } from '../cos/cosImprovementTasks.js';
 import { normalizeReviewers } from '../../lib/cos/cosValidation.js';
 import { applyStageExecution } from '../../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
@@ -52,6 +52,8 @@ import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../../lib/p
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
+import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, REPOSITORY_HOLD, REPOSITORY_STATE_VERIFICATION,
+  isRepositoryHold, worktreeStageDefersTaskSettlement } from '../../lib/agent/agentCompletionStages.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -192,10 +194,9 @@ export async function handlePipelineProgression(task, agentId, success) {
   // prompt builders — an inherited one made every stage after the first run on the
   // stage before it's instructions.
   delete nextTask.metadata.prompt;
-  // Each stage is a new task with its own spawn budget. The prior stage's
-  // dispatch accounting and claim lease would make addTask withhold the fresh
-  // budget proof, so dispatch held every later stage, and the inherited live
-  // lease refused the explicit budget reset too.
+  // Each stage is a new task with its own spawn budget. Inheriting the prior
+  // stage's dispatch accounting would start it part-way to the spawn cap, and
+  // its live claim lease would refuse an explicit budget reset.
   for (const key of [...SPAWN_HISTORY_METADATA_KEYS, ...CLAIM_METADATA_KEYS, 'lastOrphanedAt', 'worktreeBusyAttempts']) delete nextTask.metadata[key];
   // The profile, unlike the pins applied below, is SET-OR-CLEARED (see the guard at the
   // top of the hand-off): each stage runs under exactly the contract it
@@ -396,7 +397,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
     : state?.metadata?.completionCleanup?.context || completionReplayInput(context);
   const replay = durable ? priorReplay || await storeCompletionData(state, 'replay', replayInput) : undefined;
   context = { ...context, ...replayInput };
-  await persist({ version: 1, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
+  await persist({ version: COMPLETION_RECEIPT_VERSION, status: 'pending', startedAt: state?.startedAt, replay, context: undefined });
   // A received register held only by unverified rows re-verifies on replay, so
   // a since-merged fix or a recovered forge does not preserve evidence forever.
   if (priorReplay && state.metadata?.auditFindings?.finalReportReceived === true && auditEvidencePending(context)) {
@@ -429,13 +430,13 @@ async function performCompletionCleanupSteps(context, onStepError) {
       stages[key] = { status: 'running', retryable };
       await persist({ stages: { [key]: stages[key] } });
       const value = await step();
-      const held = (key === 'worktree' && Array.isArray(value) && value.length > 0)
-        || (key === 'sentinel' && auditEvidencePending(context));
+      const held = (key === COMPLETION_STAGE.WORKTREE && Array.isArray(value) && value.length > 0)
+        || (key === COMPLETION_STAGE.SENTINEL && auditEvidencePending(context));
       stages[key] = { status: held ? 'held' : 'done', retryable: false, ...(value !== undefined && { value }) };
       await persist({ stages: { [key]: stages[key] } });
       return value;
     } catch (err) {
-      const deferred = ['checkout-capture-pending', 'checkout-retirement-pending'].includes(err.message);
+      const deferred = isRepositoryHold(err.message);
       if (!deferred) firstError ||= err;
       stages[key] = { status: deferred ? 'held' : 'failed', retryable: deferred || retryable, reason: err.message };
       await persist({ stages: { [key]: stages[key] } }).catch(() => {});
@@ -444,53 +445,54 @@ async function performCompletionCleanupSteps(context, onStepError) {
     }
   };
   if (verifiedAudit) {
-    await runStep('auditTask', 'Verified audit task settlement', () => settleVerifiedAuditTask(context.agentState), true);
+    await runStep(COMPLETION_STAGE.AUDIT_TASK, 'Verified audit task settlement', () => settleVerifiedAuditTask(context.agentState), true);
   }
   // Durable ingestion and its continuation are sufficient to acknowledge this
   // exact signal. An unrelated hand-off failure must not leave it as Git dirt.
   if (['completed', 'failed'].includes(state?.status)) {
-    await runStep('sentinel', 'Completion sentinel removal', () => removeCompletionSentinel(context), true);
+    await runStep(COMPLETION_STAGE.SENTINEL, 'Completion sentinel removal', () => removeCompletionSentinel(context), true);
   }
   const deliveryContext = context;
-  await runStep('jira', 'JIRA hand-off', () => {
-    if (context.task?.metadata?.jiraTicketId && state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
+  await runStep(COMPLETION_STAGE.JIRA, 'JIRA hand-off', () => {
+    if (context.task?.metadata?.jiraTicketId && state?.metadata?.checkoutCapture?.status === 'pending') throw new Error(REPOSITORY_HOLD.CAPTURE);
     return completeJiraHandOff(deliveryContext);
-  }, stages.jira?.reason === 'checkout-capture-pending');
-  await runStep('notification', 'Plan question notification', () => notifyPlanQuestionIfNeeded(context));
+  }, stages[COMPLETION_STAGE.JIRA]?.reason === REPOSITORY_HOLD.CAPTURE);
+  await runStep(COMPLETION_STAGE.NOTIFICATION, 'Plan question notification', () => notifyPlanQuestionIfNeeded(context));
   const waitForRepository = () => {
-    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
-    const worktree = state?.metadata?.completionCleanup?.stages?.worktree;
+    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error(REPOSITORY_HOLD.CAPTURE);
+    const worktree = state?.metadata?.completionCleanup?.stages?.[COMPLETION_STAGE.WORKTREE];
     // A cleanup-only recheck verified the repository but left task settlement
     // to the verification pass that follows this replay.
-    const deferredSettlement = worktree?.status === 'done' && worktree.verifiedBy === 'repository-state-verification'
-      && worktree.taskSettlement === 'after-completion-stages';
-    if (state?.result?.cleanupPending === true && !deferredSettlement
+    if (state?.result?.cleanupPending === true && !worktreeStageDefersTaskSettlement(worktree)
       && (state.metadata?.repoStateVerification?.status !== 'completed'
-        || !['repository-preservation-receipt', 'repository-state-verification'].includes(state.metadata?.completionCleanup?.stages?.worktree?.verifiedBy))) throw new Error('checkout-retirement-pending');
+        || !['repository-preservation-receipt', REPOSITORY_STATE_VERIFICATION].includes(worktree?.verifiedBy))) {
+      throw new Error(REPOSITORY_HOLD.RETIREMENT);
+    }
   };
-  await runStep('pipeline', 'Pipeline progression', () => {
+  await runStep(COMPLETION_STAGE.PIPELINE, 'Pipeline progression', () => {
     if (context.task?.metadata?.pipeline?.status === 'running') waitForRepository();
     return handlePipelineProgression(context.task, context.agentId, deliveryContext.effectiveSuccess);
-  }, ['checkout-capture-pending', 'checkout-retirement-pending'].includes(stages.pipeline?.reason));
-  await runStep('creative', 'Creative Director completion', () => {
+  }, isRepositoryHold(stages[COMPLETION_STAGE.PIPELINE]?.reason));
+  await runStep(COMPLETION_STAGE.CREATIVE, 'Creative Director completion', () => {
     if (context.task?.metadata?.creativeDirector) waitForRepository();
     return advanceCreativeDirectorIfNeeded(deliveryContext);
-  }, ['checkout-capture-pending', 'checkout-retirement-pending'].includes(stages.creative?.reason));
+  }, isRepositoryHold(stages[COMPLETION_STAGE.CREATIVE]?.reason));
   // A terminal rejection is not proof that its audit artifacts were consumed.
   // Keep the checkout and original signal available for explicit recovery.
   const preserveAuditEvidence = auditEvidencePending(context);
   if (preserveAuditEvidence) {
     emitLog('warn', `Audit disposition incomplete for ${context.agentId}; preserving worktree and completion evidence`, { agentId: context.agentId });
   }
-  const cleanupWarnings = preserveAuditEvidence ? [] : await runStep('worktree', 'Worktree cleanup', async () => {
-    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error('checkout-capture-pending');
+  const priorWorktree = stages[COMPLETION_STAGE.WORKTREE];
+  const cleanupWarnings = preserveAuditEvidence ? [] : await runStep(COMPLETION_STAGE.WORKTREE, 'Worktree cleanup', async () => {
+    if (state?.metadata?.checkoutCapture?.status === 'pending') throw new Error(REPOSITORY_HOLD.CAPTURE);
     return completeWorktreeCleanup(context);
   },
     // Workspace retirement revalidates identity, ownership, delivery and bytes on
     // every attempt. A pre-release hold is not an unknown external side effect.
-    !stages.worktree || stages.worktree.retryable === true || stages.worktree.status === 'held');
-  if (['done', 'held'].includes(stages.worktree?.status)) {
-    await runStep('report', 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
+    !priorWorktree || priorWorktree.retryable === true || priorWorktree.status === 'held');
+  if (['done', 'held'].includes(stages[COMPLETION_STAGE.WORKTREE]?.status)) {
+    await runStep(COMPLETION_STAGE.REPORT, 'Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   }
   const unfinished = preserveAuditEvidence || Object.values(stages).some(stage => stage.status === 'held'
     || (stage.status === 'failed' && stage.retryable) || stage.status === 'running');
@@ -504,7 +506,7 @@ async function performCompletionCleanupSteps(context, onStepError) {
  */
 export async function replayAgentCompletionCleanup(agentState) {
   const receipt = agentState?.metadata?.completionCleanup;
-  if (agentState?.status !== 'completed' || receipt?.version !== 1 || receipt.status !== 'pending') return;
+  if (agentState?.status !== 'completed' || receipt?.version !== COMPLETION_RECEIPT_VERSION || receipt.status !== 'pending') return;
   let saved;
   try { saved = receipt.replay ? await readCompletionData(agentState, receipt.replay) : receipt.context; }
   catch {

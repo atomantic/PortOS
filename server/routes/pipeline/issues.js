@@ -8,13 +8,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import {
-  validateRequest,
-  imageEdgeSchema,
-  refineImagePixelCap,
-  PIXEL_CAP_MESSAGE,
-  storyboardSceneSchema,
-} from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { storyboardSceneSchema } from '../../lib/pipelineValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import { generateStage } from '../../services/pipeline/textStages.js';
@@ -52,6 +47,7 @@ import { ARC_ROLES } from '../../lib/storyArc.js';
 import { mapServiceError, countExtractedCanon } from './shared.js';
 
 import textStageRecoveryRouter from './textStageRecovery.js';
+import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../../lib/sharedSchemas.js';
 
 const router = Router();
 

@@ -24,7 +24,8 @@ import { workItemsQuerySchema } from '../../lib/queryValidation.js';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
-import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, validateRequest, qualitySchedulePlanSchema, appTaskTypeToggleBodySchema, appTaskTypeOverrideBodySchema } from '../../lib/validation.js';
+import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, qualitySchedulePlanSchema } from '../../lib/cos/cosValidation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cos/cosTaskClaimWork.js';
@@ -36,6 +37,7 @@ import { summarizeOutcomeStats, computePostApprovalCompletion, computeProposalOu
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { summarizeRejectionReasons } from '../../services/layeredIntelligenceRejections.js';
 import { loadApp } from './shared.js';
+import { appTaskTypeToggleBodySchema, appTaskTypeOverrideBodySchema } from '../../lib/appValidation.js';
 
 const router = Router();
 

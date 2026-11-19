@@ -1,17 +1,12 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
-import {
-  validateRequest,
-  restoreRequestSchema,
-  restoreDbRequestSchema,
-  restoreDbRecoverRequestSchema,
-  snapshotDownloadQuerySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as backup from '../services/backup.js';
 import { getDatabaseRestoreRecoveryStatus, resumeDatabaseRestore } from '../services/backupRestoreRecovery.js';
 import { getSettings } from '../services/settings.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
+import { restoreRequestSchema, restoreDbRequestSchema, restoreDbRecoverRequestSchema, snapshotDownloadQuerySchema } from '../lib/backupValidation.js';
 
 const router = Router();
 

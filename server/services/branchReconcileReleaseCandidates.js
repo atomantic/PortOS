@@ -26,7 +26,7 @@ export async function retireMergedReleaseCandidates(app, result, deps = {}) {
   const retire = deps.retire || recovery.retireInventoriedCheckout;
   const guard = deps.beforeMutation || recovery.assertAutomaticRetirementAllowed;
   for (const tree of trees) {
-    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }),
+    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }),
       branch: tree.branch, path: tree.path, head: tree.head, locked: true, lockReason: tree.lockReason };
     // An open, closed-unmerged or unreadable PR is the normal "still active" case: leave the lock alone.
     const delivery = await readDelivery(app.repoPath, tree.branch.replace(/^refs\/heads\//, ''), tree.head).catch(() => null);

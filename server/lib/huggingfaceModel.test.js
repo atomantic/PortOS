@@ -4,7 +4,6 @@ import {
   inspectModelFiles,
   customModelIdFromRepo,
   buildCustomModelEntry,
-  searchHuggingfaceModels,
 } from './huggingfaceModel.js';
 
 // Build a minimal HF `/api/models/{repo}` response.

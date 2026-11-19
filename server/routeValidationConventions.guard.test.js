@@ -1,12 +1,12 @@
 /**
  * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
- * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
+ * Fix: Add a Zod schema to the route family's domain `lib/<domain>Validation.js` file (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -14,6 +14,14 @@ import { fileURLToPath } from 'url';
 import { blankLiterals, matchBracket } from './lib/sourceScan.js';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
+
+let trackedFilesCache;
+let scanCache;
+
+afterAll(() => {
+  trackedFilesCache = undefined;
+  scanCache = undefined;
+});
 
 // Key: `<file> <VERB> <path>` — the declaring file plus the handler's semantic
 // identity, never a line number, so unrelated edits above it do not churn the list.
@@ -114,14 +122,29 @@ export function findUnvalidatedQueryHandlers(src) {
 // routers and the CoS runner's standalone Express app.
 const SCANNED_PATHS = ['routes', 'lib/aiToolkit/routes', 'cos-runner/index.js'];
 
-const trackedRouteSources = () => trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.'));
+const trackedRouteSources = () => (trackedFilesCache ??= trackedFiles(SERVER_ROOT, SCANNED_PATHS).filter((f) => f.endsWith('.js') && !f.includes('.test.')));
 
-const scanWith = (finder) => trackedRouteSources().flatMap((file) => (
-  finder(readFileSync(join(SERVER_ROOT, file), 'utf8')).map((hit) => `${file} ${hit}`)
-));
+function runScan() {
+  if (scanCache) return scanCache;
+  const bodyOffenders = [];
+  const queryOffenders = [];
 
-const scanTree = () => scanWith(findUnvalidatedBodyHandlers);
-const scanQueries = () => scanWith(findUnvalidatedQueryHandlers);
+  for (const file of trackedRouteSources()) {
+    const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+    for (const hit of findUnvalidatedBodyHandlers(src)) {
+      bodyOffenders.push(`${file} ${hit}`);
+    }
+    for (const hit of findUnvalidatedQueryHandlers(src)) {
+      queryOffenders.push(`${file} ${hit}`);
+    }
+  }
+
+  scanCache = { bodyOffenders, queryOffenders };
+  return scanCache;
+}
+
+const scanTree = () => runScan().bodyOffenders;
+const scanQueries = () => runScan().queryOffenders;
 
 describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
@@ -134,7 +157,7 @@ describe('route handlers validate req.body (#9950, #10024)', () => {
     expect(
       offenders,
       'These POST/PUT/PATCH handlers read `req.body` with no schema. Add a Zod schema to '
-      + '`lib/validation.js` and call `validateRequest(schema, req.body)` (root AGENTS.md: '
+      + 'the route family\'s domain `lib/<domain>Validation.js` file (the only home for a schema) and call `validateRequest(schema, req.body)` (root AGENTS.md: '
       + 'all route inputs are validated). Do NOT add an allowlist entry for a JSON body.\n'
       + `Offenders:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);

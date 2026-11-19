@@ -8,12 +8,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema, moltworldQueueFailBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema } from '../lib/agent/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agent/agentPersonalities.js';
 import * as agentActivity from '../services/agent/agentActivity.js';
 import { createMoltworldClient } from '../integrations/moltworld/index.js';
 import * as moltworldQueue from '../services/moltworldQueue.js';
+import { moltworldQueueFailBodySchema } from '../lib/moltworldValidation.js';
 
 const router = Router();
 

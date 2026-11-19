@@ -69,6 +69,7 @@ import {
   CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   buildTuiInvocation,
   createInputReadyTracker,
+  describeTrustGateFailure,
   OPENCODE_INPUT_READY_PATTERN,
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
@@ -462,7 +463,6 @@ ${prompt}`;
   const requiresInputReady = isClaudeCommand(command) || isOpencodeSession;
   // Keep local one-shot flags alongside the tracker's terminal acknowledgements
   // so a failed/delayed PTY write cannot cause repeated selector navigation.
-  let trustAccepted = false;
   let hookReviewDeclined = false;
 
   // The wrapped prompt directs the model to write its COMPLETE response to
@@ -1090,26 +1090,21 @@ ${prompt}`;
       // pastes into, losing the prompt and every retry with it (agent-671af38f).
       // Wait for the options to paint before acting. Claude Code versions do
       // not agree on their order: when "No, exit" is highlighted, select the
-      // next option before submitting. `trustAccepted` keeps this to one input.
-      if (inputReady.needsTrust && inputReady.trustChoiceReady && !trustAccepted) {
-        trustAccepted = true;
-        const trustInput = `${inputReady.trustSelectionKey}${SUBMIT_KEY}`;
-        if (dismissStartupDialog(trustInput, 'folder-trust prompt')) inputReady.ackTrustChoice();
+      // next option (alone, once the dialog settles — see trustAnswer) and submit
+      // only after a repaint shows the trust choice highlighted.
+      const trustAnswer = inputReady.trustAnswer();
+      if (trustAnswer) {
+        if (dismissStartupDialog(trustAnswer.keys, 'folder-trust prompt')) inputReady.ackTrustAnswer(trustAnswer);
         lastOutputAt = now;
         firstOutputAt = null;
         return;
       }
-      if (inputReady.needsTrust && !inputReady.trustChoiceReady) {
+      if (inputReady.needsTrust) {
         const trustDeadlineMs = requiresInputReady ? TUI_INPUT_READY_DEADLINE_MS : PASTE_DEADLINE_MS;
         if (elapsed >= trustDeadlineMs) {
           clearInterval(readyTimer);
           readyTimer = null;
-          finish({
-            success: false,
-            exitCode: 1,
-            error: `${command} presented a folder-trust prompt whose affirmative choice PortOS could not identify, so no prompt was sent.`,
-            reason: 'tui-trust-choice-unrecognized',
-          });
+          finish({ success: false, exitCode: 1, ...describeTrustGateFailure(inputReady, command) });
         }
         return;
       }

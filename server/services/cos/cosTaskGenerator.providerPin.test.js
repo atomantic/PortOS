@@ -15,8 +15,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { __resetReviewerIdentityCache } from '../reviewerIdentity.js';
 import { buildClaimWorkTask, buildJiraTicketTask } from './cosTaskClaimWork.js';
-import { emitOnDemandEmpty } from './cosTaskGenerator.js';
+import { emitOnDemandEmpty } from './cosImprovementTasks.js';
 import { cosEvents } from './cosEvents.js';
+import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
 
 vi.mock('../taskPromptService.js', () => ({
   getTaskPrompt: vi.fn(async () => 'Improve {appName} at {repoPath}\n{issueAuthorFilter}\n{issueExcludeLabels}\nReviewers: {reviewers}'),
@@ -29,6 +30,8 @@ vi.mock('../codeReview.js', async original => ({
 }));
 const identityLookup = vi.fn(async () => ({}));
 vi.mock('../github.js', async original => ({ ...await original(), execGh: (...args) => identityLookup(...args) }));
+const forgeExecOptions = vi.fn(async (cwd) => ({ cwd, env: {} }));
+vi.mock('../forgeExecOptions.js', () => ({ resolveForgeExecOptions: (...args) => forgeExecOptions(...args) }));
 const targetMock = vi.fn(async () => ({ tracker: 'github', target: { forge: 'github', apiHost: 'github.example.test' } }));
 vi.mock('../../lib/workTracker.js', async original => ({ ...await original(),
   resolveAppForgeTarget: (...args) => targetMock(...args),
@@ -45,6 +48,7 @@ vi.mock('../preflightTaskCard.js', () => ({
 const getTaskIntervalMock = vi.fn(async () => ({ type: 'weekly', taskMetadata: {} }));
 vi.mock('../taskSchedule.js', () => ({
   INTERVAL_TYPES: { PERPETUAL: 'perpetual', WEEKLY: 'weekly' },
+  DEFAULT_TASK_INTERVALS: {},
   getTaskInterval: vi.fn((...args) => getTaskIntervalMock(...args)),
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
@@ -83,6 +87,7 @@ vi.mock('../taskLearning.js', async (importActual) => ({
 vi.mock('../../lib/gitRemote.js', async (importActual) => ({
   ...(await importActual()),
   readOriginRemoteUrl: vi.fn(async () => null),
+  getOriginInfo: vi.fn(async () => null),
 }));
 
 vi.mock('../perpetualWork.js', async importOriginal => ({
@@ -91,8 +96,10 @@ vi.mock('../perpetualWork.js', async importOriginal => ({
 }));
 
 import { detectActionableWork } from '../perpetualWork.js';
+import { classifyOriginRemote, getOriginInfo } from '../../lib/gitRemote.js';
+import { getTaskPrompt } from '../taskPromptService.js';
 import { recordPerpetualStall } from '../taskSchedule.js';
-import { prepareManagedAppImprovementTask, generateSelfImprovementTaskForType } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask, generateSelfImprovementTaskForType } from './cosImprovementTasks.js';
 import { resolveClaimWorkMetadata } from './cosTaskClaimWork.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
@@ -311,8 +318,10 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     expect(recordPreflightOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', reason: 'REVIEWER_IDENTITY_NOT_FOUND', note: prepared.skip.reason }));
     await prepare();
     expect(identityLookup).toHaveBeenCalledTimes(2);
-    expect(identityLookup).toHaveBeenNthCalledWith(1, ['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
-    expect(identityLookup).toHaveBeenNthCalledWith(2, ['api', '--hostname', 'github.example.test', `users/${encodeURIComponent('missing-reviewer[bot]')}`], 8000);
+    const options = { cwd: APP.repoPath, env: {} };
+    expect(identityLookup).toHaveBeenNthCalledWith(1, ['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000, options);
+    expect(identityLookup).toHaveBeenNthCalledWith(2, ['api', '--hostname', 'github.example.test', `users/${encodeURIComponent('missing-reviewer[bot]')}`], 8000, options);
+    expect(forgeExecOptions).toHaveBeenCalledTimes(1);
     const emitted = vi.fn();
     cosEvents.on('schedule:on-demand-empty', emitted);
     try {
@@ -321,6 +330,73 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     } finally {
       cosEvents.off('schedule:on-demand-empty', emitted);
     }
+  });
+
+  it('flags a missing reviewer on a neutral GHES host for an explicit GitHub lane', async () => {
+    targetMock.mockResolvedValueOnce({ tracker: 'plan', target: null });
+    vi.mocked(getOriginInfo).mockResolvedValueOnce(classifyOriginRemote('https://scm.example.test/acme/widget.git'));
+    identityLookup.mockImplementation(missing);
+    const app = { ...APP, forgeAccount: 'release-account' };
+    const prepared = await prepareManagedAppImprovementTask('claim-issue', app, STATE, { skipPreconditions: true });
+    expect(prepared.task).toBeNull();
+    expect(prepared.skip).toMatchObject({ gate: 'reviewer-identity', detail: { reviewers: ['missing-reviewer'] } });
+    expect(forgeExecOptions).toHaveBeenCalledWith(app.repoPath, { forgeAccount: 'release-account' });
+    expect(identityLookup).toHaveBeenCalledWith(
+      ['api', '--hostname', 'scm.example.test', 'users/missing-reviewer'], 8000, { cwd: app.repoPath, env: {} },
+    );
+  });
+
+  it.each(['scheduled', 'manual'])('renders CodeIQ as a comment-triggered reviewer in the %s claim', async (entryPoint) => {
+    const authorPath = 'users/aix-codeiq%5Bbot%5D';
+    identityLookup.mockImplementation(async args => {
+      if (!['users/maintainer', authorPath].includes(args.at(-1))) missing();
+      return '{}';
+    });
+    getCodeReviewDefaultsMock.mockResolvedValue({
+      reviewers: ['claude'], usernames: ['maintainer', 'CodeIQ-AIX'], reviewerMaxRounds: { '@codeiq-aix': 2 },
+    });
+    getTaskPrompt.mockResolvedValueOnce(composeClaimIssuePrompt({ forge: 'github' }));
+    const prompt = entryPoint === 'scheduled' ? (await prepare()).task.description : (await buildClaimWorkTask(APP)).prompt;
+    expect(identityLookup.mock.calls.map(([args]) => args.at(-1))).toEqual(['users/maintainer', authorPath]);
+    expect(prompt).toContain('@CodeIQ-AIX~max=2');
+    expect(prompt).toContain('For each other `@<login>` from the Phase 5 split, request the review now');
+    expect(prompt).toContain('Only their approval of the current head satisfies them');
+    expect(prompt).toContain('gh pr comment "$PR_URL" --body \'@codeiq\'');
+    expect(prompt).toContain('again after each subsequent push');
+    expect(prompt).toContain('Never pass this token to `--add-reviewer`');
+    expect(prompt).toContain('.user.login == "aix-codeiq[bot]"');
+    expect(prompt).toContain('`.commit_id` equal to the current PR head');
+    expect(prompt).toContain('A `COMMENTED` review satisfies this required reviewer when its summary and inline threads show no unresolved findings');
+    expect(prompt).toContain('This App does not need to submit `APPROVED`');
+  });
+
+  it('reports the roster alias when the mapped CodeIQ account is missing', async () => {
+    getCodeReviewDefaultsMock.mockResolvedValue({ reviewers: ['claude'], usernames: ['codeiq-aix'] });
+    identityLookup.mockImplementation(missing);
+    const { task, skip } = await prepare();
+    expect(task).toBeNull();
+    expect(skip.detail.reviewers).toEqual(['codeiq-aix']);
+    expect(skip.reason).toContain('aix-codeiq[bot]');
+    expect(identityLookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces an unavailable optional CodeIQ account without asking the claim to trigger it', async () => {
+    getCodeReviewDefaultsMock.mockResolvedValue({
+      reviewers: ['claude'], usernames: ['codeiq-aix'], optionalReviewers: ['@codeiq-aix'],
+    });
+    identityLookup.mockImplementation(missing);
+    const { task, skip } = await prepare();
+    expect(skip).toBeNull();
+    expect(task.description).toContain('Skip optional reviewer `@codeiq-aix` for this run');
+    expect(task.description).not.toContain('gh pr comment "$PR_URL" --body');
+  });
+
+  it('keeps the configured CodeIQ reviewer out of a merge-on-green claim', async () => {
+    getCodeReviewDefaultsMock.mockResolvedValue({ reviewers: ['claude'], usernames: ['codeiq-aix'] });
+    getTaskPrompt.mockResolvedValueOnce(composeClaimIssuePrompt({ prCompletion: 'merge-on-green' }));
+    const { prompt } = await buildClaimWorkTask(APP, { prCompletion: 'merge-on-green' });
+    expect(prompt).not.toContain('Comment-triggered PR reviewers');
+    expect(identityLookup).not.toHaveBeenCalled();
   });
 
   it('blocks both manual claim builders before returning a prompt and names a task override entry', async () => {

@@ -6,15 +6,20 @@
  * Returns a stateful stripper function — instantiate one per stream.
  */
 
-// OSC alternative comes first: the single-byte class `[@-Z\\-_]` includes `]`, so
+// OSC alternative comes first: the two-byte class `[0-Z\\-~]` includes `]`, so
 // running first it would strip only the `\x1B]` opener and leak body+terminator.
 // The body alternation `[^\x07\x1B]|\x1B(?!\\)` stops at the FIRST ST; a naive
 // `[^\x07]*` would swallow visible text between adjacent OSC sequences. No
 // catastrophic backtracking: each char yields at most one alternative.
-export const ANSI_PATTERN = /\x1B(?:\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)|[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+// Beyond CSI and OSC a terminal consumes two more ECMA-35 forms, both of which
+// TUIs emit: nF (`ESC` + intermediates 0x20-0x2F + final, e.g. the charset select
+// `ESC ( B`) and the two-byte Fp/Fe/Fs escapes (`ESC 7`/`ESC 8` save and restore
+// the cursor). Matching only Fe used to leak `(B`, `7` and `8` into transcripts.
+export const ANSI_PATTERN = /\x1B(?:\](?:[^\x07\x1B]|\x1B(?!\\))*(?:\x07|\x1B\\)|[ -/]+[0-~]|[0-Z\\-~]|\[[0-?]*[ -/]*[@-~])/g;
 
 const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
 const INCOMPLETE_ESC_2BYTE = /^\x1B$/;
+const INCOMPLETE_NF = /^\x1B[ -/]+$/;
 // OSC terminators (BEL or ST). Module-level `g`-regex; reset `lastIndex` per use.
 const OSC_TERMINATOR = /\x07|\x1B\\/g;
 
@@ -23,7 +28,8 @@ const OSC_TERMINATOR = /\x07|\x1B\\/g;
 const STRIP = (s) => s
   .replace(ANSI_PATTERN, '')
   .replace(/\x1B(?![@-_])/g, '')
-  .replace(/\x00/g, '');
+  // NUL, and the SO/SI shift bytes a charset select is paired with (`ESC ( B` + SI).
+  .replace(/[\x00\x0E\x0F]/g, '');
 
 export function createStreamingAnsiStripper() {
   let tail = '';
@@ -51,7 +57,7 @@ export function createStreamingAnsiStripper() {
     const lastEsc = combined.lastIndexOf('\x1B');
     if (lastEsc !== -1 && combined.length - lastEsc <= 4096) {
       const candidate = combined.slice(lastEsc);
-      if (INCOMPLETE_ESC_2BYTE.test(candidate) || INCOMPLETE_CSI.test(candidate)) {
+      if (INCOMPLETE_ESC_2BYTE.test(candidate) || INCOMPLETE_NF.test(candidate) || INCOMPLETE_CSI.test(candidate)) {
         tail = candidate;
         return STRIP(combined.slice(0, lastEsc));
       }

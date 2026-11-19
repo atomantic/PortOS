@@ -6,7 +6,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
 import { reconcileDeadOwnerReservations } from '../deadOwnerReservations.js';
 import { MAX_ORPHAN_RETRIES, ORPHAN_GUARDS, buildOrphanOutcome, classifyOrphanGuard, decideOrphanRetry } from './agentOrphanRecovery.js';
-import { matchesSpawnBudgetProof, spawnBudgetCount } from '../spawnBudgetProof.js';
+import { matchesLatestTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { currentTaskTypeName } from '../../lib/taskTypeRenames.js';
 /**
  * Agent Management
@@ -1488,14 +1488,13 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   }
 
   if (isDeliveryCleanupHeld(task.metadata)) return;
-  if (isTruthyMeta(task.metadata?.spawnBudgetReconciledHold)) return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
-  const dispatchAgent = { id: agentId, taskId, startedAt: agentStartedAt, metadata: agentMetadata };
-  if ((!guard || guard === 'retry-held') && (!agentStartedAt || !matchesSpawnBudgetProof(task, dispatchAgent)
-    || spawnBudgetCount(task.metadata?.totalSpawnCount) === null
-    || spawnBudgetCount(task.metadata.totalSpawnCount) !== spawnBudgetCount(task.metadata.spawnBudgetProof.dispatch.totalSpawnCount))) {
-    emitLog('warn', `Holding orphaned task ${taskId}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId, agentId });
+  // Retrying is this run's to grant only while it is still the task's latest
+  // dispatch; a superseded or receipt-less run leaves the task and its checkout.
+  if ((!guard || guard === 'retry-held') && (!agentStartedAt
+    || !matchesLatestTaskDispatch({ taskId, metadata: agentMetadata }, task))) {
+    emitLog('warn', `Holding orphaned task ${taskId}: agent ${agentId} is not its latest dispatch; inspect its checkout and reset its spawn budget to run it again`, { taskId, agentId });
     return;
   }
   await consumeInterruptedBreadcrumb(agentId, agentMetadata, wasInterrupted);

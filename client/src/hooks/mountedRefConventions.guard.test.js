@@ -12,7 +12,7 @@
  *   - Raise and lower split across two `useEffect` calls bypasses rule 2.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -20,6 +20,38 @@ import { trackedSourceFiles } from '../test/trackedFiles.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+let trackedFilesCache;
+const trackedClientSources = () => (trackedFilesCache ??= trackedSourceFiles(CLIENT_ROOT));
+
+let scanCache;
+function scanTree() {
+  if (scanCache) return scanCache;
+  const oneWayViolations = [];
+  const inlinedHookViolations = [];
+
+  for (const file of trackedClientSources()) {
+    const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    if (!src.includes('useRef')) continue;
+
+    for (const name of findOneWayRefs(src)) {
+      oneWayViolations.push(`${file}: ${name}`);
+    }
+    if (file !== HOOK_FILE) {
+      for (const name of findInlinedUseMounted(src)) {
+        inlinedHookViolations.push(`${file}: ${name}`);
+      }
+    }
+  }
+
+  scanCache = { oneWayViolations, inlinedHookViolations };
+  return scanCache;
+}
+
+afterAll(() => {
+  scanCache = undefined;
+  trackedFilesCache = undefined;
+});
 
 // The one file allowed to contain the shape — it IS the shape.
 const HOOK_FILE = 'src/hooks/useMounted.js';
@@ -110,16 +142,12 @@ function findInlinedUseMounted(src) {
 
 describe('mounted-guard refs re-arm on mount (StrictMode)', () => {
   it('has no ref that is only ever set to false', () => {
-    const files = trackedSourceFiles(CLIENT_ROOT);
+    const files = trackedClientSources();
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise make
     // this guard pass by scanning nothing at all.
     expect(files.length).toBeGreaterThan(100);
 
-    const violations = [];
-    for (const file of files) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      for (const name of findOneWayRefs(src)) violations.push(`${file}: ${name}`);
-    }
+    const violations = scanTree().oneWayViolations;
 
     expect(
       violations,
@@ -174,14 +202,10 @@ describe('mounted-guard refs re-arm on mount (StrictMode)', () => {
 
 describe('mounted-guard refs call useMounted() instead of inlining it', () => {
   it('has no file re-implementing the hook', () => {
-    const files = trackedSourceFiles(CLIENT_ROOT).filter((f) => f !== HOOK_FILE);
+    const files = trackedClientSources().filter((f) => f !== HOOK_FILE);
     expect(files.length).toBeGreaterThan(100);
 
-    const violations = [];
-    for (const file of files) {
-      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
-      for (const name of findInlinedUseMounted(src)) violations.push(`${file}: ${name}`);
-    }
+    const violations = scanTree().inlinedHookViolations;
 
     expect(
       violations,
@@ -324,7 +348,7 @@ describe('mounted-guard refs call useMounted() instead of inlining it', () => {
   // The hook itself is the one sanctioned copy — if the exclusion ever stops
   // matching (file moved/renamed), this fails instead of the guard going quiet.
   it('excludes the hook itself, and the hook still matches the banned shape', () => {
-    expect(trackedSourceFiles(CLIENT_ROOT)).toContain(HOOK_FILE);
+    expect(trackedClientSources()).toContain(HOOK_FILE);
     const src = readFileSync(join(CLIENT_ROOT, HOOK_FILE), 'utf8');
     expect(findInlinedUseMounted(src)).toEqual(['mountedRef']);
   });

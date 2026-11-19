@@ -11,12 +11,21 @@ reviews stay mandatory.
 untracked diff and hands its plan to the same runners. Default `npm run pregate` runs the
 hidden-content scan, early server and client structural
 guards, lint, and focused unit tests: edited test files, sibling tests for
-changed sources, and tests whose relative `import`, `import()` or `vi.mock`
-specifier resolves directly to a changed source (one hop, at most 25 suites per
-source; the overflow is listed under `skipped` in the receipt and left to CI),
-including untracked tests, without expanding through transitive imports. Run a
-focused public-boundary regression for changed behavior that has no sibling
-test; automatic selection does not replace engineering judgment.
+changed sources, and tests within two import hops of a changed source: a
+relative `import`, `import()` or `vi.mock` specifier that resolves to it, or to
+a non-test module that does (a suite two modules away, such as a prompt
+assembly test reaching a prompt section through its builder). Each hop adds at
+most 25 suites per source, the second hop at most 60 per run, nearest hop
+first and an importer's own suite before its other referrers; the overflow is
+listed under `skipped` in the receipt and left to CI. The second hop never adds the heavy
+suites (gate tooling and the pool's exclusive tests, tens of seconds each). Untracked tests count.
+A changed non-module file has no import edge (the test memo records loaded
+modules, not opened files), so suites that spell its path, or an unambiguous
+name, as a quoted string literal are selected too, at most 25 per file and not
+the heavy ones; a nested file's bare name counts only while at most 25 suites
+spell it. Deeper chains are not selected. Run a focused public-boundary regression for changed behavior that
+has no sibling test; automatic selection does not replace engineering
+judgment.
 
 ## Full plan (`--full`)
 
@@ -30,8 +39,8 @@ receives the environment the matching job sets. A suite the machine cannot run
 as not run — in the summary and in the receipt `.cache/pregate/report.json`,
 which records the plan, stage outcomes and durations, the skipped suites, the
 base and HEAD SHAs, and the hash of the exact working tree validated. The
-shipped prompt-history guard runs locally when selected; the Windows job and
-the Linux worker-containment job are the two suites only CI can prove. The
+Windows job and the Linux worker-containment job are the two suites only CI
+can prove. The
 receipt also records `validationMode` (`focused` or `ci`); focused mode marks
 server/client results as reduced coverage, and either mode is local evidence
 only.
@@ -53,10 +62,10 @@ and `PORTOS_TEST_MEMO=off` always rerun them. The receipt records guard outcomes
 durations (`fileDurations`). A guard file over the 3s per-file target
 (`scripts/lib/guardBudget.js`) gets a `🐢` line naming it, but never fails local
 pregate: wall time on a machine running several agent gates measures the host,
-not the guard, and a slow pass stays reusable. Hosted CI enforces a 6s budget,
+not the guard, and a slow pass stays reusable. The scheduled hosted run enforces a 6s budget,
 calibrated to its slower runner, on its Linux server job (`CI_GUARD_BUDGET=enforce`), where the always-run guards run
-as their own Vitest pass before the rest of the selection; there are no per-file
-exceptions. `scripts/ensure-deps.test.js`
+as their own Vitest pass before the rest of the selection; PR, push and release runs
+only warn (`CI_GUARD_BUDGET=report`). There are no per-file exceptions. `scripts/ensure-deps.test.js`
 is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
 `update.ps1` and the lockfiles. Persistent test
 memo rules, required stages and worker caps remain the same. Downgraded full
@@ -67,7 +76,11 @@ Before lint or tests, pregate checks installed package versions against all
 four workspace lockfiles without modifying dependency trees. Stale, missing or
 unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate
 requires development dependencies (`npm ci --include=dev` in an owning
-workspace); a production-only installation cannot run its checks. Ordinary
+workspace); a production-only installation cannot run its checks. A fresh
+linked git worktree whose `node_modules` are missing (or hold only cache
+directories) is linked from its primary checkout automatically, once, by
+`scripts/link-worktree-deps.js` before the check reruns; pregate never runs npm.
+A dangling link, stale versions and real directories keep the diagnostic. Ordinary
 worktree links must be repaired only in their owning source checkout; a
 separate clone with its own locked installs is also suitable for validation.
 `--plan-only` prints the plan without checking installed dependencies.

@@ -22,7 +22,7 @@
  * per-context table. PortOS never derives one unit from the other.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Activity, BarChart3, Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal, FlaskConical } from 'lucide-react';
 import socket from '../../services/socket';
@@ -33,11 +33,10 @@ import TabPills from '../ui/TabPills';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import useUrlParams from '../../hooks/useUrlParams';
-import AssessmentSweepPanel from './AssessmentSweepPanel';
-import ModelCapabilityTests, { TestCell } from './ModelCapabilityTests.jsx';
+import { TestCell } from './ModelTestCell.jsx';
+import { lazyWithReload } from '../../utils/lazyWithReload';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import ModelThroughputReport from './ModelThroughputReport';
-import PortosModelBenchmarkPanel from './PortosModelBenchmarkPanel';
 import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
@@ -45,6 +44,13 @@ import {
   getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
   getModelCapabilityTests,
 } from '../../services/api';
+
+// Heavy, tab-gated panels: PortosModelBenchmarkPanel pulls vendor-charts, the
+// capability matrix is ~1,000 lines, and the sweep panel is only used on its tab.
+const PortosModelBenchmarkPanel = lazyWithReload(() => import('./PortosModelBenchmarkPanel'));
+const ModelCapabilityTests = lazyWithReload(() => import('./ModelCapabilityTests.jsx'));
+const AssessmentSweepPanel = lazyWithReload(() => import('./AssessmentSweepPanel'));
+const PANEL_FALLBACK = <BrailleSpinner text="Loading panel" />;
 
 const INTENTS = [
   { id: 'balanced', label: 'Balanced', blurb: 'Even weight on capability, speed, context stability, and memory headroom.' },
@@ -1144,7 +1150,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
         id="performance-task-portos-benchmark"
         aria-labelledby="tab-portos-benchmark"
       >
-        {portosBenchmarkVisited && <PortosModelBenchmarkPanel />}
+        {portosBenchmarkVisited && <Suspense fallback={PANEL_FALLBACK}><PortosModelBenchmarkPanel /></Suspense>}
       </div>
 
       <div
@@ -1166,12 +1172,14 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
         id="performance-task-capabilities"
         aria-labelledby="tab-capabilities"
       >
-        <ModelCapabilityTests
-          report={capabilityReport}
-          loading={capabilityLoading}
-          onReload={loadCapabilities}
-          disabled={busy}
-        />
+        <Suspense fallback={PANEL_FALLBACK}>
+          <ModelCapabilityTests
+            report={capabilityReport}
+            loading={capabilityLoading}
+            onReload={loadCapabilities}
+            disabled={busy}
+          />
+        </Suspense>
       </div>
 
       <div
@@ -1181,15 +1189,17 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
         aria-labelledby="tab-tuning"
         className="space-y-4"
       >
-        <AssessmentSweepPanel
-          counts={report?.sweepScopes}
-          contextTokens={report?.defaultContextTokens || []}
-          disabled={localBusy}
-          onRunningChange={setSweepRunning}
-          onSweepFinished={() => load(intent)}
-          tuningRequest={tuningSweepRequest}
-          onTuningRequestClose={closeSweepTarget}
-        />
+        <Suspense fallback={PANEL_FALLBACK}>
+          <AssessmentSweepPanel
+            counts={report?.sweepScopes}
+            contextTokens={report?.defaultContextTokens || []}
+            disabled={localBusy}
+            onRunningChange={setSweepRunning}
+            onSweepFinished={() => load(intent)}
+            tuningRequest={tuningSweepRequest}
+            onTuningRequestClose={closeSweepTarget}
+          />
+        </Suspense>
         <ModelThroughputReport
           report={report?.throughputReport}
           runtimeLabelFor={runtimeLabelFor}

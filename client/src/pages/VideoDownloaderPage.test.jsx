@@ -25,12 +25,14 @@ vi.mock('../hooks/useConfirmDelete.js', () => ({
     isConfirming: () => confirmState.confirming, requestDelete: vi.fn(), cancelDelete: vi.fn(), confirmDelete: (fn) => fn(),
   }),
 }));
+vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../components/video/YtDlpUpdateCard', () => ({ default: () => null }));
 vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 
 import VideoDownloaderPage from './VideoDownloaderPage';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
 import toast from '../components/ui/Toast';
+import { copyToClipboard } from '../lib/clipboard';
 import { cancelVideoPendingDelete } from '../services/apiImageVideo.js';
 
 describe('VideoDownloaderPage', () => {
@@ -57,6 +59,16 @@ describe('VideoDownloaderPage', () => {
     expect(await screen.findByText('New clip')).toBeInTheDocument();
     await act(async () => resolveOld([]));
     expect(screen.getByText('New clip')).toBeInTheDocument();
+  });
+
+  it('shows and copies the local path for a completed download', async () => {
+    render(<VideoDownloaderPage />);
+    await screen.findByText('Clip A');
+    act(() => download.onComplete({ id: 'new', filename: 'new.mp4', title: 'New clip', filePath: '/example/data/videos/new.mp4' }));
+    expect(screen.getByText('File: /example/data/videos/new.mp4')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy file path for New clip' }));
+    expect(copyToClipboard).toHaveBeenCalledWith('/example/data/videos/new.mp4', 'Path copied');
+    expect(screen.queryByRole('button', { name: 'Copy file path for Clip A' })).not.toBeInTheDocument();
   });
 
   it('prepends a completed download immediately when the list is ready', async () => {

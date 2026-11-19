@@ -11,13 +11,46 @@
  *   - Regex literals containing `(`, `)`, or quotes can skew the paren walk and truncate the effect.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+let trackedFilesCache;
+const trackedClientSources = () => (trackedFilesCache ??= trackedSourceFiles(CLIENT_ROOT));
+
+let scanCache;
+function scanTree() {
+  if (scanCache) return scanCache;
+  const violations = [];
+  const selfDisposing = [];
+  const violationsByFile = new Map();
+
+  for (const file of trackedClientSources()) {
+    const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    if (!src.includes('useEffect')) continue;
+
+    const unguided = unguardedEffects(src).map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
+    if (unguided.length > 0) {
+      violationsByFile.set(file, unguided);
+      if (!(file in ALLOWED)) violations.push(...unguided);
+    }
+
+    const selfDisp = selfDisposingEffects(src).map((v) => `${file}:${v.line}  ${v.setter}() re-runs the effect via dep \`${v.dep}\``);
+    if (selfDisp.length > 0) selfDisposing.push(...selfDisp);
+  }
+
+  scanCache = { violations, selfDisposing, violationsByFile };
+  return scanCache;
+}
+
+afterAll(() => {
+  scanCache = undefined;
+  trackedFilesCache = undefined;
+});
 
 /**
  * Effects exempt from the rule, each with the reason. Adding a row is the
@@ -363,22 +396,22 @@ export function selfDisposingEffects(src) {
   return found;
 }
 
-const violationsIn = (file) => unguardedEffects(readFileSync(join(CLIENT_ROOT, file), 'utf8'))
-  .map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
-
-const selfDisposingIn = (file) => selfDisposingEffects(readFileSync(join(CLIENT_ROOT, file), 'utf8'))
-  .map((v) => `${file}:${v.line}  ${v.setter}() re-runs the effect via dep \`${v.dep}\``);
+const violationsIn = (file) => {
+  const cached = scanTree().violationsByFile.get(file);
+  if (cached) return cached;
+  const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+  if (!src.includes('useEffect')) return [];
+  return unguardedEffects(src).map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
+};
 
 describe('identity-keyed async effects drop superseded responses', () => {
   it('has no unguarded identity-keyed async effect outside the allowlist', () => {
-    const files = trackedSourceFiles(CLIENT_ROOT);
+    const files = trackedClientSources();
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise
     // make this guard pass by scanning nothing at all.
     expect(files.length).toBeGreaterThan(100);
 
-    const violations = files
-      .filter((file) => !(file in ALLOWED))
-      .flatMap(violationsIn);
+    const violations = scanTree().violations;
 
     expect(
       violations,
@@ -399,10 +432,10 @@ describe('identity-keyed async effects drop superseded responses', () => {
   });
 
   it('has no lifetime flag in an effect that re-triggers itself', () => {
-    const files = trackedSourceFiles(CLIENT_ROOT);
+    const files = trackedClientSources();
     expect(files.length).toBeGreaterThan(100);
 
-    const violations = files.flatMap(selfDisposingIn);
+    const violations = scanTree().selfDisposing;
 
     expect(
       violations,

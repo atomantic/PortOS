@@ -14,7 +14,7 @@ vi.mock('./ytdlpAudioImport.js', () => ({
   cleanupYtDlpTemp: vi.fn(async () => {}),
 }));
 vi.mock('./rounds.js', () => ({ attachReferenceAudio: vi.fn() }));
-vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+vi.mock('../lib/uploads.js', async (importOriginal) => ({
   ...(await importOriginal()),
   importFileToUploads: vi.fn(async () => ({ filename: 'ab12cd34-Reference_Audio.mp3', sizeBytes: 100 })),
 }));
@@ -22,7 +22,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
 const { assertPublicHttpUrl } = await import('../lib/safeUrlFetch.js');
 const { broadcastSse } = await import('../lib/sseUtils.js');
 const { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } = await import('./ytdlpAudioImport.js');
-const { importFileToUploads } = await import('../lib/fileUtils.js');
+const { importFileToUploads } = await import('../lib/uploads.js');
 const { killWithEscalation } = await import('../lib/killWithEscalation.js');
 const { attachReferenceAudio } = await import('./rounds.js');
 const {

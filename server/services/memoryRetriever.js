@@ -6,7 +6,7 @@
  */
 
 import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memoryBackend.js';
-import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
+import { generateQueryEmbedding, estimateTokens, } from './memoryEmbeddings.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 

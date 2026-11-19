@@ -77,7 +77,6 @@ import {
   drainBackgroundOperations,
   listPeerSubscriptions,
   findPeerSubscription,
-  getOutboundCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
 } from './peerSubscriptions.js';

@@ -9,7 +9,7 @@ import { INPUT_CLASS } from './constants';
 import { cronFromIntervalMs } from '../../utils/cronHelpers';
 
 // The self-improvement loop's per-app config surface. Field set mirrors the
-// server schema (server/lib/validation.js `layeredIntelligenceConfigSchema`)
+// server schema (server/lib/appValidation.js `layeredIntelligenceConfigSchema`)
 // and the effective-config accessor (server/services/layeredIntelligence.js).
 // Off by default — the loop is a user-enabled scheduled automation.
 
@@ -91,7 +91,7 @@ function sameScopes(a, b) {
 }
 
 // The per-row primary value field, keyed by source type. Mirrors the server's
-// discriminated union (server/lib/validation.js `layeredIntelligenceConfigSchema`).
+// discriminated union (server/lib/appValidation.js `layeredIntelligenceConfigSchema`).
 export const LI_CUSTOM_TYPES = [
   { type: 'file', valueKey: 'ref', label: 'File', placeholder: 'repo-relative path, e.g. docs/metrics.md' },
   { type: 'http', valueKey: 'url', label: 'URL', placeholder: 'https://example.com/status.json' },

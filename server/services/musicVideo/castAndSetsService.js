@@ -1,4 +1,5 @@
 import { createCatalogReads, isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
+import { loadProjectMidiDigest } from './songMidiDigest.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft, selectArtGuideIfNone } from './productionReview.js';
@@ -312,7 +313,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // Standing sheet feedback rides on every direction call, a fresh rebuild included.
   const feedback = stage?.feedback || [];
   const standing = feedback.length > 0;
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback, guides: directorArtGuides(project) }) + productionFeedbackContext(project);
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback, guides: directorArtGuides(project), midi: await loadProjectMidiDigest(project) }) + productionFeedbackContext(project);
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));

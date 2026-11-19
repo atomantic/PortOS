@@ -16,7 +16,7 @@ const updateMemoryEmbedding = vi.fn(async () => {});
 const purgeMemory = vi.fn(async () => ({ success: true }));
 const generateMemoryEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
 const getMemoryIdsMissingEmbedding = vi.fn(async () => new Set());
-const getById = vi.fn();
+const getById = vi.fn(async () => null);
 // Default: a tombstone/archived file still exists (soft-archive path).
 const hasStoredRecord = vi.fn(async () => true);
 const getAll = vi.fn(async () => []);
@@ -24,7 +24,7 @@ const listLiveIds = vi.fn(async () => []);
 const getDigests = vi.fn(async () => []);
 const getReviews = vi.fn(async () => []);
 const listJournals = vi.fn(async () => ({ records: [] }));
-const getJournal = vi.fn();
+const getJournal = vi.fn(async () => null);
 const writeThroughMock = async (filePath, data) => {
   const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
   const { writeFile } = await import('fs/promises');
@@ -74,9 +74,24 @@ async function loadBridge() {
   return import('./brainMemoryBridge.js');
 }
 
+function mockPeople(records) {
+  getAll.mockImplementation(async type => type === 'people' ? records : []);
+  getById.mockImplementation(async (type, id) =>
+    type === 'people' ? records.find(record => record.id === id) ?? null : null);
+}
+
+function pauseNextEmbedding() {
+  const started = Promise.withResolvers();
+  const embedding = Promise.withResolvers();
+  generateMemoryEmbedding.mockImplementationOnce(() => {
+    started.resolve();
+    return embedding.promise;
+  });
+  return { started: started.promise, release: () => embedding.resolve([0.1, 0.2, 0.3]) };
+}
+
 beforeEach(async () => {
-  vi.clearAllMocks();
-  hasStoredRecord.mockResolvedValue(true);
+  vi.resetAllMocks();
   bridgeFileContents = null;
   pendingFileContents = null;
   // The mocked brainEvents emitter is created by the vi.mock factory, which
@@ -217,6 +232,7 @@ describe('brainMemoryBridge — tombstone:pruned purge', () => {
     const bridge = await loadBridge();
     const { brainEvents } = await import('./brainStorage.js');
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-old' });
+    hasStoredRecord.mockResolvedValue(false);
     bridge.initBridge();
 
     brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
@@ -231,6 +247,7 @@ describe('brainMemoryBridge — tombstone:pruned purge', () => {
       [bridge.bridgeKey('links', 'l1')]: 'mem-link',
       [bridge.bridgeKey('people', 'p1')]: 'mem-sentinel',
     });
+    hasStoredRecord.mockResolvedValue(false);
     bridge.initBridge();
 
     brainEvents.emit('tombstone:pruned', { type: 'links', id: 'l1' });
@@ -267,8 +284,8 @@ describe('brainMemoryBridge — queueResync debounce + dedup', () => {
     ]);
     await bridge.flushPendingResync(); // flush deterministically
 
-    expect(getById).toHaveBeenCalledTimes(1);
-    expect(getById).toHaveBeenCalledWith('people', 'p1');
+    expect(getById.mock.calls).toEqual([['people', 'p1'], ['people', 'p1']]);
+    expect(generateMemoryEmbedding).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a hard-delete sticky when a later soft touch coalesces onto the same key (#1318)', async () => {
@@ -297,7 +314,7 @@ describe('brainMemoryBridge — queueResync debounce + dedup', () => {
     ]);
     await bridge.flushPendingResync();
 
-    expect(getById).toHaveBeenCalledTimes(3);
+    expect(getById.mock.calls.map(([, id]) => id)).toEqual(['a', 'a', 'b', 'b', 'c', 'c']);
   });
 
   it('ignores a non-array payload without throwing', async () => {
@@ -384,9 +401,9 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
 
     await bridge.flushPendingResync();
 
-    // 50 distinct ids → 50 reads, NOT 51 — and they ran through the sequential
-    // queue, not 51 concurrent fire-and-forget embeds.
-    expect(getById).toHaveBeenCalledTimes(50);
+    // Each distinct id is read for the embedding and again for the commit.
+    expect(getById).toHaveBeenCalledTimes(100);
+    expect(generateMemoryEmbedding).toHaveBeenCalledTimes(50);
     expect(createMemory).toHaveBeenCalledTimes(50);
   });
 
@@ -440,11 +457,16 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
 // per typing pause — and a full LLM summarization per event once the entry
 // outgrows the embedding char budget.
 describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  const journals = new Map();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    journals.clear();
+    getJournal.mockImplementation(async date => journals.get(date) ?? null);
+  });
   afterEach(() => { vi.useRealTimers(); });
 
   const emitSave = async (brainEvents, date, content) => {
-    getJournal.mockResolvedValue({ id: date, date, content });
+    journals.set(date, { id: date, date, content });
     brainEvents.emit('journals:upserted', { entry: { id: date, date, content } });
   };
 
@@ -484,6 +506,9 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
     await bridge.flushPendingResync();
 
     expect(generateMemoryEmbedding).toHaveBeenCalledTimes(2);
+    expect(Object.keys(await bridge.loadBridgeMap()).sort()).toEqual([
+      'journals:2026-06-09', 'journals:2026-06-10',
+    ]);
   });
 
   it('drops a pending re-embed when the day is deleted', async () => {
@@ -493,12 +518,12 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('journals', '2026-06-09')]: 'mem-day' });
 
     await emitSave(brainEvents, '2026-06-09', 'about to be deleted');
+    journals.delete('2026-06-09');
     brainEvents.emit('journals:deleted', { date: '2026-06-09', entry: { id: '2026-06-09' } });
     // handleJournalDeleted is async; flush microtasks (setImmediate is faked here).
     await vi.advanceTimersByTimeAsync(0);
 
     // The pending flush must not resurrect work against a tombstoned day.
-    getJournal.mockResolvedValue(null);
     await vi.advanceTimersByTimeAsync(31_000);
     await bridge.flushPendingResync();
 
@@ -508,24 +533,14 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
 });
 
 describe('brainMemoryBridge — migration preview safety', () => {
-  afterEach(() => {
-    getAll.mockResolvedValue([]);
-    listJournals.mockResolvedValue({ records: [] });
-    getDigests.mockResolvedValue([]);
-    getReviews.mockResolvedValue([]);
-    getById.mockReset();
-    getJournal.mockReset();
-  });
-
   it('previews every source without writes or embeddings, even when refresh would archive an orphan', async () => {
     const bridge = await loadBridge();
     const person = { id: 'preview-person', name: 'Example Person' };
     const journal = { id: '2026-01-01', date: '2026-01-01', content: 'Example daily log' };
-    getAll.mockImplementation(async type => type === 'people' ? [person] : []);
+    mockPeople([person]);
     listJournals.mockResolvedValue({ records: [journal] });
     getDigests.mockResolvedValue([{ id: 'preview-digest', digestText: 'Example digest' }]);
     getReviews.mockResolvedValue([]);
-    getById.mockImplementation(async (_type, id) => id === person.id ? person : null);
     getJournal.mockResolvedValue(journal);
     const originalMap = JSON.stringify({
       [bridge.bridgeKey('people', 'deleted-person')]: 'mem-orphan',
@@ -559,12 +574,136 @@ describe('brainMemoryBridge — migration preview safety', () => {
   });
 });
 
+describe('brainMemoryBridge — overlapping canonical writes', () => {
+  const journal = { id: '2026-06-09', date: '2026-06-09', content: 'Example daily log' };
+  const person = { id: 'p1', name: 'Earlier name', updatedAt: '2026-06-09T12:00:00Z' };
+
+  it('purges a journal during its in-flight resync embedding and leaves it unmapped', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    const { upsertBrainMemory } = await import('./memoryBackend.js');
+    const key = bridge.bridgeKey('journals', journal.id);
+    bridgeFileContents = JSON.stringify({ [key]: 'mem-day' });
+    getJournal.mockResolvedValue(journal);
+    bridge.initBridge();
+    const embedding = pauseNextEmbedding();
+
+    bridge.queueResync([{ type: 'journals', id: journal.id }]);
+    const flush = bridge.flushPendingResync();
+    try {
+      await embedding.started;
+      getJournal.mockResolvedValue(null);
+      brainEvents.emit('journals:deleted', { entry: journal });
+      await vi.waitFor(() => expect(JSON.parse(bridgeFileContents)).toEqual({}));
+      expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-day');
+    } finally {
+      embedding.release();
+      await flush;
+    }
+
+    expect(upsertBrainMemory).not.toHaveBeenCalled();
+    expect(await bridge.loadBridgeMap()).toEqual({});
+    await bridge.flushPendingResyncWrites();
+    expect(JSON.parse(pendingFileContents)).toEqual({ entries: [] });
+  });
+
+  it('serializes a journal purge behind an already-started commit for the same day', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    const entered = Promise.withResolvers();
+    const commit = Promise.withResolvers();
+    const key = bridge.bridgeKey('journals', journal.id);
+    getJournal.mockResolvedValue(journal);
+    createMemory.mockImplementationOnce(() => {
+      entered.resolve();
+      return commit.promise;
+    });
+    bridge.initBridge();
+
+    const sync = bridge.resyncBrainRecord('journals', journal.id);
+    try {
+      await entered.promise;
+      getJournal.mockResolvedValue(null);
+      brainEvents.emit('journals:deleted', { entry: journal });
+      // A different key can commit while the journal commit and purge are queued.
+      mockPeople([person]);
+      await bridge.resyncBrainRecord('people', person.id);
+      expect(purgeMemory).not.toHaveBeenCalled();
+    } finally {
+      commit.resolve({ id: 'mem-day' });
+      await sync;
+    }
+
+    await vi.waitFor(() => expect(JSON.parse(bridgeFileContents)).not.toHaveProperty(key));
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-day');
+    expect(await bridge.loadBridgeMap()).not.toHaveProperty(key);
+  });
+
+  it.each([
+    { state: 'archived', current: { ...person, archived: true }, stored: true, retire: 'archive' },
+    { state: 'peer-tombstoned', current: null, stored: true, retire: 'archive' },
+    { state: 'pruned', current: null, stored: false, retire: 'purge' },
+  ])('keeps $state records out of search when their bulk embedding finishes late', async ({ current, stored, retire }) => {
+    const bridge = await loadBridge();
+    const { upsertBrainMemory } = await import('./memoryBackend.js');
+    const key = bridge.bridgeKey('people', person.id);
+    bridgeFileContents = JSON.stringify({ [key]: 'mem-person' });
+    mockPeople([person]);
+    const embedding = pauseNextEmbedding();
+    const bulk = bridge.syncAllBrainData({ refresh: true });
+    try {
+      await embedding.started;
+      getById.mockResolvedValue(current);
+      hasStoredRecord.mockResolvedValue(stored);
+    } finally {
+      embedding.release();
+      await bulk;
+    }
+
+    expect(upsertBrainMemory).not.toHaveBeenCalled();
+    if (retire === 'archive') {
+      expect(updateMemory).toHaveBeenCalledExactlyOnceWith('mem-person', { status: 'archived' });
+      expect(purgeMemory).not.toHaveBeenCalled();
+      expect(await bridge.loadBridgeMap()).toEqual({ [key]: 'mem-person' });
+      expect(await bulk).toEqual({ synced: 0, skipped: 1, errors: 0, archived: 1 });
+    } else {
+      expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-person');
+      expect(updateMemory).not.toHaveBeenCalled();
+      expect(JSON.parse(bridgeFileContents)).toEqual({});
+      expect(await bulk).toEqual({ synced: 0, skipped: 1, errors: 0, archived: 0 });
+    }
+  });
+
+  it('discards a superseded bulk embedding and queues the newer record', async () => {
+    const bridge = await loadBridge();
+    const { upsertBrainMemory } = await import('./memoryBackend.js');
+    const key = bridge.bridgeKey('people', person.id);
+    bridgeFileContents = JSON.stringify({ [key]: 'mem-person' });
+    mockPeople([person]);
+    const embedding = pauseNextEmbedding();
+    const bulk = bridge.syncAllBrainData({ refresh: true });
+    try {
+      await embedding.started;
+      getById.mockResolvedValue({
+        ...person, name: 'Current name', updatedAt: '2026-06-09T12:01:00Z',
+      });
+    } finally {
+      embedding.release();
+      await bulk;
+    }
+
+    expect(upsertBrainMemory).not.toHaveBeenCalled();
+    await bridge.flushPendingResync();
+    expect(updateMemory).toHaveBeenCalledExactlyOnceWith('mem-person', expect.objectContaining({
+      content: 'Person: Current name', status: 'active',
+    }));
+  });
+});
+
 describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recovery)', () => {
   it('persists all newly created mappings once after a bulk sync', async () => {
     const bridge = await loadBridge();
-    getAll.mockImplementation(async (type) => (type === 'people'
-      ? [{ id: 'p1', name: 'Alice' }, { id: 'p2', name: 'Bob' }]
-      : []));
+    mockPeople([{ id: 'p1', name: 'Alice' }, { id: 'p2', name: 'Bob' }]);
 
     const stats = await bridge.syncAllBrainData();
 
@@ -579,9 +718,7 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
   it('persists a replacement for a stale falsy mapping', async () => {
     const bridge = await loadBridge();
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: null });
-    getAll.mockImplementation(async (type) => (type === 'people'
-      ? [{ id: 'p1', name: 'Alice' }]
-      : []));
+    mockPeople([{ id: 'p1', name: 'Alice' }]);
 
     await bridge.syncAllBrainData();
 
@@ -593,8 +730,10 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
 
   it('persists created mappings when a later bulk read fails', async () => {
     const bridge = await loadBridge();
+    const person = { id: 'p1', name: 'Alice' };
+    mockPeople([person]);
     getAll.mockImplementation(async (type) => {
-      if (type === 'people') return [{ id: 'p1', name: 'Alice' }];
+      if (type === 'people') return [person];
       if (type === 'projects') throw new Error('store unavailable');
       return [];
     });
@@ -609,7 +748,7 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
 
   it('skips already-mapped records by default but re-embeds them with refresh:true', async () => {
     const bridge = await loadBridge();
-    getAll.mockImplementation(async (type) => (type === 'people' ? [{ id: 'p1', name: 'Alice' }] : []));
+    mockPeople([{ id: 'p1', name: 'Alice' }]);
     // p1 already mapped — the pre-#1080 staleness scenario.
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-old' });
 
@@ -657,8 +796,7 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
 
   it('refresh reconcile leaves live mapped records alone (no spurious archive)', async () => {
     const bridge = await loadBridge();
-    getAll.mockImplementation(async (type) => (type === 'people' ? [{ id: 'p1', name: 'Alice' }] : []));
-    getById.mockResolvedValue({ id: 'p1', name: 'Alice' }); // still live
+    mockPeople([{ id: 'p1', name: 'Alice' }]);
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-live' });
 
     const refreshed = await bridge.syncAllBrainData({ refresh: true });
@@ -808,6 +946,7 @@ describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
   it('includes songs in the bulk sync and the embedding-coverage tally', async () => {
     const bridge = await loadBridge();
     getAll.mockImplementation(async (type) => (type === 'songs' ? [SONG] : []));
+    getById.mockImplementation(async (type, id) => type === 'songs' && id === SONG.id ? SONG : null);
     listLiveIds.mockImplementation(async (type) => (type === 'songs' ? ['s1'] : []));
 
     // Unmapped in a fresh bridge map → the tally counts it as a backfill
@@ -838,6 +977,7 @@ describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
 describe('brain bridge durable identity (#11007)', () => {
   it('recovers after the memory commit succeeds but the cache save fails', async () => {
     const backend = await import('./memoryBackend.js');
+    getById.mockResolvedValue({ id: 'example', name: 'Example' });
     const durable = {};
     let inserted = 0;
     await backend.upsertBrainMemory.withImplementation(async key => {
@@ -861,6 +1001,7 @@ describe('brain bridge durable identity (#11007)', () => {
 
   it('rebuilds a corrupt cache from durable links before updating the record', async () => {
     const backend = await import('./memoryBackend.js');
+    getById.mockResolvedValue({ id: 'example', name: 'Example' });
     bridgeFileContents = '{broken';
     await backend.getBrainMemoryLinks.withImplementation(async () => ({ 'people:example': 'durable-1' }), async () => {
       const bridge = await loadBridge();
@@ -873,6 +1014,7 @@ describe('brain bridge durable identity (#11007)', () => {
 
   it('keeps a cold dry run write-free and still imports links on the subsequent write', async () => {
     const backend = await import('./memoryBackend.js');
+    getById.mockResolvedValue({ id: 'example', name: 'Example' });
     bridgeFileContents = JSON.stringify({ 'people:example': 'legacy-1' });
     const bridge = await loadBridge();
     await bridge.syncAllBrainData({ dryRun: true });
@@ -889,8 +1031,7 @@ describe('brain bridge durable identity (#11007)', () => {
     bridgeFileContents = JSON.stringify({ 'people:example': 'purged-1' });
     const bridge = await loadBridge();
     await bridge.loadBridgeMap();
-    getAll.mockImplementation(async type => type === 'people'
-      ? [{ id: 'example', name: 'Example' }] : []);
+    mockPeople([{ id: 'example', name: 'Example' }]);
     backend.getBrainMemoryLinks.mockResolvedValueOnce({});
     updateMemory.mockResolvedValueOnce(null);
     const stats = await bridge.syncAllBrainData({ onlyMissing: true });
@@ -958,6 +1099,8 @@ describe('brain catch-up beyond old caps', () => {
       content: 'Journal day ' + i
     })).reverse();
     listJournals.mockResolvedValue({ records });
+    const byId = new Map(records.map(record => [record.id, record]));
+    getJournal.mockImplementation(async id => byId.get(id) ?? null);
     expect((await bridge.syncAllBrainData({ onlyMissing: true })).synced).toBe(10001);
     // A second pass skips every mapped day, including the oldest.
     expect((await bridge.syncAllBrainData({ onlyMissing: true })).skipped).toBe(10001);
@@ -1008,8 +1151,43 @@ describe('brainMemoryBridge — pending resyncs survive a restart (#11756)', () 
     expect(await second.replayPersistedResync()).toBe(2);
     await second.flushPendingResync();
 
-    expect(getById.mock.calls.map(([, id]) => id)).toEqual(['b', 'c']);
+    expect(getById.mock.calls.map(([, id]) => id)).toEqual(['b', 'b', 'c', 'c']);
     await second.flushPendingResyncWrites();
+    expect(persisted()).toEqual([]);
+  });
+
+  it('retains a failed hard delete for restart while settling successful resyncs', async () => {
+    const first = await loadBridge();
+    bridgeFileContents = JSON.stringify({
+      [first.bridgeKey('people', 'deleted')]: 'mem-deleted',
+      [first.bridgeKey('people', 'archived')]: 'mem-archived',
+    });
+    purgeMemory.mockRejectedValueOnce(new Error('database unavailable'));
+
+    first.queueResync([
+      { type: 'people', id: 'deleted', hardDelete: true },
+      { type: 'people', id: 'archived' },
+    ]);
+    await first.flushPendingResync();
+    await first.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(updateMemory).toHaveBeenCalledExactlyOnceWith('mem-archived', { status: 'archived' });
+    expect(persisted()).toEqual(['people:deleted:true']);
+
+    // A later peer touch must preserve the failed local hard-delete intent.
+    purgeMemory.mockRejectedValueOnce(new Error('database still unavailable'));
+    first.queueResync([{ type: 'people', id: 'deleted' }]);
+    await first.flushPendingResync();
+    await first.flushPendingResyncWrites();
+    expect(persisted()).toEqual(['people:deleted:true']);
+
+    purgeMemory.mockClear();
+    const second = await loadBridge();
+    expect(await second.replayPersistedResync()).toBe(1);
+    await second.flushPendingResync();
+    await second.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(await second.loadBridgeMap()).not.toHaveProperty(first.bridgeKey('people', 'deleted'));
     expect(persisted()).toEqual([]);
   });
 
@@ -1048,7 +1226,7 @@ describe('brainMemoryBridge — pending resyncs survive a restart (#11756)', () 
     await flush;
     await bridge.flushPendingResyncWrites();
 
-    expect(getById).toHaveBeenCalledTimes(2);
+    expect(getById).toHaveBeenCalledTimes(4);
     expect(persisted()).toEqual([]); // removed only after the re-queued pass settled
   });
 

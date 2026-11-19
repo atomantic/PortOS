@@ -12,7 +12,6 @@ vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({
   ...(await importOriginal()),
   assertDatabaseAdmission: () => {},
 }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 const jobs = vi.hoisted(() => ({ saveCodeAnimationJobRecord: vi.fn(async job => job), saveCodeAnimationHtml: vi.fn() }));
 vi.mock('./jobStore.js', async importOriginal => ({ ...(await importOriginal()), ...jobs }));
 vi.mock('../provider/providers.js', () => ({

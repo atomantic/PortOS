@@ -4,17 +4,15 @@
 // Eidoverse world-projection schemas — the `EIDOVERSE_PROJECTION_SOURCE_KEYS` allowlist, the V1/V2
 // projection recipe union (includes/assets/terrain/scale/districts/environment, with the `..`-escape
 // guard on every asset path), and the world augment/say/config-patch route bodies (incl. the 8KB
-// augment-argument cap). Split out of `validation.js` (#5698), which re-exports it.
+// augment-argument cap). Split out of the retired validation.js catch-all (#5698).
 //
 // =============================================================================
 // EIDOVERSE WORLD PROJECTION
 // =============================================================================
-// Split out of validation.js (#5698), which re-exports this module so every
-// existing consumer's import specifier keeps working.
+// Split out of the retired validation.js catch-all (#5698).
 //
-// Cycle rule: only import zod or dependency-free leaf contracts. Importing
-// back from validation.js would TDZ — ESM hoists its `export * from` line,
-// so this file evaluates before validation.js's body runs.
+// Cycle rule: only import zod or dependency-free leaf contracts, never another
+// domain validation file.
 
 import { z } from 'zod';
 import { EIDOVERSE_LABEL_ALIAS_KEY } from './eidoverseWorldLabels.js';

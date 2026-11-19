@@ -1,6 +1,6 @@
 ---
 name: portos-ship
-description: PortOS shipping procedure — pushing, PR model/reviewer attribution labels, review reuse, hosting-provider merge authority, post-merge worktree/branch teardown, releases and the release quality snapshot. Invoke before pushing a branch, opening or merging a PR, cleaning up a merged checkout, or cutting a release.
+description: PortOS shipping procedure — pushing, PR model attribution label, review reuse, hosting-provider merge authority, post-merge worktree/branch teardown, releases and the release quality snapshot. Invoke before pushing a branch, opening or merging a PR, cleaning up a merged checkout, or cutting a release.
 ---
 
 # Shipping PortOS changes
@@ -20,9 +20,8 @@ Check branch, upstream and working-tree state, preserve unrelated changes, and c
 
 ## PR attribution labels
 
-- **Best-effort, never verified.** Nothing reads `implementer:` or `reviewer:` labels back (#16571), so attribution is one label call at PR creation with no read-back, repair or failure report; a failed label never blocks a PR.
+- **Best-effort, never verified.** Nothing reads the `implementer:` label back (#16571), so attribution is one label call at PR creation with no read-back, repair or failure report; a failed label never blocks a PR.
 - **Opener**: `implementer:<model>` (`implementer::<model>` on GitLab) from the run's **PR Model Attribution** section, else the model your host's execution context verifies (`normalizePlannerId` in `server/lib/dispatchLabels.js`); omit it rather than guess from the provider, reviewer, issue labels or self-identification. A delegated opener uses its own model; a resumed PR keeps its original label.
-- **Reviewers**: `reviewer:<model>` only from completed local review receipts, per [PR_REVIEW_ATTRIBUTION.md](../../../docs/PR_REVIEW_ATTRIBUTION.md); never from configured, queued or requested reviewers.
 
 ## Reviews
 

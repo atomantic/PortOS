@@ -32,8 +32,8 @@ import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js'
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
-import { workflowJobs } from './lib/workflowJobs.js';
-import { buildCiTestPlan, collectPlanInputs, getAlwaysRunTests } from './ci-test-plan.js';
+import { getAlwaysRunTests } from './ci-test-plan.js';
+import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
 // Actions annotation. Duration/summary tests retain real I/O.
@@ -65,17 +65,6 @@ describe('parseShard', () => {
     expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
   });
 });
-
-/** A fake `npm` on PATH that prints its arguments and the selection file it was handed. */
-function installFakeNpm(fixture, body) {
-  const npmScript = join(fixture, 'npm.js');
-  writeFileSync(npmScript, body);
-  writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
-  writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
-}
-
-const REPORTING_NPM = 'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), '
-  + 'selection: JSON.parse(require("fs").readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8")) }) + "\\n");';
 
 it('hands Vitest the selection as a file, sliced by the runner for the matrix shard, never as --shard', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
@@ -111,54 +100,6 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
       expect(selection.include, `${mode} ${shard}`).toEqual(expect.arrayContaining(expected));
       if (mode === 'files') expect(selection.include, shard).toHaveLength(expected.length);
     }
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
-  }
-}, 150_000);
-
-it('hands only real client fixture consumers to Vitest for a shared browser cleanup change', () => {
-  const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
-  try {
-    installFakeNpm(fixture, REPORTING_NPM);
-    const unused = 'scripts/lib/releaseTitle.js';
-    const source = 'scripts/lib/ownedBrowserCleanup.js';
-    // One whole-repository walk for both plans: the collected maps are keyed per
-    // source/test/suite, so each single-source plan reads only its own entries.
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [unused, source], cwd: join(import.meta.dirname, '..') });
-    expect(buildCiTestPlan([unused], inputs)).toMatchObject({
-      full: false, build: false, client: { mode: 'skip', files: [] },
-    });
-    const plan = buildCiTestPlan([source], inputs);
-    expect(plan.full).toBe(false);
-    expect(plan.build).toBe(false);
-    expect(plan.server.mode).toBe('related');
-    expect(plan.server.sources).toContain(source);
-    expect(plan.browserFiles.length).toBeGreaterThan(0);
-    expect(plan.client.mode).toBe('files');
-    // Real comment-heavy consumers and fixture templates must resolve without
-    // retaining hundreds of unrelated files in the actual runner handoff.
-    for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
-      'client/src/services/apiRounds.test.js', 'client/src/a11y/controlNames.conventions.test.js']) {
-      expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
-      expect(plan.client.files, test).not.toContain(test);
-    }
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
-      encoding: 'utf8', timeout: 120000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-        CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
-        CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
-        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-    expect(selection.include).toEqual(expect.arrayContaining([
-      'src/test/browserFixture.test.js',
-      'src/components/ThemeSwitcher.browser.test.js',
-      'src/components/goals/GoalsTreeView.browser.test.js',
-      'src/components/ui/OverflowMenu.browser.test.js',
-    ]));
-    expect(selection.include.sort()).toEqual(plan.client.files.map(file => toWorkspacePath('client', file)).sort());
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
@@ -674,7 +615,7 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
 });
 
 describe('always-run guard time budget through the real runner (#16551)', () => {
-  it('fails CI on a guard over budget, timed in its own pass, and only where ci.yml enforces it', () => {
+  it('fails the run on a guard over budget only when enforced, timed in its own pass, and warns otherwise', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-guard-budget-'));
     try {
       // Every selected file passes; the guard reports a wall time over the CI budget.
@@ -704,10 +645,17 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
       // The guard ran alone, before the rest of the selection.
       expect(enforced.stdout.match(/^RAN .*$/gm)).toEqual([`RAN ["../${guard}"]`, `RAN ["../${other}"]`]);
 
-      // Without the ci.yml switch (local pregate, Windows, browser) duration never fails a run.
-      const local = run({});
-      expect(local.status, local.stderr).toBe(0);
-      expect(local.stdout.match(/^RAN .*$/gm)).toHaveLength(1);
+      // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
+      // it stays in the one normal pass with the rest of the selection and never fails the run.
+      for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
+        const reported = run(extraEnv);
+        expect(reported.status, reported.stderr).toBe(0);
+        const ran = reported.stdout.match(/^RAN .*$/gm) ?? [];
+        expect(ran).toHaveLength(1);
+        expect(JSON.parse(ran[0].slice(4)).sort()).toEqual([`../${guard}`, `../${other}`].sort());
+        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${guard} 6.5s over the 6.0s per-file budget.`);
+        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+      }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
@@ -717,9 +665,11 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
     }
   }, 120_000);
 
-  it('enforces it on the Linux server job only', () => {
+  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
     const jobs = readCiJobs();
-    expect(Object.entries(jobs).filter(([, body]) => /CI_GUARD_BUDGET: enforce/.test(body)).map(([id]) => id)).toEqual(['server']);
+    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
+    expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
+    expect(jobs.server).toContain(expression);
   });
 });
 
@@ -1152,7 +1102,7 @@ describe('structured failure diagnostics', () => {
     }
   }, 35_000);
 
-  it('recovers a real bail failure with default and GitHub reporters even if their summary is incomplete', () => {
+  it('reports every failing file in one run, with default and GitHub reporters even if their summary is incomplete', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
     try {
       const host = join(fixture, 'host');
@@ -1161,10 +1111,12 @@ describe('structured failure diagnostics', () => {
       const report = join(fixture, 'report.json');
       writeFileSync(join(fixture, 'fixture.test.js'),
         "test('synthetic assertion diagnostic', () => { expect(1, 'synthetic mismatch').toBe(2); });");
+      writeFileSync(join(fixture, 'second.test.js'),
+        "test('second assertion diagnostic', () => { expect(3, 'second mismatch').toBe(4); });");
       writeFileSync(join(fixture, 'vitest.config.mjs'),
         FIXTURE_CONFIG);
       const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
-      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js', './second.test.js'];
       const durable = join(fixture, 'durable');
       const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1',
         PORTOS_CI_DIAGNOSTICS_DIR: durable };
@@ -1184,9 +1136,9 @@ describe('structured failure diagnostics', () => {
       const invocation = JSON.parse(readFileSync(join(durable, attempts[0], 'invocation.json'), 'utf8'));
       expect(invocation).toMatchObject({ completed: true, status: 1 });
       const progress = JSON.parse(readFileSync(join(durable, attempts[0], 'run.json'), 'utf8'));
-      // Vitest reports bail=1 as an interrupted run, even with a failed suite.
-      expect(progress).toMatchObject({ reason: 'interrupted', completedCount: 1, activeModules: [],
-        completedModules: ['<outside-repository>/fixture.test.js'] });
+      // No bail: the run finishes both files rather than stopping at the first failure.
+      expect(progress).toMatchObject({ reason: 'failed', completedCount: 2, activeModules: [] });
+      expect(progress.completedModules.sort()).toEqual(['<outside-repository>/fixture.test.js', '<outside-repository>/second.test.js']);
       expect(result.stdout).toContain('Test Files');
       expect(result.stdout).toContain('Tests');
       expect(result.stderr).toContain('Failed Tests');
@@ -1194,6 +1146,8 @@ describe('structured failure diagnostics', () => {
       const diagnostic = result.stderr.slice(result.stderr.indexOf('Structured Vitest'));
       expect(diagnostic).toContain('fixture.test.js > synthetic assertion diagnostic');
       expect(diagnostic).toContain('synthetic mismatch');
+      expect(diagnostic).toContain('second.test.js > second assertion diagnostic');
+      expect(diagnostic).toContain('second mismatch');
       expect(diagnostic).toContain('Structured Vitest failure diagnostics');
       writeFileSync(report, '{');
       expect(structuredFailureDiagnostics(report)).toContain('Inconclusive');

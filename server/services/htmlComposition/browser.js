@@ -163,9 +163,7 @@ export async function openComposition(directory, {
         ...connectOptions,
         transport: owner.transport,
         lifecycleFacts: owner.lifecycleFacts,
-        version: owner.transport
-          ? { 'User-Agent': 'HeadlessChrome/' }
-          : { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' },
+        version: { 'User-Agent': 'HeadlessChrome/' },
       });
       return { ...page, close: async options => {
         try { await page.close(options); } finally { await closeOwner(); }
@@ -357,6 +355,7 @@ async function connectComposition(assets, {
   try {
     await new Promise((resolveOpen, rejectOpen) => {
       if (ws.readyState === WebSocket.OPEN) return resolveOpen();
+      if (ws.readyState !== WebSocket.CONNECTING) return rejectOpen(failure ?? new Error('Managed browser disconnected'));
       ws.once('open', resolveOpen);
       ws.once('error', rejectOpen);
       ws.once('close', () => rejectOpen(failure ?? new Error('Managed browser disconnected')));

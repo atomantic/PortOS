@@ -33,7 +33,8 @@ import {
   splitAntigravityModel,
 } from '../../lib/provider/providerModels.js';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
-import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';

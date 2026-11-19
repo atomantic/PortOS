@@ -108,6 +108,7 @@ describe('app pull-request routes', () => {
       repoFullName: 'acme/widget',
       defaultBranch: 'main',
       selfLogin: 'bob',
+      actorTrust: { isTrusted: async (login) => login === 'bob' },
     });
     getOnDemandRequests.mockResolvedValue([]);
     triggerOnDemandTask.mockResolvedValue({ id: 'demand-abc', taskType: 'pr-reviewer', appId: 'app-001', targetPullRequest: 17 });
@@ -416,7 +417,7 @@ describe('app pull-request routes', () => {
     expect(response.body.pullRequests[0].reviewEligible).toBe(true);
   });
 
-  it('marks the operator\'s own PR as ineligible so the row offers no failing action', async () => {
+  it('marks a verified trusted operator PR as ineligible for external review', async () => {
     listAppPullRequests.mockResolvedValue({
       ...listResult(),
       pullRequests: [{ ...PULL_REQUEST, author: 'bob' }],

@@ -52,21 +52,17 @@ export async function validatePendingMergeRecovery({ target, workspacePath, requ
     sourceTask: { id: target.sourceTaskId, metadata: { app: app.id } } };
   const current = await preparePendingMergeRecovery({ app, entry, headSha: target.headSha, launchTaskId });
   if (current.blocked || current.deferred || !isDeepStrictEqual(current.target, target)) return current.blocked || 'recovery-owner-changed';
-  const [{ getOriginInfo }, { parsePullRequestUrl }, { githubRepoSpec }, { resolveForgeExecOptions }, { execGh }, { repositoryKey }] = await Promise.all([
+  const [{ getOriginInfo }, { parsePullRequestUrl }, { githubRepoSpec }, { readPullRequest, isOpenSameRepoPr }, { repositoryKey }] = await Promise.all([
     import('../lib/gitRemote.js'), import('../lib/gitForge.js'), import('../lib/workTracker.js'),
-    import('./forgeExecOptions.js'), import('./github.js'), import('./mergeHandoffOwner.js'),
+    import('./prProbe.js'), import('./mergeHandoffOwner.js'),
   ]);
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   const pr = parsePullRequestUrl(target.prUrl);
   if (!origin || !pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repositoryKey(origin)) return 'recovery-repository-changed';
-  const options = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
-  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', githubRepoSpec(origin),
-    '--json', 'state,isDraft,isCrossRepository,headRefName,headRefOid'], undefined,
-  { ...options, backoffKey: githubRepoSpec(origin) }).catch(() => null);
-  let view;
-  try { view = JSON.parse(raw); } catch { return 'recovery-pr-unreadable'; }
-  if (view?.state !== 'OPEN' || view.isDraft !== false || view.isCrossRepository !== false
-    || view.headRefName !== target.branch || view.headRefOid !== target.headSha) return 'recovery-head-moved';
+  const view = await readPullRequest(pr.number, 'state,isDraft,isCrossRepository,headRefName,headRefOid',
+    { repoPath: app.repoPath, forgeAccount: app.forgeAccount, repoSpec: githubRepoSpec(origin) });
+  if (!view) return 'recovery-pr-unreadable';
+  if (!isOpenSameRepoPr(view, { branch: target.branch, head: target.headSha })) return 'recovery-head-moved';
   if (requireCheckout) {
     const { verifyPendingMergeCheckout } = await import('./pendingMergeCheckout.js');
     if (!await verifyPendingMergeCheckout(app.repoPath, workspacePath, target.branch, target.headSha)) return 'recovery-checkout-changed';

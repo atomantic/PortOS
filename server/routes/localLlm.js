@@ -62,7 +62,7 @@ import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
-import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
+import { MODEL_ABUSE_GUARD, MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
 import { z } from 'zod'
@@ -79,7 +79,7 @@ import {
   getStatus, listModels, listVisionModels, listToolUseModels, installModel, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
-import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
+import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall, runModelAbuseScan } from '../services/modelAbuseGuard.js'
 import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
 import { readJevDecisionStats } from '../services/jevRouter.js'
 import { getSettings } from '../services/settings.js'
@@ -267,6 +267,19 @@ router.get('/security-guard/status', asyncHandler(async (_req, res) => {
     getContributionAssessmentReadiness(),
   ])
   res.json({ ...status, contributionAssessment })
+}))
+
+const manualGuardScanSchema = z.object({
+  content: z.string().min(1).max(MODEL_ABUSE_GUARD_MAX_INPUT_CHARS).refine(value => value.trim().length > 0),
+}).strict()
+
+// Explicit operator action: the default host-control write gate applies. This
+// runs only the local abuse scan, not a GitHub contribution assessment.
+router.post('/security-guard/scan', asyncHandler(async (req, res) => {
+  const { content } = validateRequest(manualGuardScanSchema, req.body ?? {})
+  const result = await runModelAbuseScan({ content })
+  if (result?.ok !== true || typeof result.safe !== 'boolean') throw new ServerError('The abuse guard could not complete the scan. Check its setup and try again.', { status: 503, code: result?.code || 'security-guard-scan-failed' })
+  res.json({ safe: result.safe, code: result.code, layers: result.layers, findings: result.findings || [] })
 }))
 
 router.post('/security-guard/install', asyncHandler(async (req, res) => {

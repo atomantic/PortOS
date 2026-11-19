@@ -1,6 +1,7 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
-import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
+import { MANDATORY_DISPATCH_HINT_GUIDANCE, mandatoryDispatchHintGuidance } from '../../lib/dispatchLabels.js';
+import { buildIssueFilingSection } from '../promptSections/plannerAttribution.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { buildMergeAdmissionSection } from '../promptSections/completion.js';
 import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from '../promptSections/reviewerOutcome.js';
@@ -243,6 +244,19 @@ describe('composable skill template routing', () => {
       expect(prompt).not.toContain('{modeInstructions}');
       expect(prompt).not.toMatch(/add (?:clear |helpful )?comments/i);
     }
+  });
+
+  it.each(['api', 'cli'])('renders provisioned dependency state in the %s claim prompt', async providerType => {
+    const { composeClaimIssuePrompt } = await import('../taskPromptDefaults/prompts.js');
+    const description = composeClaimIssuePrompt({ target: '42', preverified: true, nonEpic: true, serverCheckout: true });
+    const task = makeTask({ description, metadata: { claimFlow: true } });
+    const missing = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'absent' }] });
+    expect(missing).toContain('source checkout has no installed dependencies to link');
+    expect(missing).toContain('Install dependencies inside this worktree');
+    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked' }] });
+    expect(linked).toContain('linked or provisioned: node_modules');
+    expect(linked).toContain('Never install through dependency paths linked to the source checkout');
+    expect(linked).not.toContain('CLAIM_DEPENDENCY_PROVISIONING_STATUS');
   });
 
   it('uses provider merge authority in both prompt paths and carries recovery evidence', async () => {
@@ -4868,7 +4882,7 @@ describe('PR model attribution', () => {
     expect(prompt).toContain('Best-effort: no read-back or repair');
     const section = prompt.slice(prompt.indexOf('## PR Model Attribution')).split('\n\n')[0];
     expect(section).not.toMatch(/labels back|pr edit <pr>|mr update <mr>|completion summary/);
-    expect(section.split('\n').length).toBeLessThanOrEqual(3);
+    expect(section.split('\n')).toHaveLength(2);
     expect(prompt).not.toContain('implementer:example-runner');
   });
 
@@ -4957,6 +4971,18 @@ describe('planner attribution', () => {
     expectDeduped(text);
   });
 
+  it('adds only the GitLab separator paragraph for a glab run whose template embeds the GitHub contract', () => {
+    const embedded = buildIssueFilingSection({ forgeCli: 'glab', taskBody: [MANDATORY_DISPATCH_HINT_GUIDANCE] });
+    expect(embedded).toContain('DOUBLE colon');
+    expect(embedded).not.toContain('REQUIRED on every issue you file');
+    // The shipped claim-issue-gitlab template embeds the GitLab form: nothing is appended.
+    expect(buildIssueFilingSection({ forgeCli: 'glab', taskBody: [mandatoryDispatchHintGuidance({ cli: 'glab' })] })).toBe('');
+    const bare = buildIssueFilingSection({ forgeCli: 'glab', taskBody: ['File issues.'] });
+    expect(bare).toContain('REQUIRED on every issue you file');
+    expect(bare).toContain('DOUBLE colon');
+    expect(buildIssueFilingSection({ forgeCli: 'gh', taskBody: ['File issues.'] })).not.toContain('DOUBLE colon');
+  });
+
   it('keeps the full contract for a task that paraphrased it', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ description: 'File issues with model: and effort: labels.', metadata: { openPR: false } }),
@@ -4973,8 +4999,8 @@ describe('planner attribution', () => {
     expect(prompt).not.toMatch(/## Planner Attribution/);
     expect(prompt).toContain('## Issue Filing Labels');
     expect(prompt).toContain('exactly one `model:` and exactly one `effort:`');
-    expect(prompt).toContain('specific hardware');
-    expect(prompt).toContain('multiple real users');
+    expect(prompt).toContain('`portos-file-issue` skill');
+    expect(prompt).not.toContain('DOUBLE colon');
   });
 });
 
@@ -5117,6 +5143,7 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
   const resolveRoot = (text) => text.replaceAll('{portosRoot}', () => PATHS.installRoot);
   const githubPrompt = resolveRoot(composeClaimIssuePrompt({ forge: 'github' }));
   const githubSections = [
+    ['claim-issue-filing-github', mandatoryDispatchHintGuidance({ cli: 'gh' })],
     ['claim-epic-github', buildClaimEpicSection('github', false)],
     ['claim-handoff-github', buildClaimGithubHandoff(false)],
     ['claim-linked-screen-github', resolveRoot(buildClaimLinkedScreen('github'))],
@@ -5152,6 +5179,7 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     const composed = resolveRoot(composeClaimIssuePrompt({ forge: 'gitlab', target: 42, prCompletion: 'leave-open' }));
     const prompt = await render(composed, 'cli', 'description');
     expect(stagedSections()).toEqual([
+      ['claim-issue-filing-gitlab', mandatoryDispatchHintGuidance({ cli: 'glab' })],
       ['claim-epic-gitlab', buildClaimEpicSection('gitlab', true)],
       ['claim-linked-screen-gitlab', resolveRoot(buildClaimLinkedScreen('gitlab'))],
       ['claim-ci-recovery-gitlab', buildClaimCheckRecovery('gitlab', true)],
@@ -5184,6 +5212,6 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     const prompt = await render(edited, 'cli');
     expect(prompt).toContain('Produce 2–6 slices');
     expect(prompt).not.toContain('When Phase 1 lands on an epic');
-    expect(stagedSections()).toEqual(githubSections.slice(1));
+    expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
   });
 });

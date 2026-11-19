@@ -12,7 +12,6 @@ import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SI
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../../lib/persistent/persistentMindProcessAudit.js';
 import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
-import { readRetirementCheckoutIdentity } from '../../lib/retirementCheckoutObservation.js';
 import { resolveRetirementApp } from '../retirementAppScope.js';
 /**
  * Agent Repo-State Verification
@@ -74,6 +73,8 @@ import { withClaimOwnershipLock, readClaimOwnershipAgents } from '../cos/cosClai
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { claimCheckoutOwner } from '../../lib/claimContinuation.js';
 import { loadState } from '../cos/cosState.js';
+import { COMPLETION_RECEIPT_VERSION, COMPLETION_STAGE, REPOSITORY_HOLD, completionReceiptDone,
+  completionWaitingOnRepository, verifiedRepositoryWorktreeStage } from '../../lib/agent/agentCompletionStages.js';
 
 // A task in any of these still HOLDS its branch and will resume on it, so a
 // branch one of them targets is owned, not leaked. `challenged` is the easy one
@@ -174,10 +175,10 @@ async function probeBranchMerged(repoPath, branch, target) {
  * @param {string} params.branchName
  * @param {string} params.worktreePath
  * @param {boolean} params.branchShouldBeGone - gates the remote + merged probes
- * @param {boolean} params.prExpected - gates the forge lookup
+ * @param {{kind: 'exact-target', url: string} | {kind: 'branch'} | {kind: 'skip'}} params.prProbe
  * @returns {Promise<{worktreePresent: boolean|null, localBranchPresent: boolean|null, remoteBranchPresent: boolean|null, branchMerged: boolean|null, prState: string|null, prUrl: string|null, defaultBranch: string|null}>}
  */
-async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prExpected, originalPrUrl }) {
+async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branchShouldBeGone, prProbe }) {
   // A worktree counts as present if the directory survived on disk OR git still
   // tracks it. Either alone is a leak: an unregistered directory is the full
   // checkout `removeWorktree` believed it deleted, and a registered-but-deleted
@@ -208,14 +209,14 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // one", so there is nothing here to report and nothing missing on a `none`
   // answer.
   const probePr = async () => {
-    if (originalPrUrl && branchShouldBeGone) {
-      const parsed = parsePullRequestUrl(originalPrUrl);
+    if (prProbe.kind === 'exact-target') {
+      const parsed = parsePullRequestUrl(prProbe.url);
       const origin = await getOriginInfo(sourceWorkspace);
       if (!parsed || origin?.host !== parsed.host || origin?.fullName !== `${parsed.owner}/${parsed.repo}`) return { readable: false, prState: null, prUrl: null };
       const probe = await probeChangeRequestState(sourceWorkspace, { number: parsed.number, branch: branchName });
-      return { ...probe, prUrl: originalPrUrl, prNumber: parsed.number };
+      return { ...probe, prUrl: prProbe.url, prNumber: parsed.number };
     }
-    if (!prExpected || !branchShouldBeGone) return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
+    if (prProbe.kind === 'skip') return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
     return probePrForBranch(sourceWorkspace, branchName);
   };
 
@@ -254,8 +255,8 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     // Merge state is only in question while the branch is still there; once it is
     // gone there is nothing left to be unmerged.
     if (localBranchPresent === true && branchMerged === null) unreadable.push('branch-merged');
-    if (prExpected && !pr.readable) unreadable.push('pull-request');
   }
+  if (prProbe.kind !== 'skip' && !pr.readable) unreadable.push('pull-request');
 
   return {
     worktreePresent,
@@ -272,41 +273,17 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   };
 }
 
-/**
- * Verify one completed worktree agent left the repository as its task asked, and
- * file a recovery task when it did not.
- *
- * @param {object} params
- * @param {string} params.agentId
- * @param {object} params.task - the CoS task
- * @param {object|null} params.agentState - persisted agent record (worktree metadata)
- * @param {boolean} params.success - effective success of the run
- * @param {boolean} [params.prExpected] - the task asked for a PR (`openPR`)
- * @param {string[]} [params.cleanupWarnings] - warnings cleanup already raised
- * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
- */
 const verificationRuns = new Map();
 // Events emitted by an explicit cleanup-only recheck must not start another
 // completion replay. Unrelated events retain their normal wake behaviour.
 const manualCleanupContext = new AsyncLocalStorage();
 const CLAIM_OWNER_HOLDS = new Set(['claim-owner-active', 'claim-owner-ambiguous']);
-const MANUAL_COMPLETION_STAGES = ['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'worktree', 'report'];
-// Chain stages that agentCompletionCleanup defers until this verification's
-// worktree receipt exists. Any other unfinished stage refuses the recheck.
-const REPOSITORY_HELD_STAGES = new Set(['pipeline', 'creative']);
-const REPOSITORY_HOLD_REASONS = new Set(['checkout-capture-pending', 'checkout-retirement-pending']);
 const canonicalRepository = path => typeof path === 'string' && path ? realpath(path).catch(() => resolve(path)) : Promise.resolve(null);
 
-/** 'ready' when every completion stage finished; 'repository-held' when only
- * pipeline/creative stages wait on this verification; otherwise null. */
-function manualCompletionMode(agent) {
-  const receipt = agent?.metadata?.completionCleanup;
-  const stages = receipt?.stages;
-  if (receipt?.version !== 1 || !stages || !MANUAL_COMPLETION_STAGES.every(key => stages[key])) return null;
-  const unfinished = Object.entries(stages).filter(([, stage]) => stage?.status !== 'done');
-  if (!unfinished.length) return receipt.status === 'completed' ? 'ready' : null;
-  return receipt.status === 'pending' && unfinished.every(([key, stage]) => REPOSITORY_HELD_STAGES.has(key)
-    && stage.status === 'held' && REPOSITORY_HOLD_REASONS.has(stage.reason)) ? 'repository-held' : null;
+function manualCompletionMode(receipt) {
+  if (completionReceiptDone(receipt)) return 'ready';
+  if (completionWaitingOnRepository(receipt)) return 'repository-held';
+  return null;
 }
 
 // These are the execution-side prerequisites of isSettleableCompletionReceipt.
@@ -384,6 +361,20 @@ function exhaustedCleanupOwner(task, agent) {
     });
 }
 
+/**
+ * Verify one completed worktree agent left the repository as its task asked, and
+ * file a recovery task when it did not.
+ *
+ * @param {object} input
+ * @param {string} input.agentId
+ * @param {object} input.task - the CoS task
+ * @param {object|null} input.agentState - persisted agent record (worktree metadata)
+ * @param {boolean} input.success - effective success of the run
+ * @param {boolean} [input.prExpected] - legacy override for the live task's `openPR` hint
+ * @param {'force-branch' | 'sweep-review-target'} [input.prProbeFallback] - internal branch lookup adapter
+ * @param {string[]} [input.cleanupWarnings] - warnings cleanup already raised
+ * @returns {Promise<{verified: boolean, skipReason: string|null, issues: Array<{code: string, message: string}>, observed: object|null, recoveryTaskId: string|null}>}
+ */
 export async function verifyAgentRepoState(input) {
   if (verificationRuns.has(input.agentId)) return verificationRuns.get(input.agentId);
   const cleanupPending = input.agentState?.result?.cleanupPending === true;
@@ -400,10 +391,10 @@ export async function verifyAgentRepoState(input) {
     // forge without a captured head.
     if (input.agentState?.metadata?.checkoutCapture?.status === 'pending' && !(cleanupPending && await pendingCheckoutAbsent(input.agentState))) {
       const { retryCompletionCheckoutCapture, getAgentRecord } = await import('../cos/cosAgentLifecycle.js');
-      if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped('checkout-capture-pending');
+      if (!await retryCompletionCheckoutCapture(input.agentId).catch(() => false)) return skipped(REPOSITORY_HOLD.CAPTURE);
       const recovered = await getAgentRecord(input.agentId).catch(() => null);
       if (!recovered || recovered.status !== 'completed' || recovered.startedAt !== input.agentState.startedAt
-        || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped('checkout-capture-pending');
+        || recovered.metadata?.checkoutCapture?.status !== 'captured') return skipped(REPOSITORY_HOLD.CAPTURE);
       input = { ...input, agentState: recovered };
     }
     if (input.manualCleanupOnly) {
@@ -416,7 +407,7 @@ export async function verifyAgentRepoState(input) {
         if (input.manualCleanupOnly) return skipped('cleanup-owner-changed');
         const snapshot = await readAbsentTaskSnapshot(input.agentState);
         if (!snapshot) return skipped('cleanup-task-unavailable');
-        input = { ...input, task: snapshot, prExpected: input.prExpected || isTruthyMeta(snapshot.metadata?.openPR), originTaskAbsent: true };
+        input = { ...input, task: snapshot, originTaskAbsent: true };
         return verifyRunBranches({ ...input, success: true, cleanupWarnings: [] });
       }
       const current = input.manualCleanupOnly ? original : await recoverCompletionTaskHandoff(input.agentState) || original;
@@ -498,12 +489,11 @@ export async function verifyAgentRepoState(input) {
         if (reason) return { ...result, verified: false, skipReason: reason };
       }
       const { recordCompletionCleanup } = await import('../cos/cosAgentLifecycle.js');
-      if (input.agentState.metadata?.completionCleanup?.version === 1) {
+      if (input.agentState.metadata?.completionCleanup?.version === COMPLETION_RECEIPT_VERSION) {
         // A deferred receipt releases held chain stages to the normal replay,
         // whose later verification pass settles the task after they finish.
         const recorded = await recordCompletionCleanup(input.agentId, input.agentState.startedAt, {
-          stages: { worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification',
-            ...(input.deferTaskSettlement && { taskSettlement: 'after-completion-stages' }) } } });
+          stages: { [COMPLETION_STAGE.WORKTREE]: verifiedRepositoryWorktreeStage(input.deferTaskSettlement) } });
         if (!recorded) return { ...result, verified: false, skipReason: 'cleanup-ledger-settlement-unverified' };
       }
       if (input.manualCleanupOnly) {
@@ -568,7 +558,7 @@ export async function recheckAgentCleanup(agentId, taskId) {
   if (verificationRuns.has(agentId) || getDeliveryActivity(agentId)) return { ok: false, reason: 'cleanup-already-running' };
   if (!manualCleanupProvenanceValid(agent)) return { ok: true, verified: false, reasons: ['cleanup-provenance-unverified'] };
   if (manualSwarmContinuationPending(agent)) return { ok: true, verified: false, reasons: ['swarm-continuation-pending'] };
-  const mode = manualCompletionMode(agent);
+  const mode = manualCompletionMode(agent.metadata?.completionCleanup);
   if (!mode) return { ok: true, verified: false, reasons: ['completion-stages-pending'] };
   const recheckCleanup = async ({ requireCapture = true } = {}) => {
     const [currentTask, currentAgent] = await Promise.all([getTaskById(taskId), getAgentRecord(agentId)]);
@@ -577,12 +567,12 @@ export async function recheckAgentCleanup(agentId, taskId) {
     if (!manualCleanupProvenanceValid(currentAgent)) throw new Error('cleanup-provenance-unverified');
     if (manualSwarmContinuationPending(currentAgent)) throw new Error('swarm-continuation-pending');
     // A held run never settles here, even if its stages finish concurrently.
-    const current = manualCompletionMode(currentAgent);
+    const current = manualCompletionMode(currentAgent.metadata?.completionCleanup);
     if (!current || (mode === 'ready' && current !== 'ready')) throw new Error('completion-stages-pending');
     if (requireCapture && currentAgent.metadata?.checkoutCapture?.status !== 'captured') throw new Error('checkout-capture-unverified');
   };
   const result = await manualCleanupContext.run(true, () => verifyAgentRepoState({ agentId, agentState: agent, task, success: agent.result.success === true,
-    prExpected: isTruthyMeta(task.metadata?.openPR), manualCleanupOnly: true, recheckCleanup,
+    manualCleanupOnly: true, recheckCleanup,
     deferTaskSettlement: mode === 'repository-held' }));
   if (result.skipReason === 'cleanup-owner-changed') return { ok: false, reason: result.skipReason };
   const reasons = [...new Set([result.skipReason, ...(result.branches || []).map(row => row.skipReason)].filter(Boolean))];
@@ -718,7 +708,7 @@ async function resumeReleasedCompletion(agentId) {
   const originalTask = task || snapshot || { id: agent.taskId };
   const result = await verifyAgentRepoState({ agentId, agentState: current, task: originalTask,
     ...(snapshot && { originTaskAbsent: true }),
-    success: current.result?.success === true, prExpected: isTruthyMeta(originalTask?.metadata?.openPR) });
+    success: current.result?.success === true });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
   await verifyReleasedSynchronization(settled);
@@ -757,7 +747,7 @@ async function resumeCompletedDeliveryParent(task) {
     if (!original || original.status !== 'completed') return;
     const verified = await verifyAgentRepoState({ agentId: m.sourceAgentId, agentState: parent,
       task: { ...original, metadata: { ...original.metadata, reviewLoopPRUrl: m.reviewLoopPRUrl } },
-      success: true, prExpected: true });
+      success: true, prProbeFallback: 'force-branch' });
     if (verified.verified) {
       const { recordRepoStateVerification } = await import('../cos/cosAgentLifecycle.js');
       await recordRepoStateVerification(m.sourceAgentId, { status: 'completed', deliveryVerified: true,
@@ -1115,9 +1105,6 @@ async function settleTasklessCompletionAudit(agent, { readable }) {
     checkedAt: new Date().toISOString(), reasons: [resumed?.skipReason || 'task-unavailable'] });
 }
 
-const completionPrExpected = (task, agent) => isTruthyMeta(task.metadata?.openPR) || !!task.metadata?.reviewLoopPRUrl
-  || !!agent.metadata?.reviewLoopMergeTarget?.url;
-
 async function verifyAndReplayCompletion(agent, task) {
   const { getAgentRecord } = await import('../cos/cosAgentLifecycle.js');
   const { replayAgentCompletionCleanup } = await import('./agentCompletionCleanup.js');
@@ -1125,7 +1112,7 @@ async function verifyAndReplayCompletion(agent, task) {
   await replayAgentCompletionCleanup(agent).catch(deferCleanup);
   const refreshed = await getAgentRecord(agentIdOf(agent)).catch(() => null) || agent;
   await verifyAgentRepoState({ agentId: agentIdOf(refreshed), agentState: refreshed, task,
-    success: refreshed.result?.success === true, prExpected: completionPrExpected(task, refreshed) })
+    success: refreshed.result?.success === true, prProbeFallback: 'sweep-review-target' })
     .catch(error => emitLog('warn', `Completion recovery deferred for ${refreshed.id}: ${error.message}`, { agentId: refreshed.id }));
   const updated = await getAgentRecord(agentIdOf(refreshed)).catch(() => null);
   if (updated) await replayAgentCompletionCleanup(updated)
@@ -1261,7 +1248,7 @@ async function verifyRunBranches(input) {
       results.push(await holdBranch(branch, 'claim-checkout-identity-unverified'));
       continue;
     }
-    results.push({ branch, ...await verifyAgentBranchState({ ...input, prExpected: true,
+    results.push({ branch, ...await verifyAgentBranchState({ ...input, prProbeFallback: 'force-branch',
       agentState: { ...input.agentState, metadata: { ...meta, isWorktree: true,
         worktreeBranch: branch, sourceWorkspace, workspacePath: original?.path ?? null } },
     }) });
@@ -1270,13 +1257,24 @@ async function verifyRunBranches(input) {
     issues: results.flatMap(result => result.issues), skipReason: null };
 }
 
-async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected = false, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup, manualCleanupOnly = false }) {
-  const metadata = agentState?.metadata || {};
+function resolvePrProbeIntent({ task, metadata, staysOpen, originalPrUrl, originTaskAbsent, prExpected, prProbeFallback }) {
+  if (staysOpen) return { kind: 'skip' };
+  if (originalPrUrl) return { kind: 'exact-target', url: originalPrUrl };
+
+  const taskRequestsPr = isTruthyMeta(task?.metadata?.openPR);
+  // The saved task can restore a PR request the caller did not carry through.
+  const requested = originTaskAbsent ? prExpected || taskRequestsPr : prExpected ?? taskRequestsPr;
   // Claim prompts own publication even when the generic openPR toggle is off.
-  // Resumed claims are already worktree runs, so they bypass the swarm loop
-  // that supplies this expectation. Skipping their forge lookup turns a merged
-  // cleanup hold into another provider retry with no delivery evidence.
-  prExpected ||= hasClaimFlowContract(task) || isTruthyMeta(metadata.configClaimFlow);
+  const claimOwnsPublication = hasClaimFlowContract(task) || isTruthyMeta(metadata.configClaimFlow);
+  // The sweep uses even an unparseable review target as a hint to look up the branch.
+  const sweepReviewHint = prProbeFallback === 'sweep-review-target'
+    && (task?.metadata?.reviewLoopPRUrl || metadata.reviewLoopMergeTarget?.url);
+  if (requested || claimOwnsPublication || sweepReviewHint || prProbeFallback === 'force-branch') return { kind: 'branch' };
+  return { kind: 'skip' };
+}
+
+async function verifyAgentBranchState({ agentId, task, agentState, success, prExpected, prProbeFallback, cleanupWarnings = [], originTaskAbsent = false, recheckCleanup, recordCleanup, manualCleanupOnly = false }) {
+  const metadata = agentState?.metadata || {};
   const branchName = metadata.worktreeBranch || null;
   const sourceWorkspace = metadata.sourceWorkspace || null;
   const appId = task?.metadata?.app || null;
@@ -1294,7 +1292,6 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     cleanupWarningCount: cleanupWarnings?.length || 0,
     prCompletion: resolvePrCompletion(task?.metadata),
     leaveOpen: leavesPrForHuman(task),
-    prExpected,
     branchName,
     sourceWorkspace,
   };
@@ -1328,17 +1325,18 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     ? followUp.metadata.reviewLoopPRUrl : null;
   const originalPrUrl = [metadata.reviewLoopMergeTarget?.url, metadata.recoveryMergeTarget?.url,
     task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url, followUpPrUrl].find(value => parsePullRequestUrl(value));
-  const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
+  const expectation = resolveRepoStateExpectation({ ...structural, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
   const hold = await resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchName, worktreePath });
   if (hold) return blockWith(hold.reason, { record: hold.record });
+  const prProbe = resolvePrProbeIntent({ task, metadata, staysOpen: expectation.staysOpen, originalPrUrl, originTaskAbsent, prExpected, prProbeFallback });
   const observed = await probeRepoState({
     sourceWorkspace,
     branchName,
     worktreePath,
     branchShouldBeGone: !expectation.staysOpen,
-    prExpected: expectation.prExpected, originalPrUrl,
+    prProbe,
   }).catch(err => {
     emitLog('warn', `🔎 Repo-state probe failed for ${agentId}: ${err.message}`, { agentId, branchName });
     return null;
@@ -1350,7 +1348,7 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
     return settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen: expectation.staysOpen, recheckCleanup });
   }
   if (originTaskAbsent) return skipped('removed-task-checkout-still-present');
-  const issues = classifyRepoStateIssues(expectation, { ...observed, branchName });
+  const issues = classifyRepoStateIssues({ ...expectation, prExpected: prProbe.kind !== 'skip' }, { ...observed, branchName });
   if (issues.length === 0) {
     // A run where some probe could not be read has not been verified — it has been
     // partially checked. Say so rather than logging a firewalled host as a clean
@@ -1556,10 +1554,12 @@ async function settleUndeliveredBranch({ agentId, app, sourceWorkspace, branchNa
   return blockWith(review?.reason || delivery.reason || 'completed-review-target-unverified', { issues, observed });
 }
 
-async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record }, retirement) {
+async function fileDivergenceRecovery({ agentId, task, appId, metadata, sourceWorkspace, branchName, worktreePath, observed, issues, record, blockWith, agentState }, retirement) {
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) {
     emitLog('info', `🔎 Diverged branch ${branchName} after ${agentId} deferred to scheduled branch-reconcile`, { agentId, branchName, taskId: task?.id });
+    // Scheduling reconciliation preserves the checkout, but does not discharge its owner's cleanup obligation.
+    if (agentState?.result?.cleanupPending === true) return blockWith('deferred-to-branch-reconcile', { issues, observed });
     if (record) await record('verified', 'deferred-to-branch-reconcile', { unresolved: 0 });
     return { verified: true, skipReason: 'deferred-to-branch-reconcile', issues, observed, recoveryTaskId: null };
   }
@@ -1598,9 +1598,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
     return { reason: 'retirement-exact-inventory-unavailable' };
   }
   const tree = matches[0];
-  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   const release = { branch: branchName, path: worktreePath || tree.path, head: tree.head,
-    ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
   const { recordBranchReconcileOutcome, recordBranchReconcileCheckout } = await import('../branchReconcileOutcome.js');
   const outcome = await recordBranchReconcileCheckout(app.id, release);

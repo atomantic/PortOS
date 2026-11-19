@@ -29,6 +29,8 @@ function withSavedProviderReview(context, run) {
       // A temporary install path preserves test-only module paths without
       // weakening the CoS worktree's live-data protection.
       await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+      // server/lib/sharedSchemas.js imports the repo-root lib/pm2ProcessName.js, so the install shape needs both trees.
+      await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
       const harness = join(root, 'harness.cjs');
       await writeFile(join(root, 'context.txt'), 'example surrounding source');
       await writeFile(harness, `
@@ -83,7 +85,8 @@ function withSavedProviderReview(context, run) {
             if (failure) reject(failure);
             else resolve({ code, stdout, stderr });
           });
-          child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
+          // Older stored prompts send request fields the bridge no longer knows (#16818); it must ignore them, not reject.
+          child.stdin.end(JSON.stringify({ retiredRequestField: true, ...request }));
         });
       };
       context.signal.throwIfAborted();
@@ -99,22 +102,18 @@ function withSavedProviderReview(context, run) {
   return completed;
 }
 
-it('runs saved API review defaults and attribution from the standalone bridge without bootstrapping PortOS', context => withSavedProviderReview(context, async ({ root, data, bodies, runReview }) => {
+it('runs saved API review defaults from the standalone bridge without bootstrapping PortOS', context => withSavedProviderReview(context, async ({ root, data, bodies, runReview }) => {
   const ledger = { totalSessions: 5, totalMessages: 0, totalToolCalls: 0, totalTokens: { input: 40, output: 20 },
     byProvider: {}, byModel: {}, dailyActivity: {}, monthlyActivity: {}, hourlyActivity: Array(24).fill(0), blockEvents: [], lastUpdated: null };
   const originalLedger = JSON.stringify(ledger);
   await writeFile(join(data, 'usage.json'), originalLedger);
   const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
-  // A resumed claim may finish before attribution has been initialized (#14102).
   const noState = await runReview(request);
   expect(noState.code, noState.stderr).toBe(0);
   expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
   const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
   expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
-  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
   expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
-  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root, signal: context.signal });
-  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
   for (const [index, model] of ['review-model', 'default-model'].entries()) {
     const result = await runReview(index ? { ...request, inheritDefaults: false } : request);
     expect(result.code, result.stderr).toBe(0);
@@ -123,9 +122,6 @@ it('runs saved API review defaults and attribution from the standalone bridge wi
     expect(JSON.parse(bodies[index])).not.toHaveProperty('tools');
   }
   expect(bodies).toHaveLength(2);
-  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\n');
-  const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root, signal: context.signal });
-  expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
   // Three separate bridge processes produce three request records while the
   // long-lived server's ledger stays byte-for-byte unchanged.
   expect(await readFile(join(data, 'usage.json'), 'utf8')).toBe(originalLedger);
@@ -155,23 +151,13 @@ it('runs saved API review defaults and attribution from the standalone bridge wi
 
 }), 15000);
 
-it('keeps the verdict and a zero exit when the attribution receipt cannot be written (#16571)', context => withSavedProviderReview(context, async ({ root, runReview }) => {
-  // A directory at the receipt path makes the append fail; attribution is best-effort and must never block a review.
-  await mkdir(join(root, '.git/portos-local-review-models'));
-  const result = await runReview({ backend: 'provider:example-cli', model: 'review-model', diff: 'diff --git a/example.js b/example.js' });
-  expect(result.code, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, verdict: 'clean', findings: 'NO FINDINGS' });
-  expect(JSON.parse(result.stdout)).not.toHaveProperty('attributionError');
-}), 15000);
-
-it('runs ordinary and claim CLI reviews in scratch with the explicit model', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+it('runs ordinary and claim CLI reviews in scratch with the explicit model', context => withSavedProviderReview(context, async ({ runReview }) => {
   const request = { backend: 'provider:example-cli', model: 'review-model', diff: 'diff --git a/example.js b/example.js' };
   for (const review of [request, { ...request, kind: 'claim-review' }]) {
     const result = await runReview(review);
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', verdict: 'clean', findings: 'NO FINDINGS' });
   }
-  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\nreview-model\n');
 }), 15000);
 
 it('refuses public-comment screening without an enforced CLI reviewer mode', context => withSavedProviderReview(context, async ({ root, runReview }) => {
@@ -179,7 +165,6 @@ it('refuses public-comment screening without an enforced CLI reviewer mode', con
   expect(result.code).not.toBe(0);
   expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
   expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
-  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
 }), 15000);
 
 it('classifies a CLI command-permission refusal without exposing its private diagnostics', context => withSavedProviderReview(context, async ({ root, runReview }) => {
@@ -188,12 +173,12 @@ it('classifies a CLI command-permission refusal without exposing its private dia
   expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED' });
   expect(result.stderr).toContain('Reviewer configuration fault (REVIEWER_COMMAND_PERMISSION_DENIED) for provider:example-refusal');
   expect(result.stdout + result.stderr).not.toContain('synthetic-private');
-  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
 }), 15000);
 
 it('shuts down the Codex app-server child and cleans up scratch resources after successful and timed-out reviews', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-codex-test-'));
   await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+  await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
 
   const binDir = join(root, 'bin');
   await mkdir(binDir);
@@ -525,6 +510,7 @@ it('projects malformed diagnostics through the bridge and health store, clearing
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
   try {
     await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
     await mkdir(join(root, 'data'));
     await writeFile(join(root, 'data/providers.json'), JSON.stringify({ activeProvider: 'example-reviewer', providers: {
       'example-reviewer': { id: 'example-reviewer', name: 'Example Reviewer', type: 'api', enabled: true,
@@ -583,6 +569,7 @@ it('supports --report-failure and --active-group directly via the standalone bri
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-report-test-'));
   try {
     await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
     const data = join(root, 'data');
     await mkdir(data);
     await writeFile(join(data, 'settings.json'), JSON.stringify({

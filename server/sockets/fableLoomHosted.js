@@ -13,7 +13,6 @@ import {
   abortHostedTurn,
   acknowledgeHostedSpeech,
   endHostedSession,
-  getHostedSession,
   processHostedUtterance,
   releaseHostedSpeechOutput,
   sanitizeHostedSession,

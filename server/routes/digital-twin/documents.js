@@ -9,10 +9,10 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../../lib/queryValidation.js';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest, isPaginationRequested, paginateArray } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
   createDocumentInputSchema,
   updateDocumentInputSchema,

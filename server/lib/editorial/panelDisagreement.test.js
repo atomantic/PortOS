@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  PANEL_PERSONAS,
   PANEL_PERSONA_IDS,
   PANEL_QUESTION_IDS,
   CONSENSUS_THRESHOLD,

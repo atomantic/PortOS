@@ -6,10 +6,14 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination, brainJournalAppendBodySchema, brainJournalReplaceBodySchema } from '../lib/validation.js';
-import { dailyLogSettingsSchema, activityDigestSettingsSchema, brainDailyLogListQuerySchema } from '../lib/brainValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import {
+  dailyLogSettingsSchema, activityDigestSettingsSchema, brainDailyLogListQuerySchema,
+  brainJournalAppendBodySchema, brainJournalReplaceBodySchema
+} from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
 import * as activityDigest from '../services/activityDigest.js';
+import { parsePagination } from '../lib/queryValidation.js';
 
 const router = Router();
 

@@ -189,6 +189,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const promptTrace = {};
     const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
       promptTrace,
+      claimDependencies: claimCheckout?.dependencies,
       providerType: provider.type,
       providerId: provider.id,
       providerCommand: provider.command,
@@ -277,7 +278,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       await context.cleanupOnError('PortOS is shutting down');
       return null;
     }
-    const { runId, registeredAgent } = await withBackupAssetPublication(async () => {
+    const { runId } = await withBackupAssetPublication(async () => {
       if (!existsSync(agentDir)) {
         await ensureDir(agentDir);
       }
@@ -296,7 +297,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         injectedMemories,
         executionOptions: executionAttribution,
       });
-      const registeredAgent = await registerAgent(agentId, task.id, buildAgentRegistration({
+      await registerAgent(agentId, task.id, buildAgentRegistration({
         task,
         provider,
         instanceId,
@@ -325,7 +326,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         resolvedAppName,
         injectedMemories,
       }));
-      return { runId, registeredAgent };
+      return { runId };
     });
 
     if (claimCheckout) {
@@ -357,8 +358,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         lastSpawnedAt: new Date().toISOString(),
         ...buildClaim(instanceId),
       },
-    }, task.taskType || 'user', { expectedStatus: expectedDispatchStatus,
-      expectedTask: { metadata: expectedDispatchMetadata }, spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt: registeredAgent?.startedAt } })
+    }, task.taskType || 'user', { expectedStatus: expectedDispatchStatus, expectedTask: { metadata: expectedDispatchMetadata } })
       .catch(err => {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;

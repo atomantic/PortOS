@@ -28,8 +28,8 @@ vi.mock('../storyboards/index.js', () => ({ getStoryboard: vi.fn(async () => nul
 const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
 const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
-const { validateRequest } = await import('../../lib/validation.js');
-const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideo/musicVideoValidation.js');
+const { validateRequest } = await import('../../lib/validateRequest.js');
+const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));

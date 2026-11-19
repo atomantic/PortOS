@@ -13,13 +13,18 @@ import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
-  EXTENSION_MIME_MAP, isPathInsideDir, saveBase64Upload, serveLocalFile,
-  unlinkGuarded, importFileToDir,
+  pathExists, PATHS, isPathInsideDir, unlinkGuarded,
 } from '../lib/fileUtils.js';
+import {
+  sanitizeFilename, getFileExtension, getMimeType, EXTENSION_MIME_MAP,
+} from '../lib/mimeTypes.js';
+import {
+  saveBase64Upload, serveLocalFile, importFileToDir,
+} from '../lib/uploads.js';
 import { optionalUpload } from '../lib/multipart.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
-import { validateRequest, uploadRequestSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { uploadRequestSchema } from '../lib/uploadValidation.js';
 
 const UPLOADS_DIR = PATHS.uploads;
 

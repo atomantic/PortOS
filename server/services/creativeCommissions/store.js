@@ -551,7 +551,7 @@ export function commissionStore() {
 /**
  * Assert a schedule composes into a cron the scheduler will honor. Throws
  * ERR_VALIDATION otherwise (surfaced as HTTP 400). Kept here — not in the Zod
- * schema — so validation.js stays a leaf free of the eventScheduler import.
+ * schema — so the validation modules stay free of the eventScheduler import.
  */
 export function assertValidSchedule(schedule) {
   const recurrence = schedule?.kind === 'RECURRENCE' ? schedule.recurrence : null;

@@ -6,7 +6,7 @@
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -17,7 +17,7 @@ vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   isMuscriptorRuntimeReady: vi.fn(async () => true),
   resolveMuscriptorPython: vi.fn(() => 'python3'),
 }));
-vi.mock('../lib/fileUtils.js', async importOriginal => {
+vi.mock('../lib/uploads.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, importFileToDir: vi.fn(actual.importFileToDir) };
 });
@@ -31,8 +31,11 @@ vi.mock('../lib/sidecarProcess.js', () => ({
 }));
 
 const { startMidiTranscription, attachMidiTranscriptionSseClient, getActiveMidiTranscriptionJobId } = await import('./audioMidiTranscription.js');
-const { importFileToDir } = await import('../lib/fileUtils.js');
+const { importFileToDir } = await import('../lib/uploads.js');
 const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
+const { runSidecarProcess } = await import('../lib/sidecarProcess.js');
+const { findFfmpeg, runFfmpegProcess } = await import('../lib/ffmpeg.js');
+const ffmpeg = await findFfmpeg();
 
 const dirs = [];
 afterAll(() => Promise.all(dirs.map(dir => rm(dir, { recursive: true, force: true }))));
@@ -123,6 +126,37 @@ describe('MIDI transcription backup admission', () => {
       finishRow();
       (await cut)();
       await job.done;
+      job.close();
+    }
+  });
+});
+
+describe('MIDI decoding with FFmpeg', () => {
+  it.skipIf(!ffmpeg)('passes a real AAC/M4A source to MuScriptor as a decoded WAV and removes the scratch file', async () => {
+    const { audioPath, destDir } = await scratch();
+    const source = audioPath.replace(/\.wav$/, '.m4a');
+    const encode = await runFfmpegProcess({
+      bin: ffmpeg,
+      args: ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.1', '-c:a', 'aac', source],
+    });
+    expect(encode).toEqual({ ok: true });
+    let wavPath;
+    runSidecarProcess.mockResolvedValueOnce({ ok: false, stdout: 'AUDIO_DECODE_REQUIRED\n' });
+    runSidecarProcess.mockImplementationOnce(async ({ args }) => {
+      wavPath = args[args.indexOf('--audio') + 1];
+      const decoded = await readFile(wavPath);
+      expect(decoded.toString('ascii', 0, 4)).toBe('RIFF');
+      expect(decoded.toString('ascii', 8, 12)).toBe('WAVE');
+      expect(decoded.length).toBeGreaterThan(100);
+      await writeFile(args[args.indexOf('--output') + 1], 'synthetic midi');
+      return { ok: true, stdout: 'RESULT' };
+    });
+    const { jobId } = await startMidiTranscription({ audioPath: source, destDir });
+    const job = observeJob(jobId);
+    try {
+      await expect(job.done).resolves.toMatchObject({ type: 'complete' });
+      await vi.waitFor(() => expect(existsSync(wavPath)).toBe(false));
+    } finally {
       job.close();
     }
   });

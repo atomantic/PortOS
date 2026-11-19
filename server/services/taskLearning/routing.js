@@ -8,7 +8,7 @@
  * these mutate the store.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS, ENVIRONMENTAL_ERROR_CATEGORIES } from './store.js';
+import { loadLearningData, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS, ENVIRONMENTAL_ERROR_CATEGORIES } from './store.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
 /**

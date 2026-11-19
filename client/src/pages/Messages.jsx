@@ -1,6 +1,6 @@
 import { useNavigate, useParams } from 'react-router';
 import { Mail, RefreshCw, Settings, MessageSquare, MessageCircle, Users } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
@@ -9,17 +9,20 @@ import { useValidTab } from '../hooks/useValidTab';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 
-import InboxTab from '../components/messages/InboxTab';
-import ConfigTab from '../components/messages/ConfigTab';
-import DraftsTab from '../components/messages/DraftsTab';
-import SyncTab from '../components/messages/SyncTab';
-import IMessageTab from '../components/messages/IMessageTab';
-import SignalTab from '../components/messages/SignalTab';
-import BeeperTab from '../components/messages/BeeperTab';
-import ContactsTab from '../components/messages/ContactsTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 import { pluralize } from '../lib/textUtils.js';
+import { lazyWithReload } from '../utils/lazyWithReload';
+
+// Each tab is its own chunk so the first view downloads one tab, not all eight.
+const InboxTab = lazyWithReload(() => import('../components/messages/InboxTab'));
+const ConfigTab = lazyWithReload(() => import('../components/messages/ConfigTab'));
+const DraftsTab = lazyWithReload(() => import('../components/messages/DraftsTab'));
+const SyncTab = lazyWithReload(() => import('../components/messages/SyncTab'));
+const IMessageTab = lazyWithReload(() => import('../components/messages/IMessageTab'));
+const SignalTab = lazyWithReload(() => import('../components/messages/SignalTab'));
+const BeeperTab = lazyWithReload(() => import('../components/messages/BeeperTab'));
+const ContactsTab = lazyWithReload(() => import('../components/messages/ContactsTab'));
 
 // Presentation per tab id. The manifest (`tabGroup: 'messages'`) owns
 // id/label/order — this page owns how each tab looks and behaves.
@@ -170,7 +173,9 @@ export default function Messages() {
       <TabPills tabs={visibleTabs} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Messages sections" />
 
       <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-4'}`}>
-        {renderTabContent()}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading messages tab" cards={3} sidebar={false} />}>
+          {renderTabContent()}
+        </Suspense>
       </div>
     </div>
   );

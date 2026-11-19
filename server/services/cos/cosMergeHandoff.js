@@ -15,6 +15,7 @@ import { followUpRoster } from '../mergeFollowUpPolicy.js';
 import { readReviewEvidence } from '../mergeReviewEvidence.js';
 import { resolve } from 'node:path';
 import { execGh } from '../github.js';
+import { readPullRequest, isOpenSameRepoPr } from '../prProbe.js';
 import { resolveForgeExecOptions } from '../forgeExecOptions.js';
 import { getOriginInfo } from '../../lib/gitRemote.js';
 import { parsePullRequestUrl } from '../../lib/gitForge.js';
@@ -95,14 +96,11 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
   const { getAppById } = await import('../apps.js');
   const app = ownerTask.metadata?.app ? await getAppById(ownerTask.metadata.app).catch(() => null) : null;
   if (ownerTask.metadata?.app && (!app || !samePath(app.repoPath, target.repoPath))) return 'review-app-changed';
-  const options = await resolveForgeExecOptions(target.repoPath, { forgeAccount: app?.forgeAccount });
-  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', repoSpec,
-    '--json', 'number,state,isDraft,isCrossRepository,headRefName,headRefOid'], undefined,
-  { cwd: options.cwd, env: options.env }).catch(() => null);
-  const view = safeJSONParse(raw, null);
-  if (!isPlainObject(view) || view.number !== pr.number) return 'review-pr-unreadable';
-  if (view.state !== 'OPEN' || view.isDraft !== false || view.isCrossRepository !== false) return 'review-pr-held';
-  if (view.headRefName !== target.branch || view.headRefOid !== target.headSha) return 'review-head-moved';
+  const view = await readPullRequest(pr.number, 'number,state,isDraft,isCrossRepository,headRefName,headRefOid',
+    { repoPath: target.repoPath, forgeAccount: app?.forgeAccount, repoSpec });
+  if (!view || view.number !== pr.number) return 'review-pr-unreadable';
+  if (!isOpenSameRepoPr(view)) return 'review-pr-held';
+  if (!isOpenSameRepoPr(view, { branch: target.branch, head: target.headSha })) return 'review-head-moved';
   if (requireCheckout) {
     if (!await checkoutAtHead(workspacePath, target.branch, target.headSha, target.repository, repositoryKey)) return 'review-checkout-changed';
     const status = await execGit(['status', '--porcelain=v1', '--untracked-files=all'], workspacePath).catch(() => null);
@@ -125,15 +123,15 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
 const lowerLogin = (value) => String(value ?? '').replace(/^@+/, '').toLowerCase();
 
 // Retries of one scheduler dispatch are one owner, not competing claims. Use
-// the persisted budget epoch and ordinal, never recency alone. Inspection still
-// reads every historical completion policy and the current task below.
+// the recorded spawn ordinals of one task on one instance, never recency alone.
+// Inspection still reads every historical completion policy and the current
+// task below.
 function completedRetryOwner(owners, branch) {
   if (owners.length === 1) return owners[0];
   const sorted = [...owners].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
   const first = sorted[0];
-  const epoch = first?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
   const instance = first?.metadata?.instanceId;
-  if (!epoch || !instance || instance === 'unknown' || !first.taskId) return null;
+  if (!instance || instance === 'unknown' || !first.taskId) return null;
   let prior;
   for (const owner of sorted) {
     const dispatch = owner.metadata?.completionTaskDispatch;
@@ -143,7 +141,7 @@ function completedRetryOwner(owners, branch) {
     const ordinal = typeof recorded === 'number' || (typeof recorded === 'string' && /^\d+$/.test(recorded)) ? Number(recorded) : NaN;
     if (owner.status !== 'completed' || owner.taskId !== first.taskId
       || owner.metadata?.instanceId !== instance || dispatch?.taskId !== first.taskId
-      || dispatch.spawnBudgetEpoch !== epoch || !Number.isSafeInteger(ordinal) || ordinal < 1
+      || !Number.isSafeInteger(ordinal) || ordinal < 1
       || !Number.isFinite(Date.parse(owner.startedAt)) || !(Date.parse(owner.completedAt) >= Date.parse(owner.startedAt))
       || (prior && (ordinal !== prior.ordinal + 1 || Date.parse(owner.startedAt) < Date.parse(prior.owner.completedAt)))) return null;
     // Recovery reservations and attempts belong to the execution that spent
@@ -167,11 +165,8 @@ async function forgeReviewSubmittedOnHead(target, logins, forgeAccount) {
   const pr = parsePullRequestUrl(target.prUrl);
   const repoSpec = pr && githubRepoSpec({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` });
   if (!repoSpec) return null;
-  const options = await resolveForgeExecOptions(target.repoPath, { forgeAccount });
-  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', repoSpec, '--json', 'reviews'], undefined,
-    { cwd: options.cwd, env: options.env }).catch(() => null);
-  const view = safeJSONParse(raw, null);
-  if (!isPlainObject(view) || !Array.isArray(view.reviews)) return null;
+  const view = await readPullRequest(pr.number, 'reviews', { repoPath: target.repoPath, forgeAccount, repoSpec });
+  if (!view || !Array.isArray(view.reviews)) return null;
   return view.reviews.some((review) => logins.includes(lowerLogin(review?.author?.login))
     && !['PENDING', 'DISMISSED'].includes(String(review?.state || '').toUpperCase())
     && String(review?.commit?.oid || '').toLowerCase() === target.headSha);
@@ -295,13 +290,10 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
   const threshold = app.mergeHandoffMinQueuedRuns;
   if (!Number.isSafeInteger(threshold) || threshold < 1) return refuse('ci-backlog-policy-disabled');
 
-  const forgeExec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
-  const raw = await execGh([
-    'pr', 'view', String(pr.number), '--repo', repoSpec,
-    '--json', 'number,state,isDraft,isCrossRepository,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup',
-  ], undefined, { cwd: forgeExec.cwd, env: forgeExec.env, backoffKey: repoSpec }).catch(() => null);
-  const view = raw === null ? null : safeJSONParse(raw, null);
-  if (!isPlainObject(view) || view.number !== pr.number) return refuse('pr-unreadable');
+  const view = await readPullRequest(pr.number,
+    'number,state,isDraft,isCrossRepository,headRefName,headRefOid,mergeable,reviewDecision,statusCheckRollup',
+    { repoPath: app.repoPath, forgeAccount: app.forgeAccount, repoSpec });
+  if (!view || view.number !== pr.number) return refuse('pr-unreadable');
   if (String(view.state || '').toUpperCase() !== 'OPEN') return refuse('pr-not-open');
   if (view.isDraft !== false) return refuse('pr-draft');
   if (view.isCrossRepository !== false) return refuse('pr-cross-repository');
@@ -331,6 +323,7 @@ export async function handoffPendingMerge({ agentId, prUrl, headSha, worktreePat
 
   // Read server-side evidence, never a caller's assertion that CI is busy.
   // Unknown/unsupported backlog keeps the original owner waiting.
+  const forgeExec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
   const backlogRaw = await execGh(['api', '--hostname', githubApiHost(pr.host),
     `repos/${pr.owner}/${pr.repo}/actions/runs?status=queued&per_page=1`], undefined,
   { cwd: forgeExec.cwd, env: forgeExec.env, backoffKey: repoSpec }).catch(() => null);

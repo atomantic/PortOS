@@ -26,7 +26,6 @@ export const COGNITIVE_MODULE = 'cognitive';
 // Moved to lib so route validation can enumerate the types without importing
 // this module — issue #4901.
 export { COGNITIVE_DRILL_TYPES } from '../lib/postDrillTypes.js';
-import { COGNITIVE_DRILL_TYPES } from '../lib/postDrillTypes.js';
 import { COGNITIVE_PAIR_CONSTRAINTS } from '../lib/postCognitiveConfig.js';
 
 const NBACK_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];

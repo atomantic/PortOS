@@ -14,6 +14,7 @@ import {
   serializeShippedHashes,
 } from './shippedPromptHashes.js';
 import { historicalPromptBodies, isShallowRepository } from './shippedPromptHistory.js';
+import { runMigrations } from '../run-migrations.js';
 
 const migrationsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(migrationsDir, '..', '..');
@@ -111,22 +112,72 @@ describe('reconcileShippedPrompts', () => {
     expect(read('data/prompts/stages/a.md')).toBe(NEW);
   });
 
-  it('skips a prompt missing from data/ or no longer shipped', async () => {
+  it('leaves a prompt that no longer ships alone', async () => {
     writeTable({
       'stages/a.md': { current: md5(NEW), retired: [md5(OLD)] },
       'stages/gone.md': { retired: [md5(OLD)] },
     });
+    write('data/prompts/stages/a.md', NEW);
     write('data/prompts/stages/gone.md', OLD);
     const result = await reconcileShippedPrompts({ rootDir });
-    expect(result).toEqual({ updated: [], customized: [] });
-    expect(existsSync(join(rootDir, 'data/prompts/stages/a.md'))).toBe(false);
+    expect(result).toEqual({ updated: [], seeded: [], configAdded: [], customized: [] });
     expect(read('data/prompts/stages/gone.md')).toBe(OLD);
+  });
+
+  it('seeds a shipped prompt missing from an existing data/prompts, never creating data/prompts itself', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect((await reconcileShippedPrompts({ rootDir })).seeded).toEqual([]);
+    expect(existsSync(join(rootDir, 'data/prompts'))).toBe(false);
+
+    write('data.reference/prompts/_partials/p.md', NEW);
+    writeTable({
+      'stages/a.md': { current: md5(NEW), retired: [md5(OLD)] },
+      '_partials/p.md': { current: md5(NEW), retired: [] },
+    });
+    write('data/prompts/stages/other.md', CUSTOM);
+    const result = await reconcileShippedPrompts({ rootDir });
+    expect(result.seeded).toEqual(['_partials/p.md', 'stages/a.md']);
+    expect(read('data/prompts/stages/a.md')).toBe(NEW);
+    expect(read('data/prompts/_partials/p.md')).toBe(NEW);
+    expect(read('data/prompts/stages/other.md')).toBe(CUSTOM);
+  });
+
+  describe('stage-config.json seeding', () => {
+    const entry = (model) => ({ name: model, model });
+    const config = (stages, extra = {}) => `${JSON.stringify({ ...extra, stages }, null, 2)}\n`;
+    const installedConfig = () => JSON.parse(read('data/prompts/stage-config.json'));
+
+    beforeEach(() => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      write('data/prompts/stages/a.md', NEW);
+      write('data.reference/prompts/stage-config.json', config({ a: entry('heavy'), b: entry('light') }));
+    });
+
+    it('adds only absent entries and keeps an existing one untouched', async () => {
+      write('data/prompts/stage-config.json', config({ a: entry('custom') }, { note: 'kept' }));
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual(['b']);
+      expect(installedConfig()).toEqual({ note: 'kept', stages: { a: entry('custom'), b: entry('light') } });
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual([]);
+    });
+
+    it('creates the config when data/prompts has none', async () => {
+      await reconcileShippedPrompts({ rootDir });
+      expect(installedConfig().stages).toEqual({ a: entry('heavy'), b: entry('light') });
+    });
+
+    it('does not overwrite an unreadable installed config', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      write('data/prompts/stage-config.json', '{broken');
+      expect((await reconcileShippedPrompts({ rootDir })).configAdded).toEqual([]);
+      expect(read('data/prompts/stage-config.json')).toBe('{broken');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
+    });
   });
 
   it('is a no-op without a hash table', async () => {
     rmSync(join(rootDir, 'data.reference/prompts/shipped-hashes.json'));
     write('data/prompts/stages/a.md', OLD);
-    expect(await reconcileShippedPrompts({ rootDir })).toEqual({ updated: [], customized: [] });
+    expect(await reconcileShippedPrompts({ rootDir })).toEqual({ updated: [], seeded: [], configAdded: [], customized: [] });
     expect(read('data/prompts/stages/a.md')).toBe(OLD);
   });
 });
@@ -157,34 +208,43 @@ describe.skipIf(!historyAvailable)('every historically shipped body (full git hi
     expect(warn).not.toHaveBeenCalled();
   }, 60_000);
 
-  // The frozen numbered chain still runs over the oldest shipped bodies, and
-  // the reconciler then converges whatever it left behind.
-  it('runs the frozen prompt migration chain on a simulated old install', async () => {
+  // #16827 deleted the prompt migrations that only swapped a body, so an old
+  // install reaches today's bodies through the runner's reconcile step alone.
+  // Its ledger predates every prompt migration: the surviving prompt-hash
+  // migrations run for real, then the reconciler converges the rest.
+  it('converges an install whose ledger predates the deleted prompt migrations', async () => {
     linkReference();
     const live = await readReferencePromptHashes(repoRoot);
     const histories = historicalPromptBodies(repoRoot, Object.keys(live));
-    for (const [key, versions] of Object.entries(histories)) {
-      if (versions.length) write(`data/prompts/${key}`, versions.at(-1).body);
-    }
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seeded = Object.entries(histories).filter(([, versions]) => versions.length);
+    for (const [key, versions] of seeded) write(`data/prompts/${key}`, versions.at(-1).body);
+    // A skill template: only the reconciler ever touches it now.
+    const [customizedKey] = seeded.find(([key, versions]) => key.startsWith('skills/') && versions.length > 1);
+    write(`data/prompts/${customizedKey}`, CUSTOM);
 
-    const chain = readdirSync(migrationsDir)
+    const survivors = readdirSync(migrationsDir)
       .filter((file) => /^\d.*\.js$/.test(file) && !file.endsWith('.test.js'))
-      .filter((file) => readFileSync(join(migrationsDir, file), 'utf8').includes('makePromptReplaceMigration'))
+      .filter((file) => /ACCEPTED_OLD_MD5|NEW_SHIPPED_MD5|makePromptReplaceMigration/.test(readFileSync(join(migrationsDir, file), 'utf8')))
       .sort();
-    expect(chain.length).toBeGreaterThan(90);
-    for (const file of chain) {
-      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
-      await (mod.default ?? mod).up({ rootDir });
+    expect(survivors).toEqual(expect.arrayContaining(['003-update-pipeline-stage-prompts.js', '005-shape-aware-arc-prompts.js']));
+    const chainDir = join(rootDir, 'migrations');
+    mkdirSync(chainDir);
+    for (const file of survivors) {
+      writeFileSync(join(chainDir, file), `export { default } from ${JSON.stringify(pathToFileURL(join(migrationsDir, file)).href)};\n`);
     }
-    await reconcileShippedPrompts({ rootDir });
+    // Nonempty, so this is an upgrade and not the fresh-install purge path.
+    write('data/migrations.applied.json', JSON.stringify(['001-earlier.js']));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    // 020 only knows the body 016 leaves behind, and 016 is not in this chain.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const behind = Object.entries(histories)
-      .filter(([key, versions]) => versions.length && md5(read(`data/prompts/${key}`)) !== live[key])
+    await expect(runMigrations({ rootDir, migrationsDir: chainDir })).resolves.toBe(survivors.length);
+
+    const behind = seeded
+      .filter(([key]) => key !== customizedKey && md5(read(`data/prompts/${key}`)) !== live[key])
       .map(([key]) => key);
     expect(behind).toEqual([]);
-    expect(warn).not.toHaveBeenCalled();
+    expect(read(`data/prompts/${customizedKey}`)).toBe(CUSTOM);
   }, 60_000);
 });
 

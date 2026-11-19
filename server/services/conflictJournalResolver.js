@@ -13,7 +13,6 @@
  */
 
 import { existsSync } from 'fs';
-import { isSafeRecordId } from '../lib/validation.js';
 import { ABSENT_MEANS_FALSE_FIELDS, conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
@@ -29,6 +28,7 @@ import { restoreDeck } from './decks.js';
 import { restoreStoryboard } from './storyboards/index.js';
 import { restoreLoom } from './fableLoom/index.js';
 import { codedError } from '../lib/codedError.js';
+import { isSafeRecordId } from '../lib/zodCompat.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';

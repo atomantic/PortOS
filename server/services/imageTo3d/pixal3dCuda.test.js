@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   PIXAL3D_CONDA_ENV,
-  PIXAL3D_RESOLUTIONS,
   PIXAL3D_STANDARD_MODE_MIN_VRAM_GB,
   PIXAL3D_HIGH_RES_MIN_VRAM_GB,
   PIXAL3D_NAF_FALLBACK_HELP,

@@ -8,7 +8,7 @@ import { Router } from 'express';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoDependencyRepairSchema, musicVideoRevisionStartSchema, musicVideoRevisionReleaseSchema, musicVideoAutoReviewStartSchema, musicVideoAutoReviewResumeSchema, musicVideoProductionStartSchema, musicVideoProductionResumeSchema, musicVideoAutonomousStartSchema, musicVideoAutonomousResumeSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { musicVideoDependencyRepairSchema, musicVideoRevisionStartSchema, musicVideoRevisionReleaseSchema, musicVideoAutoReviewStartSchema, musicVideoAutoReviewResumeSchema, musicVideoProductionStartSchema, musicVideoProductionResumeSchema, musicVideoAutonomousStartSchema, musicVideoAutonomousResumeSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { getDependencyImpact, startDependencyRepair, startRevision, resumeRevision, cancelRevision, releaseRevisionSection } from '../services/musicVideo/revisionService.js';
 import { startAutoReview, resumeAutoReview, stopAutoReview, cancelAutoReview } from '../services/musicVideo/autoReviewService.js';
 import { startProduction, resumeProduction, stopProduction, cancelProduction, getProduction } from '../services/musicVideo/productionService.js';

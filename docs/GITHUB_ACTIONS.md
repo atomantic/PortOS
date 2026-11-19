@@ -85,7 +85,6 @@ as composite actions under `.github/actions/`:
 | `test-memo` | `server`, `client`, `database`, `browser`, `windows-server` | The memo restore and its key lineage; jobs save with `steps.test-memo.outputs.key` |
 | `diff-base` | `server`, `client`, `windows-server` | `scripts/ci-base-sha.js` (the `impact` job wraps the same script in its stage diagnostics) |
 | `db-tools` | `database`, `browser` | The APT download cache and `scripts/ci-install-db-tools.sh` for a given `pg-major` |
-| `candidate-evidence` | the five test jobs | The frozen release-candidate evidence upload |
 
 Every `run:` step in an action names `shell: bash`, as composite actions
 require. On `windows-latest` that replaces the pwsh default for the server
@@ -189,6 +188,13 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
+**Gate-tooling suites ride owner paths (#16798).** The eight tests of the CI and
+pregate machinery (`TOOLING_TESTS`) can never earn a memo record, so `related`
+selection used to pick them for every diff. The planner now adds them only when a
+changed path matches `TOOLING_OWNER_RE`, and `planTestMemo` keeps one from the walk
+only when a changed source reaches its closure ([TEST_MEMO.md](./TEST_MEMO.md#related-selection)).
+Full plans and pushes to `main` run all of them.
+
 **A tree guard registers by its filename.** The planner selects every tracked
 `*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
 read): a guard outside `client/src` joins every plan, and a client guard rides
@@ -211,12 +217,7 @@ or its walk reads a temporary directory). A scanner the detectors cannot see
 
 Because they run on every PR, each always-run guard has a per-file time budget
 (`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
-runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets
-`CI_GUARD_BUDGET=enforce`, so `scripts/run-ci-tests.js` runs the always-run
-guards of its slice as their own Vitest pass, prints the slowest
-(`⏱️ Always-run guards, slowest of …`) and fails the job naming any file over the
-budget. This is the only place the budget fails a run: Windows, browser and DB
-jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets `CI_GUARD_BUDGET` to `enforce` only on the scheduled run (`ci.yml`, #16810), where `scripts/run-ci-tests.js` runs the always-run guards as their own Vitest pass and fails the job naming any file over the budget. Other runs keep them in the normal pass and emit a `::warning::`. Windows, browser and DB jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
 
 ### The bundled `lib/slashdo` submodule
 
@@ -499,8 +500,7 @@ own.
 
 ### Shallow checkouts
 
-Only the path-gated **Shipped prompt history** job clones full history (it
-reads every past stage-prompt body). `actions/checkout` runs at `fetch-depth: 2`
+`actions/checkout` runs at `fetch-depth: 2`
 in every job that diffs against the base. The two gate jobs set no depth at all
 (the action's own default is 1) and pass `sparse-checkout: scripts` instead:
 they check out only to run `scripts/ci-gate-report.js`, never look at history,
@@ -510,7 +510,10 @@ first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
 deeper history. The planner passes the resulting source paths to the runner,
-which resolves them through its own module graph.
+which resolves them through its own module graph. The always-run shipped
+prompt hash guard compares with `CI_BASE_SHA` on pull requests and the first
+parent on other hosted runs. Every current or retired hash in that base must
+remain current or retired in `data.reference/prompts/shipped-hashes.json`.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -566,7 +569,8 @@ The selected work is split across parallel jobs:
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
   Server unit runs exclude that registry whenever `PORTOS_CI_BROWSER_OWNER=unit`
   is exported (Linux server shards, and `npm run pregate` on every platform);
-  other browser files, including `overlayTextService`, keep their existing owner.
+  a server test that calls `resolveTestChrome(` must be registered (the registry
+  guard discovers it), and gates on `browserSuiteCanRun(` so a missing Chrome fails there.
   The planner selects affected registered files and the browser job requires
   Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
   Ordinary PRs run the `smoke` profile: all existing assertions except the
@@ -590,17 +594,6 @@ The selected work is split across parallel jobs:
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
   its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer
   (`NODE_MINIMUM_PATH_RE`). Non-push full runs always run it; a push gates it.
-- **Shipped prompt history** — the one job with a full-history clone; it checks
-  that every prompt body ever shipped is current or retired in
-  `data.reference/prompts/shipped-hashes.json`.
-  On a pull request it runs only when the impact planner's `prompt_history`
-  plan key is true: the diff touches `scripts/migrations/`,
-  `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
-  prompt-hash regenerator, `ci.yml`, or any module the guard statically
-  imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
-  `scripts/ci-test-plan.js`). Non-PR runs
-  and pull requests into `release` always run it, and `npm run pregate` runs
-  it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
   the `linux_containment` plan key is true: the diff touches the static import
@@ -689,8 +682,8 @@ Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
 turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
 native selectors and never repeats a related-graph traversal. A scoped Linux plan fans out the same way
-(`fansOut()` in the planner) only when its explicit selection exceeds
-`MAX_TARGETED_TEST_FILES` (125). That cap keeps the scoped selection and only partitions it, so a server-only
+(`fansOut()` in the planner) only when its explicit selection exceeds its cap: `MAX_TARGETED_TEST_FILES` (125) for the server,
+`CLIENT_FANOUT_TEST_FILES` (400) for the client, since one client runner absorbs 400 files at about 0.4 s each (#16805). That cap keeps the scoped selection and only partitions it, so a server-only
 overflow does not start three client shards, the DB/browser
 suites, and a Windows run (#11871). A server `related` plan also fans out
 when its measured import reach (`serverReach.selected`, the suites the related
@@ -878,9 +871,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 
 ### Native jobs on a push to `main`
 
-A push to `main` runs the primary suites and prompt history complete (its
-guard reads every committed body, which a tree diff cannot see), but the six
-native job families (SuperCollider, Windows, macOS, Linux and Docker
+A push to `main` runs the complete primary suites. The six native job
+families (SuperCollider, Windows, macOS, Linux and Docker
 containment, Node minimum) follow the tree diff since the last green `main`
 run, decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
 (opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes
@@ -897,24 +889,23 @@ against the base it was built on: two PRs that were each green can merge into a
 red result, and a direct push skips the gate. There is no merge coordinator (#12247
 and #14185 built and removed one).
 
-`.github/workflows/main-health.yml` consumes every finished push or scheduled run
-on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
+`main-health.yml` runs `scripts/ci-nightly-report.js` after main CI pushes and
+schedules. It needs its own workflow because release.yml calls `ci.yml` without
+`issues: write`.
 
-- **red**: the run summary lists the failing jobs and steps plus every pull request
-  merged since the last **green** run on `main` (the Compare API against the head of
-  that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
-  `model:medium`, `effort:medium`) is created, or updated with a comment when one
-  is already open. The issue carries only job names, the commit range and the run
-  URL. An unreadable range or a missing earlier green run is reported as such, never
-  as "no suspects".
-- **green**: the open issue is closed with a comment.
-- **cancelled** (superseded by a newer push): nothing changes.
+A red verdict creates or updates one "main is red" issue with jobs, range and
+run link. It uses `bug`, `area:ci`, `model:medium` and `effort:medium`.
+The summary lists merges since the nearest older green run and flags an unknown
+range. To bisect, rerun the failing suite at the midpoint merge. A green verdict closes the issue and appends the run link.
+Cancellation and runner-capacity-only failures leave the issue as it was.
 
-A failure to read or write the issue fails the `main-health` job so a stale or
-duplicate issue is visible. The reporter is a separate workflow, not a job in
-`ci.yml`, because release.yml calls `ci.yml` and a called workflow cannot hold
-`issues: write` that its caller lacks. To bisect, run the failing suite at a merge in
-the middle of the list and halve it.
+Before writing, the reporter orders recent `ci.yml` push and scheduled runs by
+GitHub run number. A newer run's latest conclusive attempt supersedes older
+events. Pending and inconclusive retries preserve prior verdicts. An event
+must match its own run's current attempt, so a green retry can close that
+run's alert. Green events with no alert skip the lookup. An unreadable verdict
+fails the reporter and leaves the issue untouched. Issue read or write
+failures also fail the reporter.
 
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
@@ -1341,40 +1332,12 @@ permissions. Private repositories that cannot read the PR with that grant remain
 held rather than expanding authority. No PR checkout or code executes in this
 privileged observer; both scripts run from the default branch's sparse checkout.
 
-## Bounded frozen release-candidate failure collection
+## Test runs report every failure
 
-CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
-`codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
-release pushes and local `test:ci` keep bail=1. The shared CI command entry point supplies one
-bail flag, raises it to five for that policy, and disables both Vitest retries
-and the launcher's native-crash retry. Nested bare Vitest runs retain their own bail policy rather than inheriting the
-outer npm lifecycle setting. Existing worker caps, shard selection,
-quiet groups, database isolation and deadlines do not change.
-
-The lifecycle reporter records up to five assertion failures, preserving the
-first. Failed hooks (including assertion failures in hooks), collection errors,
-non-assertion errors, unhandled errors and process teardown timeouts stop safe
-collection. Vitest receives graceful cancellation; the launcher independently
-monitors atomic reporter evidence and cancels its owned process tree on unsafe
-or malformed evidence, using existing escalation and settlement guards. Already
-running work can finish during cancellation; its later output is **unverified**,
-not additional independent regressions. Failed assertions are candidates for
-investigation, not proof that failures are independent or predate an amendment.
-Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
-green memo entries. First-cause run evidence
-and process-settlement refusals remain in each attempt's diagnostics directory.
-
-`invocation.json` binds policy, candidate head, tested checkout, actual checkout
-base, shard, selection digest, workflow run ID/attempt and start/finish times.
-`run.json` contains the bounded assertion list, stop reason and coverage status;
-the ordinary JSON report and process evidence remain available. Report coverage
-as unverified after any stop, including tests that never ran. A successful shard
-alone is not evidence that the whole candidate passed.
-
-For hosted before/after comparisons, group workflow rounds by exact candidate
-head/base and selection digest. Use Actions job queued/start/completion times to
-separate queue time from execution time; sum job execution minutes for
-runner-minutes and report failures collected per invocation. Keep non-reproducing
-failures and classify amendment-introduced regressions separately from failures
-shown to exist at the original cutoff. No hosted duration improvement is claimed
-by this implementation; a local synthetic collection test cannot measure it.
+`npm run test:ci` and `test:db:ci` run Vitest without `--bail`, so one CI round names
+every failing test file instead of stopping at the first. This applies to every run
+alike: ordinary PRs, release PRs, nightly and local. A red run still writes no
+test-memo entry, and the launcher's one-file retry of a native worker crash is kept
+(a recovered crash never masks a real failure elsewhere in the same run). Each attempt's
+`invocation.json`, `run.json`, `failures.json` and `processes.json` stay in the job's
+diagnostics directory for the failure summary. Job timeouts bound a badly broken PR.

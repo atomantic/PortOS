@@ -437,23 +437,24 @@ export function decideMergedCheckoutOwner({ repoPath, path, branch, facts }) {
  * 1. the fresh registration matches the release: listed, the same physical
  *    checkout when the spelling differs, not the primary/bare/prunable entry,
  *    and the same head, branch and lock (a change is an ownership change);
- * 2. the checkout's observation identity, and the inventoried one when the
- *    release carries it;
- * 3. merge evidence at that head: the forge delivered it (`deliveredHead`), else
+ * 2. merge evidence at that head: the forge delivered it (`deliveredHead`), else
  *    every commit is on the default branch;
- * 4. content: unreadable holds; dirt holds unless the PR merged at exactly this
+ * 3. content: unreadable holds; dirt holds unless the PR merged at exactly this
  *    head (`disposableHead`);
- * 5. owners (`decideMergedCheckoutOwner`).
+ * 4. owners (`decideMergedCheckoutOwner`).
+ *
+ * A checkout recreated at the same path with the same head, branch and lock is
+ * not distinguished from the original: it must pass every gate above on its own.
  *
  * @param {object} input
  * @param {string} input.repoPath
- * @param {{ path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null, checkoutIdentity?: string }} input.release
+ * @param {{ path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null }} input.release
  * @param {string|null} [input.deliveredHead] - lowercased head the forge delivered
  * @param {string|null} [input.disposableHead] - lowercased head a PR merged at exactly
  * @param {object} input.facts - `trees` (listWorktrees, null unreadable), `samePhysical`
- *   (asked with the listed `path`), `identity`, `mergeEvidence`, `clean` (null
+ *   (asked with the listed `path`), `mergeEvidence`, `clean` (null
  *   unreadable), then the owner facts
- * @returns {{ need: string, path?: string } | { hold: { reason: string } } | { admit: { tree: object, checkoutIdentity: string } }}
+ * @returns {{ need: string, path?: string } | { hold: { reason: string } } | { admit: { tree: object } }}
  */
 export function decideHeldCheckoutRetirement({ repoPath, release, deliveredHead = null, disposableHead = null, facts }) {
   if (facts.trees === undefined) return { need: 'trees' };
@@ -475,8 +476,6 @@ export function decideHeldCheckoutRetirement({ repoPath, release, deliveredHead 
   // Carry the persisted release spelling through removal and its record.
   const tree = { ...listed, path: release.path };
 
-  if (facts.identity === undefined) return { need: 'identity' };
-  if (!facts.identity || (release.checkoutIdentity && release.checkoutIdentity !== facts.identity)) return holdOn('checkout-identity-changed');
   const head = String(tree.head).toLowerCase();
   if (!(deliveredHead && head === deliveredHead)) {
     if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence' };
@@ -489,7 +488,7 @@ export function decideHeldCheckoutRetirement({ repoPath, release, deliveredHead 
   if (!facts.clean && !(disposableHead && head === disposableHead)) return holdOn('worktree-dirty');
   const owner = decideMergedCheckoutOwner({ repoPath, path: tree.path, branch: release.branch ?? null, facts });
   if (!owner.admit) return owner;
-  return { admit: { tree, checkoutIdentity: facts.identity } };
+  return { admit: { tree } };
 }
 
 /**
@@ -851,14 +850,11 @@ export function decideIdleNextHolderRelease({
  * order: the worktree registry is readable; the holder is unlocked; the caller's
  * own guard (when it passed one) declines nothing; a fresh registry read is
  * still readable and unlocked; the registered branch and head did not change
- * while the guard awaited; and, for a guarded removal of a registered holder,
- * the checkout's physical incarnation is unchanged (a same-path, same-head
- * recreation would otherwise pass). A lock or an unreadable registry costs no
- * guard call.
+ * while the guard awaited. A lock or an unreadable registry costs no guard call.
  *
  * @param {object} input
  * @param {boolean} input.guarded - the caller supplied a `verifyRemoval` guard
- * @param {object} input.facts - `listing` and `fresh` (`{ holder }` where holder is `{ locked, branch, head }` or null when unregistered; null is an unreadable registry), `identity` (checkout incarnation before the guard), `guardReason` (the guard's verdict, null = no objection), `identityAfter`
+ * @param {object} input.facts - `listing` and `fresh` (`{ holder }` where holder is `{ locked, branch, head }` or null when unregistered; null is an unreadable registry), `guardReason` (the guard's verdict, null = no objection)
  * @returns {{ need: string } | { hold: { reason: string } } | { admit: true }}
  */
 export function decideForceRemoval({ guarded, facts }) {
@@ -866,7 +862,6 @@ export function decideForceRemoval({ guarded, facts }) {
   if (facts.listing === null) return holdOn('worktree-ownership-unreadable');
   const { holder } = facts.listing;
   if (holder?.locked) return holdOn('worktree-locked');
-  if (guarded && holder && facts.identity === undefined) return { need: 'identity' };
   if (guarded) {
     if (facts.guardReason === undefined) return { need: 'guardReason' };
     if (facts.guardReason) return holdOn(facts.guardReason);
@@ -876,9 +871,5 @@ export function decideForceRemoval({ guarded, facts }) {
   const current = facts.fresh.holder;
   if (current?.locked) return holdOn('worktree-locked');
   if (current?.branch !== holder?.branch || current?.head !== holder?.head) return holdOn('worktree-holder-changed');
-  if (guarded && holder) {
-    if (facts.identityAfter === undefined) return { need: 'identityAfter' };
-    if (facts.identityAfter !== facts.identity) return holdOn('worktree-holder-changed');
-  }
   return { admit: true };
 }

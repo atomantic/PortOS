@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll, onTestFinish
 import express from 'express';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { EventEmitter } from 'node:events';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
@@ -68,9 +69,13 @@ const DIRECTION = {
 
 let jobs;
 let queueSnapshots;
+// The fake queue has no project event of its own, so waiters would only notice a
+// newly queued job on their fallback timer; this wakes them the moment it lands.
+const queueSignal = new EventEmitter();
 const queueJob = async ({ params }) => {
   const id = `job-${jobs.length + 1}`;
   jobs.push({ id, params });
+  queueSignal.emit('queued', params.musicVideo?.projectId);
   return { jobId: id };
 };
 const enqueue = vi.fn(queueJob);
@@ -90,6 +95,17 @@ const board = {
 const keyOf = (job) => job.params.musicVideo.castAndSets.key;
 const current = async (id) => projects.getProject(id);
 
+/** Sleep that resolves early when `wake` is called; the fallback timer is always cleared. */
+function wakeableSleep(ms) {
+  let timer;
+  let wake;
+  const promise = new Promise((resolve) => {
+    wake = resolve;
+    timer = setTimeout(resolve, ms);
+  });
+  return { promise: promise.finally(() => clearTimeout(timer)), wake };
+}
+
 // Event-driven with deadline fallback: subscribes to state changes and re-checks
 // immediately when fired, rather than polling. Slow runners (Windows CI) stay
 // responsive because the event triggers a check instead of spinning on elapsed time.
@@ -101,28 +117,29 @@ async function until(check, label, diagnostics) {
     changes += 1;
     wake?.();
   };
-  const cleanup = () => musicVideoEvents.off('cast-and-sets', changed);
+  const cleanup = () => {
+    musicVideoEvents.off('cast-and-sets', changed);
+    queueSignal.off('queued', changed);
+  };
   musicVideoEvents.on('cast-and-sets', changed);
+  queueSignal.on('queued', changed);
   onTestFinished(cleanup);
   try {
     const deadline = Date.now() + 60_000;
     for (;;) {
+      const observed = changes;
       if (await check()) return;
       if (Date.now() >= deadline) {
         const details = diagnostics ? `: ${JSON.stringify(await diagnostics())}` : '';
         throw new Error(`timed out waiting for ${label}${details}`);
       }
-      const _observed = changes;
-      const remaining = deadline - Date.now();
-      // Wait for event with a small timeout to re-check the condition
-      // even if no event fires (e.g., state changed before subscription).
-      await Promise.race([
-        new Promise((resolve) => { wake = resolve; }),
-        new Promise((r) => setTimeout(r, Math.min(250, remaining))),
-      ]);
+      // A change that fired while check() was awaiting is retained, not lost.
+      if (changes !== observed) continue;
+      // The short fallback covers state changed before subscription; a wake clears it.
+      const sleep = wakeableSleep(Math.min(250, deadline - Date.now()));
+      wake = sleep.wake;
+      await sleep.promise;
       wake = null;
-      // If no change fired, the timeout caused the race to resolve.
-      // Continue to the next check() without further delay.
     }
   } finally {
     cleanup();
@@ -158,8 +175,13 @@ async function runTo(projectId, status) {
     changes += 1;
     wake?.();
   };
-  const cleanup = () => musicVideoEvents.off('cast-and-sets', changed);
+  const onQueued = (queuedProjectId) => changed({ projectId: queuedProjectId });
+  const cleanup = () => {
+    musicVideoEvents.off('cast-and-sets', changed);
+    queueSignal.off('queued', onQueued);
+  };
   musicVideoEvents.on('cast-and-sets', changed);
+  queueSignal.on('queued', onQueued);
   onTestFinished(cleanup);
   const deadline = Date.now() + 25_000;
   try {
@@ -176,10 +198,9 @@ async function runTo(projectId, status) {
         throw new Error(`timed out waiting for the stage to reach ${status}: status=${stage?.status} revision=${stage?.revision} jobs=${jobs.length} unfinished=[${queued.join(', ')}]`);
       }
       if (changes !== observed) continue;
-      await Promise.race([
-        new Promise((resolve) => { wake = resolve; }),
-        new Promise((resolve) => setTimeout(resolve, 250)),
-      ]);
+      const sleep = wakeableSleep(250);
+      wake = sleep.wake;
+      await sleep.promise;
       wake = null;
     }
   } finally {
@@ -234,7 +255,9 @@ afterEach(async () => {
   heldWorkReleases.clear();
   await service.__settleCastAndSetsForTests();
 });
-afterAll(cleanupTempDataRoots);
+afterAll(() => {
+  cleanupTempDataRoots();
+});
 
 async function productionCheckin(limits, price = 0.25, overrides = {}) {
   const project = await seed(overrides);
@@ -423,7 +446,7 @@ describe('Cast & Sets check-in', () => {
     const character = jobs.find((j) => keyOf(j) === 'character');
     for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
-    expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
+    expect(character.params.prompt).toMatch(/FACE, one large head-and-shoulders portrait.*FRONT, a full-body standing view from the front with the head absent.*BACK, a full-body standing view/);
     expect(character.params.prompt).toContain('Hands empty and relaxed');
     expect(character.params.prompt).toContain('signature: a brass lantern');
     expect(character.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
@@ -1684,6 +1707,8 @@ it.each([
     const sheet = jobs.find((job) => keyOf(job) === 'character');
     expect(sheet.params.referenceImagePaths.map((path) => path.split(/[\\/]/).pop())).toEqual(guides.slice(0, capacity));
     expect(sheet.params.referenceImageStrengths).toEqual(Array(capacity).fill(1));
+    // The job is queued before the service persists what it submitted, so wait for that state.
+    await until(async () => (await current(project.id)).castAndSets?.images?.character?.submittedReferences, 'the persisted sheet references');
     const stage = (await current(project.id)).castAndSets;
     expect(stage.plan.character.refImages).toEqual(guides);
     expect(stage.images.character.submittedReferences.map((ref) => ref.filename)).toEqual(guides.slice(0, capacity));
@@ -2039,7 +2064,7 @@ it('keeps an age sheet neutral while carrying memory era and film stock into sce
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
   const prompt = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
-  expect(prompt('form:age-7')).toContain(`Era: 1965. Five views`);
+  expect(prompt('form:age-7')).toContain('Era: 1965. Three panels side by side');
   expect(prompt('form:age-7')).not.toContain('Look:');
   expect(prompt('form:age-7')).not.toContain(memory);
   expect(prompt('set:home')).toContain('Era: 1965, with period-correct buildings, vehicles');

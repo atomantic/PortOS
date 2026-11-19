@@ -12,6 +12,7 @@ vi.mock('../services/videoDownload.js', () => ({
 
 vi.mock('../services/ytdlpUpdate.js', () => ({
   getYtDlpUpdateStatus: vi.fn(async () => ({ installed: true, version: '2026.08.19', canUpdate: true })),
+  installYtDlp: vi.fn(),
   updateYtDlp: vi.fn(async () => ({ success: true, version: '2026.08.19' })),
 }));
 

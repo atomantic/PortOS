@@ -306,16 +306,16 @@ const openReadReason = (rel, via) => via == null
  * listing), `crypto` (`randomUUID`), `guard` (`pathWithin`). A member of the
  * closure that mocks one of them takes the proof away (`gather`).
  */
-const CONTAINED = Object.freeze({ open: false, vars: null, via: null, trust: Object.freeze([]) });
-const UNBOUNDED = Object.freeze({ open: true, vars: null, via: null, trust: Object.freeze([]) });
-const containmentOf = ({ open, vars = null, via = null, trust = [] }) => (open ? { open, vars, via, trust: [] } : { ...CONTAINED, trust });
+const CONTAINED = Object.freeze({ open: false, vars: null, via: null, trust: Object.freeze([]), filter: null });
+const UNBOUNDED = Object.freeze({ open: true, vars: null, via: null, trust: Object.freeze([]), filter: null });
+const containmentOf = ({ open, vars = null, via = null, trust = [], filter = null }) => (open ? { open, vars, via, trust: [], filter: null } : { ...CONTAINED, trust, filter });
 /** Two variable parts in one path: inside only when both are; resolvable only when both are. */
 function bothContainments(a, b) {
-  if (!a.open && !b.open) return { ...CONTAINED, trust: [...new Set([...(a.trust ?? []), ...(b.trust ?? [])])] };
+  if (!a.open && !b.open) return { ...CONTAINED, trust: [...new Set([...(a.trust ?? []), ...(b.trust ?? [])])], filter: a.filter ?? b.filter ?? null };
   if (!a.open) return containmentOf(b);
   if (!b.open) return containmentOf(a);
   const vars = a.vars === null || b.vars === null ? null : [...a.vars, ...b.vars.filter((binder) => !a.vars.includes(binder))];
-  return { open: true, vars, via: a.via ?? b.via, trust: [] };
+  return { open: true, vars, via: a.via ?? b.via, trust: [], filter: null };
 }
 const partialPath = (base, v, containment) => ({ ...base, v: normalizeRel(v), partial: true, sep: false, ...containmentOf(containment) });
 const unfollowedPath = (value, member) => value.unfollowed ? value : { ...partialPath(value, value.v, UNBOUNDED), unfollowed: member };
@@ -346,7 +346,11 @@ const tailValue = (lit, containment = UNBOUNDED, post = '') => ({ k: 'tail', lit
  * from a recursive listing) or a generated id (`randomUUID()`). Joined under
  * a directory it stays inside it, and so does any run of such names.
  */
+const isMigrationFile = (name) => /^\d+-.*\.js$/.test(name) && !name.endsWith('.test.js');
+const isDbMigrationFile = (name) => /\.(sql|js)$/.test(name) && !name.endsWith('.test.js') && !name.startsWith('_');
 const LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'] }));
+const MIGRATION_LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'], filter: isMigrationFile }));
+const DB_MIGRATION_LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'], filter: isDbMigrationFile }));
 const GENERATED_NAME = Object.freeze(tailValue('', { open: false, trust: ['crypto'] }));
 /** Literal text that can climb out of a directory when it follows a variable part: a `..` segment, under either separator. */
 const CLIMBS = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
@@ -834,6 +838,15 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
     if (dot(start + 3) && id(start + 4, 'dirname')) return { value: dirValue(posix.dirname(ctx.fileRel)), end: start + 5 };
     return { value: UNKNOWN, end: start + 3 };
   }
+  if (token.v === 'PATHS' && dot(start + 1) && id(start + 2, 'slashdo')) {
+    ctx.shared.scopes ??= createScopes(ctx.shared.root);
+    const imported = ctx.imports.get('PATHS');
+    if (imported !== undefined && imported.name === 'PATHS' && /(?:^|\/)(?:fileUtils|paths)\.js$/.test(imported.spec)
+      && !ctx.shared.scopes.shadowed('PATHS') && !ctx.mocksSpecifier?.(imported.spec)) {
+      ctx.shared.trustLog.push(imported.spec);
+      return { value: dirValue('lib/slashdo'), end: start + 3 };
+    }
+  }
   if (token.v === 'process' && dot(start + 1)) {
     if (id(start + 2, 'cwd') && tokens[start + 3]?.v === '(') return { value: dirValue(ctx.cwdRel), end: closeOf(match, start + 3) };
     if (id(start + 2, 'execPath')) return { value: NODE, end: start + 3 };
@@ -912,6 +925,9 @@ const groupsAt = (tokens, open) => {
 const BEFORE_FUNCTION_EXPRESSION = new Set([...OPERAND_KEYWORDS, 'export', 'default']);
 /** The elements of an array are directory-entry names (`LISTED_NAME`); a finite set is a `string[]`. */
 const LISTED = Object.freeze({ listed: true });
+const MIGRATION_LISTED = Object.freeze({ listed: true, filter: isMigrationFile });
+const DB_MIGRATION_LISTED = Object.freeze({ listed: true, filter: isDbMigrationFile });
+const isListedDomain = (domain) => domain === LISTED || domain === MIGRATION_LISTED || domain === DB_MIGRATION_LISTED;
 /** How many combinations of variable values one path expression is evaluated for before it counts as unbounded. */
 const VARIABLE_VALUES_LIMIT = 64;
 /** One `binder -> text` map per combination of the variables' values, or null when there is no finite set or too many. */
@@ -1031,7 +1047,7 @@ function createScopes(ctx) {
   const loopVariables = new Set(); // the tokens a `for…of` head declares: binders, counted as such
   const arrowArity = new Map(); // `const name = (a, b) => …`: name -> parameter count (Infinity with a rest parameter, or declared twice)
   const declare = (token) => { if (!loopVariables.has(token)) declared.set(token.v, [...(declared.get(token.v) ?? []), token.i]); };
-  const bind = (token, extent, detail) => binders.set(token.v, [...(binders.get(token.v) ?? []), { name: token.v, ...extent, ...detail, domain: undefined }]);
+  const bind = (token, extent, detail) => binders.set(token.v, [...(binders.get(token.v) ?? []), { name: token.v, token, ...extent, ...detail, domain: undefined }]);
 
   /** What a function is to the code around it: a name every caller uses, an argument, or neither. */
   const roleOf = (arr, m, head, nameToken = null) => {
@@ -1049,9 +1065,32 @@ function createScopes(ctx) {
   };
   const bindParameters = (arr, m, open, extent, role) => {
     listRanges(arr, m, open).forEach(([from, to], index) => {
-      // Only a plain positional parameter has a domain: a default, a pattern or a rest element does not.
+      // Only a plain positional parameter has a domain; a default initializer or destructured
+      // object parameter may still resolve to a complete path (`migrationsDir = DEFAULT_MIGRATIONS_DIR`).
       const plain = to === from + 1 && arr[from].t === 'id';
-      for (const token of boundNames(arr, m, from, to)) bind(token, extent, plain ? { kind: 'param', role, index } : { kind: 'opaque' });
+      if (plain) { bind(arr[from], extent, { kind: 'param', role, index }); return; }
+      if (arr[from]?.t === 'id' && isPunct(arr[from + 1], '=') && from + 2 < to) {
+        bind(arr[from], extent, { kind: 'opaque', defaultExpr: { arr, m, from: from + 2, to } });
+        return;
+      }
+      if (isPunct(arr[from], '{') && m[from] !== undefined) {
+        const handled = new Set();
+        for (const [pf, pt] of listRanges(arr, m, from)) {
+          if (arr[pf]?.t === 'id' && pf + 1 === pt) {
+            handled.add(arr[pf]);
+            bind(arr[pf], extent, { kind: 'destructured', role, index, prop: arr[pf].v });
+          } else if (arr[pf]?.t === 'id' && isPunct(arr[pf + 1], '=') && pf + 2 < pt) {
+            handled.add(arr[pf]);
+            bind(arr[pf], extent, { kind: 'destructured', role, index, prop: arr[pf].v, defaultExpr: { arr, m, from: pf + 2, to: pt } });
+          } else if (arr[pf]?.t === 'id' && isPunct(arr[pf + 1], ':') && arr[pf + 2]?.t === 'id' && isPunct(arr[pf + 3], '=') && pf + 4 < pt) {
+            handled.add(arr[pf + 2]);
+            bind(arr[pf + 2], extent, { kind: 'destructured', role, index, prop: arr[pf].v, defaultExpr: { arr, m, from: pf + 4, to: pt } });
+          }
+        }
+        for (const token of boundNames(arr, m, from, to)) if (!handled.has(token)) bind(token, extent, { kind: 'opaque' });
+        return;
+      }
+      for (const token of boundNames(arr, m, from, to)) bind(token, extent, { kind: 'opaque' });
     });
   };
   /** Parameters of an arrow whose list opens at `open` (null: one bare name); a rest parameter can take any number. */
@@ -1126,8 +1165,15 @@ function createScopes(ctx) {
   // Local names of node's directory listers. A `readdir` of any other origin (a wrapper, a store
   // method) can return anything, so only an import or require of fs vouches for the name.
   const listers = new Set();
+  const scanners = new Map();
   const fsNamespaces = new Set();
   const fromFs = (token) => token?.t === 's' && FS_MODULES.has(token.v);
+  const scannerFor = (imported, spec) => {
+    if (ctx.mocksSpecifier?.(spec)) return null;
+    if (imported === 'scanMigrationFiles' && /(?:^|\/)migration(?:Files|Ledger)\.js$/.test(spec)) return MIGRATION_LISTED;
+    if (imported === 'scanDatabaseMigrationFiles' && /(?:^|\/)migrationFiles\.js$/.test(spec)) return DB_MIGRATION_LISTED;
+    return null;
+  };
   const main = ctx.tokens;
   const addFsNames = (open, alias, own) => {
     for (const [from, to] of listRanges(main, ctx.match, open)) {
@@ -1143,6 +1189,8 @@ function createScopes(ctx) {
   const TRUSTED_IMPORTS = { path: ['delimiter'], 'node:path': ['delimiter'], vitest: ['it', 'test', 'describe', 'expect'], crypto: ['randomUUID'], 'node:crypto': ['randomUUID'] };
   const importLocal = (token, imported, spec) => {
     declare(token);
+    const scanner = scannerFor(imported, spec);
+    if (scanner !== null) scanners.set(token.v, scanner);
     const trusted = TRUSTED_IMPORTS[spec] ?? (isGuardModule(ctx.fileRel, spec) ? ['pathWithin'] : []);
     if (ctx.imports?.has(token.v) || (token.v === imported && trusted.includes(imported))) ownDeclarations.set(token.v, 1);
   };
@@ -1240,6 +1288,21 @@ function createScopes(ctx) {
     let i = from;
     while (i < to && isWord(arr[i], 'await')) i += 1;
     if (i >= to || depth > 6) return null;
+    // A ternary `cond ? a : b` where both branches have the same listed/array domain.
+    let q = -1;
+    let qDepth = 0;
+    for (let k = i; k < to; k += 1) {
+      if (arr[k].t === 'p' && OPENERS[arr[k].v] && m[k] !== undefined) { k = m[k]; continue; }
+      if (isPunct(arr[k], '?')) { if (q === -1) q = k; qDepth += 1; }
+      else if (isPunct(arr[k], ':') && q !== -1) {
+        qDepth -= 1;
+        if (qDepth === 0) {
+          const left = elementsOf(arr, m, q + 1, k, depth + 1);
+          const right = elementsOf(arr, m, k + 1, to, depth + 1);
+          return unionOf([left, right]);
+        }
+      }
+    }
     let domain;
     const head = arr[i];
     if (isPunct(head, '(') && m[i] !== undefined && m[i] < to) {
@@ -1265,6 +1328,9 @@ function createScopes(ctx) {
         // `withFileTypes` yields Dirent objects, not names.
         if (arr.slice(open + 1, m[open]).some((token) => isWord(token, 'withFileTypes'))) return null;
         domain = LISTED;
+        i = m[open] + 1;
+      } else if (calls && callee === i && scanners.has(head.v) && !shadowed(head.v)) {
+        domain = scanners.get(head.v);
         i = m[open] + 1;
       } else if (calls && callee === i + 2 && head.v === 'Object' && arr[callee].v === 'freeze' && !shadowed('Object')) {
         domain = elementsOf(arr, m, open + 1, m[open], depth + 1);
@@ -1375,7 +1441,7 @@ function createScopes(ctx) {
     // `({ map: NAMES.map } = other)`, `[NAMES[0]] = pair`: a target, whatever is named.
     if (inAssignedPattern(arr, m, at)) return false;
     if (isPunct(prev, '.', '?.')) return true; // a property of that name on something else
-    if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
+    if (isPunct(prev, '...') || isWord(prev, 'of') || (isPunct(prev, '?') && isPunct(next, ':') && inForHead(arr, m, at))) return true;
     if (isPunct(next, '.', '?.')) {
       const method = arr[at + 2];
       // A method that only reads, and is not replaced (`NAMES.map = other`). `NAMES.length++`,
@@ -1440,8 +1506,8 @@ function createScopes(ctx) {
 
   const unionOf = (parts) => {
     if (parts.includes(null)) return null;
-    if (parts.every((part) => part !== LISTED)) return [...new Set(parts.flat())];
-    return parts.every((part) => part === LISTED) ? LISTED : null;
+    if (parts.every((part) => !isListedDomain(part))) return [...new Set(parts.flat())];
+    return parts.every((part) => part === parts[0] && isListedDomain(part)) ? parts[0] : null;
   };
 
   /** The `[from, to)` of argument `index` of the call opened at `open`, or null: too few arguments, or a spread before it. */
@@ -1501,8 +1567,8 @@ function createScopes(ctx) {
     return unionOf(parts);
   };
 
-  /** The one complete path every call passes as parameter `index` of the function named by `nameToken`, or null. */
-  const callSitePath = (nameToken, index) => {
+  /** The one complete path every call passes as parameter `index` (or destructured property `prop`) of `nameToken`, or null. */
+  const callSitePath = (nameToken, index, prop = null) => {
     const uses = usesOf(nameToken);
     if (uses === null) return null;
     let passed = null;
@@ -1510,8 +1576,17 @@ function createScopes(ctx) {
       if (!isPunct(arr[at + 1], '(') || m[at + 1] === undefined) return null; // not every caller is in view
       const range = argumentRange(arr, m, at + 1, index);
       if (range === null) return null;
-      const { value, end } = evaluate(arr, m, range[0], ctx);
-      if (end !== range[1] || value.k !== 'path' || value.partial) return null;
+      let exprFrom = range[0];
+      let exprTo = range[1];
+      if (prop !== null) {
+        if (!isPunct(arr[exprFrom], '{') || m[exprFrom] === undefined || m[exprFrom] + 1 !== exprTo) return null;
+        const entry = listRanges(arr, m, exprFrom).find(([pf, pt]) => arr[pf]?.t === 'id' && arr[pf].v === prop && (pf + 1 === pt || isPunct(arr[pf + 1], ':')));
+        if (entry === undefined) return null;
+        exprFrom = entry[0] + 1 === entry[1] ? entry[0] : entry[0] + 2;
+        exprTo = entry[1];
+      }
+      const { value, end } = evaluate(arr, m, exprFrom, ctx);
+      if (end !== exprTo || value.k !== 'path' || value.partial) return null;
       if (passed !== null && JSON.stringify(passed) !== JSON.stringify(value)) return null;
       passed = value;
     }
@@ -1546,7 +1621,7 @@ function createScopes(ctx) {
       || (declared.get(binder.name) ?? []).some(inside);
     // `p = other()`, `p++` or `({ p } = other)` in the body: the variable no longer holds what it was given.
     // `arguments[0] = x` rebinds a parameter in a sloppy-mode script, and `eval` can do anything.
-    const rewritten = writtenIn(binder.name, inside) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
+    const rewritten = writtenIn(binder.name, inside, binder.token ?? null) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
       || hiddenWrite(binder.name);
     return !ambiguous && !rewritten;
   };
@@ -1557,7 +1632,16 @@ function createScopes(ctx) {
   const pathOf = (binder) => {
     if (binder.path !== undefined) return binder.path;
     binder.path = null; // a value that flows back into itself resolves to nothing
-    if (binder.kind === 'param' && binder.role.kind === 'named' && settled(binder)) binder.path = callSitePath(binder.role.nameToken, binder.index);
+    if (!settled(binder)) return null;
+    if (binder.defaultExpr !== undefined) {
+      const { value, end } = evaluate(binder.defaultExpr.arr, binder.defaultExpr.m, binder.defaultExpr.from, ctx);
+      if (end === binder.defaultExpr.to && value.k === 'path' && !value.partial && !value.unfollowed) binder.path = value;
+    }
+    if (binder.path === null && binder.kind === 'param' && binder.role.kind === 'named') {
+      binder.path = callSitePath(binder.role.nameToken, binder.index);
+    } else if (binder.path === null && binder.kind === 'destructured' && binder.prop !== null && binder.role.kind === 'named') {
+      binder.path = callSitePath(binder.role.nameToken, binder.index, binder.prop);
+    }
     return binder.path;
   };
   const domainOf = (binder) => {
@@ -1592,13 +1676,17 @@ function identifierValue(token, ctx, depth) {
   const domain = ctx.shared.scopes.domainOf(binder);
   if (domain !== null) ctx.shared.trustLog.push(...binder.trusts);
   if (domain === LISTED) return LISTED_NAME;
+  if (domain === MIGRATION_LISTED) return MIGRATION_LISTED_NAME;
+  if (domain === DB_MIGRATION_LISTED) return DB_MIGRATION_LISTED_NAME;
   if (domain !== null) return variableValue({ open: true, vars: [binder] });
-  const via = binder.role?.kind === 'named' ? binder.role.nameToken.v : null;
+  const via = binder.kind === 'param' && binder.role?.kind === 'named' ? binder.role.nameToken.v : null;
+  const paramPath = ctx.shared.scopes.pathOf(binder);
+  if (paramPath !== null) return paramPath;
   // Named like a module-level path (`function read(ROOT)` beside `const ROOT = …`): the constant when
   // every call passes one path, which is then that path; otherwise somewhere the source does not say,
   // starting from the constant the name was read as before binders were modelled. Never nothing.
   const outer = bindingValue(token.v, ctx, depth);
-  if (outer.k === 'path') return ctx.shared.scopes.pathOf(binder) ?? partialPath(outer, outer.v, { open: true, via });
+  if (outer.k === 'path') return partialPath(outer, outer.v, { open: true, via });
   return via === null ? UNKNOWN : variableValue({ open: true, via });
 }
 
@@ -1608,7 +1696,7 @@ function bindingValue(name, ctx, depth = 0) {
   if (bound === undefined) {
     ctx.shared.scopes ??= createScopes(ctx.shared.root);
     const imported = importedConstant(name, ctx, ctx.shared.scopes.shadowed);
-    return imported?.k === 'str' ? str(imported.v) : UNKNOWN;
+    return imported?.k === 'str' ? str(imported.v) : imported?.k === 'path' ? imported : UNKNOWN;
   }
   if (ctx.resolving.has(name)) return UNKNOWN;
   if (ctx.bindingValues.has(name)) {
@@ -1786,8 +1874,9 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   const match = matchBrackets(tokens);
   const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens, match), bindingValues: new Map(), resolving: new Set() };
   ctx.imports = namedImports(tokens, match);
+  ctx.mocksSpecifier = (spec) => mocksModule(tokens, match, (mocked) => mocked === spec, []);
   ctx.exportedConstant = exportedConstant && ((spec, name) => (
-    mocksModule(tokens, match, (mocked) => mocked === spec, []) ? null : exportedConstant(spec, name)
+    ctx.mocksSpecifier(spec) ? null : exportedConstant(spec, name)
   ));
   // A source this file or the workspace setup (`replaced`) mocks is trusted for nothing.
   const own = replacedSources(src, fileRel);
@@ -1923,7 +2012,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
       }
       const open = value.partial && value.open;
       trusts(value);
-      for (const rel of open && value.outer !== undefined ? [value.v, value.outer] : [value.v]) facts.dirs.push({ rel, walk, guessed: value.partial, open, via: value.via ?? null });
+      for (const rel of open && value.outer !== undefined ? [value.v, value.outer] : [value.v]) facts.dirs.push({ rel, walk, guessed: value.partial, open, via: value.via ?? null, ...(value.filter ? { filter: value.filter } : {}) });
       return true;
     }
     facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v), read: consumer !== null && READ_CALLEES.has(consumer) });
@@ -1988,7 +2077,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
           if (value.unfollowed) { facts.unresolvedInputs.push(unfollowedReason(value)); continue; }
           // A complete path: a file, a directory, or a name the loader completes (`./mod` is `./mod.js`).
           if (!value.partial) { facts.paths.push({ rel: value.v, walk: true }); continue; }
-          facts.dirs.push({ rel: value.v, walk: true });
+          facts.dirs.push({ rel: value.v, walk: true, ...(value.filter ? { filter: value.filter } : {}) });
           trusts(value);
           if (!(value.partial && value.open)) continue;
           // Unbounded, the module may be anywhere, under the prefix or not: an edge the source does not name.
@@ -2142,6 +2231,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const dataTrees = new Map();
   const packages = new Map();
   const exportedLiterals = new Map(); // module -> its literal exports (`literalExports`)
+  const exportedPaths = new Map(); // module -> its complete path exports (`export const X = join(__dirname, ...)`)
   let byName = null;
   let listing; // undefined until first asked; null when git cannot list the tree
 
@@ -2348,11 +2438,34 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const bytes = fs.read(rel);
     if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
     if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
+    const pathExports = (src, fileRel) => {
+      const exported = new Map();
+      let tokens;
+      try { tokens = tokenize(src, new Set(), { jsx: !/\.[cm]?ts$/.test(fileRel) }); } catch { return exported; }
+      const match = matchBrackets(tokens);
+      const ctx = {
+        fileRel, cwdRel: workspaceRel, tokens, match, bindings: collectBindings(tokens, match),
+        bindingValues: new Map(), resolving: new Set(), imports: new Map(), exportedConstant: null,
+        replaced: { fs: false, crypto: false, guard: false }, guarded: false, delimiter: false, uuid: false, src,
+      };
+      ctx.shared = { root: ctx, scopes: undefined, trusted: { fs: false, crypto: false, guard: false }, trustLog: [] };
+      for (let i = 0; i + 4 < tokens.length; i += 1) {
+        if (!isWord(tokens[i], 'export') || !isWord(tokens[i + 1], 'const') || tokens[i + 2]?.t !== 'id' || !isPunct(tokens[i + 3], '=')) continue;
+        const { value, end } = evaluate(tokens, match, i + 4, ctx);
+        if (value.k === 'path' && !value.partial && !value.unfollowed && end === expressionEnd(tokens, match, i + 4)) {
+          exported.set(tokens[i + 2].v, value);
+        }
+      }
+      return exported;
+    };
     const exportedConstant = (spec, name) => {
       const target = resolveRelativeSpecifier(rel, spec, fs.kind);
       if (target === null || !JS_EXT.test(target)) return null;
       if (!exportedLiterals.has(target)) exportedLiterals.set(target, literalExports(fs.read(target)?.toString('utf8') ?? '', target));
-      return exportedLiterals.get(target).get(name) ?? null;
+      const lit = exportedLiterals.get(target).get(name);
+      if (lit !== undefined) return lit;
+      if (!exportedPaths.has(target)) exportedPaths.set(target, pathExports(fs.read(target)?.toString('utf8') ?? '', target));
+      return exportedPaths.get(target).get(name) ?? null;
     };
     const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel, replaced: replacedBySetup(), exportedConstant });
     for (const spec of raw.trusts) {
@@ -2412,7 +2525,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     };
     const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
-    const addDir = (dirRel, walk, guessed = false, open = false, via = null) => {
+    const addDir = (dirRel, walk, guessed = false, open = false, via = null, filter = null) => {
       // An open read may land outside the prefix. `gather` carries that fact into keying and selection.
       if (open) resolved.openReads.add(openReadReason(dirRel, via));
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
@@ -2422,12 +2535,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // `join(HERE, 'LICENSE')`: a name with no extension reads as a directory until the tree says otherwise.
       if (kind === 'file' && !guessed) addFile(dirRel, { data: !walk });
       if (kind !== 'dir') return;
-      const files = tree(dirRel);
+      const files = tree(dirRel) ?? (filter !== null ? listedTree(dirRel) : null);
       // Past the limit: a tree only read as data may still be keyed, decided once this file's edges are
       // all known. Not a guessed one: the variable segment may leave the prefix (`join(HERE, p)` called
       // with '../../client/x.js'), and under the limit that guess was only ever an approximation.
       if (files === null) { if (walk || guessed) resolved.oversized.push(dirRel || '<repo root>'); else oversizedData.push(dirRel); return; }
-      for (const file of files) addFile(file, { data: !walk });
+      for (const file of files) {
+        if (filter !== null && !filter(posix.basename(file))) continue;
+        addFile(file, { data: !walk });
+      }
     };
     const addPath = (target, walk, read = false) => {
       if (underGit(target)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
@@ -2468,7 +2584,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     resolved.mocked = registered;
     for (const target of eager) resolved.lazyModules.delete(target);
     for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
-    for (const { rel: dirRel, walk, guessed, open, via } of raw.dirs) addDir(dirRel, walk, guessed === true, open === true, via ?? null);
+    for (const { rel: dirRel, walk, guessed, open, via, filter } of raw.dirs) addDir(dirRel, walk, guessed === true, open === true, via ?? null, filter ?? null);
     for (const { value, walk, dir } of raw.cwdLiterals) {
       const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
       for (const base of bases) {
@@ -2571,7 +2687,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       members.add(rel);
       const f = factsFor(rel);
       if (walkEdges) for (const dep of f.modules) if (!members.has(dep) && (followMockOnly || !f.mockOnly.has(dep))) stack.push({ rel: dep, walkEdges: true });
-      for (const side of f.sideModules) if (!members.has(side)) stack.push({ rel: side, walkEdges: true });
+      for (const side of f.sideModules) {
+        if (f.dataModules.has(side) && f.unresolvedEdges.length === 0) inputs.add(side);
+        else if (!members.has(side)) stack.push({ rel: side, walkEdges: true });
+      }
       for (const input of f.inputs) inputs.add(input);
       for (const tool of f.tools) tools.add(tool);
       // Machine-local state (data/, the home directory) is outside every key:

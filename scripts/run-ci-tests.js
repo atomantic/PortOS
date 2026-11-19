@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn, execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { releaseCandidateDiagnostics } from './ciTestPolicy.js';
-import { watch, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import { dirname, join, relative, sep } from 'node:path';
@@ -11,9 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
+import { formatErrorAnnotation, formatWarningAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
@@ -139,13 +137,9 @@ export function parseShard(shard) {
 }
 
 /** The run-level report `scripts/vitestRunDiagnostics.js` wrote: `{ reason, errorCount }`, or null. */
-function readRunReport(runReportPath, requireCollection = false) {
+function readRunReport(runReportPath) {
   try {
     const run = readCollectionReport(runReportPath);
-    const c = run?.collection;
-    if ((requireCollection || c !== undefined)
-      && (c?.limit !== 5 || c.coverage !== 'complete' || c.stop !== null
-        || !Array.isArray(c.failures) || c.failures.length !== 0)) return null;
     return typeof run?.reason === 'string' && Number.isInteger(run.errorCount)
       ? { reason: run.reason, errorCount: run.errorCount } : null;
   } catch { return null; }
@@ -178,7 +172,6 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
       lines.push(replayDiagnostic(readInvocation(reportPath), run));
       lines.push(`Vitest run: reason=${run.reason}, exitCode=${run.exitCode}, unhandledErrors=${run.errorCount}`);
       lines.push(processExitDiagnostic(run));
-      if (run.collection) lines.push(collectionDiagnostic(run));
       if (run.teardownTimeout) lines.push('Vitest teardown timed out.');
       if (run.errors.length) lines.push(`Vitest unhandled errors (up to 10):\n${run.errors.slice(0, 10).map(error => error.slice(0, 8000)).join('\n')}`);
     } catch {
@@ -226,7 +219,6 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
  */
 export async function runNpm(scope, script, extraArgs, { env = process.env, signal, cancellationTimeoutMs = 10000 } = {}) {
   signal?.throwIfAborted();
-  const diagnostic = releaseCandidateDiagnostics(env);
   // Opt-in, job-owned storage survives an abruptly terminated launcher. Keep
   // separate roots for the initial attempt and the existing single retry.
   const durableRoot = env.PORTOS_CI_DIAGNOSTICS_DIR;
@@ -255,7 +247,7 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
       ...launched,
       ...(processEvidence ? { diagnosticsPath: reportDir } : {}),
       fileResults: launched.interrupted ? [] : fileResultsFromReport(reportPath),
-      runReport: launched.interrupted ? null : readRunReport(join(reportDir, 'run.json'), diagnostic),
+      runReport: launched.interrupted ? null : readRunReport(join(reportDir, 'run.json')),
     };
     const profile = env.PORTOS_BROWSER_TEST_PROFILE;
     if (profile !== undefined && result.status === 0) {
@@ -266,14 +258,9 @@ export async function runNpm(scope, script, extraArgs, { env = process.env, sign
         return { ...result, status: 1 };
       }
     }
-    // A diagnostic failure proves no green coverage, including a zero process
-    // exit with missing/malformed evidence or a late settlement refusal.
-    if (diagnostic && (launched.status !== 0 || result.runReport?.reason !== 'passed' || result.runReport.errorCount !== 0)) {
-      return { ...result, status: launched.status || 1, fileResults: [], runReport: null, diagnosticsPath: reportDir };
-    }
     return result;
   } finally {
-    if (!durable && !cleanupUnverified && !processEvidence && !diagnostic) rmSync(reportDir, { recursive: true, force: true });
+    if (!durable && !cleanupUnverified && !processEvidence) rmSync(reportDir, { recursive: true, force: true });
   }
 }
 
@@ -284,36 +271,16 @@ function readCollectionReport(path) {
   } catch { return null; }
 }
 
-function candidateProvenance(env) {
-  const revision = (ref) => execFileSync('git', ['rev-parse', '--verify', ref], { cwd: repoRoot, encoding: 'utf8' }).trim();
-  const checkout = revision('HEAD');
-  // cat-file reads parent identities even in a depth-one Actions checkout.
-  const parents = execFileSync('git', ['cat-file', '-p', checkout], { cwd: repoRoot, encoding: 'utf8' })
-    .split('\n\n', 1)[0].split('\n').filter(line => line.startsWith('parent ')).map(line => line.slice(7));
-  const base = parents[0];
-  const head = env.PORTOS_CI_CANDIDATE_HEAD || parents[1];
-  if (env.GITHUB_ACTIONS === 'true' && (parents.length !== 2 || parents[1] !== head)) throw Error('Candidate head does not match tested merge checkout.');
-  if (!/^[a-f0-9]{40}$/.test(head)) throw Error('Missing exact candidate head.');
-  const selection = env.PORTOS_CI_TEST_SELECTION ? readFileSync(env.PORTOS_CI_TEST_SELECTION) : Buffer.from('full suite');
-  return { candidate: { head, base, checkout, shard: env.CI_SHARD || '1/1',
-    selectionSha256: createHash('sha256').update(selection).digest('hex'),
-    runId: env.GITHUB_RUN_ID || null, runAttempt: env.GITHUB_RUN_ATTEMPT || null } };
-}
-
 function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal, cancellationTimeoutMs) {
-  const diagnostic = releaseCandidateDiagnostics(env);
   const runReportPath = join(dirname(reportPath), 'run.json');
   const invocationPath = join(dirname(reportPath), 'invocation.json');
   const invocation = {
     startedAt: Date.now(), completed: false, scope, script,
-    policy: diagnostic ? 'release-candidate' : 'ordinary', assertionLimit: diagnostic ? 5 : 1,
-    ...(diagnostic ? candidateProvenance(env) : {}),
     replay: replayContext({ env, scope, script, extraArgs, head: currentCommit(repoRoot, env) }),
     selectors: extraArgs.filter(arg => !arg.startsWith('-')).slice(0, 100)
       .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
   };
   const args = ['run', script, '--prefix', scope];
-  if (diagnostic && extraArgs.some(arg => /^--(?:bail|retry)(?:=|$)/.test(arg))) throw Error('CI launcher owns bail and retry policy.');
   args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
     `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
   // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
@@ -333,8 +300,6 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     // Only the workflow launcher owns durable attempts. Nested launcher
     // fixtures must not overwrite or add to the job's failure provenance.
     delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;
-    delete childEnv.PORTOS_CI_TEST_POLICY;
-    childEnv.PORTOS_CI_COLLECTION = diagnostic ? '1' : '';
     delete childEnv.PORTOS_CI_TEST_SUPERVISED_GROUP;
     const child = spawn(command, spawnArgs, {
       env: childEnv, cwd: repoRoot, detached: processGroup,
@@ -343,8 +308,6 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     let escalation;
     let spawnError;
     let cancellationDeadline;
-    let diagnosticWatch;
-    let diagnosticAbort;
     let settled = false;
     let cleanupUnverified = false;
     const cancel = (signal) => {
@@ -354,7 +317,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       escalation = setTimeout(() => {
         killProcessTree(child, 'SIGKILL', { processGroup });
       }, 2000);
-      if (abortSignal || diagnostic) cancellationDeadline = setTimeout(() => {
+      if (abortSignal) cancellationDeadline = setTimeout(() => {
         cleanupUnverified = true;
         spawnError = new Error('Owned test launcher cleanup unverified after cancellation.');
         child.stdout.destroy();
@@ -385,7 +348,6 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     const finish = (code, signal) => {
       if (settled) return;
       settled = true;
-      diagnosticWatch?.close();
       clearTimeout(escalation);
       clearTimeout(cancellationDeadline);
       if (interrupted) {
@@ -398,7 +360,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       abortSignal?.removeEventListener('abort', onAbort);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
       persistTestDiagnostic(invocationPath, { ...invocation, completed: !cleanupUnverified, status, signal: signal ?? interrupted ?? null,
-        childExit, childClose, ...(diagnosticAbort ? { diagnosticAbort } : {}) });
+        childExit, childClose });
       if (status !== 0) {
         console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
         console.error(structuredFailureDiagnostics(reportPath, runReportPath));
@@ -409,25 +371,6 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
       resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}),
         ...(cleanupUnverified ? { cleanupUnverified: true } : {}) });
     };
-    if (diagnostic) {
-      const abortDiagnostic = (reason) => {
-        diagnosticAbort ??= reason;
-        cancel('SIGTERM');
-      };
-      // Reporter writes are atomic. A run-level failure stops the owned tree,
-      // even if a worker cannot settle graceful Vitest cancellation.
-      try {
-        diagnosticWatch = watch(dirname(runReportPath), (_event, name) => {
-          if (String(name) !== 'run.json' || !existsSync(runReportPath)) return;
-          const run = readCollectionReport(runReportPath);
-          if (!Array.isArray(run?.errors) || !run.errors.every(error => typeof error === 'string')
-            || !Number.isInteger(run.errorCount) || run.errorCount < 0 || !validCollectionDiagnostic(run.collection)) {
-            abortDiagnostic('malformed-report');
-          } else if (run.collection?.stop === 'unsafe') abortDiagnostic('unsafe-report');
-        });
-        diagnosticWatch.on('error', () => abortDiagnostic('watcher-unavailable'));
-      } catch { abortDiagnostic('watcher-unavailable'); }
-    }
     child.on('close', (code, signal) => {
       childClose = { code, signal };
       finish(code, signal);
@@ -455,8 +398,6 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   }
   if (result.status === 0) return 0;
   if (result.interrupted) return result.status;
-  if (releaseCandidateDiagnostics()) return result.status;
-
   if (extractCrashedTestFile(result.output)) await diagnose(startedAt);
 
   const plan = planCrashRetry(scope, result.output);
@@ -466,10 +407,11 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   }
   const { relPath, selector } = plan;
 
-  // A native fail-fast abort, not an assertion — every other file in this run
-  // already passed (Vitest's own summary counts it separately from a real
-  // failure), so one retry of just the crashed file tells us whether this
-  // reproduces or was a one-off runner fault.
+  // A native fail-fast abort, not an assertion (Vitest's own summary counts it
+  // separately from a real failure), so one retry of just the crashed file tells
+  // us whether this reproduces or was a one-off runner fault. The run does not
+  // bail, so other files may also have failed; hasOtherTestFailures below keeps
+  // a recovered crash from masking those.
   console.warn(`⚠️ Vitest worker crashed natively on ${relPath} — retrying that file once`);
   const retryStartedAt = Date.now();
   // The retry keeps the run's flags (recording, pass-with-no-tests); only the selectors shrink to the crashed file.
@@ -500,19 +442,27 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 }
 
 /**
- * 1 when an always-run guard in `files` ran over CI_GUARD_BUDGET_MS, naming each
- * one; 0 otherwise. A guard with no reading (it crashed, or ran nothing) is
- * left to the test status, which already fails that run.
+ * Reports the always-run guards in `files` that ran over CI_GUARD_BUDGET_MS.
+ * With `enforce` (the scheduled hosted run) an over-budget guard returns 1,
+ * naming each one; otherwise it is a warning annotation and returns 0. A guard
+ * with no reading (it crashed, or ran nothing) is left to the test status,
+ * which already fails that run.
  */
-function guardBudgetStatus(files, durations) {
+function guardBudgetStatus(files, durations, { enforce }) {
   const timed = Object.fromEntries(files.filter(file => typeof durations[file] === 'number').map(file => [file, durations[file]]));
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
   if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
   if (over.length === 0) return 0;
+  const title = 'Always-run guard over its time budget';
   const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
-  console.error(`❌ Always-run guard over its time budget: ${detail}`);
-  console.error(formatErrorAnnotation('Always-run guard over its time budget', detail));
+  if (!enforce) {
+    console.log(`⚠️ ${title}, reported only on this run (the scheduled hosted run enforces it): ${detail}`);
+    console.log(formatWarningAnnotation(title, detail));
+    return 0;
+  }
+  console.error(`❌ ${title}: ${detail}`);
+  console.error(formatErrorAnnotation(title, detail));
   return 1;
 }
 
@@ -617,12 +567,15 @@ async function main() {
     process.exitCode = 0;
     return;
   }
-  // Hosted CI holds the always-run guards to their per-file budget (#16551).
-  // They run first as their own Vitest pass, so a related or full selection's
-  // heavy suites do not stretch their wall times; pregate only reports them.
-  const budgeted = enforceGuardBudget ? new Set(getAlwaysRunTests()) : new Set();
-  const guardRun = plan.run.filter(test => budgeted.has(test));
-  const rest = plan.run.filter(test => !budgeted.has(test));
+  // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
+  // hosted run enforces it, and only there do the guards run first as their own
+  // Vitest pass, so a related or full selection's heavy suites do not stretch
+  // their wall times. Every other run keeps them in the one pass with the rest
+  // of the selection and reports an over-budget guard as a warning.
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const guardRun = enforceGuardBudget ? plan.run.filter(test => alwaysRun.has(test)) : [];
+  const budgetWatched = enforceGuardBudget ? guardRun : plan.run.filter(test => alwaysRun.has(test));
+  const rest = plan.run.filter(test => !guardRun.includes(test));
   const passes = guardRun.length > 0 && rest.length > 0
     ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
@@ -654,7 +607,7 @@ async function main() {
       } finally {
         rmSync(selection.dir, { recursive: true, force: true });
       }
-      if (index === 0 && guardRun.length > 0) status = guardBudgetStatus(guardRun, durations) || status;
+      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, durations, { enforce: enforceGuardBudget }) || status;
     }
   } finally {
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(durations));

@@ -14,12 +14,13 @@ import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
-import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
+import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
 const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
 const cancelModelAbuseGuardInstall = vi.fn();
+const runModelAbuseScan = vi.fn();
 
 // asyncHandler emits to errorEvents on every route failure; with `io` set on
 // the app it always fires. Swallow it so a validation-rejection test doesn't
@@ -48,6 +49,7 @@ vi.mock('../services/modelAbuseGuard.js', () => ({
   getModelAbuseGuardStatus: (...args) => getModelAbuseGuardStatus(...args),
   installModelAbuseGuard: (...args) => installModelAbuseGuard(...args),
   cancelModelAbuseGuardInstall: (...args) => cancelModelAbuseGuardInstall(...args),
+  runModelAbuseScan: (...args) => runModelAbuseScan(...args),
 }));
 
 vi.mock('../services/untrustedContent.js', () => ({
@@ -149,7 +151,7 @@ vi.mock('../services/settings.js', () => ({
 
 function makeApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '3mb' }));
   app.set('io', { emit: vi.fn() });
   app.use('/api/local-llm', localLlmRoutes);
   return app;
@@ -227,6 +229,30 @@ describe('local LLM playground routes', () => {
     expect(cancel.status).toBe(200);
     expect(cancel.body).toEqual({ cancelled: true });
     expect(cancelModelAbuseGuardInstall).toHaveBeenCalled();
+  });
+
+  it('scans exactly the operator-selected text and reports a flagged verdict without treating it as an error', async () => {
+    runModelAbuseScan.mockResolvedValueOnce({ ok: true, safe: false, code: 'flagged', layers: { classifier: 'blocked' }, findings: [] });
+    const content = '  Content selected by the owner  ';
+    const res = await request(makeApp()).post('/api/local-llm/security-guard/scan').send({ content });
+    expect(res.status).toBe(200);
+    expect(runModelAbuseScan).toHaveBeenCalledWith({ content });
+    expect(res.body).toMatchObject({ safe: false, code: 'flagged' });
+    expect(JSON.stringify(res.body)).not.toContain(content);
+  });
+
+  it('rejects invalid input and reports an unavailable scan without a safe verdict', async () => {
+    const empty = await request(makeApp()).post('/api/local-llm/security-guard/scan').send({ content: '   ' });
+    expect(empty.status).toBe(400);
+    expect(runModelAbuseScan).not.toHaveBeenCalled();
+    const oversized = await request(makeApp()).post('/api/local-llm/security-guard/scan').send({ content: 'x'.repeat(2_000_001) });
+    expect(oversized.status).toBe(400);
+    expect(runModelAbuseScan).not.toHaveBeenCalled();
+    runModelAbuseScan.mockResolvedValueOnce({ ok: false, code: 'security-guard-not-ready' });
+    const unavailable = await request(makeApp()).post('/api/local-llm/security-guard/scan').send({ content: 'Example' });
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body).toMatchObject({ code: 'security-guard-not-ready' });
+    expect(unavailable.body.safe).toBeUndefined();
   });
 
   it('returns actionable Prompt Guard access prerequisites from the install route', async () => {

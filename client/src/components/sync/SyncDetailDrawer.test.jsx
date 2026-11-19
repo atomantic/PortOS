@@ -230,6 +230,15 @@ describe('SyncDetailDrawer', () => {
     expect(mockToast.error).not.toHaveBeenCalled();
   });
 
+  it('directs the operator to update this install when its schema blocked a manual push', async () => {
+    mockSyncRecordToPeer.mockResolvedValue({ pushed: false, reason: 'local-schema-behind' });
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    fireEvent.click(screen.getAllByRole('button', { name: /sync to peer/i })[0]);
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith(
+      'Nothing synced to void — update this PortOS to send the record',
+    ));
+  });
+
   it('toasts an error with the reason when the server reports pushed:false (HTTP 200)', async () => {
     // The endpoint returns 200 with { pushed:false, reason } when nothing went
     // out (category disabled, record missing, etc.) — must NOT claim success.

@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'fs';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-auth-' });

@@ -5,13 +5,11 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import {
-  validateRequest, optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray,
-} from '../../lib/validation.js';
-import { recordRenderPinFields, seriesDesignSchema } from '../../lib/sharedSchemas.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { recordRenderPinFields, seriesDesignSchema, llmSchema } from '../../lib/sharedSchemas.js';
 import { characterEvolutionSchema } from '../../lib/characterEvolutionValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import { TRIM_SIZES, INTERIOR_FONTS } from '../../lib/proseExportSettings.js';
@@ -36,8 +34,9 @@ import {
   STYLE_GUIDE_RATINGS, STYLE_GUIDE_PROFANITY, STYLE_GUIDE_SPELLING,
 } from '../../lib/styleGuide.js';
 import { mapServiceError } from './shared.js';
+import { optionalBooleanMap } from '../../lib/zodCompat.js';
 
-// Inline until better/code-quality lands and exports this from validation.js
+// Inline until better/code-quality lands and exports this from a domain validation module
 const issuesListQuerySchema = z.object({
   offset: z.preprocess((v) => (v === undefined ? 0 : Number(v)), z.number().int().min(0)).default(0),
   limit: z.preprocess((v) => (v === undefined ? 1000 : Number(v)), z.number().int().min(1).max(1000)).default(1000),

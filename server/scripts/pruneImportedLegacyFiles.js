@@ -18,8 +18,7 @@
  * but the `scripts/migrations/` runner executes BEFORE the DB pool is up. So —
  * exactly like repairUniverseTags / reconcileCanonCatalog — the real work runs
  * here from server/index.js (after ensureSchema + every store's file→DB warm
- * import), and scripts/migrations/077-prune-imported-legacy-files.js is a
- * registration stub so the change still lands in the migration ledger.
+ * import). No migration-ledger stub exists for it (deleted in #16815).
  *
  * SAFETY — IDENTITY verification (not a row count). A domain's artifacts are
  * deleted only when EVERY record id those artifacts hold is confirmed present in

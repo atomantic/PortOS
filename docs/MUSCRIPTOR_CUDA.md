@@ -10,6 +10,14 @@ minors or Conda-based environments, which can fail to load torch DLLs on
 Windows. Intel macOS and non-x86_64 Windows/Linux hosts have no lock and are
 refused.
 
+On Apple Silicon, `update.sh` checks the version in an existing default
+MuScriptor venv and refreshes it from the Apple Silicon lock when the pin
+changes. If the refresh fails, the next transcription reports the version
+mismatch and the manual repair command. On the Music Video Song page, a
+transcription failure stays visible with a retry button after navigating away
+or reloading. Audio that libsndfile cannot open, including Suno AAC/M4A imports,
+is decoded to a temporary WAV with FFmpeg before transcription.
+
 The installer selects `scripts/requirements-muscriptor-cuda-windows.lock.txt`
 or `scripts/requirements-muscriptor-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:` against the runtime

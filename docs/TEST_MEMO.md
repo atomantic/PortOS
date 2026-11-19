@@ -399,6 +399,19 @@ than the memo already does to skip the test outright, and it is stricter about
 staleness. The full suite on every push to `main` still runs everything, so a
 miss is caught by the next completed run.
 
+The gate-tooling suites are the exception (#16798). They spawn git or carry
+`test-memo: never`, so none can ever earn a record, and the rule above would
+select them on nearly every diff. `TOOLING_TESTS` (`scripts/ci-test-plan.js`)
+names them: `planTestMemo` drops one from the related walk's result unless a
+changed source is a member of its closure or one of its tracked inputs. The
+planner supplies the rest through `TOOLING_OWNER_RE` (`scripts/**`, `.github/**`,
+every `package.json`, `package-lock.json` and `.npmrc`, the Vitest configs and
+the Vitest environment modules under `server/test/`): a diff touching one of
+those adds the whole list to the plan's explicit files, which are always kept. A
+suite joins the list only after its real-tree reads have been checked to sit
+under an owner path or inside its closure; one that asserts over other tracked
+files stays out.
+
 ## CI seeding
 
 The server, client, browser and Windows jobs restore

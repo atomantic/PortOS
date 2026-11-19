@@ -12,6 +12,29 @@
 
 import { z } from 'zod';
 import { isSafeHref } from './isSafeHref.js';
+import {
+  PRIVACY_SELF_SUBJECT_ID,
+  PRIVACY_SUBJECT_RELATIONSHIPS,
+  PRIVACY_CONSENT_METHODS,
+  PRIVACY_CONSENT_SCOPES,
+  PRIVACY_BROKER_CONSENT_SCOPES,
+  PRIVACY_VAULT_TYPES,
+  PRIVACY_SENSITIVE_TYPES,
+  PRIVACY_SCAN_DEFAULT_TYPES,
+  PRIVACY_VAULT_STATUSES,
+} from './privacyConstants.js';
+
+export {
+  PRIVACY_SELF_SUBJECT_ID,
+  PRIVACY_SUBJECT_RELATIONSHIPS,
+  PRIVACY_CONSENT_METHODS,
+  PRIVACY_CONSENT_SCOPES,
+  PRIVACY_BROKER_CONSENT_SCOPES,
+  PRIVACY_VAULT_TYPES,
+  PRIVACY_SENSITIVE_TYPES,
+  PRIVACY_SCAN_DEFAULT_TYPES,
+  PRIVACY_VAULT_STATUSES,
+};
 
 // Reject non-http(s) schemes (`javascript:`/`data:`/etc.) on a URL field while
 // preserving the field's existing empty/absent handling — an empty string or
@@ -25,8 +48,7 @@ const SAFE_URL_MESSAGE = 'must be an http(s) URL';
 // =============================================================================
 // Zod schemas for the encrypted PII Vault. Records are db-primary Postgres
 // (`privacy_vault_records` / `privacy_consents`), machine-local (federation is
-// a deferred child issue). validation.js re-exports everything here so deep
-// imports keep working.
+// a deferred child issue).
 
 // =============================================================================
 // HOUSEHOLD SUBJECTS (issue #3658)
@@ -35,38 +57,6 @@ const SAFE_URL_MESSAGE = 'must be an http(s) URL';
 // is a seeded row at a FIXED uuid so the DDL (server/lib/db/schema/privacy.js),
 // the fresh-install seed (server/scripts/init-db.sql), and the services all
 // name the same row without a lookup — change all three or none.
-export const PRIVACY_SELF_SUBJECT_ID = '00000000-0000-4000-8000-000000000001';
-
-export const PRIVACY_SUBJECT_RELATIONSHIPS = Object.freeze([
-  'self', 'partner', 'child', 'parent', 'dependent', 'other',
-]);
-
-// How a subject's consent was captured. Carried verbatim from unbroker's
-// no-consent-no-action rule: the engine refuses to scan or submit for a subject
-// without an active consent row of that purpose's scope, so this is an audit
-// fact, not a UI label.
-export const PRIVACY_CONSENT_METHODS = Object.freeze([
-  'self', 'verbal', 'written', 'signed_form', 'guardian', 'power_of_attorney', 'other',
-]);
-
-// Scope (purpose) of a consent row (#8332). Each purpose is granted and gated
-// independently — a grant for one NEVER implies another:
-//   - `pii_vault`     — local-only storage in the encrypted vault. Written at
-//                       subject creation / first vault record. Discloses nothing.
-//   - `broker_scan`   — the read-only exposure scan: scan-eligible identity
-//                       values fill external broker search URLs.
-//   - `broker_optout` — the removal workflow: opt-out emails / web forms that
-//                       SEND name, email, phone, city/state (and DOB when a
-//                       broker requires it) to the broker, plus the verification
-//                       re-probes of those brokers.
-// The engine requires an ACTIVE (unrevoked) row of the EXACT scope before each
-// purpose's work. Existing `pii_vault` rows stay local-only — never widened.
-export const PRIVACY_CONSENT_SCOPES = Object.freeze(['pii_vault', 'broker_scan', 'broker_optout']);
-
-// The external-disclosure purposes — the only scopes that can be revoked
-// without deleting the subject. Revoking `pii_vault` (local storage) still
-// means deleting the subject, which hard-deletes their records.
-export const PRIVACY_BROKER_CONSENT_SCOPES = Object.freeze(['broker_scan', 'broker_optout']);
 
 // A subject reference on an existing input/query. Optional everywhere — omitted
 // means `self`, so every pre-#3658 client keeps working unchanged.
@@ -113,25 +103,6 @@ export const privacySubjectConsentRevokeSchema = z.object({
   scope: z.enum(PRIVACY_BROKER_CONSENT_SCOPES),
 }).strict();
 
-export const PRIVACY_VAULT_TYPES = Object.freeze([
-  'legal_name', 'address', 'phone', 'email', 'dob',
-  'ssn', 'passport', 'drivers_license', 'financial_account', 'custom',
-]);
-
-// Types that may NEVER be used for broker scans — `use_for_scans: true` is
-// rejected at the API AND hard-forced false in the service (defense in depth).
-// Disclosing these to a data broker's search form is never least-disclosure.
-export const PRIVACY_SENSITIVE_TYPES = Object.freeze([
-  'ssn', 'passport', 'drivers_license', 'financial_account',
-]);
-
-// Types whose `use_for_scans` DEFAULTS to true (broker scans need name /
-// contact facts to find listings). Everything else defaults false.
-export const PRIVACY_SCAN_DEFAULT_TYPES = Object.freeze([
-  'legal_name', 'email', 'phone', 'address',
-]);
-
-export const PRIVACY_VAULT_STATUSES = Object.freeze(['current', 'previous']);
 
 // ISO calendar date (DATE column) — nullable to clear.
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD').nullable().optional();
@@ -139,10 +110,10 @@ const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-
 // Opt-in pagination query params (?limit=&offset=) spread into the .strict()
 // list-query schemas below so the paginateArray envelope can be requested
 // without the strict guard rejecting the keys. Kept as passthrough strings —
-// parsePagination (validation.js) does the parseInt + clamp, so garbage falls
+// parsePagination (queryValidation.js) does the parseInt + clamp, so garbage falls
 // back to the default page rather than 400-ing. Defined locally (not imported
-// from validation.js) to avoid a circular import: validation.js re-exports this
-// module. Mirror any change into validation.js's parsePagination contract.
+// from queryValidation.js) so this module imports no other validation file.
+// Mirror any change into queryValidation.js's parsePagination contract.
 const paginationQueryFields = {
   limit: z.string().optional(),
   offset: z.string().optional(),

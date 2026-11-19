@@ -8,7 +8,7 @@ import { dismissUsageRetentionTip, getUsageRetentionTips } from '../services/usa
 import { getProviderQuotas } from '../services/provider/providerUsage.js';
 import { getAllProviders } from '../services/provider/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -19,6 +19,10 @@ import {
   getHistoricalUsageBackfillStatus,
   startHistoricalUsageBackfill
 } from '../services/usageBackfill.js';
+import {
+  usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema,
+  subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema
+} from '../lib/usageValidation.js';
 
 const router = Router();
 

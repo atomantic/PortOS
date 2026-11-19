@@ -6,7 +6,7 @@
 import { createHttpClient } from '../lib/httpClient.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 import path from 'path';
-import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
 

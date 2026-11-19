@@ -44,18 +44,11 @@ export const importsClientSource = (source) => (
 const LEGACY_TEST_CROSS_IMPORTS = new Set([
   'server/cos-runner/allowedCommands.parity.test.js',
   'server/lib/eidoverseWorldReset.parity.test.js',
-  'server/lib/icLoraWeights.parity.test.js',
   'server/lib/postPowersLadder.test.js',
   'server/lib/privacyValidation.mirror.test.js',
-  'server/lib/renderTargets.parity.test.js',
   'server/lib/spriteAnimationTracks.test.js',
-  'server/lib/videoContinuity.parity.test.js',
-  'server/lib/videoSpeedProfiles.parity.test.js',
-  'server/lib/videoTextEncoders.parity.test.js',
   'server/services/imageTo3d/renderOptions.parity.test.js',
-  'server/services/imageTo3d/unavailableReasons.parity.test.js',
   'server/services/meatspaceHealth.test.js',
-  'server/services/rigging/unavailableReasons.parity.test.js',
   'server/services/rounds.test.js',
 ]);
 

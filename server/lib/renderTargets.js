@@ -2,7 +2,7 @@
  * Render-target alphabet (#3231): the creative surfaces that enqueue renders, keyed into `settings.renderDefaults`.
  *
  * Render-target alphabet (#3231): `RENDER_TARGET`/`RENDER_TARGETS` name every creative surface that enqueues image/video renders (universe-bible, sprite-reference, music-video, …), the keys into `settings.renderDefaults` where the user pins an install-wide default backend + model per surface
- * ("Universe Bible on Codex; Music Video on Agy") without touching the global `settings.imageGen.mode`, plus the `RENDER_TARGET_BACKEND_AUTO` sentinel. A dependency-free leaf so `lib/validation.js`, the Settings UI and every surface resolver derive from ONE alphabet; resolved by `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`.
+ * ("Universe Bible on Codex; Music Video on Agy") without touching the global `settings.imageGen.mode`, plus the `RENDER_TARGET_BACKEND_AUTO` sentinel. A dependency-free leaf so `lib/settingsValidation.js`, the Settings UI and every surface resolver derive from ONE alphabet; resolved by `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`.
  * Adding a surface = one entry here + a `resolveRenderTargetConfig(settings, RENDER_TARGET.X, …)` call at its enqueue site; `services/imageGen/renderTargets.guard.test.js` fails any surface reaching for resolveCloudProviderConfig directly.
  */
 
@@ -20,6 +20,23 @@ export const RENDER_TARGET = Object.freeze({
 });
 
 export const RENDER_TARGETS = Object.freeze(Object.values(RENDER_TARGET));
+
+// The Settings → Image Gen → Defaults rows (re-exported by `client/src/lib/imageGenModes.js`): the surfaces whose default backend + model are pinnable via settings.renderDefaults. Only targets whose resolver is LIVE are listed — a pin nobody's resolver reads would be a control that silently does nothing.
+// `renderTargets.test.js` fails a target that is neither listed nor in RENDER_TARGETS_WITHOUT_SETTINGS_ROW. Labels are the Settings-UI display names. `video: true` marks the targets whose VIDEO lane also consults `renderDefaults[target].videoMode` (#3231 Phase 4): music-video (scene clips + new-project backend seeding) and creative-agent (commission video steps). Video pins are backend-only — grok video has no model knob and local video models are picked on the surface itself, so no video-model control is offered anywhere.
+export const RENDER_TARGET_OPTIONS = Object.freeze([
+  { id: RENDER_TARGET.UNIVERSE_BIBLE, label: 'Universe Bible & canon renders' },
+  { id: RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, label: 'Universe character sheets' },
+  { id: RENDER_TARGET.SERIES_FIRST_PASS, label: 'Series first-pass portraits & frames' },
+  { id: RENDER_TARGET.SPRITE_REFERENCE, label: 'Sprite references & anchors' },
+  { id: RENDER_TARGET.PIPELINE_VISUAL, label: 'Pipeline visuals (storyboards, comics, covers)' },
+  { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
+  { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets', retired: true },
+  { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
+  { id: RENDER_TARGET.DECK, label: 'Deck card renders (playing cards & tarot)' },
+]);
+
+// Targets the Settings UI deliberately does NOT list. FableLoom production exposes per-run controls instead of a persistent Settings pin; its target exists so the service still goes through the shared resolver guard.
+export const RENDER_TARGETS_WITHOUT_SETTINGS_ROW = Object.freeze([RENDER_TARGET.FABLELOOM_PRODUCTION]);
 
 // The "no pin, fall through to the install default" sentinel (creative-commission `RENDER_BACKEND_AUTO` convention); an absent/null entry means the same, the explicit value lets a UI select round-trip it.
 export const RENDER_TARGET_BACKEND_AUTO = 'auto';

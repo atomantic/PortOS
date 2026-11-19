@@ -43,5 +43,7 @@ export const COGNITIVE_DRILL_TYPES = Object.freeze([
   'flanker',
 ]);
 
+export const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
+
 // Memory drills supported by the POST runner (client-side string-comparison scoring), trusted for score + schedule/mastery advancement on session submit (#2099). Currently identical to MEMORY_DRILL_TYPES but a separate list so a FUTURE memory drill can ship generation-only, ahead of scoring support, without trusting a client-supplied score.
 export const POST_SUPPORTED_MEMORY_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];

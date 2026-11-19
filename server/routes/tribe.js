@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import * as tribe from '../services/tribe.js';
 import * as tribeOutreach from '../services/tribeOutreach.js';

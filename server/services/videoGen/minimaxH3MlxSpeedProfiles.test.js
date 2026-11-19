@@ -5,7 +5,6 @@ import { resolveTestPython } from '../../lib/testHelper.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MINIMAX_H3_LIGHTX2V_MLX_PROFILE as profile, MINIMAX_H3_FLEX_MLX_PROFILE as flex } from '../../lib/minimaxH3SpeedProfiles.js';
 import { resolveVideoSampler } from '../../lib/videoSpeedProfiles.js';
-import { prepareMiniMaxH3SpeedProfile } from './ensureWeights.js';
 import { prepareVideoGenParams, validateVideoRetryParams } from './prepareParams.js';
 import { buildArgs } from './renderArgs.js';
 import { findCachedRepoFile } from '../../lib/hfCache.js';

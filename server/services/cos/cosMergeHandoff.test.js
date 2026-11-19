@@ -582,7 +582,7 @@ describe('handoff follow-up poll', () => {
 
   // The coordinator's lazy imports load from disk, which a setImmediate drain
   // does not wait for; warm them so a fresh worker settles like a warm one.
-  beforeAll(() => Promise.all(['../prReviewerSecurity.js', '../../lib/validation.js'].map((m) => import(m))));
+  beforeAll(() => import('../prReviewerSecurity.js'));
 
   beforeEach(async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });

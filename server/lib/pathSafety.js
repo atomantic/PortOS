@@ -1,6 +1,6 @@
 /** Filename validation, containment checks, and approved image-asset resolution. */
-import { existsSync, statSync } from 'fs';
-import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { statSync } from 'fs';
+import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { platform } from 'os';
 import { ServerError } from './errorHandler.js';
 import { PATHS } from './paths.js';
@@ -202,6 +202,17 @@ export const resolveScreenshot = makePathResolver(() => PATHS.screenshots, {
   extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
 });
 
+const resolveVideoThumbnail = makePathResolver(() => PATHS.videoThumbnails, {
+  extensions: ['jpg', 'jpeg', 'png', 'webp'],
+});
+
+// A publish-kit workflow supplies a resolved frame. Keep thumbnail names out
+// of the generic basename search used by gallery and upload inputs.
+function resolveVideoThumbnailInput(rawPath) {
+  if (!isAbsolute(rawPath) || dirname(resolvePath(rawPath)) !== resolvePath(PATHS.videoThumbnails)) return null;
+  return resolveVideoThumbnail(rawPath);
+}
+
 /**
  /**
   * Resolve any user-supplied image input (init or multi-reference) to an absolute path under an approved image root (gallery, multi-ref dir, template dir, ...).
@@ -217,6 +228,7 @@ const IMAGE_INPUT_RESOLVERS = [
   ['visualTemplates', resolveTemplateAsset],
   ['imageCleanTmp', resolveImageCleanTmp],
   ['federatedMediaInbox', resolveFederatedMediaAsset],
+  ['videoThumbnails', resolveVideoThumbnailInput],
   // Sprite resolver is absolute-only (null on basename input, so the fall-through loop skips it).
   ['sprites', resolveSpriteImageInput],
 ];

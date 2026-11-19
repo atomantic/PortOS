@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile, rename } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { materializeGitRepo } from '../../lib/gitTestRepo.js';
@@ -13,7 +13,7 @@ vi.mock('../cos/cosAgentIndex.js', () => ({
 vi.mock('../cos/cos.js', () => ({}));
 vi.mock('../cos/cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
-vi.mock('../cos/cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
+vi.mock('../cos/cosImprovementTasks.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   getAgentRecord: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
@@ -157,6 +157,7 @@ describe('durable post-ingestion cleanup replay', () => {
     const settled = await saved();
     expect(settled.metadata.completionCleanup.status).toBe('completed');
     expect(settled.metadata.repoStateVerification).toEqual({ status: 'pending' });
+    expect(settled.result).toEqual(record.result);
     expect(addTask).not.toHaveBeenCalled();
   });
 

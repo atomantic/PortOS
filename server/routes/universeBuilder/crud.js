@@ -12,9 +12,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { universeStarterPatch } from '../../lib/universeStarters.js';
 import { ServerError, asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest, llmSchema, isPaginationRequested, paginateArray } from '../../lib/validation.js';
-import { paginationQuerySchema } from '../../lib/queryValidation.js';
-import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../../lib/queryValidation.js';
+import { recordRenderPinFields, llmSchema } from '../../lib/sharedSchemas.js';
 import { pruneStaleReferenceSheets } from '../../lib/storyBible.js';
 import * as svc from '../../services/universeBuilder.js';
 import { findSameNameUniverses } from '../../services/duplicateDetection.js';
@@ -119,8 +119,9 @@ const patchSchema = z.object({
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
-  const universes = await svc.listUniverses();
+  // Validate before the store read: a malformed query is a 400 whatever state the store is in (#16428).
   const query = validateRequest(paginationQuerySchema, req.query);
+  const universes = await svc.listUniverses();
   if (!isPaginationRequested(query)) {
     return res.json(universes);
   }

@@ -12,8 +12,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalog/cat
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
 
-// Wire/request schemas for federated peer-to-peer record sync (see server/services/sharing/peerSync.js);
-// validation.js re-exports everything here.
+// Wire/request schemas for federated peer-to-peer record sync (see server/services/sharing/peerSync.js).
 
 // Subscribe a record (universe / series) to a federated peer for live push (the destination is another PortOS
 // instance over Tailnet, unlike share-bucket subscriptions).
@@ -355,7 +354,7 @@ export const peerCosTasksSchema = z.object({
  * Deliberately shallow on `candidates`: the real shape lives in `eidoverseFoundationCandidateSchema`
  * (lib/eidoverseFoundations.js), which the receiver runs (fingerprint, assay evidence, federation-safety scan) on
  * EVERY candidate. Re-declaring it would duplicate a contract that must not drift and drag that module into
- * `validation.js`'s import closure. This schema only bounds the TRANSPORT: wrapper, capped count, objects.
+ * this module's import closure. This schema only bounds the TRANSPORT: wrapper, capped count, objects.
  */
 export const peerEidoverseFoundationsSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),

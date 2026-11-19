@@ -40,12 +40,12 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { probeVideoDuration } from '../lib/ffmpeg.js';

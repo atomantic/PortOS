@@ -6,16 +6,16 @@ const mergedTarget = vi.hoisted(() => ({
   probeChangeRequestState: vi.fn(),
 }));
 vi.mock('../../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOriginInfo }));
-vi.mock('../prProbe.js', () => ({ probeChangeRequestState: mergedTarget.probeChangeRequestState }));
+vi.mock('../prProbe.js', async (importOriginal) => ({ ...(await importOriginal()), probeChangeRequestState: mergedTarget.probeChangeRequestState }));
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('../claimDisposition.js', () => claimVerifier);
+const reviewHandoffVerifier = vi.hoisted(() => ({ verifyClaimReviewHandoff: vi.fn() }));
+vi.mock('../claimReviewHandoff.js', () => reviewHandoffVerifier);
 vi.mock('../../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
 });
 import { tryReadFile } from '../../lib/fileUtils.js';
-const deep = vi.hoisted(() => ({ checkpointDeepAudit: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })), settleDeepAuditDelivery: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })) }));
-vi.mock('../deepAudit.js', () => deep);
 vi.mock('../../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 vi.mock('../appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
 import { recordAuditQuality } from '../appQuality.js';
@@ -63,9 +63,8 @@ import { canRunTaskOutputHookWithoutPayload, declaresNoCommitCriterion, getTaskO
 import {
   finalizeAgent,
   retireDeadAgent,
-  dispatchRecoveredTaskOutputHook,
-  dispatchTaskOutputHookOnce,
 } from './agentFinalization.js';
+import { dispatchRecoveredTaskOutputHook, dispatchTaskOutputHookOnce } from './agentOutputHookDispatch.js';
 
 
 vi.mock('../cos/cosTaskStore.js', () => ({
@@ -400,7 +399,6 @@ describe('recovery output-hook dispatch (#3182)', () => {
         duration: 1000, workspacePath, finalSummary, outputBuffer: 'Thinking: inspect files\nexec\npython command output' });
       expect(persistedAgent.metadata.taskSummary).toBe(expected);
       expect(persistedAgent.metadata.simplifySummary).toBeNull();
-      expect(deep.checkpointDeepAudit).toHaveBeenCalled();
     } finally {
       await rm(workspacePath, { recursive: true, force: true });
     }
@@ -887,6 +885,21 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  // A completion that outlived its dispatch must not overwrite the run that
+  // replaced it. The store admits this write only while the task is still
+  // in_progress under the spawn stamp this run was bound to, with no other owner.
+  it('fences its own completion write to the dispatch it was bound to', async () => {
+    const dispatched = { claimedBy: 'fixture-local', claimedAt: '2026-09-10T00:00:00Z', lastSpawnedAt: '2026-09-10T00:00:01Z', totalSpawnCount: 2 };
+    const task = { ...TASK, status: 'in_progress', metadata: { ...TASK.metadata, ...dispatched } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: task.taskType, expected: Object.entries(dispatched) };
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, duration: 1000, outputBuffer: '' });
+    expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'completed' }), task.taskType, {
+      expectedStatus: 'in_progress', expectedMetadata: { lastSpawnedAt: dispatched.lastSpawnedAt },
+      recoveryOwner: { id: persistedAgent.id, startedAt: persistedAgent.startedAt },
+    });
+  });
+
   it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
   ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);
@@ -977,6 +990,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     const taskOutcome = { status: 'blocked', reason: 'Required CI logs need unavailable credentials; no safe rerun is authorized.' };
     persistedAgent.taskId = task.id;
     claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'claim-still-open' });
+    reviewHandoffVerifier.verifyClaimReviewHandoff.mockResolvedValue({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
     try {
       await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
         finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) });
@@ -984,7 +998,44 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'blocked',
         metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted' }) }), task.taskType);
       expect(addTask).not.toHaveBeenCalled();
-    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      reviewHandoffVerifier.verifyClaimReviewHandoff.mockReset();
+    }
+  });
+
+  // Regression: a claim whose PR passed CI but needed a code owner's approval
+  // reported `blocked`, was retried to its spawn limit and then parked as
+  // task-recovery-exhausted for the operator, duplicating the open PR's review.
+  it.each(['normal', 'restart'])('completes a claim held only by a required human approval during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42', failureCount: MAX_TASK_RETRIES - 1 } };
+    const reported = { status: 'blocked', reason: 'PR is green; branch protection still needs a code-owner approval.' };
+    const prUrl = 'https://github.example.test/example/project/pull/7';
+    const handoff = { status: 'verified', taskId: task.id, agentId: persistedAgent.id,
+      pullRequests: [{ branch: 'claim/issue-42', number: 7, url: prUrl, head: 'a'.repeat(40), state: 'OPEN', awaitingHumanReview: true }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'issue-not-closed-or-mismatched' });
+    reviewHandoffVerifier.verifyClaimReviewHandoff.mockResolvedValue(handoff);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(reviewHandoffVerifier.verifyClaimReviewHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ task,
+        agent: expect.objectContaining({ id: persistedAgent.id, taskId: task.id }), reportedOutcome: reported, success: true }));
+      const taskOutcome = { status: 'completed', reason: expect.stringContaining(prUrl) };
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true, taskOutcome }));
+      expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported, reviewHandoff: handoff });
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      reviewHandoffVerifier.verifyClaimReviewHandoff.mockReset();
+    }
   });
 
   it('preserves a failed delivery gate during claim no-op recovery', async () => {
@@ -1137,8 +1188,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
   recordAuditQuality.mockResolvedValue(true);
   await finalizeAgent({ agentId: 'extended-summary', task, success: true, exitCode: 0, duration: 1000,
     workspacePath: '/example/repo', finalSummary: 'Investigated high-risk paths and fixed two coherent defects. Coverage remains partial.', outputBuffer: 'tool transcript' });
-  expect(deep.checkpointDeepAudit).not.toHaveBeenCalled();
-  expect(deep.settleDeepAuditDelivery).not.toHaveBeenCalled();
   expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: null }) }), expect.anything());
   expect(persistedAgent.metadata.taskSummary).toContain('Coverage remains partial');
   expect(persistedAgent.metadata.taskSummarySource).toBe('terminal-result');
@@ -1151,7 +1200,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
       errorAnalysis: { type: 'transient', retryable: true, error: 'context exhausted' } });
     expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ retryPendingCleanup: expect.any(String) }) }), expect.anything());
-    expect(deep.checkpointDeepAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
   it('distinguishes a clean execution with no usable assessment from a failed execution', async () => {

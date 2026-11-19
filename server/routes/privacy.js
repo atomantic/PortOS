@@ -14,7 +14,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   privacySubjectCreateSchema,
   privacySubjectUpdateSchema,
@@ -94,7 +94,7 @@ import {
   getPrivacyRecheckStatus,
   restartPrivacyRecheckScheduler,
 } from '../services/privacyRecheckScheduler.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { updateSettingsWith } from '../services/settings.js';
 import {
   declareChange,
   listChangeEvents,
@@ -103,6 +103,7 @@ import {
   markOrgRemoved,
   draftUpdateEmail,
 } from '../services/privacyChanges.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 
 const router = Router();
 

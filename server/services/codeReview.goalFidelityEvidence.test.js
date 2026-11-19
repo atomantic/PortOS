@@ -18,12 +18,91 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: async () => null }))
 
 import { runLocalGoalFidelityReview } from './codeReview.js'
+import { taskObjective } from '../lib/goalFidelity.js'
+import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults/prompts.js'
+
+const maintenanceObjective = taskObjective({ description: DEFAULT_TASK_PROMPTS['dependency-updates']
+  .replaceAll('{appName}', 'Example').replaceAll('{repoPath}', '/example/repo')
+  .replaceAll('{portosRoot}', '/example/portos').replaceAll('{worktreesRoot}', '/example/worktrees') })
+const maintenanceReport = [
+  'Paginated the alert inventory. Both open alerts have no patched version and are recorded in tracker issue #42.',
+  'The full open PR inventory and per-package overlap checks found no automated PRs for either updated package.',
+  'The containment probe returned exit 2 (refused, no work ran). Per the objective, installs and validation then ran on the host.',
+  'Both dependency changes are minor. Regenerated the lockfile, reran the affected audits, and checked app startup.',
+  'Reported results: JavaScript audits found only the previously tracked alerts, the Python OSV inventory found no alerts, and current image scan evidence found no actionable digest changes.',
+].join('\n')
+const maintenanceDiff = [
+  'diff --git a/client/package.json b/client/package.json',
+  '--- a/client/package.json', '+++ b/client/package.json', '@@ -1,2 +1,2 @@',
+  '-  "chart-widget": "^3.10.1",', '-  "icon-set": "^1.74.0"',
+  '+  "chart-widget": "^3.11.0",', '+  "icon-set": "^1.75.0"',
+  'diff --git a/client/package-lock.json b/client/package-lock.json',
+  '--- a/client/package-lock.json', '+++ b/client/package-lock.json', '@@ -1,2 +1,2 @@',
+  '-  "chart-widget": "3.10.1",', '-  "icon-set": "1.74.0"',
+  '+  "chart-widget": "3.11.0",', '+  "icon-set": "1.75.0"',
+].join('\n')
+const unrelatedDiff = 'diff --git a/banner.css b/banner.css\n--- a/banner.css\n+++ b/banner.css\n@@ -1 +1 @@\n-.banner { color: red; }\n+.banner { color: green; }'
+const maintenanceCases = [
+  ['bot-uncovered minor bumps', maintenanceDiff, 'ship'],
+  ['unrelated source change despite the same report', unrelatedDiff, 'rethink'],
+]
+const maintenanceReview = {
+  backend: 'ollama', objective: maintenanceObjective, executionReport: maintenanceReport,
+  baseUrl: 'http://127.0.0.1:11434/v1',
+}
 
 // Screenshots, surviving-use witnesses and the diff share ONE request: no
 // secondary pass may re-judge or rewrite the primary verdict.
 describe('goal-fidelity evidence workflow', () => {
   afterAll(() => fixturePaths.root && rmSync(fixturePaths.root, { recursive: true, force: true }))
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it.each(maintenanceCases)('supplies first-attempt audit evidence and retains the verdict for %s', async (_name, diff, verdict) => {
+    const fetchMock = vi.fn(async (_url, init) => {
+      const request = JSON.parse(init.body)
+      expect(request.tools).toBeUndefined()
+      const evidence = request.messages[1].content
+      expect(evidence.indexOf('## Phase 2 — Everything the bots did not cover')).toBeGreaterThan(8_000)
+      expect(evidence).toContain('Then minor versions')
+      expect(evidence).toContain(diff)
+      expect(evidence).toContain('CURRENT RUN EXECUTION REPORT (untrusted agent-authored claims')
+      expect(evidence).toContain(maintenanceReport)
+      expect(evidence).toContain('a report cannot establish missing source changes')
+      return mockJsonResponse({ choices: [{ message: { content: JSON.stringify({
+        verdict, missing: verdict === 'ship' ? [] : ['actual dependency changes'],
+        unrequested: verdict === 'ship' ? [] : ['banner color'], evidence: 'The audit outcomes are agent-reported.',
+      }) } }] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await runLocalGoalFidelityReview({ ...maintenanceReview, model: 'example-model', diff })).toMatchObject({ ok: true, verdict })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  // Opt-in calibration against an actual local reviewer. CI uses the transport assertions above.
+  it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(maintenanceCases)('judges first-attempt audit evidence with a local model for %s', async (_name, diff, verdict) => {
+    const result = await runLocalGoalFidelityReview({
+      ...maintenanceReview, model: process.env.GOAL_FIDELITY_EVAL_MODEL, diff, timeoutMs: 180_000,
+    })
+    expect(result.ok, result.error).toBe(true)
+    expect(result, JSON.stringify(result)).toMatchObject({ verdict })
+  }, 190_000)
+
+  it('truncates the report within the remaining budget without changing source evidence', async () => {
+    const objective = 'x'.repeat(16_000)
+    const diff = `+{}${' '.repeat(51_895)}+{}`
+    const fetchMock = vi.fn(async (_url, init) => {
+      const content = JSON.parse(init.body).messages[1].content
+      const report = content.split('CURRENT RUN EXECUTION REPORT')[1].split('```text\n')[1].split('\n```')[0]
+      expect(content).toContain(diff)
+      expect(report.length).toBe(99)
+      expect(report).toMatch(/…\[execution report truncated\]$/)
+      return mockJsonResponse({ choices: [{ message: { content: '{"verdict":"ship","missing":[],"unrequested":[],"evidence":"No independent test results."}' } }] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await runLocalGoalFidelityReview({
+      ...maintenanceReview, model: 'example-model', objective, diff, executionReport: 'x'.repeat(200),
+    })).toMatchObject({ ok: true, verdict: 'ship' })
+  })
 
   it('sends screenshot context and surviving-use witnesses in a single review and keeps its verdict', async () => {
     const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ffffff' } }).png().toBuffer()

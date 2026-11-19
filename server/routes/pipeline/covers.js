@@ -9,12 +9,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import {
-  validateRequest,
-  imageEdgeSchema,
-  refineImagePixelCap,
-  PIXEL_CAP_MESSAGE,
-} from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { pipelinePdfQuerySchema } from '../../lib/pipelineValidation.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import {
@@ -28,6 +23,7 @@ import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
 import { buildComicPdf } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
 import { mapServiceError } from './shared.js';
+import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../../lib/sharedSchemas.js';
 
 const router = Router();
 

@@ -1,10 +1,9 @@
 import { normalizeTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { resolveUndeliveredTaskUpdate } from './agent/agentErrorAnalysis.js';
-import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
+import { matchesLatestTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { updateTask } from './cos/cosTaskStore.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 /** Adopt old outcome blocks once, retaining the original task, budget and checkout.
  * Manual holds, provider safety refusals and live owners are never revived here.
@@ -17,7 +16,7 @@ export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
   let recovered = 0;
   for (const task of tasks) {
     if (recovered >= 3) break;
-    if (task.status !== 'blocked' || isTruthyMeta(task.metadata?.spawnBudgetReconciledHold) || !['task-blocked', 'task-incomplete'].includes(task.metadata?.blockedCategory)
+    if (task.status !== 'blocked' || !['task-blocked', 'task-incomplete'].includes(task.metadata?.blockedCategory)
       || task.metadata?.legacyDeliveryRecovery || task.metadata?.blocker || isPrivateSecurityTask(task)) continue;
     const outcome = normalizeTaskOutcome(task.metadata.taskOutcome);
     if (!outcome || !['blocked', 'incomplete'].includes(outcome.status)) continue;
@@ -27,9 +26,7 @@ export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
       .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''))[0];
     if (!owner?.id || owner.result?.taskOutcome?.reason !== outcome.reason
       || owner.result?.taskOutcome?.status !== outcome.status || owner.metadata?.executionInterruption || owner.result?.executionInterruption
-      || isPrivateSecurityTask(owner) || !matchesSpawnBudgetProof(task, owner)
-      || spawnBudgetCount(task.metadata.totalSpawnCount) === null
-      || spawnBudgetCount(task.metadata.totalSpawnCount) !== spawnBudgetCount(task.metadata.spawnBudgetProof.dispatch.totalSpawnCount)) continue;
+      || isPrivateSecurityTask(owner) || !matchesLatestTaskDispatch(owner, task)) continue;
     const planned = resolveUndeliveredTaskUpdate(task, outcome, owner.id);
     const result = await update(task.id, { ...planned, metadata: { ...planned.metadata, legacyDeliveryRecovery: owner.id } }, task.taskType || 'user', {
       expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },

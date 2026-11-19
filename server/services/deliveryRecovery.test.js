@@ -2,19 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { recoverLegacyDeliveryBlocks } from './deliveryRecovery.js';
 
 const outcome = { status: 'incomplete', reason: 'Retained work needs its remaining validation.' };
-const epoch = '11111111-1111-4111-8111-111111111111';
 const startedAt = '2026-10-23T00:00:00Z';
-const evidence = count => {
-  const dispatch = { agentId: 'agent-example', startedAt, claimedBy: 'local', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: count };
-  return { proof: { version: 1, epoch, baseline: count - 1, dispatch }, receipt: { taskId: 'task-example', taskType: 'internal', spawnBudgetEpoch: epoch, spawnBudgetStartedAt: startedAt,
-    expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]) } };
-};
+// What a dispatch binds onto its agent. The block released the task's claim, so
+// its spawn stamp and count are what still tie it to that dispatch.
+const receipt = (count, lastSpawnedAt = 'spawn') => ({ taskId: 'task-example', taskType: 'internal',
+  expected: [['claimedBy', 'local'], ['claimedAt', 'claim'], ['lastSpawnedAt', lastSpawnedAt], ['totalSpawnCount', count]] });
 const task = { id: 'task-example', taskType: 'internal', status: 'blocked', metadata: {
   blockedCategory: 'task-incomplete', blockedAt: '2026-10-23T00:00:00Z', taskOutcome: outcome, failureCount: 1, totalSpawnCount: 2,
-  spawnBudgetProof: evidence(2).proof,
+  lastSpawnedAt: 'spawn',
 } };
 const owner = { id: 'agent-example', taskId: task.id, status: 'completed', startedAt,
-  result: { taskOutcome: outcome }, metadata: { worktreeBranch: 'fix/example', completionTaskDispatch: evidence(2).receipt } };
+  result: { taskOutcome: outcome }, metadata: { worktreeBranch: 'fix/example', completionTaskDispatch: receipt(2) } };
 const setup = (tasks = [task]) => ({ readTasks: vi.fn(async () => tasks),
   update: vi.fn(async (_id, patch) => ({ status: patch.status || 'in_progress' })), release: vi.fn(async () => ({})) });
 
@@ -46,8 +44,8 @@ describe('legacy delivery recovery', () => {
   });
 
   it('stops exhausted tasks with choices and never resets spawn budgets', async () => {
-    const deps = setup([{ ...task, metadata: { ...task.metadata, totalSpawnCount: 999, spawnBudgetProof: evidence(999).proof } }]);
-    const exhaustedOwner = { ...owner, metadata: { ...owner.metadata, completionTaskDispatch: evidence(999).receipt } };
+    const deps = setup([{ ...task, metadata: { ...task.metadata, totalSpawnCount: 999 } }]);
+    const exhaustedOwner = { ...owner, metadata: { ...owner.metadata, completionTaskDispatch: receipt(999) } };
     await recoverLegacyDeliveryBlocks([exhaustedOwner], deps);
     expect(deps.update.mock.calls[0][1]).toMatchObject({ status: 'blocked', metadata: {
       totalSpawnCount: 999, blockedCategory: 'task-recovery-exhausted', blockedReason: expect.stringContaining('Options:'),
@@ -62,11 +60,16 @@ describe('legacy delivery recovery', () => {
     expect(deps.release).not.toHaveBeenCalled();
   });
 
-  it('holds legacy delivery when the current episode proof is missing', async () => {
-    const { spawnBudgetProof, ...metadata } = task.metadata;
-    expect(spawnBudgetProof).toBeDefined();
-    const deps = setup([{ ...task, metadata }]);
-    expect(await recoverLegacyDeliveryBlocks([owner], deps)).toEqual({ recovered: 0 });
+  it.each([
+    ['has no dispatch receipt', { ...owner, metadata: { worktreeBranch: 'fix/example' } }, task],
+    ['was superseded by a later dispatch', owner, { ...task, metadata: { ...task.metadata, lastSpawnedAt: 'later-spawn', totalSpawnCount: 3 } }],
+    ['dispatched before a budget reset', owner, { ...task, metadata: { ...task.metadata, totalSpawnCount: undefined } }],
+    ['holds a receipt for another task', { ...owner, metadata: { ...owner.metadata, completionTaskDispatch: { ...receipt(2), taskId: 'task-other' } } }, task],
+    ['holds a receipt with a duplicated field', { ...owner, metadata: { ...owner.metadata,
+      completionTaskDispatch: { ...receipt(2), expected: [...receipt(2).expected, ['totalSpawnCount', 2]] } } }, task],
+  ])('holds delivery when the completed owner %s', async (_label, candidate, blocked) => {
+    const deps = setup([blocked]);
+    expect(await recoverLegacyDeliveryBlocks([candidate], deps)).toEqual({ recovered: 0 });
     expect(deps.update).not.toHaveBeenCalled();
     expect(deps.release).not.toHaveBeenCalled();
   });

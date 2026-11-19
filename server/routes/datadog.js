@@ -5,11 +5,8 @@
 import express from 'express';
 import * as datadogService from '../services/datadog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  datadogInstanceRequestSchema,
-  datadogSearchErrorsRequestSchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { datadogInstanceRequestSchema, datadogSearchErrorsRequestSchema } from '../lib/appValidation.js';
 
 const router = express.Router();
 

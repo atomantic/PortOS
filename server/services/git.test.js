@@ -132,7 +132,6 @@ describe('git.js exports the helpers the agent resume path calls', () => {
     for (const name of ['parseGitRemote', 'parseGitHubOwnerFromRemote', 'pickGhAccountForOwner', 'detectForgeCli', 'parsePullRequestUrl']) {
       expect(git[name], `git.${name} must re-export gitForge.${name}`).toBe(gitForge[name]);
     }
-    expect(git.isBranchMergedInto).toBe(git.hasBranchMergeEvidence);
     for (const name of [
       'getBranch', 'getStatusPorcelain', 'getBranchComparison',
       'hasBranchMergeEvidence', 'getWorktreeBranches', 'getDefaultBranch'

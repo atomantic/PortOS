@@ -31,6 +31,7 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => {
 vi.mock('../../lib/killWithEscalation.js', () => ({ killWithEscalation: () => {} }));
 
 const { encodeComposition } = await import('./encode.js');
+const { SOCIAL_VIDEO_ARGS } = await import('../musicVideo/socialCuts.js');
 
 const FRAME = Buffer.alloc(4 * 1024, 7).toString('base64');
 const page = {
@@ -62,6 +63,15 @@ describe('encodeComposition music-video audio', () => {
     expect(args).not.toContain('-stream_loop');
     expect(args.join(' ')).not.toContain('afade');
     expect(args).toContain('-frames:v');
+  });
+
+  it('replaces the master CRF with the rate-controlled social encode', async () => {
+    spawned.length = 0;
+    await encodeComposition(page, { ...contract(1), width: 1080, height: 1920 }, '/tmp/social.mp4', { videoArgs: SOCIAL_VIDEO_ARGS });
+    const args = spawned[0].args;
+    const codecAt = args.indexOf('-c:v');
+    expect(args.slice(codecAt, codecAt + SOCIAL_VIDEO_ARGS.length)).toEqual(SOCIAL_VIDEO_ARGS);
+    expect(args).not.toContain('-crf');
   });
 
   it('does not retain per-frame buffers across a long synthetic job', () => {

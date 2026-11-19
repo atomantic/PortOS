@@ -26,8 +26,8 @@ import {
   listDirectoryByExtension,
   copyFileGuarded,
   unlinkGuarded,
-  assertFileNotMediaManifest,
 } from '../../lib/fileUtils.js';
+import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.

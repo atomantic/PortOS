@@ -43,7 +43,6 @@ import { buildSecurityAuditRuntimeSection } from '../promptSections/securityAudi
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { COMPLETION_MODES, resolveCompletionMode } from '../../lib/agent/agentCompletionMode.js';
 import {
-  DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
   buildExternalRepositoryCompletionSection,
   buildAuditOutputCompletionSection,
@@ -417,6 +416,22 @@ async function attachWorkflowScope(task, workspaceDir) {
   return { ...task, metadata: { ...task.metadata, forgeWorkflowScope } };
 }
 
+export function renderClaimDependencyStatus(prompt, dependencies) {
+  const marker = 'CLAIM_DEPENDENCY_PROVISIONING_STATUS';
+  let status = 'Dependency provisioning could not be verified. Inspect dependency paths and symlinks before installing; never install through links to the source checkout.';
+  if (Array.isArray(dependencies) && dependencies.length) {
+    const linked = dependencies.filter(item => item.status === 'linked').map(item => item.path);
+    const absent = dependencies.filter(item => item.status === 'absent').map(item => item.path);
+    const existing = dependencies.filter(item => item.status === 'existing').map(item => item.path);
+    if (absent.length === dependencies.length) {
+      status = 'The source checkout has no installed dependencies to link. Install dependencies inside this worktree after verifying no dependency paths are symlinks.';
+    } else {
+      status = `Dependency provisioning: linked or provisioned: ${linked.join(', ') || 'none'}; absent in source: ${absent.join(', ') || 'none'}; existing and preserved: ${existing.join(', ') || 'none'}. Never install through dependency paths linked to the source checkout; inspect preserved paths before installing.`;
+    }
+  }
+  return expandPromptParts(prompt, text => text.replaceAll(marker, () => status));
+}
+
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
   // Undo the queue-path description/context split so a round-tripped generated
   // prompt (swarm, scheduled claim-work, other system tasks) renders once
@@ -458,7 +473,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
   // CLI review-outcome reports name this run so their verdicts land on its record (#16572).
-  const finalizePrompt = prompt => expandPromptParts(expandPortosApiUrl(withDeepAudit(prompt)), text => expandReviewVerdictRunId(text, options.agentId));
+  const finalizePrompt = prompt => renderClaimDependencyStatus(expandPromptParts(expandPortosApiUrl(withDeepAudit(prompt)), text => expandReviewVerdictRunId(text, options.agentId)), options.claimDependencies);
 
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;

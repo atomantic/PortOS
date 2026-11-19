@@ -43,8 +43,16 @@ export function AnalyzeAction({ project, busy, onAnalyze }) {
 /** Transcribe the track to MIDI (an advanced audio tool). */
 export function MidiAction({ project, midi, midiBound }) {
   const noAudio = noAudioOf(project);
+  if (midiBound && midi.context !== project.id) {
+    return <p role="status" className="text-xs text-port-text-muted">MIDI transcription running…</p>;
+  }
   return (
     <div className={groupCls}>
+      {!midiBound && project.midiTranscriptionError && (
+        <p role="alert" className="basis-full text-xs text-port-error break-words">
+          MIDI transcription failed. {project.midiTranscriptionError}
+        </p>
+      )}
       {midiBound ? (
         <button onClick={midi.cancel} title="Cancel MIDI transcription"
           className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0">
@@ -63,9 +71,9 @@ export function MidiAction({ project, midi, midiBound }) {
             disabled={midi.active || noAudio}
             title={noAudio
               ? 'Link a track first'
-              : `Transcribe the track to MIDI with MuScriptor (${midi.model} model, local — installs automatically on first use)`}
+              : `Transcribe the track to MIDI with MuScriptor (${midi.model} model, local — installs automatically on first use). Shot planning and Cast & Sets then read its parts, low hits, melody and chords.`}
             className={buttonCls}>
-            <Music size={15} /> MIDI
+            <Music size={15} /> {project.midiTranscriptionError ? 'Retry MIDI transcription' : 'MIDI'}
           </button>
         </>
       )}

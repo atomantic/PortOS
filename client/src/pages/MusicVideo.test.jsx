@@ -101,6 +101,65 @@ describe('MusicVideo project load recovery (#9761)', () => {
 });
 
 describe('MusicVideo project status filter', () => {
+  it('moves a Blender project out of Completed when its on-disk film becomes stale', async () => {
+    const completed = { ...PROJECT_NO_CLIP, status: 'complete', isCompleted: true, renderHistoryId: 'final', composition: { mode: 'blender' } };
+    const stale = { ...completed, isCompleted: false };
+    let current = completed;
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = !statusFilter || current.isCompleted === (statusFilter === 'completed') ? [current] : [];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    await screen.findByRole('heading', { name: completed.name });
+    current = stale;
+    getMusicVideoProject.mockResolvedValue({ ...stale, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    await pushSocket('music-video:blender', { projectId: completed.id, kind: 'state' });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: completed.name })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'In Progress' }));
+    expect(await screen.findByRole('heading', { name: completed.name })).toBeInTheDocument();
+  });
+
+  it('does not trust an unpresented run event to reclassify a stale project', async () => {
+    const stale = { ...PROJECT_NO_CLIP, status: 'complete', isCompleted: false, renderHistoryId: 'final', composition: { mode: 'blender' } };
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [stale], total: 1, nextCursor: null });
+    getMusicVideoProject.mockResolvedValue({ ...stale, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: stale.name });
+    await pushSocket('music-video:production', { projectId: stale.id, project: { ...stale, isCompleted: undefined } });
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith(stale.id, { silent: true }));
+    expect(screen.getByRole('heading', { name: stale.name })).toBeInTheDocument();
+  });
+
+  it('reconciles an unlisted Blender project as it enters, leaves, and re-enters', async () => {
+    const listed = { ...PROJECT_WITH_CLIP, id: 'mv-listed', name: 'Listed', status: 'complete', isCompleted: true };
+    const hidden = { ...PROJECT_NO_CLIP, id: 'mv-hidden', name: 'Hidden', status: 'complete', isCompleted: false };
+    let projects = [listed, hidden];
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = projects.filter((p) => !statusFilter || p.isCompleted === (statusFilter === 'completed'));
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    await screen.findByRole('heading', { name: listed.name });
+    projects = [listed, { ...hidden, isCompleted: true }];
+    getMusicVideoProject.mockResolvedValue({ ...hidden, isCompleted: undefined, renderDependencyState: { status: 'current' } });
+    await pushSocket('music-video:blender', { projectId: hidden.id, kind: 'state' });
+    expect(await screen.findByRole('heading', { name: hidden.name })).toBeInTheDocument();
+    const calls = listMusicVideoProjectSummaries.mock.calls.length;
+    await pushSocket('music-video:blender', { projectId: hidden.id, kind: 'state' });
+    await waitFor(() => expect(getMusicVideoProject.mock.calls.filter(([id]) => id === hidden.id)).toHaveLength(2));
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(calls);
+    projects = [listed, hidden];
+    getMusicVideoProject.mockResolvedValue({ ...hidden, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    await pushSocket('music-video:blender', { projectId: hidden.id, kind: 'state' });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: hidden.name })).not.toBeInTheDocument());
+    projects = [listed, { ...hidden, isCompleted: true }];
+    getMusicVideoProject.mockResolvedValue({ ...hidden, isCompleted: undefined, renderDependencyState: { status: 'current' } });
+    await pushSocket('music-video:blender', { projectId: hidden.id, kind: 'state' });
+    expect(await screen.findByRole('heading', { name: hidden.name })).toBeInTheDocument();
+  });
+
   it('batches linked catalog updates, adds an unlisted match and removes a match from a loaded later page', async () => {
     const first = { ...PROJECT_WITH_CLIP, id: 'mv-first', name: 'First Page' };
     const second = { ...PROJECT_NO_CLIP, id: 'mv-second', name: 'Second Page', status: 'complete', isCompleted: false };

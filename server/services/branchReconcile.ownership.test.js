@@ -17,7 +17,6 @@ import { execGit } from '../lib/execGit.js';
 import { attachBareOrigin, materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
-import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 
 // Keep retirement I/O inside a test-owned data root, never the install's data tree.
 vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOriginal(), {
@@ -331,14 +330,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).toEqual(expect.arrayContaining(['fix/fallback-owner', 'fix/fallback-lock', 'fix/fallback-status']));
   });
 
-  // Detached retirement settles a checkout-only receipt, and the receipt is
-  // bound to that checkout's identity rather than its path (#13405).
-  it('retires a clean detached checkout without letting a recreated same-path checkout borrow its receipt', async () => {
+  // Detached retirement settles a checkout-only receipt; a checkout recreated at
+  // the same path afterwards is a new obligation, not the retired one (#13405).
+  it('retires a clean detached checkout and keeps the inventory row of a recreated same-path checkout', async () => {
     const outcomes = await import('./branchReconcileOutcome.js');
     const path = join(repo, '.claude', 'worktrees', 'clean-detached');
     await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
     const head = (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim();
-    const release = { path: await gitCheckoutPath(path), head, detached: true, managed: true, checkoutIdentity: await readRetirementCheckoutIdentity(path) };
+    const release = { path: await gitCheckoutPath(path), head, detached: true, managed: true };
     const unrelated = { branch: 'feature/unexplained', head, reason: 'branch-held' };
     await outcomes.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }, unrelated] });
 
@@ -346,13 +345,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(result.cleaned).toContain(release.path);
     expect(existsSync(path)).toBe(false);
     const { retired } = await outcomes.getBranchReconcileOutcome('app-1');
-    expect(retired).toEqual([expect.objectContaining({ path: release.path, head, checkoutIdentity: release.checkoutIdentity,
+    expect(retired).toEqual([expect.objectContaining({ path: release.path, head,
       branchDeleted: false, checkoutOnly: true, archiveDir: null })]);
     expect(retired[0]).not.toHaveProperty('branch');
 
     await execGit(['worktree', 'add', '--detach', path, 'main'], repo);
-    const recreated = { ...release, checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'retirement-receipt-unverified' };
-    expect(recreated.checkoutIdentity).not.toBe(release.checkoutIdentity);
+    const recreated = { ...release, reason: 'retirement-receipt-unverified' };
     await outcomes.recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [recreated, unrelated] });
     const next = await outcomes.getBranchReconcileInventory('app-1');
     expect(next.retired).toEqual(retired);

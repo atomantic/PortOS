@@ -13,9 +13,8 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  * files, raising a cap in one meant the PUT 400'd on a plan the normalizer would
  * happily have accepted.
  *
- * Per the domain-validation convention this module must NOT import from
- * `validation.js` (ESM hoisting would put that read in the TDZ); it re-exports
- * from there instead.
+ * Per the domain-validation convention this module imports no other domain
+ * validation file.
  */
 
 import { z } from 'zod';

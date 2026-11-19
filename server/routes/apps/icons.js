@@ -12,6 +12,7 @@ import sharp from 'sharp';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged } from '../../services/apps.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { detectAppIcon, getIconContentType, isUsableSvg, resolveContainedIcon } from '../../services/appIconDetect.js';
 import { loadApp, pathExists } from './shared.js';
 
@@ -38,7 +39,7 @@ const getRasterIcon = (appId, iconPath, iconStat, size, iconData) => {
 // GET /api/apps/:id/icon - Serve the app's detected icon image
 router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const { appIconQuerySchema, validateRequest } = await import('../../lib/validation.js');
+  const { appIconQuerySchema } = await import('../../lib/appValidation.js');
   const { size } = validateRequest(appIconQuerySchema, req.query);
 
   // Use a stored path only when it still resolves to an icon inside the

@@ -113,7 +113,8 @@ effectiveness claims against SynthID.
 ## Method
 
 `scripts/experiments/synthid_jamming_eval.py` (self-contained; numpy + pillow, no
-GPU/torch/network; all randomness is seeded, so a run is deterministic and
+GPU/torch/network; concluded with #1764 and removed in #16909, preserved in git history).
+All randomness is seeded, so a run is deterministic and
 byte-identical on repeat). The results table below is the **reference run on macOS
 (Arial)** — the absolute figures depend on which TTF actually renders the test
 text (different glyph shapes → different edge spectra), so a Linux/Windows run
@@ -260,6 +261,8 @@ Still-open follow-ups worth a future issue:
 ## Reproduce
 
 ```bash
+# Note: scripts/experiments/synthid_jamming_eval.py concluded with #1764 and was removed in #16909;
+# restore from git history to re-run.
 python3 -m venv /tmp/jam-venv && /tmp/jam-venv/bin/pip install numpy pillow
 /tmp/jam-venv/bin/python scripts/experiments/synthid_jamming_eval.py          # table
 /tmp/jam-venv/bin/python scripts/experiments/synthid_jamming_eval.py --json   # machine-readable

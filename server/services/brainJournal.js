@@ -71,11 +71,14 @@ const storeMutex = createMutex();
 // ── Local Obsidian-location sidecar (NOT synced) ─────────────────────────────
 // Read/write the machine-local map of where each day was mirrored. Kept out of
 // the synced journal record (see OBSIDIAN_LOCATIONS_FILE rationale above).
+// Bulk mirrors stage their locations here until one sidecar write at the end.
+const pendingBulkLocations = new Map();
 let obsidianLocationsCache = null;
 let obsidianLocationsCacheTime = 0;
 const OBSIDIAN_LOCATIONS_CACHE_TTL_MS = 2000;
 
 export function _clearObsidianLocationsCacheForTest() {
+  pendingBulkLocations.clear();
   obsidianLocationsCache = null;
   obsidianLocationsCacheTime = 0;
 }
@@ -93,7 +96,7 @@ async function loadObsidianLocations() {
 
 async function getObsidianLocation(date) {
   const map = await loadObsidianLocations();
-  return map[date] || { obsidianPath: null, obsidianVaultId: null };
+  return pendingBulkLocations.get(date) || map[date] || { obsidianPath: null, obsidianVaultId: null };
 }
 
 // Serialized via storeMutex by callers; persists the location for one date (or
@@ -105,29 +108,29 @@ async function saveObsidianLocation(date, { obsidianPath, obsidianVaultId }) {
   } else {
     map[date] = { obsidianPath: obsidianPath ?? null, obsidianVaultId: obsidianVaultId ?? null };
   }
+  await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
   obsidianLocationsCache = map;
   obsidianLocationsCacheTime = Date.now();
-  await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
 }
 
 // Apply a bulk re-sync's changed locations in one sidecar write. Re-check each
 // record under the same mutex as individual writes so a day deleted while the
 // foreground re-sync was running cannot be resurrected in the local map.
-async function saveObsidianLocations(locations) {
-  if (!locations.size) return;
+async function saveObsidianLocations() {
+  if (!pendingBulkLocations.size) return;
   return storeMutex(async () => {
     const map = { ...(await loadObsidianLocations()) };
     let changed = false;
-    for (const [date, location] of locations) {
+    for (const [date, location] of pendingBulkLocations) {
       if (!(await brainStorage.getById('journals', date))) continue;
       if (map[date]?.obsidianPath === location.obsidianPath && map[date]?.obsidianVaultId === location.obsidianVaultId) continue;
       map[date] = location;
       changed = true;
     }
-    if (!changed) return;
+    if (changed) await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
+    pendingBulkLocations.clear();
     obsidianLocationsCache = map;
     obsidianLocationsCacheTime = Date.now();
-    await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
   });
 }
 
@@ -221,7 +224,8 @@ export async function listJournals({ limit = 50, offset = 0, includeContent = fa
   // synced record) so summaries still report the mirror status.
   const locations = await loadObsidianLocations();
   const hydrated = page.map((entry) => {
-    const loc = locations[entry.date || entry.id] || { obsidianPath: null, obsidianVaultId: null };
+    const date = entry.date || entry.id;
+    const loc = pendingBulkLocations.get(date) || locations[date] || { obsidianPath: null, obsidianVaultId: null };
     return { ...entry, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
   });
   return {
@@ -251,26 +255,25 @@ function newEntry(date) {
   };
 }
 
-// Fire-and-forget, serialized per date: Obsidian lives on iCloud where writes
-// can stall for hundreds of ms. Callers shouldn't wait on it, but serializing per
-// date prevents out-of-order writes during rapid autosaves. The sync path persists
-// any discovered obsidianPath itself via persistObsidianLocation() — callers must
-// not assume this async work mutates the `entry` they passed in or that a later
-// putEntry() in their flow will pick up the path.
-const pendingObsidianSyncs = new Map();
+// The next operation needs the actual location of a preceding in-flight upsert,
+// even if the journal was tombstoned before that upsert could save its sidecar.
+const obsidianQueues = new Map();
+
+function queueObsidian(date, work) {
+  const queue = obsidianQueues.get(date) || { tail: Promise.resolve() };
+  const run = () => work(queue);
+  const next = queue.tail.then(run, run);
+  queue.tail = next;
+  obsidianQueues.set(date, queue);
+  const release = () => {
+    if (queue.tail === next) obsidianQueues.delete(date);
+  };
+  next.then(release, release);
+  return next;
+}
 
 function scheduleObsidianSync(entry) {
-  const date = entry.date;
-  const previous = pendingObsidianSyncs.get(date) || Promise.resolve();
-  const next = previous
-    .then(() => syncToObsidian(entry))
-    .catch((err) => console.error(`📓 Obsidian sync failed: ${err.message}`))
-    .finally(() => {
-      if (pendingObsidianSyncs.get(date) === next) {
-        pendingObsidianSyncs.delete(date);
-      }
-    });
-  pendingObsidianSyncs.set(date, next);
+  syncToObsidian(entry).catch((err) => console.error(`📓 Obsidian sync failed: ${err.message}`));
 }
 
 /**
@@ -403,23 +406,27 @@ export async function upsertAutoSection(date, body, markers) {
 
 export async function deleteJournal(date) {
   if (!isIsoDate(date)) return false;
-  const entry = await storeMutex(async () => {
-    const existing = await getEntry(date);
-    if (!existing) return null;
-    // Tombstones in place (via brainStorage.remove) so the delete federates and
-    // a stale create echoed from a peer can't resurrect the day.
+  const deleted = await storeMutex(async () => {
+    const entry = await getEntry(date);
+    if (!entry) return null;
+    // Reserve the unlink in tombstone order before another write can recreate the day.
     await brainStorage.remove('journals', date);
-    return existing;
+    const cleanup = queueObsidian(date, async (queue) => {
+      const location = queue.location === undefined ? entry : queue.location;
+      if (location?.obsidianPath) {
+        await removeFromObsidian({ ...location, date }).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
+      }
+      await storeMutex(async () => {
+        await saveObsidianLocation(date, { obsidianPath: null, obsidianVaultId: null });
+        pendingBulkLocations.delete(date);
+      });
+      queue.location = null;
+    });
+    brainEvents.emit('journals:deleted', { date, entry });
+    return { cleanup };
   });
-  if (!entry) return false;
-  if (entry.obsidianPath) {
-    await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
-  }
-  // Drop the local mirror-location record for this day (sidecar is not synced).
-  await saveObsidianLocation(date, { obsidianPath: null, obsidianVaultId: null });
-  // Explicit deletion signal so memory bridges / integrations can archive
-  // the corresponding vector entry.
-  brainEvents.emit('journals:deleted', { date, entry });
+  if (!deleted) return false;
+  await deleted.cleanup;
   return true;
 }
 
@@ -455,10 +462,17 @@ function buildObsidianNotePath(settings, date) {
  * all entries now" action so users who turn off auto-sync can still trigger
  * a one-shot backfill.
  */
-export async function syncToObsidian(entry, { force = false, locationUpdates = null } = {}) {
+export function syncToObsidian({ date }, { force = false, batch = false } = {}) {
+  return queueObsidian(date, queue => mirrorJournal(date, { force, batch }, queue));
+}
+
+async function mirrorJournal(date, { force, batch }, queue) {
+  // A bulk page or manual request may have captured the day before deletion or
+  // recreation. Mirror the live content when this date's turn actually starts.
+  const entry = await brainStorage.getById('journals', date);
+  if (!entry) return null;
   const settings = await getSettings();
-  if (!settings.obsidianVaultId) return null;
-  if (!force && !settings.autoSync) return null;
+  if (!settings.obsidianVaultId || (!force && !settings.autoSync)) return null;
 
   const vaultId = settings.obsidianVaultId;
   const notePath = buildObsidianNotePath(settings, entry.date);
@@ -469,37 +483,23 @@ export async function syncToObsidian(entry, { force = false, locationUpdates = n
   const written = await obsidian.upsertNote(vaultId, notePath, buildMarkdown(entry));
   if (!written) return null;
 
-  // Persist whenever the path OR the vault changes — a folder rename or
-  // a vault swap in Settings both need to update the store so a later
-  // deleteJournal() unlinks the right file in the right vault.
-  if (entry.obsidianPath !== notePath || entry.obsidianVaultId !== vaultId) {
-    if (locationUpdates) {
-      locationUpdates.set(entry.date, { obsidianPath: notePath, obsidianVaultId: vaultId });
-      return notePath;
-    }
-    await persistObsidianLocation(entry.date, notePath, vaultId);
-  }
-  return notePath;
-}
-
-// Record the note location (path + vault) in the LOCAL sidecar whenever it
-// changes — NOT on the synced journal record (these fields are machine-local;
-// see OBSIDIAN_LOCATIONS_FILE). Serialized via storeMutex so a fire-and-forget
-// Obsidian persist can't clobber concurrent appendJournal writes. The `!==`
-// guard skips a redundant sidecar write on every sync of an unchanged day.
-async function persistObsidianLocation(date, notePath, vaultId) {
-  return storeMutex(async () => {
-    // Re-check the live record under the lock: a fire-and-forget syncToObsidian()
-    // can land AFTER the user deleted the day (deleteJournal tombstones it and
-    // clears the sidecar). Without this guard we'd resurrect an orphan sidecar
-    // entry for a tombstoned day, which would reattach if the date is recreated.
-    // brainStorage.getById returns null for a tombstone, so this skips correctly.
+  const location = { obsidianPath: notePath, obsidianVaultId: vaultId };
+  queue.location = location;
+  await storeMutex(async () => {
     if (!(await brainStorage.getById('journals', date))) return;
-    const loc = await getObsidianLocation(date);
-    if (loc.obsidianPath !== notePath || loc.obsidianVaultId !== vaultId) {
-      await saveObsidianLocation(date, { obsidianPath: notePath, obsidianVaultId: vaultId });
+    // A queued deletion or a concurrent bulk pass may have superseded the
+    // location the caller saw. Compare against the persisted sidecar.
+    const stored = (await loadObsidianLocations())[date];
+    if (stored?.obsidianPath !== notePath || stored.obsidianVaultId !== vaultId) {
+      if (batch) {
+        pendingBulkLocations.set(date, location);
+        return;
+      }
+      await saveObsidianLocation(date, location);
     }
+    pendingBulkLocations.delete(date);
   });
+  return notePath;
 }
 
 // Refuse to delete if the entry's recorded vault doesn't match the currently
@@ -549,12 +549,11 @@ export async function resyncAllToObsidian() {
   let skipped = 0;
   let consecutiveSkips = 0;
   let stoppedEarly = false;
-  const locationUpdates = new Map();
   for await (const entry of iterateJournals()) {
     // force:true so this bulk resync still writes even when the user has
     // turned off the per-write autoSync — they explicitly clicked "Re-sync
     // all entries now", which is the manual-sync escape hatch.
-    const path = await syncToObsidian(entry, { force: true, locationUpdates }).catch(() => null);
+    const path = await syncToObsidian(entry, { force: true, batch: true }).catch(() => null);
     if (path) {
       synced += 1;
       consecutiveSkips = 0;
@@ -576,6 +575,6 @@ export async function resyncAllToObsidian() {
       break;
     }
   }
-  await saveObsidianLocations(locationUpdates);
+  await saveObsidianLocations();
   return { synced, skipped, stoppedEarly };
 }

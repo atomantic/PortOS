@@ -30,91 +30,17 @@ if (-not $nodeVersion) {
 Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green
 Write-Host ""
 
-# Update submodules (slash-do and any others)
-Write-Host "Updating submodules..." -ForegroundColor Yellow
-git submodule update --init --recursive
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Write-Host ""
-
-# Install dependencies — --no-save honors each committed lockfile without
-# rewriting it through the local npm's lockfile schema. Use Push-Location instead
-# of --prefix so npm doesn't create a directory symlink (root package into
-# sub-package node_modules), which requires Developer Mode or admin rights on Windows.
-Write-Host "Installing dependencies..." -ForegroundColor Yellow
-
-Write-Host "  Installing root dependencies..."
-npm install --no-save
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "  Installing client dependencies..."
-Push-Location client
-npm install --no-save
-if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
-Pop-Location
-
-Write-Host "  Installing server dependencies..."
-Push-Location server
-npm install --no-save
-if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
-Pop-Location
-
-Write-Host "  Installing autofixer dependencies..."
-Push-Location autofixer
-npm install --no-save
-if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
-Pop-Location
-
-# Run trusted install scripts skipped by ignore-scripts=true in each workspace's
-# .npmrc. The allowlist lives in scripts/trusted-rebuilds.js — a single home shared
-# with `npm run setup`, scripts/ensure-deps.js, update.sh/update.ps1 and CI, so a
-# package can never be granted an install-time execution slot in one path but not
-# another. Only the server needs rebuilds; client/autofixer/browser have no
-# install-script deps — vite 8 dropped the esbuild binary dependency that used to be
-# the reason, which is also what made the old hardcoded esbuild/install.js path fail
-# with MODULE_NOT_FOUND on Windows (issue #1792).
-Write-Host ""
-Write-Host "Rebuilding trusted native dependencies..." -ForegroundColor Yellow
-node scripts/trusted-rebuilds.js server
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-# Run data setup scripts
-Write-Host ""
-Write-Host "Setting up data directory..." -ForegroundColor Yellow
-node scripts/setup-data.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node scripts/setup-db.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node scripts/setup-llm.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node scripts/setup-browser.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node scripts/setup-cert.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node scripts/setup-guide.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-# Install/update slash-do (project-level slash commands for Claude Code et al.)
-# via npx. Failures are non-fatal — PortOS still works without the
-# user-global command pool.
-Write-Host ""
-$slashdoFile = Join-Path $RootDir "scripts/SLASHDO_VERSION"
-$SlashdoVersion = if (Test-Path $slashdoFile) { (Get-Content $slashdoFile -Raw).Trim() } else { $null }
-if ($SlashdoVersion) {
-    Write-Host "Installing/updating slash-do commands (npx slash-do@$SlashdoVersion)..." -ForegroundColor Yellow
-    # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
-    # all detected envs instead of hanging on readline when stdin is not a TTY.
-    # npx writes status to stderr; scope Continue downgrade around this
-    # stdin-piped call so it isn't aborted by a NativeCommandError (#1811).
-    & {
-        $ErrorActionPreference = 'Continue'
-        "a" | & npx --yes "slash-do@$SlashdoVersion"
-    }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@$SlashdoVersion)" -ForegroundColor Yellow
-        $global:LASTEXITCODE = 0
-    }
-} else {
-    Write-Host "⚠️  scripts/SLASHDO_VERSION not found — skipping slash-do install" -ForegroundColor Yellow
+# scripts/setup.js is the one install pipeline shared with `npm run setup` and
+# setup.sh: version checks, submodules, root/client/server/autofixer deps (cwd-based
+# installs, so no --prefix directory symlink that would need Developer Mode or admin
+# rights on Windows) + the trusted native rebuilds, data dir, db, llm, browser, cert,
+# then ffmpeg, slash-do and the setup walkthrough. This script keeps only the
+# Windows-specific prompts around it.
+node scripts/setup.js
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "Setup incomplete. Fix the issue above, then re-run: .\setup.ps1" -ForegroundColor Red
+    exit $LASTEXITCODE
 }
 
 # Optional Ghostty setup

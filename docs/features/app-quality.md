@@ -12,7 +12,10 @@ The Quality tab's top status card shows active and pending check counts, each
 batch's current check and progress, and any reason it is waiting. Stop remaining
 checks is available on each batch without opening Run checks. Stopping prevents
 later checks from starting; work already queued or running can still finish.
-Status updates arrive through the existing maintenance events, including after
+A failed check holds its batch on the blocked task: retrying that task keeps the
+batch waiting on it, while deleting it (or the 14-day failure cleanup expiring
+it) stops the batch with that reason instead of running the check again. Start
+the check again to rerun it. Status updates arrive through the existing maintenance events, including after
 reconnecting or returning to the tab. Loading and failed reads are shown beside
 a retry action rather than reported as an empty queue.
 

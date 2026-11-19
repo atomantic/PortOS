@@ -8,6 +8,7 @@ vi.mock('../../services/api', () => ({
   getHfTokenStatus: vi.fn(),
   installModelAbuseGuard: vi.fn(),
   cancelModelAbuseGuardInstall: vi.fn(),
+  scanModelAbuseContent: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -21,6 +22,7 @@ import {
   getHfTokenStatus,
   getModelAbuseGuardStatus,
   installModelAbuseGuard,
+  scanModelAbuseContent,
 } from '../../services/api';
 import socket from '../../services/socket';
 import ModelAbuseGuardPanel from './ModelAbuseGuardPanel';
@@ -59,6 +61,39 @@ const renderPanel = async () => {
 };
 
 describe('ModelAbuseGuardPanel', () => {
+  it('checks only text the owner selects and clears an old result when the text changes', async () => {
+    scanModelAbuseContent.mockResolvedValueOnce({ safe: false, findings: [{ category: 'injection', reason: 'Suspicious instructions' }] });
+    await renderPanel();
+    expect(scanModelAbuseContent).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Text to check'), { target: { value: 'Example content' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check content' }));
+    expect(await screen.findByText('Content flagged by the abuse guard')).toBeInTheDocument();
+    expect(scanModelAbuseContent).toHaveBeenCalledWith('Example content', { silent: true });
+    expect(screen.getByText('Suspicious instructions')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Text to check'), { target: { value: 'Changed content' } });
+    expect(screen.queryByText('Content flagged by the abuse guard')).not.toBeInTheDocument();
+  });
+
+  it('keeps an oversized selection intact and refuses to scan a partial input', async () => {
+    await renderPanel();
+    const content = 'x'.repeat(2_000_001);
+    const field = screen.getByLabelText('Text to check');
+    fireEvent.change(field, { target: { value: content } });
+    expect(field.value).toHaveLength(content.length);
+    expect(screen.getByText(/shorten the text before checking/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check content' })).toBeDisabled();
+    expect(scanModelAbuseContent).not.toHaveBeenCalled();
+  });
+
+  it('shows scan failures without claiming content is safe', async () => {
+    scanModelAbuseContent.mockRejectedValueOnce(new Error('Guard unavailable'));
+    await renderPanel();
+    fireEvent.change(screen.getByLabelText('Text to check'), { target: { value: 'Example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check content' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Guard unavailable');
+    expect(screen.queryByText('No abuse detected')).not.toBeInTheDocument();
+  });
+
   it('warns when a ready classifier cannot back GitHub contribution assessment', async () => {
     getModelAbuseGuardStatus.mockResolvedValue({ ready: true, stages: STAGES.map(stage => ({ ...stage, ready: true })),
       contributionAssessment: { ready: false, code: 'untrusted-content-model-required' } });

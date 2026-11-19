@@ -293,6 +293,21 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].pm2Status).toBeUndefined();
     });
 
+    it('returns compact quality summaries without reading PM2 status', async () => {
+      const registeredApp = { id: 'app-001', name: 'Test App', type: 'express' };
+      appsService.getAllApps.mockResolvedValue([registeredApp]);
+      enrichAppsWithQuality.mockResolvedValueOnce([{
+        ...registeredApp,
+        quality: { score: null, ratedCategories: 0, categories: [{ assessedAt: '2026-11-01', summary: 'Audit evidence' }] },
+      }]);
+
+      const response = await request(app).get('/api/apps/quality/summaries');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{ id: 'app-001', quality: { score: null, ratedCategories: 0, hasAssessments: true } }]);
+      expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
+    });
+
     it('keeps quality reports off peer probes and returns them only for explicit local UI reads', async () => {
       appsService.getAllApps.mockResolvedValue([{ id: 'portos-default', name: 'PortOS', type: 'ios-native', repoPath: '/tmp/test' }]);
       const peer = await request(app).get('/api/apps');

@@ -4,8 +4,6 @@ import { execGit } from '../lib/execGit.js';
 
 export const sameRetirementCheckout = (left, right) => (left.branch ?? null) === (right.branch ?? null)
   && left.path === right.path && left.head === right.head;
-export const sameRetirementObservation = (left, right) => sameRetirementCheckout(left, right)
-  && (left.checkoutIdentity || null) === (right.checkoutIdentity || null);
 
 export async function reconcileInventoryRows(repoPath, rows) {
   const current = [];

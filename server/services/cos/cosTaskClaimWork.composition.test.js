@@ -76,7 +76,7 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).not.toContain('Run each LOCAL reviewer');
     expect(prompt).not.toContain('REVIEW_ATTEMPTED_HEAD=');
     expect(prompt).not.toContain('Required-review publication rule');
-    expect(prompt).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(prompt).toContain('## PR Model Attribution');
     expect(prompt).toContain('self-review');
     if (tracker === 'github') {
       expect(prompt.indexOf('Before assigning a contributor')).toBeLessThan(prompt.indexOf('gh issue edit "${CANDIDATE}" --add-assignee'));
@@ -201,7 +201,7 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt.indexOf('Effective PR completion policy: leave-open')).toBeLessThan(claim.prompt.indexOf(custom));
     expect(claim.prompt).toContain('Target Issue Constraint');
     expect(claim.prompt).not.toContain('## Before claim mutation');
-    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(renderAgent(claim)).toContain('## PR Model Attribution');
   });
 
   it.each(['github', 'gitlab'])('renders the configured %s reviewer budget and no hardcoded three-round cap', async (tracker) => {
@@ -228,7 +228,7 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt).toContain(custom);
     expect(claim.prompt).toContain('Effective PR completion policy: merge-on-green');
     expect(claim.prompt).toContain('Target Issue Constraint');
-    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(renderAgent(claim)).toContain('## PR Model Attribution');
   });
 
   it('fetches the full issue when a direct claim snapshot is oversized', async () => {
@@ -319,6 +319,7 @@ describe('claim procedures on demand', () => {
         const claim = await buildClaimWorkTask(app, { target, prCompletion });
         const { prompt, staged } = await renderOnDemand(claim);
         const names = [
+          `claim-issue-filing-${tracker}`,
           `claim-epic-${tracker}`,
           ...(tracker === 'github' ? ['claim-handoff-github'] : []),
           `claim-linked-screen-${tracker}`,
@@ -340,6 +341,6 @@ describe('claim procedures on demand', () => {
 
   it('skips only the epic phase for a verified non-epic claim', async () => {
     const { staged } = await renderOnDemand(await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true }));
-    expect(staged.map(({ name }) => name)).toEqual(['claim-handoff-github', 'claim-linked-screen-github', 'claim-ci-recovery-github']);
+    expect(staged.map(({ name }) => name)).toEqual(['claim-issue-filing-github', 'claim-handoff-github', 'claim-linked-screen-github', 'claim-ci-recovery-github']);
   });
 });

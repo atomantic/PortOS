@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import gitRoutes from './git.js';

@@ -70,15 +70,12 @@ import {
   removeMemoryFromIndex,
   searchBM25,
   getStats,
-  flush,
   clearIndex,
   hasMemory,
   batchIndex,
   buildIndexableText
 } from './memoryBM25.js'
-
-import { promises as fs } from 'fs'
-import { search, createEmptyIndex, buildInvertedIndex } from '../lib/bm25.js'
+import { search, buildInvertedIndex } from '../lib/bm25.js'
 
 describe('memoryBM25', () => {
   beforeEach(() => {

@@ -36,7 +36,7 @@ node scripts/pregate.js [--full] # same gate on Windows
 
 No `NODE_ENV` prefix is needed: `server/vitest.config.js` forces `NODE_ENV=test` (#4554). A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/TEST_MEMO.md`).
 
-**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It does not cover transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
+**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It skips imports past two hops and browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
 
 ## Test Strategy: Value Over Assertion Count
 
@@ -58,6 +58,8 @@ Test at the highest practical public boundary (route, service workflow, store ad
 - **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. Peer hops set `rejectUnauthorized: false` because WireGuard authenticates tailnet nodes; a non-tailnet peer (plain LAN IP or non-`.ts.net` host, see `peerRequiresTailscale()`) gets no server authentication.
 
 **Preserve delegated agent authority.** In the host-control gate an operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Genuine local callers keep host access when auth is disabled; network reachability and scoped peer credentials do not grant it. A Basic password holder can already exchange it for a session, so refusing Basic is credential-use policy, not isolation. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow (trace the real path, fallback and deferred work included). Authorized agent execution is an intended capability, not a vulnerability; a configured tool-capable provider still never lets an anonymous remote caller launch it.
+
+**Assess security findings against actual control, reachability and impact.** Follow [security risk assessment](docs/SECURITY_RISK_ASSESSMENT.md): distinguish owner-input reliability and conditional exposure from unauthorized harm, retain external-content and browser/network defenses, reuse the existing abuse guard only on paths it covers, and record dispositions with reevaluation conditions.
 
 **Audit the external boundary, not delegated autonomy.** Trusted local agents in a user-granted workflow are operators, not adversaries. Protect against malicious third-party code and dependencies, issue/PR/review content, retrieved pages and files, model output, and unauthorized LAN/tailnet callers; local execution does not sanitize them, and untrusted content cannot expand a grant, pick a new audience, change policy or gain host authority. Fix the actual crossing instead of adding human-only approvals, repeated passwords, blanket tool restrictions or per-step confirmations. Keep revision/evidence checks, data protection, budgets and explicit publication controls.
 
@@ -94,7 +96,7 @@ Test at the highest practical public boundary (route, service workflow, store ad
 
 The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`, `npm start` the built client from `:5555`. PM2 manages app lifecycles. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`; PostgreSQL 5432 system, 5561 Docker); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs` (re-exported by `server/lib/ports.js`).
 
-**Never run `npm ci` or `npm install` inside an ordinary CoS worktree (`data/cos/worktrees/*`).** Its `node_modules` (root, `client/`, `server/`) symlink to the primary checkout, so npm empties the primary's dependencies and every agent spawn fails with `posix_spawn failed: No such file or directory`. Use the linked binaries (`server/node_modules/.bin/vitest run <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add`. Recovery: `docs/TROUBLESHOOTING.md` ("Every Agent Spawn Fails…").
+**Never run `npm ci` or `npm install` inside an ordinary CoS worktree (`data/cos/worktrees/*`).** Its `node_modules` (root, `client/`, `server/`) symlink to the primary checkout, so npm empties the primary's dependencies and every agent spawn fails (`posix_spawn failed`). Use linked binaries (`server/node_modules/.bin/vitest run <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add` (pregate links too). Recovery: `docs/TROUBLESHOOTING.md` ("Every Agent Spawn Fails…").
 
 **Backup excludes.** `DEFAULT_EXCLUDES` in `server/services/backup.js` is rsync filter syntax: **anchor every path with a leading `/`**, or it matches at any depth and silently drops user data (`docs/BACKUP.md`).
 
@@ -139,7 +141,7 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 - **Live Node inspector**: no dynamic `import()` from an inspector-evaluated callback ([safe cleanup](docs/TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling)).
 - **Functional programming**: no classes; hooks in React.
 - **Lint is Biome** (`server/biome.jsonc`, `client/biome.jsonc`); `eslint-disable` does nothing. Suppress an enabled rule with `// biome-ignore lint/<group>/<rule>: <reason>`.
-- **Zod validation** for all route inputs via `lib/validation.js`.
+- **Zod** route validation: domain `lib/*Validation.js`.
 - **Command allowlists**: preserve the operator and unattended execution policies in `server/lib/commandSecurity.js` and the agent guard (PortOS runtime execution; dev-agent tool permissions come from the host).
 - **Push, don't poll**: the server emits a Socket.IO event when data changes; own mutations apply their response locally; never refetch on a timer ([exceptions](docs/UX_DESIGN_GUIDE.md#realtime-updates-not-polling); client rules in `client/src/AGENTS.md`).
 - **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/logLevelConventions.guard.test.js`; [marker table](docs/INSTRUCTION_RULE_DETAIL.md#logging-levels)).

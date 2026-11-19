@@ -13,7 +13,6 @@ import { brainEvents } from './brainStorage.js';
 import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
-import { validate } from '../lib/validation.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
@@ -37,7 +36,7 @@ import {
   extractedIdeaSchema,
   extractedAdminSchema,
   extractedMemorySchema
-} from '../lib/brainValidation.js';
+} from '../lib/brainSchemas.js';
 
 export const TOOL_FREE_REQUIRED = 'TOOL_FREE_REQUIRED';
 

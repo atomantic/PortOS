@@ -5,14 +5,12 @@
 
 import { executionOptionsSchema } from '../aiToolkit/internal/executionOptionsValidation.js';
 /**
- * Agent & social-automation Zod schemas (split out of validation.js, issue #1831).
+ * Agent & social-automation Zod schemas (split out of the retired validation.js catch-all, issue #1831).
  *
  * Covers the autonomous social-bot agent domain — agent personality, Moltbook/
  * Moltworld platform accounts, automation schedules, the agent posting/engage
  * tools, the Moltworld tool + websocket payloads — plus the CoS Feature Agent
- * definitions. validation.js re-exports everything here (flat) so existing deep
- * `import { x } from '../validation.js'` callsites keep working; the barrel
- * surfaces it as the `agentValidation` namespace.
+ * definitions. Import each schema from this module directly.
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from '../zodCompat.js';

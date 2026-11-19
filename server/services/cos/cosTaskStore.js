@@ -4,8 +4,7 @@ import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../../lib/releaseSynchronization.js';
 import { RELEASE_ATTEMPTS_KEY, mergeReleaseAttempts } from '../../lib/releaseAttemptMembership.js';
-import { currentTaskTypeName } from '../../lib/taskTypeRenames.js';
-import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode, spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from '../spawnBudgetProof.js';
+import { spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './cosSpawnBudget.js';
 /**
  * CoS Task Store Module
  *
@@ -30,7 +29,7 @@ import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../../lib/cos/cosValidation
 import { validateRequest } from '../../lib/validateRequest.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';
-import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../../lib/taskPauseHold.js';
+import { PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../../lib/investigationTasks.js';
@@ -56,6 +55,19 @@ import { firstLine } from '../../lib/textUtils.js';
 export { firstLine };
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
+
+// Metadata of the retired spawn-budget proof (#16807). Rows written before its
+// removal, and peers still on cosTasks schema 12, carry these keys. Nothing
+// reads them: a task write and a peer merge drop them, so no migration is needed.
+const RETIRED_SPAWN_PROOF_KEYS = Object.freeze(['spawnBudgetProof', 'spawnBudgetReconciledHold']);
+
+/** `task` without the retired proof metadata; the same object when it has none. */
+function withoutRetiredSpawnProof(task) {
+  if (!RETIRED_SPAWN_PROOF_KEYS.some(key => task?.metadata && Object.hasOwn(task.metadata, key))) return task;
+  const metadata = { ...task.metadata };
+  for (const key of RETIRED_SPAWN_PROOF_KEYS) delete metadata[key];
+  return { ...task, metadata };
+}
 
 // The `blockedCategory` vocabulary lives in `lib/taskBlockCategories.js` — the
 // pause logic, the failure reaper below, and the investigation auto-retry all
@@ -397,11 +409,6 @@ export async function getCosApprovalView({ limit = Infinity } = {}) {
 }
 
 /**
- * Alias for backward compatibility
- */
-export const getTasks = getUserTasks;
-
-/**
  * Get a specific task by ID from any task source
  */
 /**
@@ -607,16 +614,13 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
   }
 
-  // Never accept proof supplied by an intake caller. A record with prior run
-  // accounting is not a new episode merely because it was inserted here.
+  // Server-owned metadata is never accepted from an intake caller.
   const initialMetadata = { ...(newTask.metadata || {}) };
   delete initialMetadata.repoRepairContract;
   if (repoRepairContract && taskType === 'internal') initialMetadata.repoRepairContract = { ...repoRepairContract, taskId: newTask.id };
-  delete initialMetadata.spawnBudgetProof;
-  delete initialMetadata.spawnBudgetReconciledHold;
+  for (const key of RETIRED_SPAWN_PROOF_KEYS) delete initialMetadata[key];
   delete initialMetadata[RELEASE_ATTEMPTS_KEY];
-  const pristine = newTask.status === 'pending' && SPAWN_HISTORY_METADATA_KEYS.every(key => initialMetadata[key] == null);
-  newTask = { ...newTask, metadata: { ...initialMetadata, ...(pristine ? { spawnBudgetProof: newSpawnBudgetEpisode() } : {}) } };
+  newTask = { ...newTask, metadata: initialMetadata };
 
   // Add task to top or bottom based on position parameter
   if (taskData.position === 'top') {
@@ -661,6 +665,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
  *
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
+ *
+ * `spawnBudgetOperation: { kind: 'reset' }` is the only way a write lowers or
+ * clears `metadata.totalSpawnCount` (see `applySpawnAccounting`); with
+ * `requireInactive` the reset is also refused under a live claim lease.
  */
 export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
@@ -793,8 +801,6 @@ function hasCompetingTaskOwner({ owners, taskId, exceptAgentId = null }) {
       && (agent.taskId || agent.task?.id) === taskId));
 }
 
-const trustedAgent = (owners, agentId) => (owners.trusted ? owners.agents?.[agentId] : null);
-
 async function isStaleRecoveryOwner({ taskId, recoveryOwner }) {
   const owners = await readAgentsStateForSafetyCheck();
   if (!owners.trusted) return true;
@@ -807,76 +813,33 @@ async function isStaleRecoveryOwner({ taskId, recoveryOwner }) {
     || (!!registered && registered.startedAt !== recoveryOwner.startedAt);
 }
 
-function acceptsCompletionProof({ owners, current, taskId, taskType, priorProof, nextCount, spawnBudgetOperation }) {
-  const agent = trustedAgent(owners, spawnBudgetOperation.agentId);
-  return validSpawnBudgetEpisode(priorProof) && spawnBudgetOperation.epoch === priorProof.epoch
-    && !!agent && ['running', 'completed'].includes(agent.status) && !!agent.startedAt
-    && !hasCompetingTaskOwner({ owners, taskId, exceptAgentId: agent.id })
-    && matchesSpawnBudgetProof({ ...current, taskType }, agent)
-    && nextCount !== null && !(nextCount > spawnBudgetCount(priorProof.dispatch.totalSpawnCount));
-}
-
-function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata, spawnBudgetOperation }) {
-  const count = spawnBudgetCount(updatedMetadata.totalSpawnCount);
-  const before = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
-  return !!agent && agent.id === spawnBudgetOperation.agentId && agent.taskId === taskId && agent.status === 'running'
-    && !!agent.startedAt && agent.startedAt === spawnBudgetOperation.startedAt
-    && !hasCompetingTaskOwner({ owners, taskId, exceptAgentId: agent.id })
-    && count !== null && before !== null && count === before + 1
-    && !!updatedMetadata.claimedBy && !!updatedMetadata.claimedAt && !!updatedMetadata.lastSpawnedAt;
-}
-
 const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
   && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
-// Store-owned spawn-budget provenance. Mutates `updatedMetadata`; returns a
-// refusal for the caller to return, or null to continue the write.
-async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation }) {
-  // Provenance is owned by the store, not by callers carrying task snapshots.
-  // Compatibility only: retain historical membership for independently upgraded peers.
+
+/**
+ * Store-owned spawn accounting for one task write. Mutates `updatedMetadata`.
+ *
+ * `totalSpawnCount` is monotonic: a write that is not an explicit reset keeps
+ * the stored count unless it raises it. A completion or recovery that carries an
+ * older task snapshot therefore cannot refund a charged spawn, whatever it
+ * spreads back, and `MAX_TOTAL_SPAWNS` keeps bounding provider spend. An equal
+ * count keeps the stored scalar, so a number/text round trip never rewrites it.
+ */
+function applySpawnAccounting({ current, updatedMetadata, reset }) {
+  // Compatibility only: retain historical membership for independently upgraded
+  // peers. It is owned by the store, not by callers carrying task snapshots.
   delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
   if (current.metadata?.[RELEASE_ATTEMPTS_KEY] != null) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
+  for (const key of RETIRED_SPAWN_PROOF_KEYS) delete updatedMetadata[key];
+  const stored = spawnBudgetCount(current.metadata?.totalSpawnCount);
+  const incoming = spawnBudgetCount(updatedMetadata.totalSpawnCount);
+  const raised = incoming !== null && incoming > (stored ?? 0);
+  if (!reset && stored !== null && !raised) updatedMetadata.totalSpawnCount = current.metadata.totalSpawnCount;
   // Older peers may still use complete membership to authorize recovery. A
-  // dispatch omitted by this version makes that historical record incomplete.
-  if (spawnBudgetOperation?.kind === 'dispatch' && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
+  // dispatch, which this version no longer records there, makes it incomplete.
+  if (raised && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
     updatedMetadata[RELEASE_ATTEMPTS_KEY] = { ...updatedMetadata[RELEASE_ATTEMPTS_KEY], complete: false };
   }
-  delete updatedMetadata.spawnBudgetProof;
-  const priorProof = current.metadata?.spawnBudgetProof;
-  if (validSpawnBudgetEpisode(priorProof)) updatedMetadata.spawnBudgetProof = priorProof;
-  // A reconciliation never grants a retry. Keep the hold until an explicit
-  // reset, including when a stale completion supplies its older metadata.
-  delete updatedMetadata.spawnBudgetReconciledHold;
-  if (isTruthyMeta(current.metadata?.spawnBudgetReconciledHold)) updatedMetadata.spawnBudgetReconciledHold = true;
-  const kind = spawnBudgetOperation?.kind;
-  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = true;
-  const oldCount = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
-  const nextCount = spawnBudgetCount(updatedMetadata.totalSpawnCount ?? 0);
-  if (kind === 'completion') {
-    const owners = await readAgentsStateForSafetyCheck();
-    if (!acceptsCompletionProof({ owners, current, taskId, taskType, priorProof, nextCount, spawnBudgetOperation })) {
-      return { statusChanged: true, task: current };
-    }
-  }
-  // A generic counter edit may be an operator decision. It cannot be evidence
-  // that the current episode survived unchanged.
-  if (!spawnBudgetOperation && oldCount !== nextCount) delete updatedMetadata.spawnBudgetProof;
-  if (kind === 'reset') {
-    if (nextCount === null) delete updatedMetadata.spawnBudgetProof;
-    else updatedMetadata.spawnBudgetProof = newSpawnBudgetEpisode(nextCount);
-    delete updatedMetadata.spawnBudgetReconciledHold;
-  }
-  if (kind === 'dispatch' && validSpawnBudgetEpisode(priorProof)) {
-    const owners = await readAgentsStateForSafetyCheck();
-    const agent = trustedAgent(owners, spawnBudgetOperation.agentId);
-    if (!acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata, spawnBudgetOperation })) {
-      return { error: 'Cannot establish spawn budget dispatch proof' };
-    }
-    const history = [...(priorProof.history || []), ...(priorProof.dispatch ? [priorProof.dispatch] : [])];
-    updatedMetadata.spawnBudgetProof = { ...priorProof, history, dispatch: { agentId: spawnBudgetOperation.agentId, startedAt: agent.startedAt,
-      claimedBy: updatedMetadata.claimedBy, claimedAt: updatedMetadata.claimedAt,
-      lastSpawnedAt: updatedMetadata.lastSpawnedAt, totalSpawnCount: spawnBudgetCount(updatedMetadata.totalSpawnCount) } };
-  }
-  return null;
 }
 
 function isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget }) {
@@ -990,8 +953,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
-  const spawnBudgetRefusal = await applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation });
-  if (spawnBudgetRefusal) return spawnBudgetRefusal;
+  applySpawnAccounting({ current, updatedMetadata, reset: spawnBudgetOperation?.kind === 'reset' });
 
   // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
   // field off this descriptor instead of re-deriving an answer from
@@ -1176,7 +1138,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
  * @param {{ now?: number }} [opts]     injectable clock for deterministic tests
  * @returns {Promise<{ changed: boolean, count?: number }>}
  */
-export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), legacySpawnBudget = false } = {}) {
+export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const { changed, count, merged } = await withStateLock(async () => {
     const localTasks = await readTaskFile(taskType);
@@ -1185,9 +1147,12 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
     // history; merging them in would pull them back into the working set.
     const remoteCompletedIds = remoteTasks.filter((task) => task?.status === 'completed').map((task) => task.id);
     const knownCompleted = await getCompletedTaskIds(taskType, remoteCompletedIds);
-    const incoming = knownCompleted.size === 0
+    // A peer on an older schema still sends the retired proof metadata. The spawn
+    // count itself is merged by cosTaskMerge: it follows the later dispatch.
+    const incoming = (knownCompleted.size === 0
       ? remoteTasks
-      : remoteTasks.filter((task) => !(task?.status === 'completed' && knownCompleted.has(task.id)));
+      : remoteTasks.filter((task) => !(task?.status === 'completed' && knownCompleted.has(task.id))))
+      .map(withoutRetiredSpawnProof);
 
     const merged = mergeTaskLists(localTasks, incoming, { now });
     const localById = new Map(localTasks.map(task => [task.id, task]));
@@ -1196,33 +1161,10 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
       const remote = remoteById.get(task.id);
       if (!remote) continue;
       const local = localById.get(task.id);
-      const localEpoch = local?.metadata?.spawnBudgetProof?.epoch;
-      const remoteEpoch = remote.metadata?.spawnBudgetProof?.epoch;
-      const localProof = local?.metadata?.spawnBudgetProof;
-      const remoteProof = remote.metadata?.spawnBudgetProof;
-      const differentProof = local && !isDeepStrictEqual(localProof, remoteProof);
       const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY],
         { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
       if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
       else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
-      if ((!local || localEpoch === remoteEpoch) && (isTruthyMeta(local?.metadata?.spawnBudgetReconciledHold)
-        || isTruthyMeta(remote.metadata?.spawnBudgetReconciledHold))) {
-        task.metadata.spawnBudgetReconciledHold = true;
-      }
-      // Only an explicit chain of prior dispatch tuples establishes ancestry;
-      // a higher counter alone cannot order concurrent peer dispatches.
-      if (!legacySpawnBudget && differentProof && validSpawnBudgetEpisode(localProof)
-        && validSpawnBudgetEpisode(remoteProof) && localEpoch === remoteEpoch) {
-        const chain = proof => [...(proof.history || []), ...(proof.dispatch ? [proof.dispatch] : [])];
-        const left = chain(localProof); const right = chain(remoteProof);
-        const prefix = (shorter, longer) => shorter.length < longer.length
-          && shorter.every((dispatch, position) => isDeepStrictEqual(dispatch, longer[position]));
-        if (prefix(left, right)) task.metadata.spawnBudgetProof = remoteProof;
-        else if (prefix(right, left)) task.metadata.spawnBudgetProof = localProof;
-        else delete task.metadata.spawnBudgetProof;
-      } else if (legacySpawnBudget || differentProof) {
-        delete task.metadata.spawnBudgetProof;
-      }
     }
 
     // Nothing the peer sent changed our state — skip the write (and the event that would

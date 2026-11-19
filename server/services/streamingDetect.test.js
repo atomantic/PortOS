@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs'
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
-import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProcessTypes.js';
+import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, } from './appProcessTypes.js';
 
 // streamDetection shells out to PM2 and scans for an app icon; neither is under
 // test here and both are slow/environment-dependent.
@@ -1560,7 +1560,7 @@ describe('isStandardizable', () => {
     // `type` lives on the app record, and an app created without one defaults to
     // this. A positive gate that missed it would silently hide the standardize
     // button on every such app across every install.
-    const { appSchema } = await import('../lib/validation.js');
+    const { appSchema } = await import('../lib/appValidation.js');
     const defaultType = appSchema.parse({ name: 'Example App', repoPath: '/srv/example-app' }).type;
     expect(isStandardizable(defaultType)).toBe(true);
   });

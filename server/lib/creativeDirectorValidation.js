@@ -17,11 +17,9 @@ import { CREATIVE_DIRECTOR_GOAL_MAX } from './creativeBriefLimits.js';
 // =============================================================================
 // CREATIVE DIRECTOR + CREATE-SUITE IMPORTER SCHEMAS
 // =============================================================================
-// Split out of validation.js (issue #1151); validation.js re-exports
-// everything here so existing deep imports keep working. The import from
-// zodCompat.js (not validation.js) supplies emptyToUndefined — ESM hoists
-// validation.js's `export * from` of this module, so importing validation.js
-// back from here would evaluate before its body runs (TDZ).
+// Split out of the retired validation.js catch-all (issue #1151). The import from
+// zodCompat.js supplies emptyToUndefined; a domain file imports no other domain
+// validation file, so shared fragments live in zodCompat.js / sharedSchemas.js.
 
 
 export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
@@ -289,7 +287,7 @@ export const CREATIVE_DIRECTOR_IDS_BATCH_MAX = 100;
 // full list. Unknown keys (limit/offset) strip out of the parsed result — the
 // route reads those straight off `req.query` for paginateArray.
 export const creativeDirectorProjectQuerySchema = z.object({
-  // 120 matches the per-record peer-sync `recordId` bound (validation.js), not
+  // 120 matches the per-record peer-sync `recordId` bound (peerSyncValidation.js), not
   // the helper's 64-char default: a locally-minted id is `cd-<uuid>` (39), but a
   // project that arrived from a peer may carry anything that contract accepts,
   // and such a project must still be resolvable through this batch.

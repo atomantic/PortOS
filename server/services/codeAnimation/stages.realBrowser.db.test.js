@@ -16,7 +16,6 @@ import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-code-animation-stages-'),
 }));

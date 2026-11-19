@@ -18,10 +18,11 @@ import { dirname, join } from 'path';
 import { atomicWrite, listDirectoryByExtension } from '../../lib/fileUtils.js';
 import { isGitStageableFilePath } from '../../lib/gitArgs.js';
 import { isPathInsideDir, isSafeFilename, isTopLevelEntryName } from '../../lib/pathSafety.js';
-import { documentUpdateSchema, validateRequest } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import * as git from '../../services/git.js';
 import { loadApp, pathExists } from './shared.js';
+import { documentUpdateSchema } from '../../lib/documentValidation.js';
 
 const router = Router();
 

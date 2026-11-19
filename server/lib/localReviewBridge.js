@@ -13,11 +13,10 @@ import { PATHS } from './fileUtils.js';
 export const LOCAL_REVIEW_BRIDGE_SCRIPT = join(PATHS.root, 'server/scripts/run-local-code-review.mjs');
 export const LOCAL_REVIEW_LIFECYCLE_GUIDE = join(PATHS.root, 'docs/LOCAL_REVIEW_LIFECYCLE.md');
 export const LOCAL_REVIEW_LIFECYCLE_SCRIPT = join(PATHS.root, 'server/scripts/local-review-lifecycle.mjs');
-export const LOCAL_REVIEW_ATTRIBUTION_GUIDE = join(PATHS.root, 'docs/PR_REVIEW_ATTRIBUTION.md');
 
 /** Preserve a claim's enforced review policy at the bridge boundary. */
 export function localReviewBridgeRequest(request, cwd) {
-  const { timeoutMs, recordAttribution: _recordAttribution, ...reviewRequest } = request;
+  const { timeoutMs, ...reviewRequest } = request;
   if (Number.isFinite(timeoutMs) && timeoutMs > 0) reviewRequest.timeoutMs = timeoutMs;
   if (request.kind === 'claim-review') reviewRequest.toolFree = true;
   return { ...reviewRequest, cwd };

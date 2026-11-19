@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, Loader2, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import { useSocket } from '../../hooks/useSocket.js';
-import { getYtDlpStatus, updateYtDlp } from '../../services/apiVideoDownload.js';
+import { getYtDlpStatus, installYtDlp, updateYtDlp } from '../../services/apiVideoDownload.js';
 
 /**
- * yt-dlp version + one-click update, on the Video Downloader page.
+ * yt-dlp version + one-click installation and update, on the Video Downloader page.
  *
  * YouTube gates media URLs behind a player handshake that yt-dlp tracks
  * release-to-release, so a binary only weeks old fails downloads the browser
@@ -16,7 +16,7 @@ import { getYtDlpStatus, updateYtDlp } from '../../services/apiVideoDownload.js'
 export default function YtDlpUpdateCard() {
   const socket = useSocket();
   const [status, setStatus] = useState(null);
-  const [updating, setUpdating] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
 
   const refresh = useCallback(
@@ -26,8 +26,7 @@ export default function YtDlpUpdateCard() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // `brew upgrade` relays its own output while it runs, so the button can show
-  // what it's doing rather than spinning silently for a minute.
+  // Homebrew streams output while a package change is running.
   useEffect(() => {
     const onFrame = (frame) => {
       if (frame?.event === 'progress' && frame.message) setProgress(String(frame.message).trim());
@@ -36,17 +35,20 @@ export default function YtDlpUpdateCard() {
     return () => socket.off('ytdlp:update', onFrame);
   }, [socket]);
 
-  const onUpdate = async () => {
-    setUpdating(true);
+  const onAction = async () => {
+    const installing = !status.installed;
+    const action = installing ? installYtDlp : updateYtDlp;
+    setBusy(true);
     setProgress('');
-    await updateYtDlp({ silent: true })
+    await action({ silent: true })
       .then((result) => {
-        toast.success(result?.note ? `yt-dlp ${result.note}` : `yt-dlp updated to ${result?.version || 'the latest release'}`);
+        const verb = installing ? 'installed' : 'updated';
+        toast.success(result?.note ? `yt-dlp ${result.note}` : `yt-dlp ${verb}${result?.version ? ` (${result.version})` : ''}`);
         return refresh();
       })
-      .catch((err) => toast.error(err?.message || 'yt-dlp update failed'))
+      .catch((err) => toast.error(err?.message || `yt-dlp ${installing ? 'installation' : 'update'} failed`))
       .finally(() => {
-        setUpdating(false);
+        setBusy(false);
         setProgress('');
       });
   };
@@ -55,6 +57,10 @@ export default function YtDlpUpdateCard() {
   // the first response may contradict.
   if (!status) return null;
 
+  const canInstall = !status.installed && status.canInstall;
+  const actionLabel = canInstall ? 'Install yt-dlp' : 'Update yt-dlp';
+  const busyLabel = canInstall ? 'Installing…' : 'Updating…';
+  const ActionIcon = canInstall ? Download : RefreshCw;
   const outdated = status.installed && status.updateAvailable;
 
   return (
@@ -82,20 +88,20 @@ export default function YtDlpUpdateCard() {
               ? 'A stale yt-dlp is the usual cause of a failed YouTube download.'
               : status.installed
                 ? `Up to date via ${status.methodLabel}.`
-                : null)}
+                : canInstall ? 'Install with Homebrew on the PortOS host.' : null)}
         </p>
       </div>
-      {status.installed && status.canUpdate && (
+      {(canInstall || (status.installed && status.canUpdate)) && (
         <button
           type="button"
-          onClick={onUpdate}
-          disabled={updating}
+          onClick={onAction}
+          disabled={busy}
           className={`shrink-0 inline-flex items-center justify-center gap-2 px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-            outdated ? 'bg-port-accent hover:bg-blue-600 text-white' : 'border border-port-border text-gray-300 hover:text-white'
+            canInstall || outdated ? 'bg-port-accent hover:bg-blue-600 text-white' : 'border border-port-border text-gray-300 hover:text-white'
           }`}
         >
-          {updating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          {updating ? 'Updating…' : 'Update yt-dlp'}
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <ActionIcon size={14} />}
+          {busy ? busyLabel : actionLabel}
         </button>
       )}
       {!status.installed && status.downloadUrl && (

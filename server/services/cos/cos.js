@@ -18,7 +18,6 @@ import { mergePersistentMindMaintainer } from '../../lib/persistent/persistentMi
  * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
-import { join } from 'path';
 import { getActiveProvider } from '../provider/providers.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../../lib/cos/cosSpawnWindow.js';
@@ -60,11 +59,11 @@ import { runHealthCheck } from './cosHealthMonitor.js';
 // these from the declaring modules, not from here. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';
-import { spawnBudgetHoldReason } from '../spawnBudgetProof.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { handBackBlockedPrRemediation } from '../blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from '../healthCriticalNotifier.js';
 
@@ -98,7 +97,6 @@ import { resolveAgentProviderAndModel } from '../agent/agentProviderResolution.j
 // these are imported for internal use by the scheduler.
 import {
   evaluateTasks,
-  queueEligibleImprovementTasks,
   admitAutoApprovedSystemTasks,
   admitPendingUserTasks,
   resolveAutonomyBudget,
@@ -106,6 +104,7 @@ import {
   isWithinProjectLimit,
   unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
+import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 
 // Autonomous-job + improvement-check timer machinery (extracted to
 // cosJobScheduler.js). Imported for internal use by start()/stop()/init() and
@@ -745,10 +744,17 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
     return { error: localCapacityError };
   }
 
-  const budgetHold = await spawnBudgetHoldReason(task);
-  if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
+  // Same reason once more: the spawn cap is enforced inside the `task:ready`
+  // listener, which blocks the task after this call has already answered
+  // "Spawning". Name the cap and the way past it instead.
+  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
+  if (!resetSpawnBudget && totalSpawns >= MAX_TOTAL_SPAWNS) {
+    return {
+      error: `Spawn budget exhausted (${totalSpawns}/${MAX_TOTAL_SPAWNS}) — reset the spawn budget to run this task again`,
+      code: 'SPAWN_BUDGET_EXHAUSTED',
+    };
+  }
   if (resetSpawnBudget) {
-    if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
     // The store refuses a reset under a live claim lease; say so instead of the
     // generic "changed" refusal, and when the lease frees up.
     if (isLeaseLive(task.metadata)) return { error: `A claim lease on this task is live until ${task.metadata.leaseExpiresAt}; reset after it expires` };

@@ -13,7 +13,7 @@ import { blenderRefusal } from '../film/workspace.js';
 import { requireFilmProject, filmSnapshotOwner } from './films.js';
 import { getBlenderSong } from '../film/song.js';
 import { mutateFilmProject } from './projectStore.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 
 const digestFile = async (path) => {
   const digest = createHash('sha256');

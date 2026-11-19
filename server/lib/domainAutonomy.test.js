@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  DOMAIN_MODES,
-  DEFAULT_DOMAIN_MODE,
   AUTONOMY_DOMAINS,
   DOMAIN_IDS,
   normalizeDomainAutonomy,

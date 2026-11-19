@@ -11,10 +11,11 @@
  * creates or updates the one open "main is red" issue; a green run closes it; a
  * cancelled run (a newer push superseded it) changes nothing.
  *
- * The summary is diagnostic and every lookup is best-effort. An unreadable base
+ * CI run and job state must be readable before changing the alert. Compare
+ * lookups are diagnostic and best-effort. An unreadable base
  * is reported as unreadable, never as an empty range — "no merges" would clear
- * the suspects, "could not tell" does not. The issue sync is the opposite: a
- * failure to read or write the issue is reported as `syncFailed` so the job goes
+ * the suspects, "could not tell" does not. A failure to read or write the issue
+ * is reported as `syncFailed` so the job goes
  * red rather than silently leaving a stale or duplicate issue.
  *
  * Builtins only and nothing outside scripts/: the job checks out `scripts/`
@@ -33,10 +34,13 @@ const MAX_LISTED_MERGES = 60;
 const API_TIMEOUT_MS = 10_000;
 const ISSUES_PER_PAGE = 100;
 const MAX_ISSUE_PAGES = 5;
+const RUNS_PER_PAGE = 100;
 export const MAIN_RED_TITLE = 'main is red';
 const MAIN_RED_LABELS = ['bug', 'area:ci', 'model:medium', 'effort:medium'];
 const RED_CONCLUSIONS = new Set(['failure', 'timed_out']);
 const MAIN_EVENTS = new Set(['push', 'schedule']);
+const isMainRun = (run) => run?.head_branch === 'main' && MAIN_EVENTS.has(run.event);
+const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const HEX_SHA = /^[0-9a-f]{7,40}$/i;
 const GATE_JOB_NAMES = new Set(['CI Gate', 'Full CI Gate']);
 
@@ -72,7 +76,7 @@ export function mergedPullRequests(commits) {
  *
  * @param {object} input
  * @param {Array<{name: string, steps: string[]}>|null} input.failedJobs - null: unreadable
- * @param {{sha: string, runId: number|string}|null} input.base - last green scheduled run, null: none found
+ * @param {{sha: string, runId: number|string}|null} input.base - last green push or scheduled run, null: none found
  * @param {string} input.head
  * @param {Array<{number: number, title: string, sha: string}>|null} input.pulls - null: range unreadable
  * @param {boolean} [input.truncated] - the compare listing was cut short
@@ -114,19 +118,61 @@ export function buildNightlyReport({ failedJobs, base, head, pulls, truncated = 
 }
 
 
-/**
- * The most recent successful push or scheduled run on main other than this one.
- * Pull-request runs are excluded: a fork branch can be named `main`.
- *
- * @returns {Promise<{sha: string, runId: number}|null>}
- */
-async function findLastGreenMainRun(target, fetchImpl, logger) {
-  const url = `${target.repoPath}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=30`;
+/** Read the current attempts of recent main runs, newest original run first. */
+async function readMainRuns(target, fetchImpl, logger) {
+  const url = `${target.repoPath}/actions/workflows/ci.yml/runs?branch=main&per_page=${RUNS_PER_PAGE}`;
   const body = await githubJson(fetchImpl, url, target.token, { timeoutMs: API_TIMEOUT_MS, logger });
-  const run = (Array.isArray(body?.workflow_runs) ? body.workflow_runs : [])
-    .find((candidate) => String(candidate?.id) !== target.runId
-      && MAIN_EVENTS.has(candidate?.event) && HEX_SHA.test(candidate?.head_sha || ''));
-  return run ? { sha: run.head_sha, runId: run.id } : null;
+  if (!Array.isArray(body?.workflow_runs)) return null;
+  const runs = body.workflow_runs.filter(isMainRun);
+  if (!runs.every(isUsableRun)) return null;
+  return runs.sort((a, b) => b.run_number - a.run_number);
+}
+
+function isUsableRun(run) {
+  return positiveInteger(run.id) && positiveInteger(run.run_number) && positiveInteger(run.run_attempt)
+    && HEX_SHA.test(run.head_sha || '') && typeof run.status === 'string'
+    && (run.status !== 'completed' || typeof run.conclusion === 'string');
+}
+
+async function readMainRun(target, fetchImpl, logger) {
+  const url = `${target.repoPath}/actions/runs/${target.runId}`;
+  const run = await githubJson(fetchImpl, url, target.token, { timeoutMs: API_TIMEOUT_MS, logger });
+  const path = typeof run?.path === 'string' && run.path.split('@', 1)[0];
+  return path === '.github/workflows/ci.yml' && isMainRun(run) && isUsableRun(run) ? run : null;
+}
+
+async function readRedJobs(run, target, fetchImpl) {
+  const outcomes = await fetchRunJobOutcomes(fetchImpl, {
+    ...target, runId: String(run.id), runAttempt: run.run_attempt, timeoutMs: API_TIMEOUT_MS,
+  });
+  if (!outcomes) return null;
+  return { ...outcomes, failed: outcomes.failed.filter(({ name }) => !GATE_JOB_NAMES.has(name)) };
+}
+
+function isCapacityOnly({ failed, neverStarted }) {
+  // A red gate caused solely by an unacquired runner says nothing about the commit (#16488).
+  return !failed.length && neverStarted.length > 0;
+}
+
+/** A newer original run keeps its last verdict while an inconclusive retry is in flight or finished. */
+async function readNewerVerdict(run, target, fetchImpl, logger) {
+  let attempt = run;
+  while (true) {
+    if (attempt.status === 'completed') {
+      if (attempt.conclusion === 'success') return true;
+      if (RED_CONCLUSIONS.has(attempt.conclusion)) {
+        const outcomes = await readRedJobs(attempt, target, fetchImpl);
+        if (!outcomes) return null;
+        if (!isCapacityOnly(outcomes)) return true;
+      }
+    }
+    const previous = attempt.run_attempt - 1;
+    if (!previous) return false;
+    const url = `${target.repoPath}/actions/runs/${run.id}/attempts/${previous}`;
+    attempt = await githubJson(fetchImpl, url, target.token, { timeoutMs: API_TIMEOUT_MS, logger });
+    if (!attempt || attempt.id !== run.id || attempt.run_attempt !== previous
+      || attempt.status !== 'completed' || typeof attempt.conclusion !== 'string') return null;
+  }
 }
 
 /**
@@ -154,7 +200,7 @@ export function buildMainRedIssueBody({ failedJobs, base, head, runUrl, compareB
   return lines.join('\n');
 }
 
-/** The open "main is red" issue number, `null` when none, `undefined` when the listing failed. */
+/** The open "main is red" issue record, `null` when none, `undefined` when the listing failed. */
 async function findOpenMainRedIssue(target, fetchImpl, logger) {
   for (let page = 1; page <= MAX_ISSUE_PAGES; page += 1) {
     const issues = await githubJson(
@@ -166,7 +212,7 @@ async function findOpenMainRedIssue(target, fetchImpl, logger) {
     if (!Array.isArray(issues)) return undefined;
     // The issues endpoint also lists pull requests.
     const hit = issues.find((issue) => !issue?.pull_request && issue?.title === MAIN_RED_TITLE);
-    if (hit) return hit.number;
+    if (hit) return hit;
     if (issues.length < ISSUES_PER_PAGE) return null;
   }
   return null;
@@ -193,21 +239,22 @@ async function writeIssue(fetchImpl, target, logger, method, path, payload) {
  *
  * @returns {Promise<{action: 'created'|'updated'|'closed'|'none', ok: boolean}>}
  */
-async function syncMainRedIssue({ red, target, fetchImpl, logger, body, runUrl, head }) {
-  const existing = await findOpenMainRedIssue(target, fetchImpl, logger);
-  if (existing === undefined) return { action: 'none', ok: false };
+async function syncMainRedIssue({ existing, red, target, fetchImpl, logger, body, runUrl, head }) {
   if (red) {
     if (existing === null) {
       const ok = await writeIssue(fetchImpl, target, logger, 'POST', '/issues', { title: MAIN_RED_TITLE, body, labels: MAIN_RED_LABELS });
       return { action: 'created', ok };
     }
-    const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing}`, { body })
-      && await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing}/comments`, { body: `Still red at \`${head.slice(0, 9)}\`: ${runUrl}` });
+    const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing.number}`, { body })
+      && await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing.number}/comments`, { body: `Still red at \`${head.slice(0, 9)}\`: ${runUrl}` });
     return { action: 'updated', ok };
   }
-  if (existing === null) return { action: 'none', ok: true };
-  const ok = await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing}/comments`, { body: `Green again at \`${head.slice(0, 9)}\`: ${runUrl}` })
-    && await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing}`, { state: 'closed', state_reason: 'completed' });
+  const recovery = `Green again at \`${head.slice(0, 9)}\`: ${runUrl}`;
+  const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing.number}`, {
+    state: 'closed',
+    state_reason: 'completed',
+    body: existing.body ? `${existing.body}\n\n${recovery}` : recovery,
+  });
   return { action: 'closed', ok };
 }
 
@@ -248,18 +295,44 @@ export async function reportMainHealth({
   const runUrl = `${repoUrl}/actions/runs/${runId}`;
 
   let report;
+  const noChange = { ran: true, action: 'none', syncFailed: false };
+  const syncFailure = (message) => {
+    logger.error?.(`⚠️ Main health could not sync the issue: ${message}`);
+    return { ran: true, report, action: 'none', syncFailed: true };
+  };
+  let existing;
+  if (!red) {
+    existing = await findOpenMainRedIssue(target, fetchImpl, logger);
+    if (existing === undefined) return syncFailure('the open issue list could not be read.');
+    if (existing === null) return noChange;
+  }
+
+  const runs = await readMainRuns(target, fetchImpl, logger);
+  if (!runs) return syncFailure('recent main CI runs could not be read.');
+  const listedRun = runs.find((run) => String(run.id) === runId);
+  // Older reruns can lie outside the recent page. Read their run number so a
+  // known newer verdict can still supersede them, but never write from that gap.
+  const current = listedRun ?? await readMainRun(target, fetchImpl, logger);
+  if (!current || String(current.id) !== runId || current.head_sha !== head || current.event !== env.CI_RUN_EVENT) {
+    return syncFailure(`event run #${runId} could not be verified against main CI.`);
+  }
+  if (current.status !== 'completed' || current.conclusion !== conclusion) {
+    logger.log(`⏭️ Main health skipped: event for run #${runId} no longer matches its current attempt.`);
+    return noChange;
+  }
+
   let issueBody = '';
-  if (red) {
-    const outcomes = await fetchRunJobOutcomes(fetchImpl, { ...target, timeoutMs: API_TIMEOUT_MS });
-    const failedJobs = outcomes?.failed.filter(({ name }) => !GATE_JOB_NAMES.has(name)) ?? null;
-    // The gate went red only because GitHub never ran a job (hosted-runner
-    // capacity, #16488). Nothing about the tested commit was shown broken, so
-    // the issue is left exactly as it was, like a superseded cancel.
-    if (outcomes && !failedJobs.length && outcomes.neverStarted.length) {
+  let outcomes;
+  if (red && listedRun) {
+    outcomes = await readRedJobs(current, target, fetchImpl);
+    if (outcomes && isCapacityOnly(outcomes)) {
       logger.log(`⏭️ Main health skipped: ${outcomes.neverStarted.join(', ')} never got a runner, so the run proved nothing.`);
       return { ran: false, inconclusive: true };
     }
-    const lastGreen = await findLastGreenMainRun(target, fetchImpl, logger);
+    const failedJobs = outcomes?.failed ?? null;
+    const earlier = runs.find((run) => run.run_number < current.run_number
+      && run.status === 'completed' && run.conclusion === 'success');
+    const lastGreen = earlier ? { sha: earlier.head_sha, runId: earlier.id } : null;
     let pulls = null;
     let truncated = false;
     if (lastGreen) {
@@ -280,7 +353,22 @@ export async function reportMainHealth({
     writeSummary(report);
   }
 
-  const { action, ok } = await syncMainRedIssue({ red, target, fetchImpl, logger, body: issueBody, runUrl, head });
+  for (const run of runs) {
+    if (run.run_number <= current.run_number) break;
+    const verdict = await readNewerVerdict(run, target, fetchImpl, logger);
+    if (verdict === null) return syncFailure(`the verdict for newer CI run #${run.id} could not be read.`);
+    if (!verdict) continue;
+    logger.log(`⏭️ Main health skipped: newer CI run #${run.id} supersedes run #${runId}.`);
+    return { ...noChange, report };
+  }
+  if (!listedRun) return syncFailure(`run #${runId} is outside the recent main CI run list, with no newer verdict found there.`);
+  if (red) {
+    if (!outcomes) return syncFailure(`jobs for CI run #${runId} attempt ${current.run_attempt} could not be read.`);
+    existing = await findOpenMainRedIssue(target, fetchImpl, logger);
+    if (existing === undefined) return syncFailure('the open issue list could not be read.');
+  }
+
+  const { action, ok } = await syncMainRedIssue({ existing, red, target, fetchImpl, logger, body: issueBody, runUrl, head });
   const log = ok ? logger.log : logger.error;
   log.call(logger, `${ok ? '📋' : '⚠️'} main-is-red issue: ${action}${ok ? '' : ' (failed)'}`);
   return { ran: true, report, action, syncFailed: !ok };

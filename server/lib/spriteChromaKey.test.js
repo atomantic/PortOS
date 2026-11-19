@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CHROMA_KEYS, CHROMA_KEY_HEXES, MIN_HUE_SEPARATION,
+  CHROMA_KEYS, MIN_HUE_SEPARATION,
   rgbToHsv, hueDistance, pickChromaKey, keyProximityWarning,
   keyChannelSplit, keyShareFn,
 } from './spriteChromaKey.js';

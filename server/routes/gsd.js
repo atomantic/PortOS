@@ -11,12 +11,13 @@ import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { atomicWrite } from '../lib/fileUtils.js'
-import { documentUpdateSchema, validateRequest } from '../lib/validation.js'
+import { validateRequest } from '../lib/validateRequest.js';
 import * as gsdService from '../services/gsdService.js'
 import { resolveGsdPath } from '../services/gsdPaths.js'
 import { addTask } from '../services/cos/cosTaskStore.js'
 import { getActiveApps } from '../services/apps.js'
 import * as git from '../services/git.js'
+import { documentUpdateSchema } from '../lib/documentValidation.js';
 
 const router = Router()
 

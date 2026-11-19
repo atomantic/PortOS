@@ -29,6 +29,7 @@ vi.mock('../services/appUrls', () => launchUrlMock);
 vi.mock('../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
   getApps: vi.fn(() => Promise.resolve(APPS)),
+  getAppQualitySummaries: vi.fn(() => Promise.resolve([])),
   deleteApp: vi.fn(() => Promise.resolve({})),
   archiveApp: vi.fn(() => Promise.resolve({})),
   unarchiveApp: vi.fn(() => Promise.resolve({})),
@@ -194,7 +195,28 @@ describe('Apps collection load states', () => {
 
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByRole('link', { name: 'Example App' });
-    expect(api.getApps).toHaveBeenLastCalledWith({ includeQuality: true, silent: true });
+    expect(api.getApps).toHaveBeenLastCalledWith({ signal: expect.any(AbortSignal), silent: true });
+  });
+
+  it('renders the app controls before quality summaries resolve', async () => {
+    let resolveQuality;
+    api.getAppQualitySummaries.mockReturnValueOnce(new Promise(resolve => { resolveQuality = resolve; }));
+    await renderApps();
+    expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Loading quality…' })).toHaveAttribute('href', '/apps/app-alpha/quality');
+
+    await act(async () => {
+      resolveQuality([{ id: 'app-alpha', quality: { score: 75, ratedCategories: 3 } }]);
+    });
+    expect(screen.getByRole('link', { name: 'Quality: 75/100 · 3 rated' })).toBeInTheDocument();
+  });
+
+  it('keeps the app controls usable if quality summaries fail', async () => {
+    api.getAppQualitySummaries.mockRejectedValueOnce(new Error('Quality unavailable'));
+    await renderApps();
+    expect(await screen.findByRole('link', { name: 'Quality unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('keeps a real empty collection distinct from an unavailable collection', async () => {

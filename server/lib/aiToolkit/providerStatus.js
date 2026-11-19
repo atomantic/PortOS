@@ -8,7 +8,7 @@
 import { EventEmitter } from 'events';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { clampToRuntimeContextWindow } from './internal/ollamaBacked.js';
 

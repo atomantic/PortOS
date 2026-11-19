@@ -454,13 +454,44 @@ describe('prepareAppIssueClaim', () => {
   });
 
   it.each([
-    { assignees: [{ login: 'atomantic' }] },
     { labels: ['in-progress'] },
     { state: 'CLOSED' },
   ])('refuses an existing claim before changing invitations: %j', async extra => {
     execGh.mockResolvedValue(issue(['help wanted'], extra));
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status: 409, code: 'ISSUE_IN_FLIGHT' });
     expect(execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts assignment to the pinned GitHub account and rechecks it after retiring invitations', async () => {
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'worker-token' }, account: 'worker' });
+    const assigned = { assignees: [{ login: 'Worker' }] };
+    execGh.mockResolvedValueOnce(issue(['help wanted'], assigned)).mockResolvedValueOnce('worker\n')
+      .mockResolvedValueOnce(prs()).mockResolvedValueOnce('').mockResolvedValueOnce(issue([], assigned));
+
+    await expect(prepareAppIssueClaim({ ...APP, forgeAccount: 'worker' }, '42', 'github')).resolves.toEqual({ epic: false });
+    expect(execGh).toHaveBeenCalledTimes(5);
+    expect(execGh).toHaveBeenNthCalledWith(2, ['api', 'user', '--hostname', 'github.com', '--jq', '.login'],
+      undefined, { cwd: '/repo', env: { GH_TOKEN: 'worker-token' } });
+    expect(execGh).toHaveBeenNthCalledWith(4, expect.arrayContaining(['edit', '--remove-label', 'help wanted']),
+      undefined, expect.anything());
+  });
+
+  it.each([
+    ['worker', 409, 'ISSUE_IN_FLIGHT'],
+    ['', 502, 'CLAIM_STATE_UNAVAILABLE'],
+  ])('withholds a mixed assignment or an unverified account (%j)', async (login, status, code) => {
+    execGh.mockResolvedValueOnce(issue(['help wanted'], { assignees: [{ login: 'worker' }, { login: 'other' }] }))
+      .mockResolvedValueOnce(login);
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toMatchObject({ status, code });
+    expect(execGh).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts assignment to the authenticated GitLab account', async () => {
+    useGitlabOrigin();
+    execGlab.mockResolvedValueOnce(issue([], { state: 'opened', assignees: [{ username: 'worker' }] }))
+      .mockResolvedValueOnce('{"username":"worker"}').mockResolvedValueOnce('[]');
+    await expect(prepareAppIssueClaim(APP, '42', 'gitlab')).resolves.toEqual({ epic: false });
+    expect(execGlab).toHaveBeenNthCalledWith(2, ['api', 'user'], '/repo', undefined, { rejectOnError: true });
   });
 
   it.each([

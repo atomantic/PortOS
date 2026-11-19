@@ -223,8 +223,47 @@ describe('POST /api/music-video/autonomous', () => {
       status: 'awaiting-approval', awaiting: 'song', stage: 'song', stages: { song: { status: 'pending', step: 'pick-take' } },
       brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
     });
-    // Only a render of this request can be picked for the download.
+    // Reject malformed IDs at the route boundary.
     expect((await resume({ sunoSongId: 'not-a-suno-id' })).status).toBe(400);
+  });
+
+  it.each(['failed', 'stopped'])('recovers a %s Suno stage with a manual take and waits before downloading', async (status) => {
+    const songId = '11111111-1111-4111-8111-111111111111';
+    const generateSunoSong = vi.fn()
+      .mockImplementationOnce(async (_fields, { signal }) => {
+        if (status === 'failed') throw new Error('Styles field timed out');
+        await holdStage().promise;
+        signal.throwIfAborted();
+      })
+      .mockResolvedValueOnce({ songId, songIds: [songId], filename: 'music-manual.m4a' });
+    service.__setAutonomousDepsForTests({ ...stageDoubles(), generateSunoSong });
+    const res = await begin({ prompt: 'p' });
+    expect(res.status).toBe(202);
+    const id = res.body.project.id;
+    if (status === 'stopped') {
+      await vi.waitFor(() => expect(heldStage).toBeTruthy());
+      expect((await request(app).post(`/api/music-video/${id}/autonomous/stop`).send({})).status).toBe(200);
+      heldStage.resolve();
+    }
+    await settle();
+    expect(await get(id)).toMatchObject({ status, stage: 'song' });
+
+    const resume = (body) => request(app).post(`/api/music-video/${id}/autonomous/resume`).send(body);
+    expect((await resume({ sunoSongId: songId })).status).toBe(200);
+    await settle();
+    expect(await get(id)).toMatchObject({
+      status: 'awaiting-approval', awaiting: 'song', stage: 'song', error: null,
+      stages: { song: { status: 'pending', step: 'pick-take' } },
+      output: { sunoSongIds: [songId], songTakeApproved: false },
+    });
+    expect(generateSunoSong).toHaveBeenCalledTimes(1);
+
+    expect((await resume({ sunoSongId: songId })).body.run.status).toBe('awaiting-approval');
+    expect(generateSunoSong).toHaveBeenCalledTimes(1);
+    expect((await resume({})).status).toBe(200);
+    await settle();
+    expect(generateSunoSong).toHaveBeenLastCalledWith(expect.any(Object), expect.objectContaining({ songIds: [songId], exportSongId: null }));
+    expect(await get(id)).toMatchObject({ output: { trackId: 'track-1', songTakeApproved: true } });
   });
 
   it('requires a session for approval grants and audits an agent grant without storing legacy passwords', async () => {

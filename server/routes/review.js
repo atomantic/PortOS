@@ -2,10 +2,11 @@ import express from 'express';
 import { reviewItemsQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as reviewService from '../services/review.js';
 import { claimQueueDelivery } from '../services/reviewQueueDelivery.js';
 import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
+import { reviewQueueQuerySchema } from '../lib/reviewValidation.js';
 
 const router = express.Router();
 

@@ -406,12 +406,6 @@ export async function setProjectSections(id, sections) {
   return project;
 }
 
-export async function setProjectMidiTranscription(id, midi) {
-  const next = await (await selectBackend()).setProjectMidiTranscription(id, midi);
-  emitRecordUpdated('musicVideoProject', id);
-  return withCatalogDescriptions(next);
-}
-
 /** Add a director's shot at its time; shots locked before stay locked. */
 export async function addProjectScene(id, sceneInput, { edit: answerEdit = false } = {}) {
   const [{ addScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);

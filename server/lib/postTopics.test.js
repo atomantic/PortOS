@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   POST_TOPICS,
   TOPIC_IDS,
-  SESSION_TOPIC_IDS,
   resolveTopicForDrillType,
   getTopic,
   isTopicEnabled,

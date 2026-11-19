@@ -5,7 +5,10 @@
  * since filing an issue isn't knowable from task metadata.
  */
 
-import { formatPlannerLabelGuidance, resolvePlannerId, MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
+import {
+  formatPlannerLabelGuidance, resolvePlannerId, mandatoryDispatchHintGuidance,
+  MANDATORY_DISPATCH_HINT_GUIDANCE, GITLAB_DISPATCH_SEPARATOR_GUIDANCE,
+} from '../../lib/dispatchLabels.js';
 
 /**
  * The `## Planner Attribution` section, or '' when no identity resolves (never invite a guessed label).
@@ -25,17 +28,25 @@ export function buildPlannerAttributionSection({ providerId = null, model = null
 
 const collapseWhitespace = (text) => String(text || '').replace(/\s+/g, ' ');
 const EMBEDDED_CONTRACT = collapseWhitespace(MANDATORY_DISPATCH_HINT_GUIDANCE);
+const EMBEDDED_GITLAB_CONTRACT = collapseWhitespace(mandatoryDispatchHintGuidance({ cli: 'glab' }));
 
 /**
  * Runtime contract for stored/custom tasks and follow-ups, skipped when the task body
  * already embeds it (templates keep their embed so the prompt editor shows a complete
  * prompt). Whitespace-collapsed match: an indented copy matches, a paraphrase does not.
- * Attribution is always emitted: a task cannot name its own model.
+ * Attribution is always emitted: a task cannot name its own model. The templates embed the
+ * GitHub form (the GitLab claim template embeds the GitLab form), so a `glab` run whose body
+ * embeds only the GitHub form still gets the GitLab separator paragraph.
  * @param {string[]} [options.taskBody] - rendered task parts (description, context)
  * @param {object} [options]
  */
 export function buildIssueFilingSection({ taskBody = [], ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);
-  if (taskBody.some((part) => collapseWhitespace(part).includes(EMBEDDED_CONTRACT))) return attribution;
-  return `## Issue Filing Labels\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}${attribution ? `\n\n${attribution}` : ''}`;
+  const glab = options.forgeCli === 'glab';
+  const parts = taskBody.map(collapseWhitespace);
+  if (glab && parts.some((part) => part.includes(EMBEDDED_GITLAB_CONTRACT) || part.includes('claim-issue-filing-gitlab'))) return attribution;
+  const embedded = parts.some((part) => part.includes(EMBEDDED_CONTRACT) || part.includes('claim-issue-filing-github'));
+  if (embedded && !glab) return attribution;
+  const contract = embedded ? GITLAB_DISPATCH_SEPARATOR_GUIDANCE : mandatoryDispatchHintGuidance({ cli: glab ? 'glab' : 'gh' });
+  return `## Issue Filing Labels\n\n${contract}${attribution ? `\n\n${attribution}` : ''}`;
 }

@@ -4,7 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
-import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
+import { safeJSONParse, sleep, rmGuarded } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -15,7 +15,6 @@ import {
   parseStatus,
   parseDiffStat,
   parseBranchVerboseLine,
-  parseSubmoduleStatusLine,
   extractAgentSummary,
   isBenignConcurrentFetchRefRace
 } from '../lib/gitOutputParsers.js';
@@ -610,10 +609,9 @@ export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHead
 
   // A zero exit may mean queued, and a timeout/nonzero exit may follow a
   // completed merge. Read back before reporting success or deleting anything.
-  const { execGh } = await import('./github.js');
-  const merged = await execGh(['pr', 'view', String(prNumber), '--json',
-    'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository'],
-  undefined, { cwd: dir, env }).then(value => safeJSONParse(value, null), () => null);
+  const { readPullRequest } = await import('./prProbe.js');
+  const merged = await readPullRequest(prNumber,
+    'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository', { cwd: dir, env });
   if (merged?.state !== 'MERGED') {
     return { success: false, error: result.error || 'Pull request merge is not yet verified',
       branchCleanup: { deleted: false, reason: 'merge-unverified' }, ...meta };
@@ -1800,9 +1798,6 @@ async function probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOpt
     await rmGuarded(scratch, { recursive: true, force: true, maxRetries: 3 });
   }
 }
-
-// Backward-compatible name for callers using the original evidence predicate.
-export const isBranchMergedInto = hasBranchMergeEvidence;
 
 /**
  * Checkout a remote branch that doesn't exist locally.

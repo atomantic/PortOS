@@ -9,7 +9,7 @@ import { blenderRefusal } from '../film/workspace.js';
 import { blenderFilmProblems, readBlenderManifest } from '../film/manifest.js';
 import { requireFilmProject, codeAnimationFilmOwner } from './films.js';
 import { mutateFilmProject } from './projectStore.js';
-import { emitCodeAnimationChanged } from '../socket.js';
+import { emitCodeAnimationChanged } from './events.js';
 
 const audioPath = makePathResolver(() => PATHS.music, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 

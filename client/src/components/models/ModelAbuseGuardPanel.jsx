@@ -8,9 +8,13 @@ import {
   cancelModelAbuseGuardInstall,
   getModelAbuseGuardStatus,
   installModelAbuseGuard,
+  scanModelAbuseContent,
 } from '../../services/api';
 import socket from '../../services/socket';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel.jsx';
+import { formatCount } from '../../utils/formatters';
+
+const MANUAL_SCAN_MAX_CHARS = 2_000_000;
 
 const FALLBACK_STAGES = [
   { id: 'huggingface-token', label: 'Hugging Face access token', description: 'A read token plus gated-model approval on the Prompt Guard model card.' },
@@ -32,6 +36,10 @@ function stagesFromStatus(status) {
 
 export default function ModelAbuseGuardPanel() {
   const [guardStatus, setGuardStatus] = useState(null);
+  const [scanText, setScanText] = useState('');
+  const [scanResult, setScanResult] = useState(null);
+  const [scanError, setScanError] = useState('');
+  const [scanning, setScanning] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
@@ -96,6 +104,21 @@ export default function ModelAbuseGuardPanel() {
   const cancelGuard = () => cancelModelAbuseGuardInstall({ silent: true })
     .then(loadGuardStatus)
     .catch(() => null);
+
+  const scanContent = async (event) => {
+    event.preventDefault();
+    if (scanning || !scanText.trim() || scanText.length > MANUAL_SCAN_MAX_CHARS) return;
+    setScanning(true);
+    setScanResult(null);
+    setScanError('');
+    try {
+      setScanResult(await scanModelAbuseContent(scanText, { silent: true }));
+    } catch (error) {
+      setScanError(error.message || 'Scan failed.');
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const stages = stagesFromStatus(guardStatus).map((stage) => {
     if (stage.id !== 'huggingface-token' || tokenPresent === null) return stage;
@@ -262,6 +285,23 @@ export default function ModelAbuseGuardPanel() {
         {incomplete && <p role="status" className="text-xs text-port-warning">A partial or failed installation blocks screening, including sources with an optional classifier. Repair the setup before retrying those tasks.</p>}
         <p className="text-xs text-gray-400">Install downloads Python packages and model weights. Accept the model terms and add a read token first.</p>
       </div>
+      <form onSubmit={scanContent} className="space-y-2 border border-port-border rounded-lg p-3">
+        <h3 className="text-sm font-semibold text-white">Check content</h3>
+        <p className="text-xs text-gray-400">Paste any text to run the local abuse scan on demand. A pass does not establish trust; this does not run the separate GitHub contribution assessment.</p>
+        <label htmlFor="abuse-guard-content" className="block text-xs text-gray-300">Text to check</label>
+        <textarea id="abuse-guard-content" value={scanText} disabled={scanning}
+          onChange={(event) => { setScanText(event.target.value); setScanResult(null); setScanError(''); }}
+          rows={5} className="w-full rounded border border-port-border bg-port-bg p-2 text-sm text-white" />
+        <p className="text-xs text-gray-400">{formatCount(scanText.length)} / {formatCount(MANUAL_SCAN_MAX_CHARS)} characters{scanText.length > MANUAL_SCAN_MAX_CHARS ? ' — shorten the text before checking.' : ''}</p>
+        <button type="submit" disabled={scanning || !scanText.trim() || scanText.length > MANUAL_SCAN_MAX_CHARS} className="px-3 py-2 text-xs border border-port-border rounded text-port-accent disabled:opacity-50">
+          {scanning ? 'Checking…' : 'Check content'}
+        </button>
+        {scanError && <p role="alert" className="text-xs text-port-warning">{scanError}</p>}
+        {scanResult && <div role="status" className="text-xs space-y-1">
+          <p className={scanResult.safe ? 'text-port-success' : 'text-port-warning'}>{scanResult.safe ? 'No abuse detected' : 'Content flagged by the abuse guard'}</p>
+          {(scanResult.findings || []).map((finding, index) => <p key={`${finding.category}-${index}`} className="text-gray-300">{finding.reason}</p>)}
+        </div>}
+      </form>
       <UntrustedContentPolicyPanel />
     </section>
   );

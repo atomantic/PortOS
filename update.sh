@@ -403,7 +403,7 @@ safe_install autofixer
 
 # Run trusted install scripts skipped by ignore-scripts=true in each workspace's
 # .npmrc. The allowlist lives in scripts/trusted-rebuilds.js — a single home
-# shared with `npm run setup`, scripts/ensure-deps.js, setup.ps1, update.ps1 and CI,
+# shared with scripts/setup.js (`npm run setup`), scripts/ensure-deps.js, update.ps1 and CI,
 # so a package can never be granted an install-time execution slot in one path but
 # not another.
 # Only the server needs rebuilds; client/autofixer have no install-script deps
@@ -440,60 +440,16 @@ network_summary=$(node scripts/setup-guide.js --summary 2>> "$UPDATE_LOG" || tru
 step "network-setup" "done" "${network_summary:-Network setup checked}"
 log ""
 
-# Ensure ffmpeg is present — it's a runtime dependency for the media/video
-# features (camera-device enumeration, video generation, thumbnailing, audio
-# mux) that server/lib/ffmpeg.js shells out to, not an npm package. Without it
-# those paths fail at runtime with `spawn ffmpeg ENOENT`. update.sh has no TTY,
-# so the Linux package-manager branches are gated on passwordless sudo
-# (`sudo -n`) — never block the unattended update waiting on a password prompt.
-# All branches are fail-soft: the update completes regardless.
+# Ensure ffmpeg is present — a runtime dependency of the media/video features
+# (see scripts/ensure-ffmpeg.js, the single owner of the install logic). update.sh
+# has no TTY, so --non-interactive limits Linux installs to passwordless sudo and
+# never blocks the unattended update on a password prompt. The helper always exits
+# 0: the update completes whether or not ffmpeg could be installed.
 step "ffmpeg" "running" "Checking ffmpeg..."
 if command -v ffmpeg &> /dev/null; then
   step "ffmpeg" "done" "ffmpeg present"
 else
-  log "🎞️  ffmpeg not found — required for camera devices, video generation, and thumbnails."
-  case "$(uname -s)" in
-    Darwin)
-      if command -v brew &> /dev/null; then
-        log "📦 Installing ffmpeg via Homebrew..."
-        run brew install ffmpeg || log "⚠️  brew install ffmpeg failed — install manually: brew install ffmpeg"
-      else
-        log "⚠️  Homebrew not found. Install brew (https://brew.sh) then run: brew install ffmpeg"
-      fi
-      ;;
-    Linux)
-      # Prefix with sudo only when not root; update.sh has no TTY so sudo must
-      # be passwordless (sudo -n). A root container needs no sudo at all (and
-      # the Docker image has no sudo binary). If we're non-root and can't get
-      # passwordless sudo, we can't escalate — print the manual hint.
-      SUDO=""
-      can_install=1
-      if [ "$(id -u)" -ne 0 ]; then
-        if sudo -n true 2>/dev/null; then
-          SUDO="sudo -n"
-        else
-          can_install=0
-        fi
-      fi
-      if [ "$can_install" -eq 0 ]; then
-        log "⚠️  ffmpeg missing and passwordless sudo unavailable — install manually: sudo apt-get install ffmpeg (or your distro's equivalent)."
-      elif command -v apt-get &> /dev/null; then
-        log "📦 Installing ffmpeg via apt-get..."
-        (run $SUDO apt-get update && run $SUDO apt-get install -y ffmpeg) || log "⚠️  apt-get install ffmpeg failed — install manually: sudo apt-get install ffmpeg"
-      elif command -v dnf &> /dev/null; then
-        log "📦 Installing ffmpeg via dnf..."
-        run $SUDO dnf install -y ffmpeg || log "⚠️  dnf install ffmpeg failed — install manually: sudo dnf install ffmpeg"
-      elif command -v pacman &> /dev/null; then
-        log "📦 Installing ffmpeg via pacman..."
-        run $SUDO pacman -S --noconfirm ffmpeg || log "⚠️  pacman -S ffmpeg failed — install manually: sudo pacman -S ffmpeg"
-      else
-        log "⚠️  No known package manager (apt-get/dnf/pacman). Install ffmpeg manually so media/video features work."
-      fi
-      ;;
-    *)
-      log "⚠️  Unrecognized platform — install ffmpeg manually so media/video features work."
-      ;;
-  esac
+  run node scripts/ensure-ffmpeg.js --non-interactive || true
   if command -v ffmpeg &> /dev/null; then
     step "ffmpeg" "done" "ffmpeg installed"
   else
@@ -502,6 +458,22 @@ else
 fi
 log ""
 
+# Refresh only a previously installed Apple Silicon runtime. The runner also
+# checks the pin so failed repairs and upgrades outside update.sh stay visible.
+muscriptor_python="${HOME}/.portos/venv-muscriptor/bin/python3"
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] && [ -x "$muscriptor_python" ]; then
+  if ! run "$muscriptor_python" scripts/transcribe_muscriptor.py --check-runtime; then
+    step "muscriptor" "running" "Refreshing the MuScriptor MIDI runtime..."
+    if run "$muscriptor_python" -m pip install --disable-pip-version-check --no-input --require-hashes --no-deps \
+      -r scripts/requirements-muscriptor-mlx.lock.txt \
+      && run "$muscriptor_python" scripts/transcribe_muscriptor.py --check-runtime; then
+      step "muscriptor" "done" "MuScriptor MIDI runtime refreshed"
+    else
+      step "muscriptor" "done" "MuScriptor refresh failed (see update log for the repair command)"
+    fi
+  fi
+fi
+
 # Run data migrations
 step "migrations" "running" "Running data migrations..."
 if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
@@ -509,18 +481,12 @@ if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
 fi
 step "migrations" "done" "Migrations complete"
 
-# Install/update slash-do commands. Replaces the previous interactive prompt
-# with an always-on pinned `npx slash-do@<version>` call so the user-global command
-# pool stays current across updates without user intervention. Failures are
-# non-fatal — the PR Reviewer schedule task is the only consumer and it
-# fails gracefully if the binary is missing.
-# Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
-# all detected envs instead of hanging on readline (update.sh has no TTY).
-SLASHDO_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/scripts/SLASHDO_VERSION")"
+# Install/update the pinned slash-do commands (scripts/install-slashdo.js owns the
+# npx call and the scripts/SLASHDO_VERSION pin). Non-fatal: the helper always
+# exits 0 — the PR Reviewer schedule task is the only consumer and it fails
+# gracefully if the commands are missing.
 step "slash-do" "running" "Installing/updating slash-do commands..."
-if ! echo a | run npx --yes "slash-do@${SLASHDO_VERSION}"; then
-  log "⚠️  slash-do install/update failed. Continuing without it (re-run later: npx slash-do@${SLASHDO_VERSION})."
-fi
+run node scripts/install-slashdo.js || true
 step "slash-do" "done" "slash-do commands installed/updated"
 log ""
 

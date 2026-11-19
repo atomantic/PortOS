@@ -29,6 +29,8 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/publish/x.browser.test.js',
   'server/services/musicVideo/publish/sunoHook.browser.test.js',
   'server/routes/manualUpdateRecovery.browser.test.js',
+  'server/services/musicVideo/overlayTextService.browser.test.js',
+  'server/services/codeAnimation/poster.realBrowser.test.js',
 ];
 
 /**

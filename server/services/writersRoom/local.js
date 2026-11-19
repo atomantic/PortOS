@@ -43,8 +43,7 @@ const queueWorkWrite = createRecordWriteQueue();
 // ---------- text analysis ----------
 
 // `countWords` lives in lib/textUtils.js — the one whitespace word count, on
-// both sides of the client/server line (`textUtils.guard.test.js` fails the suite on a
-// re-spelled copy). Re-exported here so existing importers of this module keep
+// both sides of the client/server line. Re-exported here so existing importers keep
 // working unchanged. The editorial prose checks count LETTER words instead,
 // through lib/editorial/proseTics.js#tokenizeWords — a different rule on
 // purpose, owned the same way.

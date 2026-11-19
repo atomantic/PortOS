@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {Target, TreePine, List} from 'lucide-react';
 import * as api from '../services/api';
-import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -11,8 +10,10 @@ import LoadFailedState from '../components/ui/LoadFailedState';
 import { useValidTab } from '../hooks/useValidTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import { lazyWithReload } from '../utils/lazyWithReload';
 
-const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
+const GoalsListView = lazyWithReload(() => import('../components/goals/GoalsListView'));
+const GoalsTreeView = lazyWithReload(() => import('../components/goals/GoalsTreeView'));
 
 // Icon per tab id. The manifest (`tabGroup: 'goals'`) owns id/label/order —
 // this page owns only how each tab looks; the short page-local labels
@@ -105,7 +106,9 @@ export default function Goals() {
         ) : !data && loadError ? (
           <LoadFailedState title="Could not load goals" hint={loadError.message} onRetry={retryLoad} />
         ) : tab === 'list' ? (
-          <GoalsListView data={data} onRefresh={loadData} selectedGoalId={goalId} />
+          <Suspense fallback={<PageSkeleton header="none" label="Loading goal list" cards={4} sidebar={false} />}>
+            <GoalsListView data={data} onRefresh={loadData} selectedGoalId={goalId} />
+          </Suspense>
         ) : (
           // Same reserved shape the page's own load branch uses above — the tree
           // chunk arriving late shouldn't look different from the data arriving

@@ -67,7 +67,6 @@ vi.mock('./apps.js', () => ({
 import {
   gatherIssueWatcherInput as buildTaskInput,
   buildTaskInput as runScheduledIssueIntake,
-  classifyChecks,
   isIssueClaimRequest,
   isTaskOutputPayload,
   parseAddedDiffLines,
@@ -221,15 +220,6 @@ describe('issue-watcher pure contracts', () => {
     const anchors = parseAddedDiffLines(DIFF);
     expect(anchors.has('src/example.js\u0000RIGHT\u00002')).toBe(true);
     expect(anchors.has('src/example.js\u0000RIGHT\u00001')).toBe(false);
-  });
-
-  it('keeps failed, pending, and green check states distinct', () => {
-    expect(classifyChecks([{ conclusion: 'FAILURE' }])).toBe('failed');
-    expect(classifyChecks([{ state: 'ERROR' }])).toBe('failed');
-    expect(classifyChecks([{ conclusion: 'STARTUP_FAILURE' }])).toBe('failed');
-    expect(classifyChecks([])).toBe('pending');
-    expect(classifyChecks([{ status: 'IN_PROGRESS' }])).toBe('pending');
-    expect(classifyChecks([{ conclusion: 'SUCCESS' }, { conclusion: 'SKIPPED' }])).toBe('green');
   });
 
   it('requires both output arrays for transcript payload rescue', () => {

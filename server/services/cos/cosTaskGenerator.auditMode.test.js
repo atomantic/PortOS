@@ -81,7 +81,7 @@ vi.mock('../../lib/gitRemote.js', async (importActual) => ({
   readOriginRemoteUrl: vi.fn(async () => null),
 }));
 
-import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask } from './cosImprovementTasks.js';
 import { generateTaskFromJob } from '../autonomousJobs/skillTemplates.js';
 import { buildLightContextPrompt } from '../agent/agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from '../taskTypeHooks.js';

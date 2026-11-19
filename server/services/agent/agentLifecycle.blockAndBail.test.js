@@ -1,5 +1,5 @@
 const reportInfrastructureFailure = vi.hoisted(() => vi.fn(async () => null));
-const proofState = vi.hoisted(() => ({ agents: {}, saved: null }));
+const persisted = vi.hoisted(() => ({ saved: null }));
 vi.mock('../reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureFailure: reportInfrastructureFailure }));
 
 /**
@@ -71,7 +71,6 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./agentFinalization.js', () => ({
-  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
@@ -82,7 +81,6 @@ vi.mock('../cos/cosEvents.js', () => ({
 vi.mock('../cos/cosState.js', async importOriginal => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
-  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: proofState.agents })),
 }));
 vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
@@ -172,19 +170,11 @@ const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', env
 // observable for a task that bound one (#989).
 const APP = 'example-app';
 
-// The real spawn gate requires persisted provenance before reaching the
-// provider gates covered below. Give each fixture a matching prior run.
+// The real spawn gate re-reads the queued task before it reaches the provider
+// gates covered below. Give each fixture the snapshot the queue would hold.
 const spawnAgentForTask = task => {
-  const epoch = '11111111-1111-4111-8111-111111111111';
-  const count = task.metadata?.totalSpawnCount;
-  const dispatch = count == null || Number(count) === 0 ? null : { agentId: `agent-${task.id}`, startedAt: 'start', claimedBy: 'fixture', claimedAt: 'claim',
-    lastSpawnedAt: 'spawn', totalSpawnCount: count };
-  const saved = { ...task, taskType: task.taskType || 'user', status: 'pending', metadata: { ...task.metadata,
-    spawnBudgetProof: { version: 1, epoch, baseline: dispatch ? Number(count) - 1 : 0, dispatch } } };
-  proofState.saved = saved;
-  if (dispatch) proofState.agents[dispatch.agentId] = { id: dispatch.agentId, taskId: task.id, status: 'completed', startedAt: 'start',
-    metadata: { completionTaskDispatch: { taskId: task.id, taskType: saved.taskType, spawnBudgetEpoch: epoch,
-      spawnBudgetStartedAt: 'start', expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]) } } };
+  const saved = { ...task, taskType: task.taskType || 'user', status: 'pending' };
+  persisted.saved = saved;
   vi.mocked(getTaskById).mockResolvedValue(saved);
   return runSpawnAgentForTask(task);
 };
@@ -245,7 +235,6 @@ function reachPostPrepGates() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  proofState.agents = {};
   spawningTasks.clear();
   runnerAgents.clear();
   setUseRunner(false);
@@ -253,7 +242,7 @@ beforeEach(() => {
   vi.mocked(spawnAgentViaRunner).mockResolvedValue({ pid: 4242 });
   vi.mocked(validatePublicReviewModel).mockResolvedValue({ ok: true });
   // Truthy: a falsy in_progress write is read as "the claim did not land".
-  vi.mocked(updateTask).mockImplementation(async (_id, patch) => ({ metadata: { ...proofState.saved?.metadata, ...patch.metadata } }));
+  vi.mocked(updateTask).mockImplementation(async (_id, patch) => ({ metadata: { ...persisted.saved?.metadata, ...patch.metadata } }));
   vi.mocked(getConfig).mockResolvedValue({});
   vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
     ok: true, provider: CLAUDE_TUI, selectedModel: 'sonnet', modelSelection: {},

@@ -11,39 +11,11 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  spriteImportRequestSchema,
-  spriteRecordUpdateSchema,
-  spriteCreateSchema,
-  spriteReferenceGenerateSchema,
-  spriteReferenceLockSchema,
-  spriteReferenceUnlockSchema,
-  spriteForkSchema,
-  spriteTrackGenerateSchema,
-  spriteTrackApproveSchema,
-  spriteTrackReopenSchema,
-  spriteTrackParamsSchema,
-  spriteAnimationTrackCreateSchema,
-  spriteAnimationTrackUpdateSchema,
-  spriteWalkGenerateSchema,
-  spriteWalkApproveSchema,
-  spriteWalkReopenSchema,
-  spriteWalkUnlockSchema,
-  spriteWalkPostprocessSchema,
-  spriteWalkTargetSchema,
-  spriteWalkSourceFramesParamsSchema,
-  spriteWalkTrimSchema,
-  spritePublishBindingSchema,
-  spriteAtlasCompileSchema,
-  spriteAtlasPublishSchema,
-  spriteAssetDeleteSchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { spriteImportRequestSchema, spriteRecordUpdateSchema, spriteCreateSchema, spriteReferenceGenerateSchema, spriteReferenceLockSchema, spriteReferenceUnlockSchema, spriteForkSchema, spriteTrackGenerateSchema, spriteTrackApproveSchema, spriteTrackReopenSchema, spriteTrackParamsSchema, spriteAnimationTrackCreateSchema, spriteAnimationTrackUpdateSchema, spriteWalkGenerateSchema, spriteWalkApproveSchema, spriteWalkReopenSchema, spriteWalkUnlockSchema, spriteWalkPostprocessSchema, spriteWalkTargetSchema, spriteWalkSourceFramesParamsSchema, spriteWalkTrimSchema, spritePublishBindingSchema, spriteAtlasCompileSchema, spriteAtlasPublishSchema, spriteAssetDeleteSchema } from '../lib/spriteValidation.js';
 import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
@@ -76,7 +48,7 @@ import {
   getTrackState, startTrackGeneration, approveTrackRun, reopenTrackDirection,
 } from '../services/sprites/animationTrackWorkflow.js';
 // #3153 — CRUD over the user-defined store. Separate from the read-side store
-// module so `validation.js`'s import graph stays free of the record scan the
+// module so `spriteValidation.js`'s import graph stays free of the record scan the
 // in-use refusal needs (see animationTrackCrud.js's header).
 import {
   listAnimationTracks, createAnimationTrack, updateAnimationTrack, deleteAnimationTrack,

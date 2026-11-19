@@ -6,7 +6,6 @@ import {
   ERR_VALIDATION, ERR_LOCKED, ERR_PARTIAL_COMMIT_ISSUES, ERR_IMPORT_IN_PROGRESS, IMPORTER_SOURCE_CHAR_LIMIT,
 } from '../services/importer.js';
 import * as universeSvc from '../services/universeBuilder.js';
-import * as seriesSvc from '../services/pipeline/series.js';
 import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
 
 vi.mock('../services/importer.js', async () => {

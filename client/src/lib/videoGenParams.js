@@ -6,6 +6,13 @@
 
 import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDeliveryVideoModel } from './videoFinish.js';
+import { DEFAULT_CONTEXT_FRAMES, resolveContextFrames } from '../../../server/lib/videoContinuity.js';
+import {
+  STOCK_TEXT_ENCODER_ID, SPEED_PROFILE_DEFAULT_ID, isDefaultSpeedProfile, speedProfileAcceptsMode, videoSpeedProfiles,
+} from '../../../server/lib/videoRequestDefaults.js';
+import {
+  IC_LORA_MODE_VALUES, isIcLoraMode, icResolutionIssue, listIcLoraRemixModes,
+} from '../../../server/lib/icLoraRegistry.js';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
@@ -27,15 +34,16 @@ export const MAX_CHUNKS = 8;
 export const CHUNK_OPTIONS = Array.from({ length: MAX_CHUNKS }, (_, i) => i + 1);
 
 // Continuation context window — how many of the prior chunk's frames each
-// subsequent chunk conditions on. Display-side mirror of
-// `server/lib/videoContinuity.js` (which stays the authority: it defaults,
-// clamps, and picks the strategy). Pinned against drift by
-// `server/lib/videoContinuity.parity.test.js`.
+// subsequent chunk conditions on. The default and the absent/invalid → default
+// rule (`resolveContextFrames`) are `server/lib/videoContinuity.js`'s own, which
+// stays the authority: it defaults, clamps, and picks the strategy. The option
+// list is the client's presentation choice, kept inside the route's accepted range
+// by `videoGenParams.test.js`.
 //
 // `0` is a real option, not "unset" — it opts back into seeding the next chunk
 // from a single extracted last frame, which is what every runtime without an
 // extend pipeline does anyway.
-export const DEFAULT_CONTEXT_FRAMES = 22;
+export { DEFAULT_CONTEXT_FRAMES };
 export const CONTEXT_FRAME_OPTIONS = [0, 11, 22, 45, 73];
 // Older catalogs have no projection; preserve their established LTX contract.
 // An explicit server refusal always wins over the legacy runtime fallback.
@@ -117,15 +125,15 @@ export const supportsVideoAudioControls = (model) => model?.supportsDisableAudio
 export const supportsVideoAudioPromptControls = (model) => model?.supportsAudioPrompting !== false;
 
 // Substitutable prompt conditioners (#4081). The OPTIONS themselves are not
-// mirrored here — the server decorates each model entry with its own
+// held here — the server decorates each model entry with its own
 // `textEncoderOptions` (label, description, size) in
 // `videoGen/local.js#decorateVideoModel`, so the picker renders whatever this
 // build's runner can actually key-map and a stale client can't offer one it
-// can't. Only the "no override" sentinel is duplicated, and it must stay equal
-// to `STOCK_TEXT_ENCODER_ID` in `server/lib/videoTextEncoders.js`: the submit
-// builder drops the field when it holds this value, and the server treats an
-// absent field and this id identically.
-export const STOCK_TEXT_ENCODER_ID = 'stock';
+// can't. The "no override" sentinel is the server's own
+// (`server/lib/videoRequestDefaults.js`): the submit builder drops the field
+// when it holds this value, and the server treats an absent field and this id
+// identically.
+export { STOCK_TEXT_ENCODER_ID };
 export const textEncoderOptionsForModel = (model) => (
   Array.isArray(model?.textEncoderOptions) ? model.textEncoderOptions : []
 );
@@ -148,51 +156,39 @@ export const textEncoderIdFromRecord = (value) => (
 // and for the same reason: the option list is decorated onto each model entry
 // by the server (`applyVideoSpeedProfiles` in server/lib/videoSpeedProfiles.js),
 // so the picker offers exactly what this install's registry declares and a
-// stale client can't submit a schedule that no longer exists. Only the "no
-// override" sentinel is duplicated here, and it must stay equal to
-// `SPEED_PROFILE_DEFAULT_ID` on the server: the submit builder drops the field
-// when it holds this value, and the server treats absence and this id
+// stale client can't submit a schedule that no longer exists. The "no
+// override" sentinel (`SPEED_PROFILE_DEFAULT_ID`) and the mode gate are the
+// server's own (`server/lib/videoRequestDefaults.js`): the submit builder drops
+// the field when it holds this value, and the server treats absence and this id
 // identically.
-export const DEFAULT_SPEED_PROFILE_ID = 'quality';
+export const DEFAULT_SPEED_PROFILE_ID = SPEED_PROFILE_DEFAULT_ID;
 export const isMiniMaxH3SpeedProfile = (profile) => (
   profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v' || profile?.type === 'minimax-h3-mlx-flex'
 );
 
-// Absence, the empty string and the default id are one request — mirrors
-// `isDefaultSpeedProfile` on the server.
-export const isDefaultSpeedProfileId = (id) => (
-  id == null || id === '' || id === DEFAULT_SPEED_PROFILE_ID
-);
+// Absence, the empty string and the default id are one request.
+export const isDefaultSpeedProfileId = isDefaultSpeedProfile;
 // Every profile the model DECLARES, mode-independent. Used to validate a
 // stored selection; the picker wants the mode-filtered view below.
-export const speedProfilesForModel = (model) => (
-  Array.isArray(model?.speedProfiles) ? model.speedProfiles.filter((p) => p?.id) : []
-);
+export const speedProfilesForModel = videoSpeedProfiles;
 // The profiles that actually apply to THIS mode — what the picker offers, and
 // the set a selection must be in to drive the sampler. The mode filter lives
 // here rather than at each call site because both consumers need the same
 // answer: a profile the server would decline must neither appear in the picker
-// nor lock Steps/CFG. Mirrors the server's gate (`speedProfileDeclineReason`),
-// pinned by server/lib/videoSpeedProfiles.parity.test.js. An absent mode is the
-// default text render. A profile declaring no `modes` falls back to the
-// two-stage set — NOT to "unrestricted": the server's decline check applies
-// exactly that fallback, and reading a missing field as permissive here would
-// offer a profile on fflf that the server then declines. (Such a profile can't
-// reach a shipped registry — `validateSpeedProfileTable` strips it — so this is
-// belt-and-braces against a hand-edited one, and must not diverge.)
-export const DEFAULT_SPEED_PROFILE_MODES = ['text', 'image'];
+// nor lock Steps/CFG. The gate is the server's own (`speedProfileAcceptsMode`, the
+// predicate `speedProfileDeclineReason` applies): an absent mode is the default
+// text render, and a profile declaring no `modes` falls back to the two-stage
+// set — NOT to "unrestricted", which would offer a profile on fflf that the
+// server then declines.
 // Accepts a single mode OR the list of modes a request will actually run in —
 // a chained render is one clip whose chunks differ (see videoChainChunkModes),
 // and the server applies a profile to such a request only when EVERY chunk
 // accepts it. Matching that here is what stops the picker from offering a
 // speed-up the chain then declines wholesale.
 export const speedProfilesForMode = (model, mode) => {
-  const wanted = (Array.isArray(mode) ? mode : [mode]).map((m) => m || 'text');
-  const modes = wanted.length > 0 ? wanted : ['text'];
-  return speedProfilesForModel(model).filter((p) => {
-    const declared = Array.isArray(p.modes) ? p.modes : DEFAULT_SPEED_PROFILE_MODES;
-    return modes.every((m) => declared.includes(m));
-  });
+  // An empty list is the default text render, as on the server (`resolveVideoSpeedProfileForModes`).
+  const wanted = Array.isArray(mode) ? (mode.length > 0 ? mode : [null]) : [mode];
+  return speedProfilesForModel(model).filter((p) => wanted.every((m) => speedProfileAcceptsMode(p, m)));
 };
 
 // The modes a request's chunks will run in, mirroring generateChainedVideo's
@@ -209,23 +205,16 @@ export const speedProfilesForMode = (model, mode) => {
 export const videoChainChunkModes = ({ model, mode, chaining, contextFrames, hasSourceImage = false }) => {
   const first = mode || (hasSourceImage ? 'image' : 'text');
   if (!chaining) return [first];
-  // resolveContextFrames (server/lib/videoContinuity.js) reads absent / '' /
+  // resolveContextFrames (server/lib/videoContinuity.js, the server's own rule) reads absent / '' /
   // non-finite as DEFAULT_CONTEXT_FRAMES, NOT as zero — so a request that omits
   // the field chains with a window. Reading it as a frame hop here would show
   // the Fast picker and grey out Steps/CFG for a chain the server then declines
   // wholesale, which is the precise failure this gate exists to prevent.
-  const windowHop = resolveContextFramesForDisplay(contextFrames) > 0 && supportsContextWindow(model);
+  const windowHop = resolveContextFrames(contextFrames) > 0 && supportsContextWindow(model);
   const temporalMode = model?.continuationCapability?.outputLayout === 'new-output-only' ? 'text' : 'extend';
   return [first, windowHop ? temporalMode : 'image'];
 };
 
-// Display-side mirror of resolveContextFrames. Only the absent/invalid→default
-// rule matters for the gate above; the clamp is the server's business.
-export const resolveContextFramesForDisplay = (requested) => {
-  if (requested == null || requested === '') return DEFAULT_CONTEXT_FRAMES;
-  const n = Number(requested);
-  return Number.isFinite(n) ? n : DEFAULT_CONTEXT_FRAMES;
-};
 // Snap a selection onto what the (possibly just-switched) model declares, so
 // the <select> is never left on a value with no matching <option>. Deliberately
 // NOT mode-filtered: switching to fflf hides the picker, it must not silently
@@ -377,87 +366,13 @@ export const computeFflfSafeFrames = (width, height, numFrames, budget) => {
   return safeLatent * 8 + 1;
 };
 
-// IC-LoRA remix modes (issue #3100) — mirror of the server registry in
-// server/lib/icLoraWeights.js, which is the source of truth. The client needs
-// the labels, the input-surface descriptors, and the reference-count/resolution
-// rules to render the panel and validate before submit; the weight repo/filename
-// stays server-side (the client never resolves a weight path).
-//
-// Field names match the server entry exactly so drift is mechanically
-// detectable: server/lib/icLoraWeights.parity.test.js imports BOTH modules and
-// diffs the mirrored fields, so adding a mode (or changing a bound) without
-// updating this list fails CI instead of silently letting the form accept a
-// render the route rejects.
-export const IC_LORA_MODES = [
-  {
-    mode: 'ic-control',
-    label: 'Control',
-    description: 'Structure + motion from a control clip',
-    uploadLabel: 'Upload a control clip (depth / pose / edges)',
-    // The IC encoder downscales the reference by this factor, and the pipeline
-    // requires the OUTPUT dimensions to divide evenly by it (the server rejects
-    // otherwise with IC_LORA_RESOLUTION_NOT_DIVISIBLE). Per-weight — read from
-    // the weight's safetensors metadata server-side, never assumed.
-    referenceDownscaleFactor: 2,
-    minReferences: 1,
-    maxReferences: 1,
-    referenceKind: 'video',
-  },
-  {
-    mode: 'ic-colorize',
-    label: 'Colorize',
-    description: 'Color restored onto a black-and-white clip',
-    uploadLabel: 'Upload a B&W clip to restore',
-    // 1 — the Colorizer conditions on a full-resolution reference, so it imposes
-    // no divisibility rule at all (icResolutionIssue short-circuits at <= 1).
-    referenceDownscaleFactor: 1,
-    minReferences: 1,
-    maxReferences: 1,
-    referenceKind: 'video',
-  },
-  {
-    mode: 'ic-ingredients',
-    label: 'Ingredients',
-    description: 'A scene recomposed from 2-8 reference stills (characters, props, settings)',
-    uploadLabel: 'Upload a reference still (character / prop / setting)',
-    // 1 — read off the weight's safetensors metadata server-side; conditions on
-    // full-resolution references, so no divisibility rule.
-    referenceDownscaleFactor: 1,
-    minReferences: 2,
-    maxReferences: 8,
-    // Images, not clips: `referenceKind` drives the panel's picker (a 2-8 row
-    // gallery list rather than the single upload/history pair).
-    referenceKind: 'image',
-  },
-  {
-    mode: 'ic-ingredients-25',
-    label: 'LTX 2.5 References',
-    description: 'Keep characters, props and locations consistent with a reference sheet',
-    uploadLabel: 'Choose a character, prop or location reference',
-    referenceDownscaleFactor: 1,
-    minReferences: 1,
-    maxReferences: 8,
-    referenceKind: 'image',
-  },
-];
-
-export const IC_LORA_MODE_VALUES = IC_LORA_MODES.map((m) => m.mode);
-export const isIcLoraMode = (mode) => IC_LORA_MODE_VALUES.includes(mode);
+// IC-LoRA remix modes (issue #3100): the form reads the server's own registry table (`server/lib/icLoraRegistry.js`,
+// remix subset), so its labels, input-surface descriptors, reference-count bounds and per-weight resolution
+// rule cannot drift from what the route enforces. The weight repo/filename ride along but the client never
+// resolves a weight path.
+export const IC_LORA_MODES = listIcLoraRemixModes();
+export { IC_LORA_MODE_VALUES, isIcLoraMode, icResolutionIssue };
 export const icLoraSpecForMode = (mode) => IC_LORA_MODES.find((m) => m.mode === mode) || null;
-
-// Mirror of icResolutionIssue in server/lib/icLoraWeights.js: a human message
-// when the output dimensions aren't divisible by the weight's reference-downscale
-// factor, else null. One implementation so the panel's warning and the submit
-// gate can never disagree.
-// A null/absent factor means UNKNOWN (a gated weight whose metadata hasn't been
-// read yet), not 1. Both assert no rule, but the non-number guard keeps the two
-// implementations byte-for-byte equivalent rather than agreeing by accident.
-export const icResolutionIssue = (spec, width, height) => {
-  const scale = spec?.referenceDownscaleFactor;
-  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
-  if (Number(width) % scale === 0 && Number(height) % scale === 0) return null;
-  return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
-};
 
 // The one mode-compatibility predicate — used by the Model dropdown and by
 // every "can this model do i2v?" gate on the page. a2v is limited to declared

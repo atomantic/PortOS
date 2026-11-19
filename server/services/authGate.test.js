@@ -887,6 +887,7 @@ describe('host control by default on /api writes (#16018)', () => {
     settings.patch('/slice', ok);
     app.use('/api/settings', settings);
     app.post('/api/brain/inbox', ok);
+    app.post('/api/local-llm/security-guard/scan', ok);
     app.delete('/api/apps/:id', ok);
     app.get('/api/scaffold/directories', ok);
     app.post('/api/peer-sync/push', ok);
@@ -899,6 +900,7 @@ describe('host control by default on /api writes (#16018)', () => {
     ['put', '/api/settings', { location: {} }],
     ['patch', '/api/settings/slice', { slicePath: 'localLlm.mtplx', partial: { keepLoaded: true } }],
     ['post', '/api/brain/inbox', { text: 'Example note' }],
+    ['post', '/api/local-llm/security-guard/scan', { content: 'Example' }],
     ['delete', '/api/apps/example-app', undefined],
   ];
   const send = (app, method, path, body, header) => {

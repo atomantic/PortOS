@@ -390,10 +390,14 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   }
 
   let output = '';
-  // Codex writes its final answer to stdout; stderr is a diagnostic transcript
-  // containing the input prompt. Keep both in logs, but never parse stderr.
+  // Codex can echo the prompt on stderr and Claude can print sign-in notices.
+  // Both write their answer to stdout; keep the full transcript for diagnostics.
   let assistantOutput = '';
-  const stdoutIsResponse = isCodexProvider(provider);
+  const isClaude = isClaudeProvider(provider);
+  const stdoutIsResponse = isCodexProvider(provider) || isClaude;
+  const signInWarningPrefix = '\nWarning: this sign-in ends between ';
+  let stderrTail = '\n';
+  let claudeSignInExpiring = false;
   let immediateFallbackAnalysis = null;
   let childProcess = null;
   // True when the child is a credential-bootstrap WRAPPER supervising the real
@@ -478,7 +482,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // shared daemon.
   // Restricted Claude image reads ignore settings files. Carry only the user's
   // configured environment forward so Bedrock/gateway authentication still works.
-  const visionSettingsEnv = vision && toolFree && isClaudeProvider(provider)
+  const visionSettingsEnv = vision && toolFree && isClaude
     ? await import('./agent/agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
     : null;
   const childEnv = buildCliChildEnv({
@@ -589,6 +593,12 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   childProcess.stderr?.on('data', (data) => {
     const text = data.toString();
     output += text;
+    if (isClaude && !claudeSignInExpiring) {
+      // Carry enough stderr across pipe chunks to detect a split notice.
+      const stderr = stderrTail + text;
+      claudeSignInExpiring = stderr.includes(signInWarningPrefix);
+      stderrTail = stderr.slice(1 - signInWarningPrefix.length);
+    }
     onData?.(text);
     abortForImmediateFallbackSignal(text);
   });
@@ -643,6 +653,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
       metadata.exitCode = exitCode;
       metadata.success = spawnError ? false : exitCode === 0 && !immediateFallbackAnalysis && !canceled;
       metadata.outputSize = Buffer.byteLength(output);
+      if (claudeSignInExpiring) metadata.claudeSignInExpiring = true;
 
       if (spawnError) {
         // Name whatever was ACTUALLY spawned — for a credential-bootstrap

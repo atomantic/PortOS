@@ -30,11 +30,11 @@ describe('vi.mock factory contract conventions', () => {
   it('flags a planted key the real module does not export', () => {
     const probe = join(ROOT, 'server/lib/__probe.test.js');
     const src = [
-      "vi.mock('./validation.js', () => ({ validateRequest: vi.fn(), plantedDeadKey: vi.fn() }));",
-      "// vi.mock('./validation.js', () => ({ commentedDeadKey: vi.fn() }));",
-      "vi.mock('./validation.js', async () => ({ ...(await vi.importActual('./validation.js')), spreadKey: vi.fn() }));",
+      "vi.mock('./validateRequest.js', () => ({ validate: vi.fn(), plantedDeadKey: vi.fn() }));",
+      "// vi.mock('./validateRequest.js', () => ({ commentedDeadKey: vi.fn() }));",
+      "vi.mock('./validateRequest.js', async () => ({ ...(await vi.importActual('./validateRequest.js')), spreadKey: vi.fn() }));",
     ].join('\n');
-    expect(drift(probe, src)).toEqual(['server/lib/__probe.test.js:1 — ./validation.js mocks plantedDeadKey']);
+    expect(drift(probe, src)).toEqual(['server/lib/__probe.test.js:1 — ./validateRequest.js mocks plantedDeadKey']);
   });
 
   it('does not read a JSX-text apostrophe as a string opener (#12794)', () => {

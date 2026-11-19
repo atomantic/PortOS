@@ -44,12 +44,14 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import { directShots, planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
-import { getProject, addProjectScenes, mutateProjectRecord } from './projects.js';
+import { addProjectScenes, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { parseShotCamera, planShotCameras, shotCameraPromptSection } from './shotCamera.js';
 import { getCameraMovement } from '../../lib/cameraMovements.js';
 import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { midiSongSummary, midiWindowFacts } from '../../lib/musicVideo/musicVideoMidiDigest.js';
+import { loadProjectMidiDigest } from './songMidiDigest.js';
 
 const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;
@@ -166,8 +168,10 @@ const quote = (text, max) => {
  * Each line carries the shot's musical section (label, energy, position inside
  * the section), its duration, the lyric lines it spans (or that it is
  * instrumental — no lyrics are invented), and any phrase-level visual intent.
+ * `midi` (songMidiDigest.js) adds what the song's audio→MIDI transcription
+ * shows in each shot: parts playing, low hits, top-line contour, chords.
  */
-export function buildScenePlanPrompt(project, shots) {
+export function buildScenePlanPrompt(project, shots, { midi = null } = {}) {
   const concept = project.concept || {};
   const direction = project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction;
   const conceptLine = concept.prompt ? `Concept: ${concept.prompt}` : '';
@@ -213,6 +217,8 @@ export function buildScenePlanPrompt(project, shots) {
       const times = anchors(project.audioAnalysis?.[kind]);
       if (times) parts.push(`${kind} (seconds): ${times}`);
     }
+    const music = midiWindowFacts(midi, s.startSec, s.endSec);
+    if (music) parts.push(music);
     if (s.shotMode === 'performance') parts.push(PERFORMANCE_FRAME);
     if (s.current?.framePrompt) parts.push(`current frame: ${quote(s.current.framePrompt, PROMPT_GUIDANCE_MAX)}`);
     if (s.current?.prompt) parts.push(`current motion: ${quote(s.current.prompt, PROMPT_GUIDANCE_MAX)}`);
@@ -233,7 +239,7 @@ ${guidanceLine}
 ${motionPlan}
 ${productionFeedbackContext(project)}
 
-The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}):
+${midi ? `${midiSongSummary(midi)}.\n` : ''}The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent${hasDelivery ? '; optional delivery directions from the lyric sheet' : ''}${midi ? '; what the transcription shows in the shot' : ''}):
 ${shotLines}
 
 For EACH shot above, propose a timed composition for its assigned medium (code-authored worlds, selected stills or footage):
@@ -242,7 +248,7 @@ For EACH shot above, propose a timed composition for its assigned medium (code-a
 - "camera": the shot's camera move from the vocabulary below, with its speed, end framing, whether it lands on the downbeat, and (for a static camera) the reason.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
-- Use each shot's absolute times and musical anchors to decide what happens and when the camera lands (its "onBeat"), but keep them out of the motion prompt text. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Across a section's shots, build anticipation, payoff and recovery (each shot carries one of them); motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
+- Use each shot's absolute times and musical anchors to decide what happens and when the camera lands (its "onBeat"), but keep them out of the motion prompt text.${midi ? ' The transcription facts are anchors too: land an impact or cut on a strong low hit, let a rising top line build and a falling one release, bring a new element on screen where a part enters, and match a sparse passage with stillness.' : ''} Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Across a section's shots, build anticipation, payoff and recovery (each shot carries one of them); motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
 ${direction ? `- "subject": who the frame shows. "lead" for the protagonist, "none" when no person is in frame (an empty set, a title card, an object insert), or a short description of whoever else is in frame (for example "a desk clerk"). Each frame opens with this subject, and only the lead wears the assigned look, so set it on every shot; a performance is always "lead".
 ${direction.sets?.length ? '- "set": only when a shot belongs in a different listed set than its assigned one, that set\'s exact name; otherwise leave it out.\n' : ''}` : ''}${revising ? '- These shots already exist. Revise each one\'s current frame and motion to address the unresolved review feedback, keeping what the feedback does not ask to change.\n' : ''}- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
 ${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
@@ -323,7 +329,7 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
       provider,
       model: selectedModel,
       ...effortArg(route),
-      prompt: buildScenePlanPrompt(project, shots),
+      prompt: buildScenePlanPrompt(project, shots, { midi: await loadProjectMidiDigest(project) }),
       source: 'music-video-plan',
     }));
   } catch (err) {

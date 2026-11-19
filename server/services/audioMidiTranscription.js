@@ -29,7 +29,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
+import { PATHS, shortId } from '../lib/fileUtils.js';
+import { importFileToDir } from '../lib/uploads.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { MUSCRIPTOR_MODELS } from '../lib/muscriptorModels.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
@@ -74,6 +75,8 @@ const GATED_MARKER_RE = /USER_ERROR:gated_repo(?::(\S+))?/;
  */
 export function classifyMidiFailure(reason, model) {
   const text = String(reason || '');
+  const mismatch = text.match(/ERROR: (MuScriptor version mismatch \(installed [\w.+! -]+, expected [\w.+!-]+\)\. Run INSTALL_MUSCRIPTOR=1 bash scripts\/setup-image-video\.sh to repair the runtime, then retry\.)/);
+  if (mismatch) return { code: 'MIDI_RUNTIME_VERSION_MISMATCH', error: mismatch[1] };
   const marker = text.match(GATED_MARKER_RE);
   if (marker || isGatedRepoError(text)) {
     const repo = (marker && marker[1]) || extractGatedRepo(text) || `MuScriptor/muscriptor-${resolveMuscriptorModel(model)}`;
@@ -86,6 +89,27 @@ export function classifyMidiFailure(reason, model) {
     };
   }
   return { error: text || 'MIDI transcription failed' };
+}
+
+async function decodeMidiAudio(audioPath, wavPath, signal) {
+  const { findFfmpeg, runFfmpegProcess, FFMPEG_SCAN_TIMEOUT_MS } = await import('../lib/ffmpeg.js');
+  const bin = await findFfmpeg();
+  if (signal.aborted) return;
+  if (!bin) {
+    throw new ServerError('Install FFmpeg to decode this audio format, then retry MIDI transcription.', { code: 'MIDI_FFMPEG_MISSING' });
+  }
+  const result = await runFfmpegProcess({
+    bin, signal, timeoutMs: FFMPEG_SCAN_TIMEOUT_MS,
+    // Only self-contained media containers are allowed. In particular, do not
+    // follow playlist/concat references to other files or the network.
+    args: ['-v', 'error', '-nostdin', '-protocol_whitelist', 'file',
+      '-format_whitelist', 'mov,matroska,webm,aac,mp3,ogg,wav,flac,aiff,caf,asf,ac3,eac3,amr,ape,au,wv,tta,mpeg,mpegts',
+      '-i', audioPath, '-map', '0:a:0', '-c:a', 'pcm_f32le', wavPath],
+  });
+  if (!result.ok && !signal.aborted) {
+    console.error(`❌ MIDI audio decode failed: ${result.reason}`);
+    throw new ServerError('FFmpeg could not decode the song audio. Check that the source plays or replace it, then retry.', { code: 'MIDI_AUDIO_DECODE_FAILED' });
+  }
 }
 
 const MUSCRIPTOR_INSTALL_HINT =
@@ -133,6 +157,7 @@ export function cancelMidiTranscription(jobId) {
   const job = transcriptionJobs.get(jobId);
   if (!job || job.settled) return false;
   job.cancelRequested = true;
+  job.decodeController.abort();
   const proc = job.process;
   if (proc) killWithEscalation(proc, { label: 'muscriptor transcription', stillRunning: () => job.process === proc });
   return true;
@@ -145,7 +170,7 @@ export function cancelMidiTranscription(jobId) {
  * `extra` is whatever the optional `onComplete` callback returns — the music
  * video route uses it to persist the pointer on the project and hand the
  * updated record to the client), `{ type: 'error', error }`, or
- * `{ type: 'canceled' }`. Throws (before returning a jobId) when the
+ * `{ type: 'canceled' }`; `onSettled(frame)` receives whichever one ends the job. Throws (before returning a jobId) when the
  * MuScriptor venv isn't provisioned, so that surfaces as a real 503 with the
  * install hint.
  *
@@ -156,7 +181,7 @@ export function cancelMidiTranscription(jobId) {
  * `PATHS.music` so the file federates to peers alongside the project's other
  * audio (the peer-sync asset manifest only ships known directories).
  */
-export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads, ownerKey = null }) {
+export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, onFailure, onSettled, destDir = PATHS.uploads, ownerKey = null }) {
   // Gate on the actual import, not just the binary — a partial venv (binary
   // present, `muscriptor` not importable) must still 503 so the in-app
   // installer re-opens to repair it instead of failing later in the sidecar.
@@ -167,17 +192,23 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
   if (!existsSync(audioPath)) {
     throw new ServerError('Audio file not found', { status: 404, code: 'NOT_FOUND' });
   }
+  if (ownerKey && getActiveMidiTranscriptionJobId(ownerKey)) {
+    throw new ServerError('MIDI transcription is already running for this project.', { status: 409, code: 'MIDI_TRANSCRIPTION_RUNNING' });
+  }
   const resolvedModel = resolveMuscriptorModel(model);
   const jobId = randomUUID();
   const tempOut = join(tmpdir(), `portos-midi-${jobId}.mid`);
-  const job = { id: jobId, status: 'running', clients: [], process: null, cancelRequested: false, settled: false };
+  const tempWav = join(tmpdir(), `portos-midi-${jobId}.wav`);
+  const job = { id: jobId, status: 'running', clients: [], process: null, cancelRequested: false, settled: false, decodeController: new AbortController() };
   transcriptionJobs.set(jobId, job);
   if (ownerKey) activeByOwner.set(ownerKey, jobId);
   console.log(`🎹 MIDI transcription ${shortId(jobId)} [${resolvedModel}] — ${audioPath}`);
 
+  // The terminal frame, also handed to `onSettled` for a server-side caller that waits on the job.
+  let outcome = { type: 'error', error: 'MIDI transcription ended without a result' };
+  const settle = (frame) => { outcome = frame; broadcastSse(job, frame); };
   (async () => {
     try {
-      const { bin, args } = buildMuscriptorArgs({ pythonPath, audioPath, outputPath: tempOut, model: resolvedModel });
       broadcastSse(job, { type: 'progress', stage: 'starting' });
       // MuScriptor's weights live in a gated HF repo (MuScriptor/muscriptor-*),
       // so pass the user's HF token through for the first download to
@@ -188,26 +219,33 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // — honor the flag before spawning anything.
       if (job.cancelRequested) {
         console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled before spawn`);
-        broadcastSse(job, { type: 'canceled' });
+        settle({ type: 'canceled' });
         return;
       }
       // STAGE: lines become SSE progress frames (and pm2 log lines, so a stuck
       // first-run weight download is visible); onProcess tracks the live child
       // for cancelMidiTranscription's killWithEscalation.
-      const result = await runSidecarProcess({
-        bin, args, env,
+      const run = (input) => runSidecarProcess({
+        ...buildMuscriptorArgs({ pythonPath, audioPath: input, outputPath: tempOut, model: resolvedModel }),
+        env,
         onProcess: (proc) => { job.process = proc; },
         onStage: (stage, detail, raw) => {
           console.log(`🎹 muscriptor ${raw}`);
           broadcastSse(job, { type: 'progress', stage, detail });
         },
       });
+      let result = await run(audioPath);
+      if (!job.cancelRequested && !result.ok && /(?:^|\n)AUDIO_DECODE_REQUIRED$/.test(result.stdout?.trimEnd())) {
+        broadcastSse(job, { type: 'progress', stage: 'decode-audio' });
+        await decodeMidiAudio(audioPath, tempWav, job.decodeController.signal);
+        if (!job.cancelRequested) result = await run(tempWav);
+      }
 
       // `job.cancelRequested` covers a cancel that arrived after the child
       // exited cleanly but before the result landed — don't persist it.
       if (result.canceled || job.cancelRequested) {
         console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled`);
-        broadcastSse(job, { type: 'canceled' });
+        settle({ type: 'canceled' });
         return;
       }
       // A clean exit isn't enough — require a parsed RESULT line AND a
@@ -241,12 +279,12 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // orphaned file and tell the client it was discarded, not "ready".
       if (extra.discarded) {
         console.log(`🗑️ MIDI transcription ${shortId(jobId)} discarded — ${extra.reason || 'stale result'}`);
-        broadcastSse(job, { type: 'complete', discarded: true, model: resolvedModel });
+        settle({ type: 'complete', discarded: true, model: resolvedModel });
         return;
       }
 
       console.log(`🎹 MIDI transcription ${shortId(jobId)} complete — ${filename}`);
-      broadcastSse(job, { type: 'complete', filename, model: resolvedModel, ...extra });
+      settle({ type: 'complete', filename, model: resolvedModel, ...extra });
     } catch (err) {
       console.error(`❌ MIDI transcription ${shortId(jobId)} failed: ${err?.message || err}`);
       // Carry the typed gated-repo fields (code/repo) through to the client so
@@ -254,11 +292,15 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       const frame = { type: 'error', error: err?.message || String(err) };
       if (err?.code) frame.code = err.code;
       if (err?.repo) frame.repo = err.repo;
-      broadcastSse(job, frame);
+      try { await onFailure?.(frame); } catch (error) {
+        console.error(`❌ MIDI transcription ${shortId(jobId)} could not record failure: ${error.message}`);
+      }
+      settle(frame);
     } finally {
       job.settled = true;
+      try { onSettled?.(outcome); } catch (err) { console.error(`❌ MIDI transcription ${shortId(jobId)} settle callback failed: ${err.message}`); }
       if (ownerKey && activeByOwner.get(ownerKey) === jobId) activeByOwner.delete(ownerKey);
-      await unlink(tempOut).catch(() => {});
+      await Promise.all([tempOut, tempWav].map((path) => unlink(path).catch(() => {})));
       closeJobAfterDelay(transcriptionJobs, jobId);
     }
   })();

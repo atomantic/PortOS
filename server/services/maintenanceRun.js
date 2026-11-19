@@ -36,7 +36,9 @@ import { isLegacyDeepAudit, deepAuditProof, EXTENDED_AUDIT_WORKFLOW } from '../l
  * the safety net for holds that no agent completion will lift — a transient
  * claim probe, a queued request an engine refused, a task setting the user
  * fixes after the fact. A hold never ends a run: it is re-tried until it
- * clears, or the user stops the run.
+ * clears, or the user stops the run. Dismissing a step's failed task (deleting
+ * it, or the failure reaper expiring it) is not a hold clearing — it stops the
+ * run rather than re-dispatching the step (`dismissedStepReason`).
  *
  * AI-policy posture (AGENTS.md): every dispatch traces to the user's click on
  * "Run now", which names the app, provider and model. Boot arms the listener
@@ -381,7 +383,36 @@ async function holdForOutstandingWork(id, run, ignoreTaskId) {
       status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(),
     });
   }
+  const dismissed = await dismissedStepReason(run, outcome);
+  if (dismissed) {
+    console.log(`🧹 Maintenance run ${id} ${dismissed}`);
+    // `active: null` so an explicit resume re-dispatches the step instead of
+    // tripping over the same missing task again.
+    return holdRun(id, run, dismissed, { status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(), active: null });
+  }
   return null;
+}
+
+/**
+ * The open step's task was dismissed without succeeding: deleted (only the task
+ * DELETE route and a queue save that drops the row remove one), or flipped to
+ * `completed` by the 14-day failure reaper (`resolution: 'auto-expired'`).
+ * Neither is a success the run has yet to record: an audit success writes the
+ * ledger and clears `active` in one turn, and the reaper only expires failure
+ * leftovers. Falling through would re-dispatch the same step, turning "clear this
+ * failed check" into "run it again" once per dismissal for as long as the run
+ * lives. The task is read by id because a completed one may have aged out of
+ * the working set `getAllTasks` returns; only absence everywhere is a delete.
+ */
+async function dismissedStepReason(run, outcome) {
+  const { stepId, taskType } = run.active || {};
+  if (!stepId || run.completed?.[stepId]) return null;
+  const taskId = run.active.taskId || (outcome?.status === 'accepted' ? outcome.taskId : null);
+  if (!taskId) return null;
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
+  const task = await getTaskById(taskId);
+  const how = !task ? 'was deleted' : task.metadata?.resolution === 'auto-expired' ? 'expired after failing' : null;
+  return how && `stopped: the ${taskType || 'step'} task ${taskId} ${how} — start the check again to rerun it`;
 }
 
 /** Advance a step already completed in the ledger, or a drain proven empty. */
@@ -470,8 +501,9 @@ async function evaluate(id, { ignoreTaskId }) {
 /**
  * Continuation. An audit step is done when its agent SUCCEEDS; a failed agent
  * leaves its task blocked, which the next evaluation reports as a hold until
- * the user retries or dismisses it. A drain step is never completed here — the
- * claim probe decides that on the evaluation this triggers.
+ * the user retries it (the run then waits on the retried task) or dismisses it
+ * (the run stops). A drain step is never completed here — the claim probe
+ * decides that on the evaluation this triggers.
  */
 function onMaintenanceAgentCompleted(agent) {
   const id = agent?.metadata?.taskQuotaBurnMaintenanceRunId;

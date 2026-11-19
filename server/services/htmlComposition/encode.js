@@ -57,7 +57,7 @@ const MAX_FRAME_RETRIES = 2;
 // recoverable browser failure; the frame is redrawn there and the encoder
 // keeps running, so frames already piped are kept. `onRetry({ frame, attempt,
 // error })` reports each restart, `frame` counted on song time.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, videoArgs = H264_ENCODE_ARGS, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
   onLifecycle?.({ phase: 'encoder-preflight' });
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
@@ -93,7 +93,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   const args = ['-hide_banner', '-loglevel', 'error', ...input, '-framerate', String(fps * sub), '-i', 'pipe:0'];
   if (exactAudio) args.push('-ss', String(exactAudio.startSec ?? 0), '-t', String(durationSec), '-i', exactAudio.path);
   else if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
-  args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
+  args.push('-map', '0:v', '-vf', [motionBlurFilter, videoFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...videoArgs, ...BT709_CONTAINER_ARGS);
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
   else if (musicPath) args.push('-map', '1:a', '-af', `${bedTrim}${mastering ? `,${mastering.filter}` : ''},afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   // select drops subframes without changing the input's advertised rate.
@@ -301,7 +301,7 @@ function planSegments(numFrames, workers) {
 // A worker whose browser stalls closes it and continues on a fresh one from
 // the frame it was on (#10839). When that replaces `page` itself, `page` is
 // closed and the result carries `pageReplaced: true`.
-export async function encodeCompositionSegments(page, contract, outputPath, { openPage, workers = compositionRenderWorkers(), offsetSec = 0, videoFilterAt = () => null, signal, onProgress, onRetry = null, encode = encodeComposition, runFfmpeg = runFfmpegProcess, locateFfmpeg = findFfmpeg } = {}) {
+export async function encodeCompositionSegments(page, contract, outputPath, { openPage, workers = compositionRenderWorkers(), offsetSec = 0, videoFilterAt = () => null, videoArgs, signal, onProgress, onRetry = null, encode = encodeComposition, runFfmpeg = runFfmpegProcess, locateFfmpeg = findFfmpeg } = {}) {
   const { fps, durationSec } = contract;
   const numFrames = Math.round(durationSec * fps);
   const segments = planSegments(numFrames, workers);
@@ -323,7 +323,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
   if (segments.length === 1) {
     const slot = replaceable(page, signal);
     try {
-      const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec, durationSec), reopenPage: slot.reopen, onRetry });
+      const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoArgs, videoFilter: videoFilterAt(offsetSec, durationSec), reopenPage: slot.reopen, onRetry });
       return { ...result, workers: 1, ...(pageReplaced ? { pageReplaced } : {}) };
     } finally {
       await released(slot);
@@ -348,7 +348,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
         slot.page ??= await openPage(controller.signal);
         const at = offsetSec + start / fps;
         const result = await encode(slot.page, { ...contract, durationSec: frames / fps }, parts[i], {
-          signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at, frames / fps),
+          signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoArgs, videoFilter: videoFilterAt(at, frames / fps),
           reopenPage: slot.reopen, onRetry: onRetry && (detail => onRetry({ ...detail, segment: i })),
           onProgress: (_fraction, detail) => {
             done[i] = detail?.frame ?? 0;

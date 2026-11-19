@@ -13,7 +13,12 @@ import {
   DEFAULT_DRAFT_DECODE_ID, isFullDecodeId, draftDecodeOptionsForModel,
   supportsDraftDecode, normalizeDraftDecodeForModel, draftDecodeFromRecord,
   resolveDraftDecodeForModel,
+  DEFAULT_CONTEXT_FRAMES, CONTEXT_FRAME_OPTIONS, supportsContextWindow, contextFrameOptionsForModel,
 } from './videoGenParams.js';
+import {
+  MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES, resolveContextFrames, resolveContinuityStrategy,
+  publicContinuationCapability, continuationContract,
+} from '../../../server/lib/videoContinuity.js';
 
 describe('videoModelMemoryGb', () => {
   it('prefers an explicit positive memoryGb field', () => {
@@ -158,9 +163,8 @@ describe('IC-LoRA remix modes (#3100)', () => {
   });
 
   it('mirrors the Ingredients bounds + image kind (#3112)', () => {
-    // The 2-8 count is the weight's contract, mirrored here so the form blocks
-    // before a POST the route would reject; the parity test in
-    // server/lib/icLoraWeights.parity.test.js is what keeps the two in step.
+    // The 2-8 count is the weight's contract, read from the shared registry so the
+    // form blocks before a POST the route would reject.
     const ing = icLoraSpecForMode('ic-ingredients');
     expect(ing.minReferences).toBe(2);
     expect(ing.maxReferences).toBe(8);
@@ -188,10 +192,9 @@ describe('IC-LoRA remix modes (#3100)', () => {
     }
   });
   it('keeps each mode on its own resolution rule (Control 2, Colorize 1)', () => {
-    // Mirrors server/lib/icLoraWeights.js, where each factor is READ from that
-    // weight's safetensors metadata — a drift here would let the form accept a
-    // resolution the server rejects with IC_LORA_RESOLUTION_NOT_DIVISIBLE, or
-    // reject one the server would happily render.
+    // Each factor is READ from that weight's safetensors metadata (server/lib/icLoraRegistry.js)
+    // — a change here would let the form accept a resolution the server rejects with
+    // IC_LORA_RESOLUTION_NOT_DIVISIBLE, or reject one the server would happily render.
     expect(icLoraSpecForMode('ic-control').referenceDownscaleFactor).toBe(2);
     expect(icLoraSpecForMode('ic-colorize').referenceDownscaleFactor).toBe(1);
   });
@@ -204,9 +207,54 @@ describe('IC-LoRA remix modes (#3100)', () => {
   });
 });
 
+// The window size, default and absent→default rule are server/lib/videoContinuity.js's own; what the client
+// owns is the option list and the legacy-catalog fallback in `supportsContextWindow`, checked here against the
+// server's projection so an unmirrored server change fails this suite instead of the picker quietly disagreeing
+// with what renders.
+describe('continuation context window', () => {
+  it('offers the server default, 0 (last-frame chaining is a real choice), and nothing the route rejects', () => {
+    expect(CONTEXT_FRAME_OPTIONS).toContain(DEFAULT_CONTEXT_FRAMES);
+    expect(CONTEXT_FRAME_OPTIONS).toContain(0);
+    for (const n of CONTEXT_FRAME_OPTIONS) {
+      expect(n).toBeGreaterThanOrEqual(MIN_CONTEXT_FRAMES);
+      expect(n).toBeLessThanOrEqual(MAX_CONTEXT_FRAMES);
+    }
+  });
+
+  it('agrees with the server projection on which runtimes can use a window', () => {
+    for (const runtime of ['ltx2', 'ltx25', 'mlx_video', 'minimax_h3', 'minimax_h3_cuda', 'wan22', 'fastvideo', undefined]) {
+      const model = { runtime, continuationCapability: publicContinuationCapability({ runtime }) };
+      expect(supportsContextWindow(model), String(runtime)).toBe(continuationContract(runtime).temporalContext);
+      if (!supportsContextWindow(model)) expect(contextFrameOptionsForModel(model)).toEqual([0]);
+    }
+    // An explicit server refusal wins over the legacy runtime fallback.
+    expect(supportsContextWindow({ runtime: 'ltx2', continuationCapability: { temporalContext: false } })).toBe(false);
+  });
+
+  it('chooses the chunk hop the server strategy resolver chooses, for every contextFrames spelling', () => {
+    for (const runtime of ['ltx25', 'minimax_h3', 'wan22']) {
+      const model = { runtime, continuationCapability: publicContinuationCapability({ runtime }) };
+      for (const requested of [undefined, null, '', Number.NaN, 0, '0', 22, 73]) {
+        const server = resolveContinuityStrategy({ model, contextFrames: resolveContextFrames(requested) });
+        const [, hop] = videoChainChunkModes({ model, mode: 'text', chaining: true, contextFrames: requested });
+        expect({ runtime, requested: String(requested), strategy: hop === 'image' ? 'frame' : 'window' })
+          .toEqual({ runtime, requested: String(requested), strategy: server });
+      }
+    }
+  });
+
+  it('keeps H3 history and output frame grids independent of LTX stride', () => {
+    const model = { runtime: 'minimax_h3', frameStride: 4, frameOptions: [61, 121],
+      continuationCapability: { temporalContext: true, historyFrames: 17, outputLayout: 'new-output-only' } };
+    expect(videoChainChunkModes({ model, mode: 'image', chaining: true, contextFrames: 17 })).toEqual(['image', 'text']);
+    expect(contextFrameOptionsForModel(model)).toEqual([0, 17]);
+    expect(frameOptionsForModel(model, 125)).toEqual([61, 121]);
+    expect(continuationContract(model.runtime).latentFrameStride).toBeUndefined();
+  });
+});
+
 // Speed profiles (#4875) — the client-side half of the sentinel + option list.
-// Cross-package agreement with the server is pinned separately by
-// server/lib/videoSpeedProfiles.parity.test.js.
+// The sentinel and the mode gate are the server's own (server/lib/videoRequestDefaults.js).
 describe('speed profiles', () => {
   const FAST = { id: 'fast', name: 'Fast', steps: 8, guidance: 1.0, modes: ['text', 'image'] };
   const model = { runtime: 'ltx25', speedProfiles: [FAST] };
@@ -249,6 +297,8 @@ describe('speed profiles', () => {
     expect(speedProfilesForMode(model, 'extend')).toEqual([]);
     // An absent mode is the default text render.
     expect(speedProfilesForMode(model, null)).toEqual([FAST]);
+    // So is an empty mode list (a chain that declared no chunks).
+    expect(speedProfilesForMode(model, [])).toEqual([FAST]);
     // A profile with no declared modes falls back to the two-stage set, NOT to
     // "unrestricted" — the server's decline check applies exactly that
     // fallback, and reading it permissively here would offer a profile on fflf

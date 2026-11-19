@@ -3,7 +3,7 @@ import { mkdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { htmlCompositionContractSchema, htmlCompositionContractSchemaFor } from '../../lib/validation.js';
+import { htmlCompositionContractSchema, htmlCompositionContractSchemaFor } from '../../lib/htmlCompositionValidation.js';
 
 const { seen } = vi.hoisted(() => ({ seen: [] }));
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {

@@ -471,7 +471,7 @@ function compactCanonForPrompt(universe) {
 
 /**
  * Build a sanitized arc preview from a raw LLM arc response. Whitelists the
- * known fields (matching `importerArcShape` in validation.js) so hallucinated
+ * known fields (matching `importerArcShape` in creativeDirectorValidation.js) so hallucinated
  * or future extra keys never silently reach the client or commit path. Also
  * validates `shape` against `ARC_SHAPE_IDS` — an invalid/misspelled shape is
  * dropped to `null` so the UI renders "— pick one —" immediately rather than

@@ -13,7 +13,7 @@ import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm,
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
-import { basename, dirname, join, resolve, relative, isAbsolute } from 'path';
+import { basename, dirname, join, resolve, relative, isAbsolute, posix } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
@@ -1240,6 +1240,33 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
   if (marked) console.log(`💾 Backup: marked ${marked} interrupted snapshot(s) failed`);
 }
 
+async function isRetentionEligibleSnapshot(snapshotDir, id, requiresDatabase) {
+  // Only confirmed absence is legacy. An existing manifest must pass the
+  // same structural checks as a file restore, without hashing old payloads.
+  const srcDir = join(snapshotDir, 'data');
+  const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
+  const manifest = manifestRead.value;
+  const legacy = manifest === MANIFEST_ABSENT;
+  const entries = manifestRead.ok && !legacy ? manifestDataEntries(manifest, srcDir, null) : null;
+  if (!manifestRead.ok || (!legacy && !entries)) {
+    console.warn(`⚠️ Backup retention: kept snapshot ${id} (manifest unreadable or invalid)`);
+    return false;
+  }
+  if (!requiresDatabase) return true;
+  if (!legacy && !Object.hasOwn(manifest.files, '../portos-db.sql')) return false;
+
+  // A recorded hash alone cannot establish that the dump remains available.
+  // For pre-manifest snapshots the regular, nonempty dump is the only record.
+  const dump = await lstat(join(snapshotDir, 'portos-db.sql')).catch(err => {
+    if (err?.code !== 'ENOENT') {
+      console.warn(`⚠️ Backup retention: kept snapshot ${id} (dump metadata unreadable: ${err?.code ?? 'UNKNOWN'})`);
+    }
+    return null;
+  });
+  if (!dump?.isFile() || dump.size === 0) return false;
+  return legacy || (await legacyDbMetadataDomains(srcDir, [...entries.dataPaths])).length === 0;
+}
+
 /**
  * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
  * namespace beyond `retentionCount`, plus every interrupted snapshot older
@@ -1250,10 +1277,10 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
  * with a successful or explicitly skipped database dump — a run that fails
  * earlier never reaches this call, so an in-progress snapshot is never a
  * candidate; state is re-checked here anyway via `snapshotState` in case an
- * unrelated run left one behind. Ordinary `.failed` snapshots are kept for
- * salvage. Only ever walks `snapshots/<MACHINE_HOST>/` — never another
- * machine's namespace and never the legacy pre-namespace root, both of which
- * this install has no authority to prune.
+ * unrelated run left one behind. Ordinary `.failed` snapshots and completed
+ * snapshots excluded from the database budget stay available for salvage.
+ * Only walks `snapshots/<MACHINE_HOST>/`; other machines' namespaces and the
+ * legacy pre-namespace root stay outside this install's pruning scope.
  * `retentionCount` of `null`/`undefined` means unlimited completed snapshots.
  * @param {string} destPath
  * @param {number|null} retentionCount
@@ -1261,6 +1288,7 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
  */
 async function pruneOldSnapshots(destPath, retentionCount) {
   const unlimited = retentionCount === null || retentionCount === undefined;
+  const requiresDatabase = !usesFileEscapeHatch();
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
   // A completed snapshot was just written here; even ENOENT is a failed
   // inventory, not proof that there is nothing to prune. Keep paths private.
@@ -1279,28 +1307,14 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     // Unlimited retention prunes only interrupted snapshots; completed ones are
     // never candidates, so their manifests need no admission check.
     if (unlimited) return { id, snapshotDir };
-    // Share restore's structural admission, without hashing old payloads.
-    // Only confirmed absence is legacy; JSON null is an invalid manifest.
-    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
-    const valid = manifestRead.ok && (manifestRead.value === MANIFEST_ABSENT
-      || manifestDataEntries(manifestRead.value, join(snapshotDir, 'data'), null) !== null);
-    return { id, snapshotDir, protectedFromPrune: !valid };
+    return await isRetentionEligibleSnapshot(snapshotDir, id, requiresDatabase) ? { id, snapshotDir } : null;
   }))).filter(Boolean);
 
   // Newest-first by snapshot id (an ISO-style timestamp that never depends on
   // reading the manifest). IDs are unique within this source namespace.
   descriptors.sort((a, b) => b.id.localeCompare(a.id));
 
-  // Keep protected snapshots in addition to the readable retention budget,
-  // even when a bad clock placed a protected snapshot ahead of healthy ones.
-  const healthy = descriptors.filter(d => {
-    if (d.interrupted) return false;
-    if (d.protectedFromPrune) {
-      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable or invalid)`);
-      return false;
-    }
-    return true;
-  });
+  const healthy = descriptors.filter(d => !d.interrupted);
   // An interrupted snapshot is only dropped once a newer healthy one exists.
   const newestHealthyId = healthy[0]?.id;
   const toDelete = [
@@ -1323,7 +1337,7 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     release();
   }
   if (pruned) {
-    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s), keeping ${retentionCount ?? 'all'} completed`);
+    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s) (limit: ${retentionCount ?? 'unlimited'})`);
   }
   return { pruned };
 }
@@ -1818,7 +1832,7 @@ async function snapshotScopeInventory(srcDir, subdirFilter, isSkippedPath = isRe
   return { paths, largestFileBytes };
 }
 
-// These exact metadata shapes belonged to six marker-gated file→DB imports.
+// These exact paths belonged to historical file→DB imports.
 // Sibling assets and parked .imported evidence remain file-primary recovery data.
 const LEGACY_DB_METADATA = [
   ['universes', /^universes\/[^/]+\/index\.json$/],
@@ -1827,7 +1841,46 @@ const LEGACY_DB_METADATA = [
   ['story-builder', /^story-builder\/stb-[A-Za-z0-9-]+\/index\.json$/],
   ['writers-room', /^writers-room\/(?:(?:folders|exercises)\.json|works\/[^/]+\/manifest\.json)$/],
   ['creative-director', /^creative-director-projects\.json$/],
+  ['cos-tasks', /^(?:COS-)?TASKS\.md$/],
 ];
+
+// Migrations 018/019 read config.json first and fall back to state.json's
+// config slice. Read from the snapshot even when the selected scope omits CoS.
+async function snapshotLegacyCosTaskPaths(srcDir) {
+  const cosDir = join(srcDir, 'cos');
+  for (const directory of [srcDir, cosDir]) {
+    const info = await lstat(directory).catch(() => null);
+    if (!info?.isDirectory()) return [];
+  }
+  for (const name of ['config.json', 'state.json']) {
+    const path = join(cosDir, name);
+    const info = await lstat(path).catch(() => null);
+    if (!info?.isFile()) continue;
+    const { ok, value } = await readJSONFileStrict(path, null, { logError: false });
+    const config = name === 'config.json' ? value : value?.config;
+    if (!ok || !config || typeof config !== 'object' || Array.isArray(config)) continue;
+
+    return [config.userTasksFile, config.cosTasksFile]
+      .filter(path => typeof path === 'string' && path.trim())
+      .map(path => snapshotCosTaskPath(srcDir, path.trim()))
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function snapshotCosTaskPath(srcDir, configured) {
+  // Only compare archive member names. A config path never grants filesystem
+  // access. Relative paths in the old config are relative to the checkout.
+  if (isAbsolute(configured)) {
+    for (const root of [PATHS.data, srcDir]) {
+      const rel = relative(root, configured).replaceAll('\\', '/');
+      if (rel && rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel)) return rel;
+    }
+    return null;
+  }
+  const path = posix.normalize(configured.replaceAll('\\', '/'));
+  return path.startsWith('data/') ? path.slice('data/'.length) : null;
+}
 
 async function legacyDbMetadataDomains(srcDir, paths) {
   // Manifest paths use native separators; restore inventory uses forward slashes.
@@ -1838,6 +1891,9 @@ async function legacyDbMetadataDomains(srcDir, paths) {
   if (paths.includes('universes/index.json')) {
     const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
     if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
+  }
+  if (paths.length && !domains.has('cos-tasks') && (await snapshotLegacyCosTaskPaths(srcDir)).some(path => paths.includes(path))) {
+    domains.add('cos-tasks');
   }
   return [...domains];
 }

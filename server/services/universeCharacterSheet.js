@@ -38,7 +38,7 @@ import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
 } from '../lib/canonPrompt.js';
 import {
-  LEGACY_SHEET_VARIANT_ID, readSheetPointer, applySheetPointerToCharacter,
+  LEGACY_SHEET_VARIANT_ID, applySheetPointerToCharacter,
 } from '../lib/storyBible.js';
 import {
   claimPendingSheetSlot, releasePendingSheetSlot,

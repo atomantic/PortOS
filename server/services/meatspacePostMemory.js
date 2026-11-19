@@ -20,7 +20,7 @@ import {
   mergeScheduleAdvance,
   scheduleOrDefault,
 } from '../lib/spacedRepetition.js';
-import { listStoredTrainingEntries, saveStoredTrainingRun } from './postRunStore.js';
+import { saveStoredTrainingRun } from './postRunStore.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');

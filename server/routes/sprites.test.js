@@ -132,8 +132,8 @@ import * as atlas from '../services/sprites/atlas.js';
 import * as publish from '../services/sprites/publish.js';
 import * as assets from '../services/sprites/assets.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { cloudModelIdString } from '../lib/validation.js';
 import spriteRoutes from './sprites.js';
+import { cloudModelIdString } from '../lib/sharedSchemas.js';
 
 function makeApp() {
   const app = express();

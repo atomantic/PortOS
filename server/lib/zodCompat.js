@@ -3,7 +3,7 @@
  *
  * `partialWithoutDefaults(objectSchema)` is like `.partial()` but strips inner field defaults first, so a PATCH/update schema doesn't inject (and clobber) stored values of fields the caller
  * didn't send. Also home to the provider-reference zod forms (#7564), `providerRefSchema` / `providerRefFieldSchema` (a preset id OR a composite `harness.method@service[+bootstrap]`, per `providerRef.js`) and
- * `presetProviderIdSchema` (preset-only), because `cosValidation.js` needs them and must not import validation.js.
+ * `presetProviderIdSchema` (preset-only), because `cosValidation.js` needs them and must not import another domain validation file.
  *
  * Zod 4 changed two defaults behaviors: (1) `.default()` no longer re-parses its input (use `.prefault({})` for the old "parse the default"); (2) `.partial()` only marks fields optional and no longer strips inner
  * `.default()`s, so a patch schema populates defaults for keys the caller never sent, silently clobbering stored values when merged. `partialWithoutDefaults` restores Zod 3 semantics for (2): it rebuilds the shape with
@@ -48,7 +48,7 @@ export const emptyToNull = (v) => (v === '' ? null : v);
  * A provider SELECTION reference (#7564): a preset record id OR a composite `<harness>.<method>@<service-slug>[+<bootstrap-slug>]` (as `parseProviderRef` reads it), taken by every "which provider runs this?" field
  * (CoS task metadata, orchestration roles, feature pins, scheduled prompts). `providerRefFieldSchema` also admits the empty string a picker sends for "default"; pair it with `emptyToUndefined` / `emptyToNull` when
  * the field must distinguish clear from absent. `presetProviderIdSchema` is the PRESET-ONLY form for surfaces a composite must never reach (`PUT /api/providers/active`, a record's `fallbackProvider`, an app's `taskTypeOverrides` pin):
- * a materialized composite is never a stored record. Here (not validation.js) for the same TDZ reason.
+ * a materialized composite is never a stored record. Here (not in a domain validation file) for the same TDZ reason.
  */
 export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_LENGTH)
   .refine((value) => parseProviderRef(value) !== null, PROVIDER_REF_MESSAGE);
@@ -56,3 +56,15 @@ export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_L
 export const providerRefFieldSchema = z.union([z.literal(''), providerRefSchema]);
 
 export const presetProviderIdSchema = z.string().regex(PRESET_ID_RE, PRESET_ONLY_MESSAGE).max(80);
+
+// Reject a record id that isn't a bare filename segment. Use before a
+// peer-supplied / externally-sourced id is interpolated into a filesystem path
+// (e.g. the sharing importer's raw `join(bucket, …, `${id}.json`)` reads, or
+// the conflict journal's `recordDir(id)`), so a `../`-bearing id can't turn the
+// read/delete into a path-traversal oracle. Records persisted through a
+// collectionStore are already gated by its `idPattern`; this guards the raw
+// path sites that don't go through a store.
+export const isSafeRecordId = (id) =>
+  typeof id === 'string' && id.length > 0
+  && id !== '.' && id !== '..'
+  && !id.includes('/') && !id.includes('\\') && !id.includes('\0');

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { forceQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { promptStageNameSchema, promptVariableKeySchema, promptStageCreateBodySchema, promptStageUpdateBodySchema, promptVariableCreateBodySchema, validateRequest, promptVariableUpdateBodySchema, promptJobSkillBodySchema, promptPreviewBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   SYSTEM_STAGE_KEYS,
   isProtectedStage,
@@ -17,6 +17,11 @@ import {
   getJob,
   JOB_SKILL_MAP
 } from '../services/autonomousJobs.js';
+import {
+  promptStageNameSchema, promptVariableKeySchema, promptStageCreateBodySchema, promptStageUpdateBodySchema,
+  promptVariableCreateBodySchema, promptVariableUpdateBodySchema, promptJobSkillBodySchema,
+  promptPreviewBodySchema
+} from '../lib/promptValidation.js';
 
 /**
  * Create PortOS-specific prompts routes

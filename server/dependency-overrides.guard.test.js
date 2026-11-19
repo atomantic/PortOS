@@ -307,7 +307,7 @@ const readDirectDeps = (rel) => {
 // install, which defeats the point of pinning"). The same argument applies to the
 // packages this repo depends on DIRECTLY, and until #5699 nothing enforced it —
 // six server dependencies had drifted to caret ranges. Any tree re-resolution
-// (`npm run setup`'s `npm install --no-save --prefix server`, a Dependabot bump to
+// (`npm run setup`'s cwd-based `npm install --no-save` in server/, a Dependabot bump to
 // a sibling, `scripts/ensure-deps.js`'s clean reinstall) would float them to a
 // newer release no human reviewed. Upgrades arrive as reviewable PRs instead.
 describe('direct dependency pinning (#5699)', () => {

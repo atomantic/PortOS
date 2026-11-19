@@ -47,7 +47,6 @@ vi.mock('../../lib/backupSnapshotBoundary.js', async importOriginal => {
 vi.mock('../codexSummaryRepair.js', () => ({ repairCodexTaskSummary: async () => null }));
 const storage = await import('./cosAgentStorage.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
-const { pruneOldAgentArchives } = await import('./cosAgentIndex.js');
 const { default: routes } = await import('../../routes/dataManager.js');
 const app = express();
 app.use(express.json()); app.use('/api/data', routes); app.use(errorMiddleware);
@@ -93,7 +92,6 @@ afterAll(() => rm(fixture.root, { recursive: true, force: true }));
 it('compresses through HTTP, verifies bytes, serves the gzip, and preserves old history and unknown evidence', async () => {
   const dir = await seed();
   const before = await readFile(join(dir, 'metadata.json'), 'utf8');
-  await pruneOldAgentArchives(1);
   const preview = await request(app).post('/api/data/cos/storage/preview').send({ action: 'compress' });
   expect(preview.status).toBe(200);
   expect(preview.body.totals.eligibleRuns).toBe(1);

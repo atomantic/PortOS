@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
 import { ChildProcess } from '../lib/childProcess.js';
+import { parseLLMJSON } from '../lib/llmText.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 // executeCliRun validates that a requested workspace actually exists before
@@ -480,6 +481,56 @@ describe('executeCliRun — Codex response channel', () => {
     await flushMicrotasks();
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true, text: '{"message":"answer"}' }));
     expect(onData).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('executeCliRun — Claude response channel', () => {
+  it('parses the stdout reply and preserves a split sign-in warning in run history', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const onComplete = vi.fn();
+    const onData = vi.fn();
+    await executeCliRun({
+      runId: 'run-claude-expiry',
+      provider: { id: 'claude-code', command: 'claude', args: [], timeout: 5000 },
+      prompt: 'Return JSON', workspacePath: TEST_WORKSPACE, onData, onComplete,
+    });
+
+    const warningStart = 'Warning: this sign-in ';
+    const warningEnd = 'ends between <date> and <date>. Run claude auth login before then.\n';
+    child.stdout.emit('data', Buffer.from('{"ok":'));
+    child.stderr.emit('data', Buffer.from(warningStart));
+    child.stderr.emit('data', Buffer.from(warningEnd));
+    child.stdout.emit('data', Buffer.from('true}'));
+    child.emit('close', 0);
+    await flushMicrotasks();
+
+    const result = onComplete.mock.calls[0][0];
+    expect(result).toMatchObject({ success: true, claudeSignInExpiring: true, text: '{"ok":true}' });
+    expect(parseLLMJSON(result.text)).toEqual({ ok: true });
+    expect(onData.mock.calls.flat()).toEqual(['{"ok":', warningStart, warningEnd, 'true}']);
+    expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), '{"ok":' + warningStart + warningEnd + 'true}');
+    expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'),
+      expect.objectContaining({ claudeSignInExpiring: true, success: true }));
+  });
+
+  it('keeps a warning-shaped model reply as stdout and does not mark it as a CLI notice', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const onComplete = vi.fn();
+    await executeCliRun({
+      runId: 'run-claude-model-text',
+      provider: { id: 'claude-code', command: 'claude', args: [], timeout: 5000 },
+      prompt: 'Quote a notice', workspacePath: TEST_WORKSPACE, onComplete,
+    });
+    const reply = 'Warning: this sign-in ends between <date> and <date>.';
+    child.stdout.emit('data', Buffer.from(reply));
+    child.emit('close', 0);
+    await flushMicrotasks();
+
+    const result = onComplete.mock.calls[0][0];
+    expect(result).toMatchObject({ success: true, text: reply });
+    expect(result).not.toHaveProperty('claudeSignInExpiring');
   });
 });
 

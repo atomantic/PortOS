@@ -23,7 +23,6 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createSettingsStore } from '../lib/settingsStore.js';
 import { buildMarkers } from '../lib/markedSection.js';
-import { getUserTimezone } from './userTimezone.js';
 import { getDaySummary } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';

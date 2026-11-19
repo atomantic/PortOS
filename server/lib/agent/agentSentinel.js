@@ -11,7 +11,8 @@
 import { join } from 'path';
 import { normalizeTaskOutcome } from './agentOutcome.js';
 
-import { safeJSONParse, sanitizeFilename } from '../fileUtils.js';
+import { safeJSONParse } from '../fileUtils.js';
+import { sanitizeFilename } from '../mimeTypes.js';
 
 export const DONE_SENTINEL_NAME = '.agent-done';
 

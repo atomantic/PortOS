@@ -457,7 +457,7 @@ const cosTasksSweepInFlight = new Set(); // peerInstanceId
  * cosTaskStore.mergePeerTasks (which runs the pure merge under the state lock).
  * Returns changed-file count separately from successful application completion.
  */
-async function mergeCosTasksFromPayload(tasks, { legacySpawnBudget = false } = {}) {
+async function mergeCosTasksFromPayload(tasks) {
   const mod = await import('../cos/cosTaskStore.js').catch(() => null);
   if (!mod?.mergePeerTasks) return { changed: 0, complete: false };
   const user = [];
@@ -471,12 +471,11 @@ async function mergeCosTasksFromPayload(tasks, { legacySpawnBudget = false } = {
   // Always merge BOTH files (even when one side is empty) so a task the peer
   // resolved/removed from a file converges — an empty list still merges (union
   // keeps local-only tasks, so it never wipes the local backlog).
-  const options = legacySpawnBudget ? [{ legacySpawnBudget: true }] : [];
-  const userRes = await mod.mergePeerTasks('user', user, ...options).catch((err) => {
+  const userRes = await mod.mergePeerTasks('user', user).catch((err) => {
     logFailureWithStack('⚠️ peerSync: cos-tasks user merge failed', err); return null;
   });
   if (userRes?.changed) changed++;
-  const internalRes = await mod.mergePeerTasks('internal', internal, ...options).catch((err) => {
+  const internalRes = await mod.mergePeerTasks('internal', internal).catch((err) => {
     logFailureWithStack('⚠️ peerSync: cos-tasks internal merge failed', err); return null;
   });
   if (internalRes?.changed) changed++;
@@ -538,7 +537,7 @@ export async function syncCosTasksFromPeer(peer) {
       }
       cosTasksUnchangedSkips.set(peer.instanceId, 0); // forced re-merge — fall through
     }
-    const { changed, complete } = await mergeCosTasksFromPayload(payload.tasks, { legacySpawnBudget: payload.schemaVersion < 11 });
+    const { changed, complete } = await mergeCosTasksFromPayload(payload.tasks);
     // A partial merge remains retryable on the very next sweep. Successful
     // files are retained and safely re-applied by the idempotent store merge.
     if (complete) lastCosTasksListHash.set(peer.instanceId, payload.listHash);

@@ -125,8 +125,9 @@ vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn().mockResolvedValue('test prompt')
 }));
 
-// Mock validation
-vi.mock('../lib/validation.js', () => ({
+// Mock validation (`validate` only; validateRequest keeps its real body)
+vi.mock('../lib/validateRequest.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   validate: vi.fn()
 }));
 

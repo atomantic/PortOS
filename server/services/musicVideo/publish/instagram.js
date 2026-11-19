@@ -19,7 +19,10 @@ export const instagramAdapter = {
     if (/accounts\/login/.test(page.url()) || await page.locator('input[name=password]').count()) throw loginRequired(label, HOME_URL);
     await step(label, 'start a new post', async () => {
       await page.evaluate(() => {
-        const icon = [...document.querySelectorAll('svg[aria-label="New post"]')].find((s) => s.getBoundingClientRect().width > 0);
+        // The nav's create icon was "New post"; it is now "Post" and opens the file picker directly.
+        // Feed items carry no "Post" icon, but take the nav's (leftmost) one to be safe.
+        const shown = (label) => [...document.querySelectorAll(`svg[aria-label="${label}"]`)].filter((s) => s.getBoundingClientRect().width > 0);
+        const icon = shown('New post')[0] || shown('Post').sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
         (icon?.closest('a,[role=link],[role=button]') || icon?.parentElement)?.click();
       });
       await page.waitForTimeout(1500);

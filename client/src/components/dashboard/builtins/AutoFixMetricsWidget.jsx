@@ -2,7 +2,7 @@ import { memo } from 'react';
 import { Link } from 'react-router';
 import { Wrench, ArrowRight } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import { getAutoFixMetrics } from '../../../services/apiAgents.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatDurationMs } from '../../../utils/formatters';
 
@@ -82,7 +82,7 @@ function TrendSparkline({ trend }) {
 
 function AutoFixMetricsWidget() {
   const { data, loading } = useSocketResource(
-    () => api.getAutoFixMetrics({ silent: true }),
+    () => getAutoFixMetrics({ silent: true }),
     {
       namespace: 'cos', events: RESOURCE_EVENTS,
       // Skip the re-render only when EVERY rendered slice is byte-identical.

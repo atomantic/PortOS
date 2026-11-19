@@ -1,13 +1,14 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, logsQuerySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
-import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/safeUrlFetch.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
 import { requestHasHostControl } from '../services/authGate.js';
 import * as browserService from '../services/browserService.js';
+import { logsQuerySchema } from '../lib/sharedSchemas.js';
 
 const router = express.Router();
 

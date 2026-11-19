@@ -42,8 +42,14 @@ export const GOAL_FIDELITY_HOLD_EVENT = 'agent:goal-fidelity-hold';
  * Hard caps on what crosses into the reviewer's context: an oversized request to a fixed-window
  * local model fails or silently truncates, so the gate declines with a reason instead.
  */
-export const MAX_OBJECTIVE_CHARS = 8_000;
+export const MAX_OBJECTIVE_CHARS = 20_000;
 export const MAX_FIDELITY_DIFF_CHARS = 60_000;
+const MAX_FIDELITY_TEXT_CHARS = 68_000;
+
+// Long objectives can include conditions that authorize the change. Give them
+// room within the same total text budget, while keeping the ceiling on diffs.
+export const goalFidelityDiffBudget = (objective) =>
+  Math.min(MAX_FIDELITY_DIFF_CHARS, MAX_FIDELITY_TEXT_CHARS - objective.length);
 
 /** Cap on how many named items are kept from either list. */
 const MAX_ITEMS = 10;

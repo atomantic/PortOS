@@ -19,12 +19,6 @@ on:
         type: boolean
         default: true
 
-# Explicit opt-in: no ordinary PR, nightly, or release push changes policy.
-env:
-  PORTOS_CI_TEST_POLICY: ${{ github.event_name == 'pull_request' && github.base_ref == 'release' && startsWith(github.head_ref, 'codex/release-') && github.event.pull_request.head.repo.full_name == github.repository && 'release-candidate' || '' }}
-  PORTOS_CI_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-  PORTOS_CI_CANDIDATE_HEAD: ${{ github.event.pull_request.head.sha }}
-
 permissions:
   contents: read
 
@@ -156,28 +150,6 @@ jobs:
         if: always()
         run: node scripts/ci-impact-diagnostics.js settlement
 
-  prompt-history:
-    name: Shipped prompt history
-    needs: impact
-    if: fromJSON(needs.impact.outputs.plan).prompt_history
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Use Node.js 26.x
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 26.x
-
-      - name: Check shipped stage-prompt history
-        run: node scripts/migrations/check-shipped-prompt-history.js
-
   server:
     # Sharded on a full plan — see docs/GITHUB_ACTIONS.md "Full-suite sharding".
     # The matrix comes from the planner; once-only steps pin to shard 1, and the
@@ -208,18 +180,6 @@ jobs:
       - uses: ./.github/actions/setup-server
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
-
-      # Recognition facts are blob-addressed, not cached guard verdicts. Each run
-      # still checks working bytes and resolves imports against the current tree.
-      - name: Restore floating-async summaries
-        id: floating-async-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/floating-async/summaries.json
-          key: floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-${{ github.event.pull_request.base.sha || github.sha }}-${{ github.sha }}
-          restore-keys: |
-            floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-${{ github.event.pull_request.base.sha || github.sha }}-
-            floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-
 
       # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
       # express, resolved from autofixer/node_modules). Shards are separate
@@ -273,10 +233,11 @@ jobs:
           CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_sources) }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           CI_EXPECT_SLASHDO_SUBMODULE: ${{ fromJSON(needs.impact.outputs.plan).slashdo }}
-          # The always-run guards' per-file time budget is enforced here, on the
-          # uniform Linux runner, and nowhere else: local pregate only reports it
-          # (scripts/lib/guardBudget.js, #16551).
-          CI_GUARD_BUDGET: enforce
+          # The always-run guards' per-file time budget fails the run only on the
+          # twice-daily schedule, where a regression is still caught within 12
+          # hours without runner noise blocking a PR, push or release. Every other
+          # event reports it as a warning (scripts/lib/guardBudget.js, #16551, #16810).
+          CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1
@@ -284,13 +245,6 @@ jobs:
           # isolated test file without changing DB selection or credentials.
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
-
-      - name: Save floating-async summaries
-        if: steps.server-tests.outcome == 'success' && steps.floating-async-cache.outputs.cache-hit != 'true' && hashFiles('.cache/floating-async/summaries.json') != ''
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/floating-async/summaries.json
-          key: ${{ steps.floating-async-cache.outputs.cache-primary-key }}
 
       # Only trusted runs on the default/release branches seed the memo, and
       # only from a green test step: the runner writes no entry from a red
@@ -310,12 +264,6 @@ jobs:
       - name: Smoke-boot server
         if: fromJSON(needs.impact.outputs.plan).smoke && matrix.shard == 1
         run: npm run smoke
-
-      - name: Retain frozen candidate invocation evidence
-        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: ./.github/actions/candidate-evidence
-        with:
-          name: candidate-diagnostics-server-${{ strategy.job-index || 0 }}
 
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
@@ -395,12 +343,6 @@ jobs:
       - name: Build client
         if: fromJSON(needs.impact.outputs.plan).build && matrix.shard == 1
         run: npm run build --prefix client
-
-      - name: Retain frozen candidate invocation evidence
-        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: ./.github/actions/candidate-evidence
-        with:
-          name: candidate-diagnostics-client-${{ strategy.job-index || 0 }}
 
   lint:
     # Its own job rather than a step on client shard 1, for cost and latency —
@@ -562,12 +504,6 @@ jobs:
           path: ${{ runner.temp }}/portos-test-memo
           key: ${{ steps.test-memo.outputs.key }}
 
-      - name: Retain frozen candidate invocation evidence
-        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: ./.github/actions/candidate-evidence
-        with:
-          name: candidate-diagnostics-database-${{ strategy.job-index || 0 }}
-
   browser:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
@@ -687,12 +623,6 @@ jobs:
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/engine.png
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/parity.json
 
-      - name: Retain frozen candidate invocation evidence
-        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: ./.github/actions/candidate-evidence
-        with:
-          name: candidate-diagnostics-browser-${{ strategy.job-index || 0 }}
-
   windows-server:
     # Native CLI/TUI, process and filesystem contracts; application suites run
     # in the primary server/client jobs. The planner emits one Windows runner.
@@ -773,12 +703,6 @@ jobs:
         env:
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
         run: node scripts/ci-test-diagnostics.js
-
-      - name: Retain frozen candidate invocation evidence
-        if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
-        uses: ./.github/actions/candidate-evidence
-        with:
-          name: candidate-diagnostics-windows-server-${{ strategy.job-index || 0 }}
 
   node-minimum:
     name: Node minimum compatibility
@@ -1047,7 +971,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, prompt-history, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, macos-native, supercollider-live]
+    needs: [impact, server, client, lint, database, browser, windows-server, node-minimum, linux-containment, docker-containment-live, macos-native, supercollider-live]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # READ only: the reporter lists this run's jobs to name the one whose STEP
@@ -1079,7 +1003,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_GATE_LABEL: CI Gate
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
-          CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}

@@ -1,14 +1,13 @@
 /**
- * Media-generation & local-model infrastructure Zod schemas (split out of
- * validation.js, issue #1831).
+ * Media-generation & local-model infrastructure Zod schemas (split out of the retired
+ * validation.js catch-all, issue #1831).
  *
  * Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management,
  * media-collection bulk ops).
  *
  * Covers LoRA training config + run params, the local-LLM (Ollama / LM Studio)
  * backend management routes, OpenWorld snapshot config/query, and the media-
- * collection bulk add/remove payloads. validation.js re-exports everything here
- * (flat) so existing deep imports keep working.
+ * collection bulk add/remove payloads, plus the media sketch save body.
  */
 import { z } from 'zod';
 import { PORTS } from './ports.js';
@@ -473,3 +472,29 @@ export const beeperScopeInputSchema = z.object({
 export const beeperSavedScopesSchema = z.array(beeperScopeInputSchema.extend({
   id: z.string().uuid(),
 })).max(50);
+
+// Vector strokes drawn over a generated image. Points are stored in the
+// image's natural-pixel space so they restore exactly regardless of the
+// display size (see AnnotationCanvas.jsx). The service (mediaSketches.js)
+// re-sanitizes + clamps beyond this schema; the Zod layer rejects the
+// obviously-malformed shapes early with a 400.
+const sketchPointSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite()
+});
+
+const sketchStrokeSchema = z.object({
+  mode: z.enum(['draw', 'erase']).optional(),
+  color: z.string().max(32).optional(),
+  size: z.number().positive().max(512).optional(),
+  points: z.array(sketchPointSchema).min(1).max(20000)
+});
+
+export const mediaSketchSaveSchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+  strokes: z.array(sketchStrokeSchema).max(5000),
+  // Flattened raster (image + strokes) as a PNG data URL. Optional so a caller
+  // can persist just the vector layer; the service decodes + stores the bytes.
+  png: z.string().startsWith('data:image/png;base64,').optional()
+});

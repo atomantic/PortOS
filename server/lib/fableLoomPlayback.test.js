@@ -16,7 +16,6 @@ import {
   resolvePlaybackPhaseAsset,
   resolveFableLoomProtagonistPresence,
   sanitizeAudioInterval,
-  sanitizeAudioOccupancy,
   sanitizeInteractionWindow,
   sanitizePlaybackAssets,
   sanitizeVisualConditioning,

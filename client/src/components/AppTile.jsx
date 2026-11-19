@@ -2,7 +2,7 @@ import { useState, memo } from 'react';
 import { Link } from 'react-router';
 import StatusBadge from './StatusBadge';
 import AppIcon from './AppIcon';
-import * as api from '../services/api';
+import { handleSelfRestart, launchNativeApp, restartApp, startApp, stopApp } from '../services/apiApps.js';
 import { getPrimaryLaunchUrl } from '../services/appUrls';
 
 // Memoized component to prevent re-renders when parent polls for updates
@@ -13,10 +13,10 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
   const handleAction = async (action) => {
     setLoading(action);
     const actionFn = {
-      native: api.launchNativeApp,
-      start: api.startApp,
-      stop: api.stopApp,
-      restart: api.restartApp
+      native: launchNativeApp,
+      start: startApp,
+      stop: stopApp,
+      restart: restartApp
     }[action];
 
     const result = await actionFn(app.id).catch(() => null);
@@ -26,7 +26,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
     }
 
     if (result?.selfRestart) {
-      api.handleSelfRestart();
+      handleSelfRestart();
       return;
     }
 

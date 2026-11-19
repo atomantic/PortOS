@@ -134,30 +134,6 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('forceRemoveWorktreeDir', () => {
     expect(await registered(path)).toBe(true);
   });
 
-  it('checks checkout incarnation after the final Git inventory', async () => {
-    const path = await addWorktree();
-    const branch = `br-${n}`;
-    const physical = async () => {
-      const stat = await lstat(join(path, '.git'), { bigint: true });
-      return [stat.dev, stat.ino, stat.birthtimeNs].map(String).join(':');
-    };
-    const captured = await physical();
-    let listings = 0;
-    injected.gitFails = async args => {
-      if (args[0] === 'worktree' && args[1] === 'list' && ++listings === 2) {
-        await execGit(['worktree', 'remove', path, '--force'], repo);
-        await execGit(['worktree', 'add', path, branch], repo);
-        await writeFile(join(path, 'replacement.txt'), 'new work\n');
-      }
-      return false;
-    };
-    const outcome = await forceRemoveWorktreeDir(repo, path, {
-      verifyRemoval: async () => await physical() === captured ? null : 'checkout-changed',
-    });
-    expect(outcome).toMatchObject({ removed: false, reason: 'worktree-holder-changed' });
-    expect(existsSync(join(path, 'replacement.txt'))).toBe(true);
-  });
-
   it('lets Git preserve unmerged work created just before non-forced removal', async () => {
     const path = await addWorktree();
     const outcome = await forceRemoveWorktreeDir(repo, path, { force: false,

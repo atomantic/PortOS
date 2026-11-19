@@ -702,9 +702,20 @@ describe('executeTuiRun', () => {
         + '❯ No, exit\n'
         + '  Yes, I trust this folder\n'
         + 'Enter to confirm · Esc to cancel\n');
+      // Claude resets this selector shortly after first paint, so nothing goes
+      // out until the dialog has aged and settled.
       await vi.advanceTimersByTimeAsync(400);
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[B'));
+      await vi.advanceTimersByTimeAsync(1000);
+      // The arrow goes out alone: Enter bundled with it was lost when the reset
+      // undid the move (agent-8a2fe161).
+      expect(pty.write).toHaveBeenCalledWith('\x1b[B');
+      expect(pty.write).not.toHaveBeenCalledWith('\x1b[B\r');
+      expect(pty.write).not.toHaveBeenCalledWith('\r');
 
-      expect(pty.write).toHaveBeenCalledWith('\x1b[B\r');
+      pty.emitData('  No, exit\n❯ Yes, I trust this folder\n');
+      await vi.advanceTimersByTimeAsync(500);
+      expect(pty.write).toHaveBeenCalledWith('\r');
       expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
 
       pty.emitExit({ exitCode: 0 });
@@ -788,9 +799,11 @@ describe('executeTuiRun', () => {
         version: '0.162.1 with Quit highlighted',
         dialog: 'Folder access\n/workspace/example\nTrustthisfolder?\n'
           + '1. Trust and continue\n› 2.Quit\nenter continue · esc quit\n',
-        answer: '\x1b[A\r',
+        answer: '\x1b[A',
+        // Enter follows only once the repaint shows the trust choice highlighted.
+        repaint: '› 1. Trust and continue\n  2. Quit\n',
       },
-    ])('confirms the Codex $version trust gate before its idle path can paste', async ({ dialog, answer }) => {
+    ])('confirms the Codex $version trust gate before its idle path can paste', async ({ dialog, answer, repaint }) => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });
@@ -808,6 +821,13 @@ describe('executeTuiRun', () => {
 
       expect(pty.write).toHaveBeenCalledWith(answer);
       expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+      if (repaint) {
+        expect(pty.write).not.toHaveBeenCalledWith('\r');
+        pty.emitData(repaint);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(pty.write).toHaveBeenCalledWith('\r');
+        expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+      }
 
       pty.emitData('OpenAI Codex ready\n');
       await vi.advanceTimersByTimeAsync(2000);

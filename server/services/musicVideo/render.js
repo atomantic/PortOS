@@ -35,7 +35,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
+import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, hasAudioStream, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
@@ -46,7 +46,7 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { isLocalRenderMark, settledRender, settleMusicVideoRender } from './renderSettlement.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideo/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideo/musicVideoLayers.js';
 import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideo/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -58,10 +58,11 @@ import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
 import { coldOpenPlan, coldOpenScenes, withSongScenesOnly } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
-import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { captureMusicVideoEvidence, } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
-import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
+import { buildSongAudioMix, clipSoundVoices } from './clipSoundMix.js';
+import { songClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
@@ -313,6 +314,7 @@ async function footageClip(scene, entry, planned, editOverride = undefined) {
   if (!geometry) return { problem: 'missing-clip' };
   const edit = editOverride !== undefined ? editOverride : performanceEdit(scene);
   const { rate, leadSec, inSec, outSec, sourceSec } = clipPlaybackWindow(scene, edit, geometry.duration);
+  const clipSound = songClipSound(scene);
   return { clip: {
     sceneId: scene.sceneId,
     videoPath: geometry.videoPath,
@@ -328,6 +330,8 @@ async function footageClip(scene, entry, planned, editOverride = undefined) {
     ...(clipReversed(scene) ? { reverse: true } : {}),
     // The director chose to hold the last frame over a shot longer than its clip.
     ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
+    // The shot plays its own sound over the song, when its clip has any.
+    ...(clipSound && await hasAudioStream(geometry.videoPath) ? { clipSound } : {}),
     ...(rate !== 1 ? { rate } : {}),
     ...(leadSec > 0 ? { leadSec } : {}),
     inSec,
@@ -955,17 +959,12 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // chain, trimmed to the song so it can never extend or replace the master.
   let audioSrc = `[${audioIdx}:a]`;
   let audioMap = `${audioIdx}:a`;
-  if (soundBed?.path) {
-    filters.push(`[${audioIdx}:a]${AUDIO_NORM}[master]`);
-    const bed = buildAudioBedMix({
-      beds: [{ assetPath: soundBed.path, offsetSec: 0, durationSec: fullDuration, volume: soundBed.volume }],
-      firstInputIdx: audioIdx + 1 + overlays.length,
-      mainLabel: '[master]',
-      outLabel: '[mixa]',
-      limitPeak: true,
-    });
-    inputs.push(...bed.inputs);
-    filters.push(...bed.filters);
+  // A song shot may also play its own clip sound over the song (musicVideoClipSound.js).
+  const voices = clipSoundVoices(plan);
+  const mix = buildSongAudioMix({ mainLabel: `[${audioIdx}:a]`, soundBed, voices, firstInputIdx: audioIdx + 1 + overlays.length, durationSec: fullDuration, outLabel: '[mixa]' });
+  if (mix) {
+    inputs.push(...mix.inputs);
+    filters.push(...mix.filters);
     audioSrc = '[mixa]';
     audioMap = '[mixa]';
   }
@@ -1005,7 +1004,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     '-y',
     outputPath,
   ];
-  return { args, totalDuration, canonW, canonH, fps, sections };
+  return { args, totalDuration, canonW, canonH, fps, sections, voices };
 }
 
 // Pure: every cut and typography-cue boundary that falls inside

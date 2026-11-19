@@ -71,3 +71,8 @@ const escapeCommandProperty = (value) => escapeCommandData(value)
 export function formatErrorAnnotation(title, message) {
   return `::error title=${escapeCommandProperty(title)}::${escapeCommandData(message)}`;
 }
+
+/** A `::warning::` workflow annotation line: reported on the run, never a failure. */
+export function formatWarningAnnotation(title, message) {
+  return `::warning title=${escapeCommandProperty(title)}::${escapeCommandData(message)}`;
+}

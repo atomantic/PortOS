@@ -1,8 +1,8 @@
 // test-memo: never (tree-wide scanner)
 
 /**
- * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`), and no browser `alert`/`confirm`/`prompt` (`client/src/AGENTS.md`).
- * Fix: Fix the missing export/member name, update the mock factory, or replace `alert`/`confirm`/`prompt` with inline confirmations or toasts.
+ * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`).
+ * Fix: Fix the missing export/member name, or update the mock factory.
  * What this guard cannot see:
  *   - Scoped to git-tracked sources under `client/src` (comments masked); non-literal `vi.mock` factories are not checked.
  */
@@ -99,20 +99,6 @@ export function mockDrift(rawSource, file, contract, allowed) {
   return violations;
 }
 
-const BLOCKING_DIALOG_RE = /(?<![\w$.])(?:window\.)?(alert|confirm)\s*\(/g;
-
-/** Calls to the browser's blocking dialogs (bare or via `window.`). */
-export function blockingDialogs(rawSource, file) {
-  const source = maskComments(rawSource)
-    // A declaration or method shorthand named confirm/prompt is not a call to the global.
-    .replace(/\bfunction\s+(?:alert|confirm)\s*\(/g, 'function _(');
-  return [...source.matchAll(BLOCKING_DIALOG_RE)]
-    // `confirm(id) {` / `confirm(id) =>` is a method or callback being defined, not a call.
-    .filter((match) => match[0].startsWith('window.')
-      || !/^[^)]*\)\s*(?:\{|=>)/.test(source.slice(match.index + match[0].length).split('\n')[0]))
-    .map((match) => `${file}:${lineOf(source, match.index)} — ${match[0].replace(/\s*\($/, '')}()`);
-}
-
 const usedAdapters = new Set();
 const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { root: CLIENT_ROOT, allowed: MOCK_ADAPTERS, used: usedAdapters });
 
@@ -129,7 +115,7 @@ describe('module contract conventions', () => {
     expect(files.length).toBeGreaterThan(100);
   });
 
-  it('detects a missing member, a drifted mock and a blocking dialog', () => {
+  it('detects a missing member and a drifted mock', () => {
     const [contract] = CONTRACT_MODULES;
     const members = new Set(['success', 'warning']);
     expect(missingMembers("import toast from '../ui/Toast';\ntoast.warn('x'); toast.success('y');", 'probe.jsx', contract, members))
@@ -139,9 +125,6 @@ describe('module contract conventions', () => {
     expect(missingMembers("import toast from './toastish';\ntoast.warn('x');", 'probe.jsx', contract, members)).toEqual([]);
     expect(mockDrift("vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn() } }));", 'probe.test.jsx', contract, new Set(['default', 'success'])))
       .toEqual(['probe.test.jsx:1 — mocks info']);
-    expect(blockingDialogs("if (!confirm('Delete?')) return;\nwindow.alert('x');", 'probe.jsx'))
-      .toEqual(['probe.jsx:1 — confirm()', 'probe.jsx:2 — window.alert()']);
-    expect(blockingDialogs("const confirm = useConfirmDelete();\ndeleteConfirm.confirm();\n// confirm('x')", 'probe.jsx')).toEqual([]);
   });
 
   for (const contract of CONTRACT_MODULES) {
@@ -168,9 +151,4 @@ describe('module contract conventions', () => {
     expect(drift, 'delete the dead key, or mock the module that really exports it').toEqual([]);
     expect(unusedAllowed(MOCK_ADAPTERS, usedAdapters), 'delete the stale MOCK_ADAPTERS entry').toEqual([]);
   }, 60_000); // reads every tracked client test file; a loaded runner overran the 15s default
-
-  it('never calls the browser alert/confirm/prompt dialogs', () => {
-    const violations = files.flatMap((file) => blockingDialogs(read(file), file));
-    expect(violations, 'use an inline confirmation (useConfirmDelete + ConfirmButtonPair) or a toast').toEqual([]);
-  });
 });

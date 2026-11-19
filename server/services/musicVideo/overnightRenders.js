@@ -9,7 +9,7 @@
 import { basename } from 'path';
 import { authoredShotPrompt } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { ltxReferenceFrames, sceneRenderShot } from '../../lib/musicVideo/musicVideoShotTiming.js';
-import { preMusicClipSound } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { shotWantsClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 
 /** Which overnight lane a local model renders on, or null when it takes no clip references. */
@@ -41,7 +41,7 @@ export async function overnightRenderBodies({ project, sceneIds, models, schedul
     };
     for (const model of models) {
       const common = { prompt, backend: 'local', modelId: model.id, sourceImageFile: scene.referenceImageId,
-        disableAudio: !preMusicClipSound(scene), schedule };
+        disableAudio: !shotWantsClipSound(scene), schedule };
       if (overnightModelKind(model) === 'ltxReferences') {
         const numFrames = ltxReferenceFrames(scene);
         if (!numFrames) { skip(sceneId, model.id, 'The shot is too long for one LTX reference clip.'); continue; }

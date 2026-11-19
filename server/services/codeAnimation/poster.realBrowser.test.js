@@ -7,13 +7,13 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot } from '../../lib/mockPathsDataRoot.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
-import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
-vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 vi.mock('./jobStore.js', () => ({}));
 
 const { posterCaptureScript } = await import('./poster.js');
 const chrome = resolveTestChrome();
+const canRun = browserSuiteCanRun('code animation poster browser suite', { Chrome: chrome }, { onUnavailable: cleanupTempDataRoots });
 
 // The rAF loop paints red; renderFrame(t) paints blue proportional to t.
 const film = ({ withRenderFrame }) => `<!doctype html><html><head><style>
@@ -55,7 +55,7 @@ async function posterPixel(html) {
   }
 }
 
-describe.skipIf(!chrome)('Code Animation gallery poster readout in real Chrome', () => {
+describe.skipIf(!canRun)('Code Animation gallery poster readout in real Chrome', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-poster-'), 'chrome-test-profile');
     proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });

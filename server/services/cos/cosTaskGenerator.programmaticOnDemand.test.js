@@ -33,7 +33,7 @@ vi.mock('./cosState.js', async (importActual) => ({
   isImprovementEnabled: (...args) => isImprovementEnabled(...args),
 }));
 
-const { drainProgrammaticOnDemandRequests } = await import('./cosTaskGenerator.js');
+const { drainProgrammaticOnDemandRequests } = await import('./cosImprovementTasks.js');
 const { cosEvents } = await import('./cosEvents.js');
 
 // Returns the removed record to the caller that actually took it, and null to a

@@ -22,12 +22,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
-import { cleanWorkspaceDeps, WORKSPACES } from './ensure-deps.js';
+import { cleanWorkspaceDeps, installWorkspace, WORKSPACES } from './ensure-deps.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Every helper that wipes a workspace's installed deps before a reinstall. */
-const REINSTALL_HELPERS = ['scripts/ensure-deps.js', 'update.sh', 'update.ps1'];
+const REINSTALL_HELPERS = ['scripts/ensure-deps.js', 'scripts/setup.js', 'update.sh', 'update.ps1'];
 
 /** True when `source` can delete a workspace lockfile, or asks git whether it may. */
 const deletesLockfile = (source) => (
@@ -83,6 +83,22 @@ describe('clean reinstall keeps the committed lockfile (#5691)', () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+});
+
+// scripts/setup.js (first run) and this module (startup repair) must share one
+// install implementation: cwd-based `npm install --no-save`, the clean retry and
+// the trusted rebuilds. A second copy is how setup.ps1 drifted from the README path.
+describe('one install implementation (#16820)', () => {
+  it('exports the installer that scripts/setup.js imports', () => {
+    expect(typeof installWorkspace).toBe('function');
+    expect(readFileSync(join(REPO_ROOT, 'scripts', 'setup.js'), 'utf8')).toMatch(/import \{[^}]*\binstallWorkspace\b[^}]*\} from '\.\/ensure-deps\.js'/);
+  });
+
+  it('no script installs a workspace through npm --prefix, which needs Developer Mode on Windows', () => {
+    for (const file of ['package.json', 'setup.sh', 'setup.ps1', 'update.sh', 'update.ps1', 'scripts/setup.js', 'scripts/ensure-deps.js']) {
+      expect(readFileSync(join(REPO_ROOT, file), 'utf8'), file).not.toMatch(/npm install[^\n]*--prefix/);
+    }
   });
 });
 

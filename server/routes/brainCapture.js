@@ -8,14 +8,10 @@ import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, brainInboxRetryBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  captureInputSchema,
-  resolveReviewInputSchema,
-  fixInputSchema,
-  updateInboxInputSchema,
-  markInboxSentToCatalogSchema,
-  inboxQuerySchema
+  captureInputSchema, resolveReviewInputSchema, fixInputSchema, updateInboxInputSchema,
+  markInboxSentToCatalogSchema, inboxQuerySchema, brainInboxRetryBodySchema
 } from '../lib/brainValidation.js';
 
 const router = Router();

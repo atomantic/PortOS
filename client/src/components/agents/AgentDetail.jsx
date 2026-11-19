@@ -1,17 +1,19 @@
 import TabPills from '../ui/TabPills';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 import { AGENT_DETAIL_TABS } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
-import OverviewTab from './tabs/OverviewTab';
-import ToolsTab from './tabs/ToolsTab';
-import WorldTab from './tabs/WorldTab';
-import PublishedTab from './tabs/PublishedTab';
-import SchedulesTab from './tabs/SchedulesTab';
-import ActivityTab from './tabs/ActivityTab';
+import { lazyWithReload } from '../../utils/lazyWithReload';
+
+const OverviewTab = lazyWithReload(() => import('./tabs/OverviewTab'));
+const ToolsTab = lazyWithReload(() => import('./tabs/ToolsTab'));
+const WorldTab = lazyWithReload(() => import('./tabs/WorldTab'));
+const PublishedTab = lazyWithReload(() => import('./tabs/PublishedTab'));
+const SchedulesTab = lazyWithReload(() => import('./tabs/SchedulesTab'));
+const ActivityTab = lazyWithReload(() => import('./tabs/ActivityTab'));
 
 const NAV_TABS = AGENT_DETAIL_TABS.map(({ icon, ...tab }) => ({
   ...tab, icon: () => <span aria-hidden="true">{icon}</span>,
@@ -205,7 +207,9 @@ function AgentDetailContent() {
 
       {/* Tab Content */}
       <div className="flex-1 overflow-auto bg-port-bg">
-        {renderTab()}
+        <Suspense fallback={<div className="p-6"><BrailleSpinner text="Loading tab" /></div>}>
+          {renderTab()}
+        </Suspense>
       </div>
     </div>
   );

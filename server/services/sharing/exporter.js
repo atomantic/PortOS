@@ -24,7 +24,7 @@ import { getOrComputeImageSha256, stripImageSidecarLocalBytes } from '../../lib/
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
-import { listSeries, getSeries } from '../pipeline/series.js';
+import { getSeries } from '../pipeline/series.js';
 import { listIssuesForSeries } from '../pipeline/issues.js';
 import { getReview } from '../pipeline/manuscriptReview.js';
 import { getStoredOutline } from '../pipeline/reverseOutline.js';
@@ -38,7 +38,7 @@ import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { listSheetPointers } from '../../lib/storyBible.js';
 import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 import { isStr } from '../../lib/textUtils.js';
-import { isSafeRecordId } from '../../lib/validation.js';
+import { isSafeRecordId } from '../../lib/zodCompat.js';
 
 /**
  * Best-effort cap on the bucket's manifest directory after each export.

@@ -48,7 +48,7 @@ vi.mock('../services/beeperAttachments.js', () => ({
 // path, and the stored mimeType as an explicit `contentType` — because
 // `GET /v1/assets/serve` sends no Content-Type and a hash-named file has no
 // extension worth sniffing.
-vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+vi.mock('../lib/uploads.js', async (importOriginal) => ({
   ...(await importOriginal()),
   serveLocalFile: vi.fn(async (res) => res.json({ served: true })),
 }));
@@ -79,7 +79,7 @@ import {
   getAttachmentSummary,
   setAttachmentKeep,
 } from '../services/beeperAttachments.js';
-import { serveLocalFile } from '../lib/fileUtils.js';
+import { serveLocalFile } from '../lib/uploads.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 import { BeeperApiError } from '../services/beeperClient.js';
 

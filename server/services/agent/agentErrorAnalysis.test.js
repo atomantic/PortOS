@@ -23,7 +23,7 @@ import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from '../taskLearning/metrics.js';
 import { getConfig } from '../cos/cosState.js';
 import { addTask, updateTask, getAllTasks } from '../cos/cosTaskStore.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/validation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks } from '../../lib/taskParser.js';
 
 // Fixed clock for the retry-hold stamp, so the assertion is exact.

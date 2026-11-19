@@ -9,6 +9,7 @@
  */
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
@@ -17,7 +18,7 @@ import { mutateProjectRecord } from '../projects.js';
 import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
 import { canonicalizeSunoUrl, isSunoShareLink, readSunoSongTitle } from '../../sunoShareLink.js';
-import { browserOperationInProgress, connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
+import { browserOperationInProgress, connectPortosBrowser, pageTargetId, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
 import { tiktokAdapter } from './tiktok.js';
@@ -57,41 +58,49 @@ const emitDraft = (draft, state = draft.state) => musicVideoEvents.emit('publish
 /** Drop the CDP session only (the PortOS Browser and the tab keep running). */
 async function detachDraft(draft) {
   clearTimeout(draft.timer);
-  const { browser, page } = draft;
-  if (page && !page.isClosed()) draft.url = page.url(); // the tab may have moved on while the human worked
+  const { browser } = draft;
   draft.browser = null;
   draft.page = null;
   await browser?.close().catch(() => {});
 }
 
-/** Whether the draft's tab is still open, reconnecting (never launching) when the session was dropped. */
-async function findDraftPage(draft, deps = {}) {
-  if (draft.page) return draft.page.isClosed() ? null : draft.page;
-  let session;
-  try { session = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return null; }
-  const page = session.context.pages().find((candidate) => candidate.url() === draft.url) || null;
-  draft.reconnect = session;
-  return page;
+/** Find the draft's tab. Only a fresh connection belongs to the lookup caller. */
+async function findDraftPage(draft, deps = {}, replacement) {
+  if (draft.page) return { page: draft.page.isClosed() ? null : draft.page };
+  if (!draft.targetId) return { page: null };
+  let reconnect;
+  if (!replacement) {
+    try { reconnect = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return { page: null }; }
+  }
+  try {
+    const { context } = replacement || reconnect;
+    for (const page of context.pages()) {
+      if (page !== replacement?.page && await pageTargetId(context, page) === draft.targetId) return { page, reconnect };
+    }
+    return { page: null, reconnect };
+  } catch (err) {
+    await reconnect?.browser.close().catch(() => {});
+    throw err;
+  }
 }
 
 /** Re-check a detached draft's tab; mark it closed (and tell the UI) when it is gone. */
 async function refreshDraft(draft, deps) {
   if (draft.state === 'closed') return;
-  const page = await findDraftPage(draft, deps);
-  const session = draft.reconnect;
-  draft.reconnect = null;
-  await session?.browser.close().catch(() => {});
+  const { page, reconnect } = await findDraftPage(draft, deps);
+  await reconnect?.browser.close().catch(() => {});
   if (!page) { draft.state = 'closed'; emitDraft(draft); }
 }
 
-async function closeDraft(draft, deps) {
+async function closeDraft(draft, deps, replacement) {
   drafts.delete(draft.id);
   clearTimeout(draft.timer);
-  const page = await findDraftPage(draft, deps);
-  await page?.close().catch(() => {});
-  const session = draft.reconnect || { browser: draft.browser };
-  draft.reconnect = null;
-  await session.browser?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  const { page, reconnect } = await findDraftPage(draft, deps, replacement);
+  try {
+    await page?.close().catch(() => {});
+  } finally {
+    await (reconnect?.browser || draft.browser)?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  }
   emitDraft(draft, 'discarded');
 }
 
@@ -100,16 +109,13 @@ async function closeDraft(draft, deps) {
  * tab go: it now shows their post, so it stays open with no session attached.
  */
 async function recordDetectedPost(draft, url) {
-  if (!drafts.has(draft.id)) return;
-  drafts.delete(draft.id);
-  draft.state = 'posted';
-  // A record that fails to save leaves the draft as it was: the card keeps it, and the link can still be pasted.
-  const { project } = await recordPublishPost(draft.projectId, draft.target, { url, links: draft.payload?.crossLinks }).catch((err) => {
-    draft.state = 'open';
-    drafts.set(draft.id, draft);
-    throw err;
-  });
-  await detachDraft(draft);
+  if (drafts.get(draft.id) !== draft) return;
+  // Keep the draft available for replacement or manual recovery while the write is pending.
+  const { project } = await recordPublishPost(draft.projectId, draft.target, { url, links: draft.payload?.crossLinks });
+  if (drafts.get(draft.id) === draft) {
+    drafts.delete(draft.id);
+    await detachDraft(draft);
+  }
   musicVideoEvents.emit('publish-draft', { projectId: draft.projectId, draftId: draft.id, target: draft.target, state: 'posted', url, project });
   console.log(`🔗 ${draft.target} post recorded for music-video ${draft.projectId.slice(0, 8)}: ${url}`);
 }
@@ -138,6 +144,12 @@ function watchForPost(draft, adapter) {
   page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) check(); });
 }
 
+// Suno refuses files at the limit as well as above it (decimal MB).
+const SUNO_HOOK_MAX_BYTES = 200_000_000;
+const missingReleaseFile = (name) => new ServerError(`A release file is missing on disk (${name}) — rebuild the publishing kit`, {
+  status: 422, code: 'PUBLISH_ASSET_MISSING',
+});
+
 const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails, images: () => PATHS.images };
 
 /** Resolve every `{ dir, name }` file ref in a payload to an existing absolute `path`. */
@@ -146,10 +158,29 @@ function resolveFiles(value) {
   if (!value || typeof value !== 'object') return value;
   if (typeof value.dir === 'string' && typeof value.name === 'string') {
     const path = DIRS[value.dir] ? safeUnder(DIRS[value.dir](), value.name) : null;
-    if (!path || !existsSync(path)) throw new ServerError(`A release file is missing on disk (${value.name}) — rebuild the publishing kit`, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
+    if (!path || !existsSync(path)) throw missingReleaseFile(value.name);
     return { ...value, path };
   }
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolveFiles(v)]));
+}
+
+async function checkedPublishPayload(target, project, options, { resolveMedia = false } = {}) {
+  const draft = buildPublishPayload(target, project, options);
+  const payload = resolveMedia || target === 'sunoHook' ? resolveFiles(draft) : draft;
+  if (target !== 'sunoHook') return payload;
+
+  const { video } = payload;
+  const info = await stat(video.path).catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!info?.isFile()) throw missingReleaseFile(video.name);
+  if (info.size >= SUNO_HOOK_MAX_BYTES) {
+    throw new ServerError('Suno Hook videos must be under 200 MB. Choose a shorter 9:16 cut or rebuild the publishing kit.', {
+      status: 422, code: 'PUBLISH_ASSET_TOO_LARGE',
+    });
+  }
+  return payload;
 }
 
 // Square cover sizes: Suno shows 1500px; stores ask distributors for 3000px.
@@ -242,11 +273,10 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     throw new ServerError(`Already posted to ${adapter.label}. Confirm "Post again" to fill another draft`, { status: 409, code: 'PUBLISH_ALREADY_POSTED', context: { target, urls } });
   }
   const resolved = await withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps);
-  let payload = resolveFiles(buildPublishPayload(target, project, resolved));
+  let payload = await checkedPublishPayload(target, project, resolved, { resolveMedia: true });
   payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
   payload = await withSunoTitle(target, payload, deps);
-  for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
   // The PortOS Browser fills one post at a time (X can hold it for minutes while its
   // upload finishes): say what this fill waits on, then what it is doing.
   const progress = (state, message) => musicVideoEvents.emit('publish-draft', { projectId, target, state, message });
@@ -259,9 +289,10 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   return serialize(async () => {
     progress('filling', `Opening ${adapter.label} in the PortOS Browser`);
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
-    const page = await context.newPage();
-    tab = page;
     try {
+      const page = await context.newPage();
+      tab = page;
+      const targetId = await pageTargetId(context, page);
       await page.bringToFront();
       const summary = await adapter.prepare(page, payload);
       // A dedicated account for this content must be the one signed in (where the adapter can tell).
@@ -269,7 +300,12 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvpub-${randomUUID()}`;
       const screenshot = shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null;
-      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, url: page.url(), state: 'open', createdAt: Date.now() };
+      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, targetId, state: 'open', createdAt: Date.now() };
+      // Keep the previous draft available until its replacement is ready. The
+      // shared browser queue covers both the lookup and the swap.
+      for (const previous of [...drafts.values()]) {
+        if (previous.projectId === projectId && previous.target === target) await closeDraft(previous, deps, { context, page });
+      }
       draft.timer = setTimeout(() => { detachDraft(draft).catch(() => {}); }, DRAFT_DETACH_MS);
       draft.timer.unref?.();
       page.once?.('close', () => { if (draft.page === page && draft.state === 'open' && drafts.has(id)) { draft.state = 'closed'; emitDraft(draft); } });
@@ -279,7 +315,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       console.log(`📝 ${adapter.label} draft filled for music-video ${projectId.slice(0, 8)} [${id.slice(6, 14)}]`);
       return draftPresentation(draft);
     } catch (err) {
-      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await page.close().catch(() => {});
+      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await tab?.close().catch(() => {});
       await browser.close().catch(() => {});
       throw err;
     }
@@ -301,7 +337,7 @@ export async function previewPublishPost(projectId, target, options = {}, deps =
   }
   const platforms = deps.platforms || await getPublishPlatforms();
   return withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps)
-    .then((resolved) => buildPublishPayload(target, project, resolved))
+    .then((resolved) => checkedPublishPayload(target, project, resolved))
     .then((payload) => ({ ready: true, parts: publishPreviewParts(target, project, payload) }), (err) => {
       if (err?.status === 422 || err?.status === 409) return { ready: false, problem: err.message };
       throw err;
@@ -378,16 +414,16 @@ export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
   let tab = null;
   return serialize(async () => {
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
-    const page = await context.newPage();
-    tab = page;
     try {
+      const page = await context.newPage();
+      tab = page;
       await page.bringToFront();
       const summary = await adapter.prepare(page, row);
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       console.log(`🔗 ${adapter.label} cross-link edit filled for music-video ${projectId.slice(0, 8)}`);
       return { target, links: row.missing.map((l) => l.target), summary, screenshot: shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null };
     } catch (err) {
-      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await page.close().catch(() => {});
+      if (err?.code !== 'PUBLISH_EDIT_INTERRUPTED') await tab?.close().catch(() => {});
       throw err;
     } finally {
       await browser.close().catch(() => {}); // disconnects; the tab stays open for the director

@@ -40,6 +40,10 @@ const { unlinkMock, copyFileMock, assertManifestMock } = vi.hoisted(() => ({
   assertManifestMock: vi.fn(async () => {}),
 }));
 
+vi.mock('../../lib/uploads.js', () => ({
+  assertFileNotMediaManifest: assertManifestMock,
+}));
+
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: {
     root: '/mock',
@@ -58,7 +62,6 @@ vi.mock('../../lib/fileUtils.js', () => ({
   }),
   unlinkGuarded: unlinkMock,
   copyFileGuarded: copyFileMock,
-  assertFileNotMediaManifest: assertManifestMock,
   sha256File: vi.fn(async () => 'a'.repeat(64)),
 }));
 

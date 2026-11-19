@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -30,31 +30,18 @@ describe('reconcileDeadOwnerReservations', () => {
     ...extra,
   });
 
-  it('marks a dead-owner settled publication unsettled so receipt recovery can drain it, and leaves a live owner', () => {
+  it('marks a dead-owner settled publication unsettled, and leaves a live owner', () => {
     const { admission } = gate();
     const dead = admission.admit('settlement', 'Output publication');
     const live = admission.admit('settlement', 'Output publication');
     rewritePid(admission, dead.id, DEAD_PID);
-    const before = readOps(admission).find(op => op.id === dead.id);
-    const hold = admission.begin({ reason: 'Inspect refused publication', owner: 'Operator' }).hold;
-    const receipt = { disposition: 'operator-reconciled' };
-    const publish = vi.fn(() => receipt);
-    const replay = vi.fn(() => receipt);
-    // Settled residue is invisible to the receipt path. Skipping the stamp leaves this refusal in place.
-    expect(() => admission.reconcilePublicationRefusal({ hold, expected: before, publish, replay })).toThrow(/uncertain publication/);
-    expect(publish).not.toHaveBeenCalled();
+    expect(readOps(admission).find(op => op.id === dead.id).unsettled).toBeUndefined();
 
     expect(reconcile(admission)).toMatchObject({ marked: 1, released: 0 });
     const stamped = readOps(admission).find(op => op.id === dead.id);
     expect(stamped).toMatchObject({ unsettled: true, pid: DEAD_PID, resource: 'Output publication' });
     expect(stamped.uncertaintyStamp).toMatch(/^[0-9a-f-]{36}$/i);
     expect(readOps(admission).find(op => op.id === live.id).unsettled).toBeUndefined();
-
-    expect(admission.reconcilePublicationRefusal({ hold, expected: stamped, publish, replay })).toBe(receipt);
-    expect(publish).toHaveBeenCalledOnce();
-    expect(replay).not.toHaveBeenCalled();
-    expect(readOps(admission).some(op => op.id === dead.id)).toBe(false);
-    expect(readOps(admission).some(op => op.id === live.id)).toBe(true);
   });
 
   it('does not rotate an uncertainty stamp or stamp a non-publication settlement', () => {

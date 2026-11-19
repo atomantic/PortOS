@@ -22,10 +22,7 @@ import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
-import {
-  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
   REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
@@ -115,6 +112,10 @@ import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS
 import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
 import { GOOGLE_VIDEO_MODEL_IDS } from '../lib/googleVideoModels.js';
 import { getProject } from '../services/musicVideo/projects.js';
+import {
+  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema
+} from '../lib/mediaGenerationValidation.js';
 
 const router = Router();
 

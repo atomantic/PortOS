@@ -7,7 +7,7 @@
 import { randomBytes } from 'crypto';
 
 import { vllmExtraArgs } from './qwenAgentParsers.js';
-import { parseEnvContents, upsertEnvLine } from './portosEnv.js';
+import { parseEnvContents, } from './portosEnv.js';
 
 /** Bytes of entropy in a generated key (the doc's `openssl rand -hex 24`). */
 const API_KEY_BYTES = 24;

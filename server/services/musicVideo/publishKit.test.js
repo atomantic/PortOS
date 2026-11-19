@@ -25,7 +25,7 @@ const kit = await import('./publishKit.js');
 const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
-const validation = await import('../../lib/musicVideo/musicVideoValidation.js');
+const validation = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
 const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
@@ -322,6 +322,9 @@ describe('publishing kit build (#9281)', () => {
       await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
       const vertical = (await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16');
       expect(vertical.layout).toBe('native');
+      expect(native).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        videoArgs: expect.arrayContaining(['-b:v', '10M', '-maxrate', '12M', '-bufsize', '24M']),
+      }));
       expect(await readFile(join(PATHS.videos, vertical.filename), 'utf8')).toBe('native 9:16 render');
       // the master was never squeezed into 9:16 for it
       expect(encode.mock.calls.some(([o]) => o.args.includes(kit.VERTICAL_FIT_FILTER))).toBe(false);
@@ -405,10 +408,11 @@ describe('renderSeekedWindow (the kit\'s native 9:16 cut)', () => {
     const encode = vi.fn(async (input) => ({ width: 1080, height: 1920, input }));
     const renderers = { document: { prepare: vi.fn(async (project) => ({ totalSec: 30, project })), encode } };
     const stored = { id: 'mv-x', aspect: '16:9', composition: { mode: 'document' } };
-    const out = await excerptRender.renderSeekedWindow(stored, { startSec: 20, endSec: 45, aspect: '9:16', fade: true, outputPath: '/tmp/v.mp4', jobId: 'job' }, { renderers, resolveAudio: async () => '/tmp/song.wav' });
+    const videoArgs = ['-maxrate', '12M', '-bufsize', '24M'];
+    const out = await excerptRender.renderSeekedWindow(stored, { videoArgs, startSec: 20, endSec: 45, aspect: '9:16', fade: true, outputPath: '/tmp/v.mp4', jobId: 'job' }, { renderers, resolveAudio: async () => '/tmp/song.wav' });
     expect(out).toMatchObject({ width: 1080, height: 1920 });
     const input = encode.mock.calls[0][0];
-    expect(input).toMatchObject({ startSec: 20, endSec: 30, fade: true, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
+    expect(input).toMatchObject({ startSec: 20, endSec: 30, fade: true, videoArgs, outputPath: '/tmp/v.mp4', audioPath: '/tmp/song.wav', soundBed: null });
     expect(renderers.document.prepare.mock.calls[0][0]).not.toBe(stored); // re-framed view, the record untouched
   });
 });

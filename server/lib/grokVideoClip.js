@@ -8,7 +8,7 @@
  * `generateVideo` warns when a delivered clip is shorter than requested. Confirm any change with a
  * probe (`sourceVideoSeconds` stamps), not a tool description.
  *
- * Dependency-free so `lib/validation.js` and `routes/videoGen.js` derive their Zod schemas from
+ * Dependency-free so `lib/sharedSchemas.js` and `routes/videoGen.js` derive their Zod schemas from
  * the list the services gate on.
  */
 

@@ -59,7 +59,12 @@ describe('bounded forge mutations', () => {
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(60000);
     // A failed merge is read back once: a timeout is not proof it did not land.
-    if (_name.includes('mergePR')) await vi.advanceTimersByTimeAsync(60000);
+    // The read-back loads its PR helper lazily, so let that import settle first or
+    // its own timeout is armed after the clock has already been advanced.
+    if (_name.includes('mergePR')) {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(60000);
+    }
 
     await expect(pending).resolves.toMatchObject({
       success: false,

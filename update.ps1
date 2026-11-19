@@ -510,7 +510,7 @@ Safe-Install -Dir "autofixer" -Label "autofixer"
 
 # Run trusted install scripts skipped by ignore-scripts=true in each workspace's
 # .npmrc. The allowlist lives in scripts/trusted-rebuilds.js — a single home
-# shared with `npm run setup`, scripts/ensure-deps.js, setup.ps1, update.sh and CI,
+# shared with scripts/setup.js (`npm run setup`), scripts/ensure-deps.js, update.sh and CI,
 # so a package can never be granted an install-time execution slot in one path but
 # not another.
 # Only the server needs rebuilds; client/autofixer have no install-script deps
@@ -559,6 +559,19 @@ if ($LASTEXITCODE -ne 0 -or -not $networkSummary) {
 Step "network-setup" "done" ($networkSummary -join " ")
 Write-SafeHost ""
 
+# Ensure ffmpeg is present — scripts/ensure-ffmpeg.js is the single owner of the
+# install logic. Windows has no automated install, so the helper only records a
+# manual-install hint in the update log. It always exits 0.
+Step "ffmpeg" "running" "Checking ffmpeg..."
+Invoke-Logged node scripts/ensure-ffmpeg.js --non-interactive
+$global:LASTEXITCODE = 0
+if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+    Step "ffmpeg" "done" "ffmpeg present"
+} else {
+    Step "ffmpeg" "done" "ffmpeg unavailable (media/video features degraded)"
+}
+Write-SafeHost ""
+
 # Run data migrations
 Step "migrations" "running" "Running data migrations..."
 $migrationsScript = Join-Path $RootDir "scripts\run-migrations.js"
@@ -568,24 +581,12 @@ if (Test-Path $migrationsScript) {
 }
 Step "migrations" "done" "Migrations complete"
 
-# Install/update slash-do commands. Replaces the previous interactive prompt
-# with an always-on pinned `npx slash-do@<version>` call so the user-global command
-# pool stays current across updates. Failures are non-fatal.
-# Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
-# all detected envs instead of hanging on readline (update.ps1 has no TTY).
-$SlashdoVersion = (Get-Content (Join-Path $RootDir "scripts/SLASHDO_VERSION") -Raw).Trim()
+# Install/update the pinned slash-do commands (scripts/install-slashdo.js owns the
+# npx call and the scripts/SLASHDO_VERSION pin). Non-fatal: the helper always
+# exits 0, and its own exit status is not allowed to fail the update.
 Step "slash-do" "running" "Installing/updating slash-do commands..."
-# npx writes status to stderr; scope the same Continue downgrade as Invoke-Logged
-# around this stdin-piped call so it isn't aborted by a NativeCommandError (#1811).
-# $LASTEXITCODE set inside the script block still propagates to the check below.
-& {
-    $ErrorActionPreference = 'Continue'
-    "a" | & npx --yes "slash-do@$SlashdoVersion" >> $UpdateLog 2>&1
-}
-if ($LASTEXITCODE -ne 0) {
-    Write-SafeHost "⚠️  slash-do install/update failed. Continuing (re-run later: npx slash-do@$SlashdoVersion)." -ForegroundColor Yellow
-    $global:LASTEXITCODE = 0
-}
+Invoke-Logged node scripts/install-slashdo.js
+$global:LASTEXITCODE = 0
 Step "slash-do" "done" "slash-do commands installed/updated"
 Write-SafeHost ""
 
