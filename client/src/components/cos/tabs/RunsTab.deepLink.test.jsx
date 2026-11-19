@@ -56,6 +56,16 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunOutput).toHaveBeenCalledWith('run-b');
   });
 
+  it('shows Claude sign-in renewal guidance on a successful run without opening its logs', async () => {
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], providerName: 'Claude Code', claudeSignInExpiring: true }, RUNS[1]] });
+    renderTab('/cos/runs');
+
+    expect(await screen.findByText('Claude Code sign-in expires soon')).toBeVisible();
+    expect(screen.getByText('claude auth login')).toBeVisible();
+    expect(screen.getAllByText('Succeeded')).toHaveLength(2);
+    expect(api.getRunOutput).not.toHaveBeenCalled();
+  });
+
   it('moves a Running row to its end state on any activity invalidation (#16557)', async () => {
     api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] });
     renderTab('/cos/runs');
