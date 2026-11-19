@@ -61,19 +61,13 @@ import {
   MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_LIGHTX2V_MLX_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE, isMiniMaxH3SpeedProfile, isMiniMaxH3SpeedProfileRequest,
   isPinnedMiniMaxH3SpeedProfile, miniMaxH3SpeedProfileDeclineReason,
 } from './minimaxH3SpeedProfiles.js';
+import {
+  SPEED_PROFILE_DEFAULT_ID, TWO_STAGE_SPEED_PROFILE_MODES, effectiveSpeedProfileMode, isDefaultSpeedProfile,
+  speedProfileAcceptsMode, speedProfileModes, videoSpeedProfiles,
+} from './videoRequestDefaults.js';
 
-/**
- * The implicit "unchanged" profile. Never resolves to an override.
- */
-export const SPEED_PROFILE_DEFAULT_ID = 'quality';
-
-/**
- * Modes that route through the LTX two-stage pipeline (`run_two_stage` in
- * scripts/generate_ltx2.py), which is the only pipeline the shipped schedules
- * below were measured on. Declared once so a new profile can't quietly widen
- * itself past what was validated.
- */
-export const TWO_STAGE_SPEED_PROFILE_MODES = Object.freeze(['text', 'image']);
+// The sentinel, the mode gate and the declared-profile reader live in the browser-safe leaf the client form shares.
+export { SPEED_PROFILE_DEFAULT_ID, TWO_STAGE_SPEED_PROFILE_MODES, isDefaultSpeedProfile, videoSpeedProfiles };
 
 /**
  * Shipped profiles, keyed by registry entry id.
@@ -167,22 +161,6 @@ export const applyVideoSpeedProfiles = (list) => {
 };
 
 /**
- * Absence and the default id are the same request — so a client that always
- * submits its picker value doesn't create a second spelling of "unchanged".
- */
-export const isDefaultSpeedProfile = (id) => id == null || id === '' || id === SPEED_PROFILE_DEFAULT_ID;
-
-/**
- * The profiles a model declares, or `[]`. Deliberately does NOT prepend the
- * implicit default entry: that is a PRESENTATION rule (the picker owns it, the
- * same way `TextEncoderPicker` owns hide-when-there-is-no-real-choice), and
- * folding it in here would make every model look like it has a profile.
- */
-export const videoSpeedProfiles = (model) => (
-  Array.isArray(model?.speedProfiles) ? model.speedProfiles.filter((p) => typeof p?.id === 'string') : []
-);
-
-/**
  * Does this model offer any speed profile at all?
  */
 export const supportsSpeedProfiles = (model) => videoSpeedProfiles(model).length > 0;
@@ -220,14 +198,14 @@ export const speedProfileDeclineReason = ({ model, profileId, mode }) => {
       message: `Speed profile "${profileId}" isn't offered by ${model?.name || model?.id || 'this model'} — rendering at its default sampler.`,
     };
   }
-  const modes = Array.isArray(profile.modes) ? profile.modes : TWO_STAGE_SPEED_PROFILE_MODES;
-  // Absence is read as the plain text render — which is only SAFE because the
+  // Absence is read as the plain text render (`effectiveSpeedProfileMode`) — which is only SAFE because the
   // caller resolves the runner's own inference first (see `inferEffectiveMode`
   // below, used by generateVideo). A direct caller that hands us a raw absent
   // `mode` alongside keyframes would otherwise be told the profile applies,
   // while buildLtx2Args infers `fflf` and runs an entirely different pipeline.
-  const effectiveMode = mode == null || mode === '' ? 'text' : mode;
-  if (!modes.includes(effectiveMode)) {
+  const effectiveMode = effectiveSpeedProfileMode(mode);
+  if (!speedProfileAcceptsMode(profile, mode)) {
+    const modes = speedProfileModes(profile);
     return {
       code: 'SPEED_PROFILE_MODE_UNSUPPORTED',
       message: `The ${profile.name} profile is validated for ${modes.join('/')} renders only — ${effectiveMode} renders use a different pipeline and keep the default sampler.`,

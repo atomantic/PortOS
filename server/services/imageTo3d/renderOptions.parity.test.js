@@ -4,9 +4,8 @@
  * `renderOptions.js` owns the server-side bounds; `client/src/lib/
  * imageTo3dRenderOptions.js` is the hand-maintained client mirror (the input's
  * `max` attribute and the steps presets). This suite imports BOTH and asserts
- * they stay compatible — the same mechanism as
- * `unavailableReasons.parity.test.js` next door. It lives server-side because
- * the client mirror is a pure module that loads fine under the node runner.
+ * they stay compatible. It lives server-side because the client mirror is a
+ * pure module that loads fine under the node runner.
  */
 
 import { readFileSync } from 'node:fs';
