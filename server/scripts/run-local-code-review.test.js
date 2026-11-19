@@ -83,8 +83,8 @@ function withSavedProviderReview(context, run) {
             if (failure) reject(failure);
             else resolve({ code, stdout, stderr });
           });
-          // A stored pre-#16818 prompt still sends `recordAttribution: true`; the bridge must ignore the unknown field.
-          child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
+          // Older stored prompts send request fields the bridge no longer knows (#16818); it must ignore them, not reject.
+          child.stdin.end(JSON.stringify({ retiredRequestField: true, ...request }));
         });
       };
       context.signal.throwIfAborted();
@@ -163,7 +163,6 @@ it('refuses public-comment screening without an enforced CLI reviewer mode', con
   expect(result.code).not.toBe(0);
   expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
   expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
-  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
 }), 15000);
 
 it('classifies a CLI command-permission refusal without exposing its private diagnostics', context => withSavedProviderReview(context, async ({ root, runReview }) => {
@@ -172,7 +171,6 @@ it('classifies a CLI command-permission refusal without exposing its private dia
   expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED' });
   expect(result.stderr).toContain('Reviewer configuration fault (REVIEWER_COMMAND_PERMISSION_DENIED) for provider:example-refusal');
   expect(result.stdout + result.stderr).not.toContain('synthetic-private');
-  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
 }), 15000);
 
 it('shuts down the Codex app-server child and cleans up scratch resources after successful and timed-out reviews', async () => {

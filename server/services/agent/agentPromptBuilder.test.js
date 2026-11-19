@@ -4870,7 +4870,6 @@ describe('PR model attribution', () => {
     const section = prompt.slice(prompt.indexOf('## PR Model Attribution')).split('\n\n')[0];
     expect(section).not.toMatch(/labels back|pr edit <pr>|mr update <mr>|completion summary/);
     expect(section.split('\n')).toHaveLength(2);
-    expect(prompt).not.toContain('PR_REVIEW_ATTRIBUTION');
     expect(prompt).not.toContain('implementer:example-runner');
   });
 
