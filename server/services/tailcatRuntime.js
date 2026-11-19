@@ -42,19 +42,6 @@ export function listCandidateTailcatBins({ env = process.env, home = homedir() }
 }
 
 /**
- * Read `tailcat version` and return a bare semver, or null when the binary
- * cannot run / the banner cannot be parsed.
- */
-export async function readTailcatBinaryVersion(
-  bin,
-  { readOutput = (b) => commandOutput(b, ['version'], { timeoutMs: 5_000 }) } = {},
-) {
-  if (!bin) return null;
-  const raw = await readOutput(bin);
-  return parseTailcatVersion(raw);
-}
-
-/**
  * Resolve an installed `tailcat` binary that meets {@link MIN_TAILCAT_VERSION},
  * or null when none is both runnable and new enough. Older binaries are
  * skipped (not returned) so install/upgrade can still try to replace them —

@@ -96,9 +96,6 @@ export const POST_TOPICS = [
 
 export const TOPIC_IDS = POST_TOPICS.map(t => t.id);
 
-/** Topics the launcher can compose into a Full/Quick session. */
-export const SESSION_TOPIC_IDS = POST_TOPICS.filter(t => t.surface === 'session').map(t => t.id);
-
 // drill type → topic, built once at module load.
 const TOPIC_BY_DRILL_TYPE = {};
 for (const topic of POST_TOPICS) {

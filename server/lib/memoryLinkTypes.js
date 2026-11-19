@@ -15,10 +15,5 @@ export const MEMORY_LINK_TYPES = Object.freeze([
   'applies-to'
 ]);
 
-export const isMemoryLinkType = (value) => MEMORY_LINK_TYPES.includes(value);
-
 /** Only `related` gets a reverse row. */
 export const isSymmetricMemoryLinkType = (type) => type === DEFAULT_MEMORY_LINK_TYPE;
-
-/** Absent (null/undefined) means the legacy default; anything else must be a known type. */
-export const normalizeMemoryLinkType = (value) => (value == null ? DEFAULT_MEMORY_LINK_TYPE : value);

@@ -48,13 +48,6 @@ export const FRAME_REASON = {
   TOO_SMALL: 'too-small-to-judge',
 };
 
-// "Backend produced no content" reasons; `stats-unavailable` and `too-small-to-judge` ride `ok: null`.
-export const DEGENERATE_FRAME_REASONS = [
-  FRAME_REASON.SOLID_FILL,
-  FRAME_REASON.FULLY_TRANSPARENT,
-  FRAME_REASON.NEAR_EMPTY,
-];
-
 const result = (ok, reason, perChannel = null) => ({ ok, reason, perChannel });
 
 /**

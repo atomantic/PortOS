@@ -32,10 +32,8 @@ import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } f
 
 const NOOP_CLEANUP = () => {};
 
-export const GROK_API_ID = 'grok';
 export const GROK_CLI_ID = 'grok-cli';
 export const GROK_TUI_ID = 'grok-tui';
-export const GROK_API_ENDPOINT = 'https://api.x.ai/v1';
 // Shipped CLI/TUI providers pin a concrete model for accurate attribution.
 // Legacy configured-default selections still omit --model for compatibility.
 

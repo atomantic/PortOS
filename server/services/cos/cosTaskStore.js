@@ -3,8 +3,7 @@ import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORG
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../../lib/releaseSynchronization.js';
-import { RELEASE_ATTEMPTS_KEY, mergeReleaseAttempts } from '../../lib/releaseAttemptMembership.js';
-import { spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './cosSpawnBudget.js';
+import { spawnBudgetCount } from './cosSpawnBudget.js';
 /**
  * CoS Task Store Module
  *
@@ -619,7 +618,6 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   delete initialMetadata.repoRepairContract;
   if (repoRepairContract && taskType === 'internal') initialMetadata.repoRepairContract = { ...repoRepairContract, taskId: newTask.id };
   for (const key of RETIRED_SPAWN_PROOF_KEYS) delete initialMetadata[key];
-  delete initialMetadata[RELEASE_ATTEMPTS_KEY];
   newTask = { ...newTask, metadata: initialMetadata };
 
   // Add task to top or bottom based on position parameter
@@ -813,9 +811,6 @@ async function isStaleRecoveryOwner({ taskId, recoveryOwner }) {
     || (!!registered && registered.startedAt !== recoveryOwner.startedAt);
 }
 
-const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
-  && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
-
 /**
  * Store-owned spawn accounting for one task write. Mutates `updatedMetadata`.
  *
@@ -826,20 +821,11 @@ const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => meta
  * count keeps the stored scalar, so a number/text round trip never rewrites it.
  */
 function applySpawnAccounting({ current, updatedMetadata, reset }) {
-  // Compatibility only: retain historical membership for independently upgraded
-  // peers. It is owned by the store, not by callers carrying task snapshots.
-  delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
-  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] != null) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
   for (const key of RETIRED_SPAWN_PROOF_KEYS) delete updatedMetadata[key];
   const stored = spawnBudgetCount(current.metadata?.totalSpawnCount);
   const incoming = spawnBudgetCount(updatedMetadata.totalSpawnCount);
   const raised = incoming !== null && incoming > (stored ?? 0);
   if (!reset && stored !== null && !raised) updatedMetadata.totalSpawnCount = current.metadata.totalSpawnCount;
-  // Older peers may still use complete membership to authorize recovery. A
-  // dispatch, which this version no longer records there, makes it incomplete.
-  if (raised && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
-    updatedMetadata[RELEASE_ATTEMPTS_KEY] = { ...updatedMetadata[RELEASE_ATTEMPTS_KEY], complete: false };
-  }
 }
 
 function isVerifiedDependencyRelease({ current, updates, expectedStatus, expectedTask, recoveryOwner, preserveRetryBudget }) {
@@ -1155,17 +1141,6 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
       .map(withoutRetiredSpawnProof);
 
     const merged = mergeTaskLists(localTasks, incoming, { now });
-    const localById = new Map(localTasks.map(task => [task.id, task]));
-    const remoteById = new Map(incoming.map(task => [task.id, task]));
-    for (const task of merged) {
-      const remote = remoteById.get(task.id);
-      if (!remote) continue;
-      const local = localById.get(task.id);
-      const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY],
-        { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
-      if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
-      else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
-    }
 
     // Nothing the peer sent changed our state — skip the write (and the event that would
     // wake the scheduler). `merged` is still returned so the post-lock LI-verdict consume

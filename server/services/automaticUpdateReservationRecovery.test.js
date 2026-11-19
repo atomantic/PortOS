@@ -353,7 +353,6 @@ describe('automatic recovery for a waiting update', () => {
     expect(isOrdinaryAgentRecord(op, { id: 'agent-1', metadata: { taskAnalysisType: 'claim-issue', analysisType: 'do-release' } })).toBe(false);
     expect(isOrdinaryAgentRecord(op, { id: 'agent-1', metadata: { taskAnalysisType: 'claim-issue', releaseSynchronization: {} } })).toBe(false);
     expect(isOrdinaryAgentRecord(op, { id: 'agent-1', metadata: { taskAnalysisType: 'future-release-kind' } })).toBe(false);
-    expect(isOrdinaryAgentRecord(op, { id: 'agent-1', metadata: { taskAnalysisType: 'claim-issue', releaseAttempts: {} } })).toBe(false);
     expect(isOrdinaryAgentRecord(op, { id: 'agent-1', taskId: 'task-1', metadata: { taskAnalysisType: 'claim-issue' } })).toBe(false);
     expect(isOrdinaryAgentRecord(op, { id: 'agent-1', taskId: 'task-1', metadata: { taskAnalysisType: 'claim-issue' } },
       { id: 'task-1', metadata: { analysisType: 'do-release' } })).toBe(false);

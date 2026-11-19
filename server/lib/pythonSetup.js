@@ -262,7 +262,6 @@ export function detectVenvBasePythonSync() {
 // actionable, and hard-coding a ceiling would reject each new CPython release
 // until someone remembered to raise it.
 export const MIN_VENV_PYTHON = Object.freeze([3, 10]);
-export const MIN_VENV_PYTHON_LABEL = MIN_VENV_PYTHON.join('.');
 
 // `{ version, major, minor }` for an interpreter, or null when it can't be run
 // (missing, not an interpreter, a Store alias, a venv whose base was pruned).
@@ -287,10 +286,6 @@ export async function probePythonVersion(pythonPath, { env, timeout = 10_000 } =
 export const meetsMinVenvPython = (probed) =>
   !!probed && (probed.major > MIN_VENV_PYTHON[0]
     || (probed.major === MIN_VENV_PYTHON[0] && probed.minor >= MIN_VENV_PYTHON[1]));
-
-export async function isSupportedVenvBase(pythonPath, options) {
-  return meetsMinVenvPython(await probePythonVersion(pythonPath, options));
-}
 
 // venvBaseCandidatesSync() split by MIN_VENV_PYTHON, preserving its ordering
 // (the tier ranking in that function is about torch loading correctly, and

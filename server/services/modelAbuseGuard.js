@@ -24,8 +24,6 @@ import {
 } from '../lib/fileUtils.js';
 import {
   MODEL_ABUSE_GUARD,
-  MODEL_ABUSE_GUARD_CHUNK_OVERLAP,
-  MODEL_ABUSE_GUARD_CHUNK_TOKENS,
   MODEL_ABUSE_GUARD_ID,
   MODEL_ABUSE_GUARD_MAX_INPUT_CHARS,
   MODEL_ABUSE_GUARD_MAX_OUTPUT_CHARS,
@@ -687,8 +685,3 @@ export async function runModelAbuseScan({
   };
 }
 
-export const MODEL_ABUSE_GUARD_RUNTIME = Object.freeze({
-  chunkTokens: MODEL_ABUSE_GUARD_CHUNK_TOKENS,
-  chunkOverlap: MODEL_ABUSE_GUARD_CHUNK_OVERLAP,
-  timeoutMs: MODEL_ABUSE_GUARD_TIMEOUT_MS,
-});

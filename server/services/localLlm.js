@@ -939,22 +939,6 @@ function providerUsesBackend(provider, backend) {
   return provider?.type === 'api' && identity !== null && identity === modelEndpointIdentity(baseUrl)
 }
 
-/** True/false only for reported metadata on the selected daemon; null is unknown. */
-export async function getModelVisionSupport(providerId, model) {
-  const provider = await getProviderById(providerId).catch(() => null)
-  const backend = localBackendForProvider(provider)
-  if (!backend || !providerUsesBackend(provider, backend)) return null
-  if (backend === 'ollama') {
-    const capabilities = await ollamaManager.getModelCapabilities(model).catch(() => null)
-    return Array.isArray(capabilities) && capabilities.length > 0
-      ? isVisionModel({ id: model, capabilities }) : null
-  }
-  const models = await lmStudioManager.getAvailableModels().catch(() => [])
-  const card = models.find((entry) => entry.id === model)
-  return card?.type || (Array.isArray(card?.capabilities) && card.capabilities.length > 0)
-    ? isVisionModel(card) : null
-}
-
 async function listVisionBackendModels(backend) {
   const provider = await getProviderById(LOCAL_LLM_PROVIDER_ID_BY_BACKEND[backend]).catch(() => null)
   if (!providerUsesBackend(provider, backend)) return []

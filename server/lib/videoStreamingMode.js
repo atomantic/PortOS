@@ -34,10 +34,6 @@ export const isDefaultVideoStreamingMode = (mode) => (
 
 export const isKnownVideoStreamingMode = (mode) => VIDEO_STREAMING_MODES.includes(mode);
 
-export const videoStreamingModeLabel = (mode) => (
-  VIDEO_STREAMING_MODE_OPTIONS.find((o) => o.value === mode)?.label || 'Auto'
-);
-
 // Read a mode out of a persisted record (history entry, resumed job params): history records only a NON-default mode (generateVideo.js), so a missing/unknown field means Auto and must CLEAR a leftover selection rather than carry it into a render the user asked to reproduce.
 export const videoStreamingModeFromRecord = (value) => (
   isKnownVideoStreamingMode(value) ? value : DEFAULT_VIDEO_STREAMING_MODE

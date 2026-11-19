@@ -50,7 +50,6 @@ import { spawn } from '../lib/childProcess.js';
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
 export const VALID_MODES = STORAGE_VALID_MODES;
-export const SOURCE_KINDS = ['memory', 'brain-note', 'autobiography', 'goal', 'calendar', 'catalog'];
 
 const PER_SOURCE_LIMIT = {
   memory: 6,

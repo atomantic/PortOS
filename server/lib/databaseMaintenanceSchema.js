@@ -5,7 +5,6 @@
  */
 
 /** The existing fenced startup diagnostic, shared without importing a DB pool. */
-export const DATABASE_MAINTENANCE_SCHEMA_CONTRACT = 'maintenance-target-v1';
 export const DATABASE_MAINTENANCE_SCHEMA_SQL = `
       SELECT current_database() AS database, current_user AS "user",
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories') AS has_memories,

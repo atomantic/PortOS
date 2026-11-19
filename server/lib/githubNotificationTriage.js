@@ -18,23 +18,6 @@ import { isUntrustedContentProvider } from './untrustedContent.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { PULL_REQUEST_ACTIONS, PULL_REQUEST_RULE_KINDS } from '../../lib/pullRequestActions.js';
 
-export const TRIAGE_DECISIONS = Object.freeze([
-  'suspect',
-  'surface-high',
-  'surface',
-  'needs-you',
-  'suggest-review',
-  'suggest-untrusted-review',
-  'suggest-mark-read',
-  'handled-by-pr-workflow',
-  'duplicate',
-  'suggest-done',
-  'suggest-mute',
-  'handed-off',
-]);
-
-export const TRUST_LEVELS = Object.freeze(['yours', 'trusted', 'outside', 'unknown']);
-
 /** Non-secret account identity and authority carried into an inbox agent task. */
 export const notificationAgentAccountBinding = (account, origin = 'user') => ({
   accountId: account.id,

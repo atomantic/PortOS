@@ -641,7 +641,6 @@ const coerceDefault = (backend, modelId) => (backend === 'fal'
       : null);
 
 export { coerceGoogleVideoSeconds };
-export const snapGoogleShotSpan = (span, modelId = null) => coerceGoogleVideoSeconds(getGoogleVideoModel(modelId || GOOGLE_DEFAULT_VIDEO_MODEL), span);
 
 /**
  * The fal.ai request one take of `scene` makes on the fal lane, and its

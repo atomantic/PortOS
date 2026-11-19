@@ -336,4 +336,3 @@ export async function openApprovedDraft(id) {
   return run;
 }
 
-export const xDraftStates = [...DRAFT_STATES];

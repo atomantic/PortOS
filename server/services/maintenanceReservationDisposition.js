@@ -49,7 +49,7 @@ function assertOrdinaryRunnerRecords(records) {
       || (typeof record?.taskId === 'string' && (record.taskId.startsWith('task-release-sync-') || record.taskId.includes('-do-release-')))
       || record?.releasePublication || record?.releaseCandidate
       || metadata.releasePublication || metadata.releaseCandidate || metadata.releaseCandidateLifecycle
-      || metadata.releaseSynchronization || metadata.releaseSynchronizationCheckout || metadata.releaseAttempts;
+      || metadata.releaseSynchronization || metadata.releaseSynchronizationCheckout;
   })) refuse('Release-agent ownership must use its release recovery path.');
 }
 
