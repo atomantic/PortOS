@@ -111,7 +111,7 @@ describe('workspace-scoped survivor detection', () => {
       loadRun: async () => ({ workspacePath: '/repos/work' }),
     })).resolves.toEqual(['provider-command-unavailable']);
   });
-  it.each(['/bin/bash /repos/app/update.sh', 'powershell.exe -File C:\\repos\\app\\update.ps1', 'node scripts/update.js'])
+  it.each(['/bin/bash /repos/app/update.sh', 'powershell.exe -File C:\\repos\\app\\update.ps1', 'node scripts/update.js', 'node scripts/update.mjs'])
   ('detects a managed update child: %s', async command => {
     const ops = [{ kind: 'app-operation', resource: 'app-1' }];
     await expect(assertNoScopedLegacyProcesses(ops, [{ pid: 7, state: 'S', command }], { ...options,

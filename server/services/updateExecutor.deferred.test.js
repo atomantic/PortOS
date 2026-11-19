@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { installUpdateTestSupervisor } from '../../scripts/lib/updateTestSupervisor.js';
+import { installAdmittedUpdateFixture } from '../../scripts/lib/updateContractHarness.js';
 import { continueManualUpdateRecovery, offerManualUpdateRecovery } from '../../scripts/lib/manualUpdateRecovery.mjs';
 import { requestManualUpdate } from '../../scripts/manual-update-recovery.mjs';
 
@@ -22,9 +23,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
   it('lets the existing UI Command Runner request a detached manual update without granting interruption consent', async () => {
     installUpdateTestSupervisor(PATHS.root);
     await writeFile(join(PATHS.root, 'package.json'), JSON.stringify({ type: 'module', version: '0.0.0' }));
-    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    await writeFile(join(PATHS.root, 'update.sh'), `${header}\nprintf '%s' "\${PORTOS_UPDATE_INTERRUPT:-}" > request-consent\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(PATHS.root, "writeFileSync('request-consent', process.env.PORTOS_UPDATE_INTERRUPT || '');");
     const admission = createMaintenanceAdmission(PATHS.data);
     const launch = await requestManualUpdate({ args: ['--request'], root: PATHS.root,
       launch: (tag, emit, options) => launchUpdate(tag, emit, { ...options, admission, monitorIntervalMs: 50 }), emit: vi.fn() });
@@ -39,9 +38,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
     git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture']);
     mkdirSync(join(PATHS.root, 'client', 'dist'), { recursive: true });
     await writeFile(join(PATHS.root, 'client', 'dist', 'index.html'), 'Old UI');
-    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    await writeFile(join(PATHS.root, 'update.sh'), `${header}\nprintf '%s|%s' "$PORTOS_FORCE_CLEAN_WORKSPACES" "$PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED" > browser-consent-applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(PATHS.root, "writeFileSync('browser-consent-applied', [process.env.PORTOS_FORCE_CLEAN_WORKSPACES, process.env.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED].join('|'));");
     const admission = createMaintenanceAdmission(PATHS.data);
     const request = async () => {
       const { id } = admission.deferredUpdate.request();
@@ -67,9 +64,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
   });
   it('keeps a late manual-consent refusal typed through detached completion and allows explicit continuation', async () => {
     installUpdateTestSupervisor(PATHS.root);
-    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch consent-applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(PATHS.root, "writeFileSync('consent-applied', '');");
     const admission = createMaintenanceAdmission(PATHS.data);
     const render = admission.admit('render:example', 'project-example');
     await writeFile(join(PATHS.root, 'observed-running-work'), 'render');
@@ -86,9 +81,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
   });
   it('replaces a prior waiting owner, refuses duplicate reuse, and waits for a racing render to save', async () => {
     installUpdateTestSupervisor(PATHS.root);
-    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(PATHS.root, "writeFileSync('applied', '');");
     const admission = createMaintenanceAdmission(PATHS.data);
     const render = admission.admit('render:example', 'project-example');
     const previous = admission.deferredUpdate.request();
@@ -114,9 +107,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
 
   it('replaces an observed automatic waiter without broadcasting its interruption as the manual update failure', async () => {
     installUpdateTestSupervisor(PATHS.root);
-    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch manual-applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(PATHS.root, "writeFileSync('manual-applied', '');");
     const admission = createMaintenanceAdmission(PATHS.data);
     const render = admission.admit('render:example', 'project-example');
     const report = vi.fn();

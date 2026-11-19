@@ -2,7 +2,7 @@
 
 How PortOS notices a new release and updates itself. PortOS is distributed software — many people run it, and a large share run it from a **personal fork**, so every step here is fork-aware. Breaking that assumption produces silent no-op updates.
 
-Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
+Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/update.mjs`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
 
 ## Manual and automatic updates
 
@@ -104,12 +104,11 @@ submodule, so those changes remain a visible update blocker.
 
 ### Submodules follow the pulled parent revision
 
-**An unsupported Node.js runtime refuses the target before installation.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero before pulling the target or changing dependencies. Automatic idle updates leave PM2 apps running. Manual updates have already stopped them and use failure recovery to restart them. The checkout therefore does not advance to an unsupported target. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
+**An unsupported Node.js runtime refuses the target before installation.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, the shared updater resolves the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero before pulling the target or changing dependencies. Automatic idle updates leave PM2 apps running. Manual updates have already stopped them and use failure recovery to restart them. The checkout therefore does not advance to an unsupported target. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
 
-Before pulling, both platform scripts repair any recursive submodule checkout
+Before pulling, the shared updater repairs any recursive submodule checkout
 that is not at the commit pinned by the current parent tree. After switching to
-`main` they repeat that repair, then after pulling `main` both platform scripts
-run:
+`main` they repeat that repair, then after pulling `main` it runs:
 
 ```bash
 git submodule sync --recursive
@@ -141,7 +140,7 @@ To prevent that confusion, `POST /api/update/execute` rejects fork runs with **4
 
 ## Every PortOS update goes through the detached launcher
 
-`update.sh` deletes and restarts every PortOS PM2 entry. PM2's TreeKill walks **PPID**, so a script left attached to `portos-server` is killed by its own `pm2 delete` step — mid-list, before it can run the closing `pm2 start` — and the install is left headless. `spawnDetached`'s double-fork (`server/lib/detachedSpawn.js`) is what reparents the script to init so it survives; `launchUpdate()` in `server/services/updateExecutor.js` is the single launcher that applies it, along with the `STEP:` progress parsing, the still-running-script guard, and `recordUpdateResult()`.
+`scripts/update.mjs` is the Node-only pipeline that deletes and restarts the PortOS PM2 entries. Scripts `update.sh` and `update.ps1` preserve the old launcher contract, and `npm run update` enters the same supervisor directly. PM2's TreeKill walks **PPID**, so a script left attached to `portos-server` is killed by its own `pm2 delete` step — mid-list, before it can run the closing `pm2 start` — and the install is left headless. `spawnDetached`'s double-fork (`server/lib/detachedSpawn.js`) is what reparents the script to init so it survives; `launchUpdate()` in `server/services/updateExecutor.js` is the single launcher that applies it, along with the `STEP:` progress parsing, the still-running-script guard, and `recordUpdateResult()`.
 
 **Windows needs the same escape, and cannot get it from `detached: true`.** PM2 kills there with `taskkill /pid <app> /T /F`, which walks the identical parent→child tree, so an attached `update.ps1` dies at `pm2-stop` exactly as an attached `update.sh` would. But Node's `detached: true` maps to **`DETACHED_PROCESS`** on Windows, which denies the child a console — and a console host like `powershell.exe` given no console exits **0 within ~100ms without running a single line**. That combination is why the in-app update silently did nothing on Windows while reporting a successful update to the target release (#6169): the script never ran, `executeUpdate` saw exit 0, and stamped the triggering tag onto a "Success" result. So on Windows `spawnDetached` launches a short-lived PowerShell launcher that `Process.Start`s a **supervisor** (with `CreateNoWindow`, per [WINDOWS_CONSOLE.md](WINDOWS_CONSOLE.md)) and exits. The supervisor's parent is then gone, so `taskkill /T` from the server never reaches it; it redirects the script's output into the control dir and records its pid and exit status there, so the same tailer streams `STEP:` progress on both platforms. This is the *only* win32 path — it shipped in #6169 behind a `windowsDetached` opt-in, because the plain-spawn fallback beside it handed back a real `ChildProcess` whose `kill` tree-killed the job's own descendants and the supervisor path could then only signal the job's pid; #6170 routed the supervisor handle's `kill` (and the boot-time orphan reaper) through the same `taskkill /T /F`, which removed the trade-off and with it the option.
 
@@ -322,6 +321,28 @@ When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with 
 
 Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
 
+## Verifying a change to the updater itself
+
+Do not test a candidate on a primary install. A worktree by itself does not isolate
+PM2, the database, or service ports. Use a disposable instance with its own VM or
+an otherwise isolated maintenance window on each OS. Before starting, record the
+current commit, configured `node --version` and `npm --version`, checked-out data
+backup, running PM2 app list, and working local health URL. Make sure the current
+operator can restore that snapshot without going through the candidate updater.
+
+Use a test remote that exposes the chosen revision as `main`. First advance it
+from the old installation to the exact PR head, and update through the old
+launcher. That run can finish entirely in the old updater even though it checked
+out the new shims. Then advance the test remote to a distinct, content-identical
+commit descended from the PR head so the second invocation has to pull. Invoke
+the newly installed `update.sh` or `update.ps1` this time. Both runs should preserve
+their ordered `STEP:` transcript, advance to the expected SHA, record a new
+`data/update-complete.json`, and start the production PM2 app set without Vite.
+Verify `/api/system/health` after each run and record the commit and exact result.
+If a run fails, retain `data/update.log` and its terminal result; do not merge on a
+failed recovery. Restore the disposable instance from its known-good snapshot
+rather than guessing which partial setup or migration ran.
+
 ## Running a customized fork
 
 The `UpdateTab` fork panel states this in short form. The full loop is here, because that panel is
@@ -347,8 +368,7 @@ node scripts/trusted-rebuilds.js server
 npm run build && npm run pm2:restart
 ```
 
-**Use `--no-save`, not a bare `npm install`.** `--no-save` is what `safe_install` in `update.sh`
-and `scripts/ensure-deps.js` run, for two reasons that both bite a fork: a bare install rewrites
+**Use `--no-save`, not a bare `npm install`.** `--no-save` is what `scripts/update.mjs` and `scripts/ensure-deps.js` run, for two reasons that both bite a fork: a bare install rewrites
 `client/package.json` and the lockfiles, which dirties your private branch and re-stales a build
 you just made (`client/package.json` is a `staleBuild` input — see below); and an older npm can
 strip newer lockfile metadata it does not understand. `--no-save` still honors `package-lock.json`.

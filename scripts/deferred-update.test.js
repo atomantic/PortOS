@@ -10,6 +10,7 @@ import { processAbsent, reconcileReusedLaunch } from '../server/lib/maintenanceD
 import { trackedRenderMap } from '../server/services/renderActivity.js';
 import { runDeferredUpdate, settleInterruptedUpdate } from './deferred-update.mjs';
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
+import { installAdmittedUpdateFixture } from './lib/updateContractHarness.js';
 import { portosServiceListeners } from './lib/legacyUpdateActivity.mjs';
 
 const roots = [];
@@ -508,7 +509,7 @@ describe('deferred update admission', () => {
     expect(readFileSync(join(control, 'pid'), 'utf8')).toBe('4001');
   });
 
-  it.each(['relative updater', 'surviving npm child'])('waits for a live same-install %s despite a legacy exit file', async kind => {
+  it.each(['relative updater', 'relative Node updater', 'surviving npm child'])('waits for a live same-install %s despite a legacy exit file', async kind => {
     const { root, admission } = fixture();
     const control = join(root, 'data/update-detached');
     mkdirSync(control, { recursive: true });
@@ -526,7 +527,8 @@ describe('deferred update admission', () => {
       ...(alive && kind === 'surviving npm child' ? [{ pid: 5002, ppid: 1, pgid: 5001,
         startedAt: Date.parse('2026-11-01T00:00:00Z'), command: `sh supervisor ${control}` }] : []),
       ...(alive ? [{ pid: 4002, ppid: 1, pgid: 5001,
-        command: kind === 'relative updater' ? 'bash ./update.sh' : 'npm install --no-save' }] : [])];
+        command: { 'relative updater': 'bash ./update.sh', 'relative Node updater': 'node scripts/update.mjs',
+          'surviving npm child': 'npm install --no-save' }[kind] }] : [])];
     const launch = vi.fn(completedLaunch(admission));
     const wait = vi.fn(async () => { expect(launch).not.toHaveBeenCalled(); alive = false; });
     await expect(runDeferredUpdate({ admission, launch, wait, cwd: root, legacySnapshot,
@@ -704,9 +706,7 @@ describe('deferred update admission', () => {
 describe.skipIf(process.platform === 'win32')('direct update script offline boundary', () => {
   const start = root => {
     installUpdateTestSupervisor(root, { standalone: true });
-    const source = readFileSync(new URL('../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    writeFileSync(join(root, 'update.sh'), `${header}\ntouch applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(root, "writeFileSync('applied', '');");
     // This is a standalone process in a copied disposable install, not a Vitest
     // worker writing the executing checkout's data tree (same as boot smoke).
     const env = { ...process.env, PORTOS_DATA_ROOT: root };

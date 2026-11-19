@@ -1053,7 +1053,7 @@ describe('CI test impact planner', () => {
 
   // update.* and the lockfiles already force a full CI plan, so the planner
   // row above can't show it; pregate's downgraded plan relies on this rule.
-  it.each(['update.sh', 'update.ps1', 'scripts/ensure-deps.js', 'server/package-lock.json'])('selects the ensure-deps contract for %s', (changed) => {
+  it.each(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/ensure-deps.js', 'server/package-lock.json'])('selects the ensure-deps contract for %s', (changed) => {
     expect(structuralTestsFor([changed, 'docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).toContain('scripts/ensure-deps.test.js');
     expect(structuralTestsFor(['docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).not.toContain('scripts/ensure-deps.test.js');
   });
@@ -1870,7 +1870,7 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
-  it.each(['update.ps1', 'scripts/deferred-update.mjs', 'scripts/update-headless-recovery.test.js'])('runs the real PowerShell failure-settlement contract for %s', source => {
+  it.each(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/deferred-update.mjs', 'scripts/update-headless-recovery.test.js'])('runs the real PowerShell failure-settlement contract for %s', source => {
     const contract = 'scripts/update-headless-recovery.test.js';
     const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, contract] });
     expect(plan.windows).toBe(true);

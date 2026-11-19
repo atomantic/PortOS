@@ -174,8 +174,8 @@ function isSamePath(a, b) {
  * build: guessing those steps from a package.json can freeze or break apps
  * whose lifecycle does not resemble PortOS.
  *
- * PortOS itself is a managed app, and its comprehensive update.sh/update.ps1
- * lifecycle is delegated to `portosSelfUpdate` — the same launcher the Update
+ * PortOS itself is a managed app. Its compatibility shim and shared Node
+ * update lifecycle are delegated to `portosSelfUpdate` — the same launcher the Update
  * page uses — which owns the restart and the dashboard handoff for that case.
  * That branch resolves as soon as the detached script is RUNNING and reports
  * `selfUpdateStarted`, because this process does not outlive the script's
@@ -235,8 +235,8 @@ async function _doUpdate(app, emit, {
   // Snapshot what is running BEFORE any step: `pm2 restart` on a stopped
   // process would START it, and an update routine that stops its own
   // processes must not read as "the app was not running". The detached
-  // PortOS self-update restarts nothing from here: update.sh/update.ps1 bring
-  // the ecosystem back up and do their own dashboard handoff.
+  // The detached self-updater brings the ecosystem back up and does the
+  // dashboard handoff. Do not ask the outer app updater to restart it too.
   const declaredNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
   const processNames = await pm2Service.getProcessesToRestartOnUpdate(declaredNames, app.pm2Home);
   if (syncFork) {

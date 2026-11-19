@@ -65,6 +65,7 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/doctor.js',
   'scripts/checkGitVersion.js',
   'scripts/setup.js',
+  'scripts/update.mjs',
   'scripts/ensure-ffmpeg.js',
   'scripts/install-slashdo.js',
 ];
