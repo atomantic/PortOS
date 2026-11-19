@@ -1,4 +1,3 @@
-import AppQuality from '../components/apps/AppQuality';
 import { useState, useRef } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, Gamepad2, Play, Square, RotateCcw, RefreshCw, Archive, ArchiveRestore, Trash2, AlertTriangle } from 'lucide-react';
@@ -15,14 +14,21 @@ import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { getLaunchUrls } from '../services/appUrls';
+import { formatCount } from '../utils/formatters';
 import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
 
 const APP_EVENTS = ['apps:changed'];
 
-const fetchAppList = async () => {
-  const data = await api.getApps({ includeQuality: true, silent: true });
+const fetchAppList = async ({ signal }) => {
+  const data = await api.getApps({ signal, silent: true });
   if (!Array.isArray(data)) throw new Error('Invalid apps response');
   return data;
+};
+
+const fetchQualitySummaries = async ({ signal }) => {
+  const data = await api.getAppQualitySummaries({ signal, silent: true });
+  if (!Array.isArray(data)) throw new Error('Invalid app quality summaries response');
+  return new Map(data.map(({ id, quality }) => [id, quality]));
 };
 
 export default function Apps() {
@@ -44,6 +50,7 @@ export default function Apps() {
   const menuTriggerRef = (id) => (menuTriggerRefs.current[id] ||= { current: null });
 
   const { data, loading, error: loadError, refetch: fetchApps, updateData: setApps } = useSocketResource(fetchAppList, { events: APP_EVENTS });
+  const { data: qualityByApp, loading: qualityLoading } = useSocketResource(fetchQualitySummaries, { events: APP_EVENTS });
   const apps = data ?? [];
   const retry = async () => {
     setRetrying(true);
@@ -297,7 +304,7 @@ export default function Apps() {
                             <StatusBadge status={app.overallStatus} size="sm" />
                           )}
                         </div>
-                        <AppQuality app={app} />
+                        <AppQualityLink appId={app.id} quality={qualityByApp?.get(app.id)} qualityPending={qualityLoading} />
                         <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
                           {isNonPm2 ? (
                             <span className="break-all">{app.repoPath}</span>
@@ -483,5 +490,19 @@ export default function Apps() {
 
       </div>
     </div>
+  );
+}
+
+function AppQualityLink({ appId, quality, qualityPending }) {
+  let label = 'Quality unavailable';
+  if (qualityPending) label = 'Loading quality…';
+  else if (quality && !quality.unavailable) {
+    label = quality.score != null ? `Quality: ${quality.score}/100 · ${formatCount(quality.ratedCategories)} rated`
+      : quality.hasAssessments ? 'Quality: no qualifying score' : 'Quality: not assessed';
+  }
+  return (
+    <Link to={`/apps/${appId}/quality`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
+      {label}
+    </Link>
   );
 }

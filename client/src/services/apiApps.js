@@ -24,6 +24,7 @@ export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
   return request(`/apps${suffix}`, options);
 };
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
+export const getAppQualitySummaries = (options) => request('/apps/quality/summaries', options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
 // Per-lane outcome of filed audit issues (#12088); the table renders its own
 // unavailable state, so the wrapper is silent.
