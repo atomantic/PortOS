@@ -283,7 +283,7 @@ const FULL_TRIGGER_RULES = [
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
-  /^(?:update\.sh|scripts\/(?:deferred-update\.mjs|update\.mjs|update-headless-recovery\.test\.js))$/,
+  /^(?:update\.sh|scripts\/(?:deferred-update\.mjs|update\.mjs|update-(?:headless-recovery|submodules)\.test\.js))$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|windowsAgentProcess|windowsAgentSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,

@@ -2047,6 +2047,7 @@ describe('Windows native support boundary', () => {
 
   it.each([
     'scripts/deploy.ps1',
+    'scripts/update-submodules.test.js',
     'server/lib/bufferedSpawn.js',
     'server/lib/windowsGitSupervisor.cs',
     'server/lib/windowsAgentSupervisor.cs',
