@@ -399,7 +399,7 @@ const yesNo = (v) => (v ? 'Yes' : 'No');
 /** The 9:16 cut a payload posts, in words ("9:16 cut 0:40–1:10"). */
 function cutLabel(project, video) {
   const cut = verticalCuts(project).find((c) => c.filename === video?.name);
-  return cut ? `${cut.id === 'kit-vertical' ? 'Kit vertical (fit)' : '9:16 cut'} ${clock(cut.startSec)}–${clock(cut.endSec)}` : '9:16 cut';
+  return cut ? `${cut.id === 'kit-vertical' ? `Kit vertical (${cut.layout})` : '9:16 cut'} ${clock(cut.startSec)}–${clock(cut.endSec)}` : '9:16 cut';
 }
 
 /**
