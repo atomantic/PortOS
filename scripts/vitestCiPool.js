@@ -74,7 +74,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
 // unbounded local run spends their budget on CPU contention (#10356). They run
 // one at a time after the parallel group. Isolation does not raise their
 // timeouts or drop their assertions.
-const EXCLUSIVE_TESTS = [
+export const EXCLUSIVE_TESTS = [
   ...EXCLUSIVE_CAPTURE_TESTS,
   'services/databaseMaintenanceCutover.test.js',
   // The generated shell/curl ownership proof retains its native process

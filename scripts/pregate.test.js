@@ -26,6 +26,7 @@ import {
   downgradeFullPlan,
   focusedLocalPlan,
   RELATED_SUITE_CAP,
+  SECOND_HOP_RUN_CAP,
   parseArgs,
   pregateWorkerEnv,
   stageSpawnEnv,
@@ -246,7 +247,7 @@ describe('pregate hidden-content invocation', () => {
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -1474,7 +1475,7 @@ describe('the gate end to end', () => {
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
@@ -1955,34 +1956,125 @@ describe('focused local policy', () => {
   });
 });
 
-describe('focused local policy: one-hop referencing suites', () => {
+describe('focused local policy: referencing suites within two import hops', () => {
   const plan = () => planWith({ browser: { files: [] }, server: { mode: 'related', files: [], sources: [] } });
   const reader = files => path => files[path] ?? null;
+  const plant = (files, extraTracked = []) => ({ tracked: [...new Set([...Object.keys(files), ...extraTracked])], read: reader(files) });
 
-  it('selects a differently named suite that mocks or imports a changed source, but not a transitive one', () => {
+  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', () => {
     const files = {
       'server/routes/x.test.js': "vi.mock('../services/x.js', () => ({}));",
       'server/routes/lazy.test.js': "const m = await import('../services/x');",
       'server/routes/direct.test.js': "import { a } from '../services/x.js';",
-      'server/routes/twoHops.test.js': "import { r } from './routeUsingX.js';",
+      'server/routes/unresolved.test.js': "import { r } from './routeUsingX.js';",
       'server/routes/lookalike.test.js': "import { a } from '../other/x.js';",
     };
-    const tracked = ['server/services/x.js', 'server/other/x.js', ...Object.keys(files)];
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    const { tracked, read } = plant(files, ['server/services/x.js', 'server/other/x.js']);
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
+    expect(local.relatedOverflow).toEqual([]);
+  });
+
+  // The two pre-fix heads from #16863 whose failing suite sits two imports from the edit.
+  it.each([
+    ['server/lib/dispatchLabels.js', 'server/lib/quotaBurnPresets.js', 'server/lib/quotaBurnPresets.test.js', "import { LABELS } from './dispatchLabels.js';", "import { presets } from './quotaBurnPresets.js';"],
+    ['server/services/promptSections/prAttribution.js', 'server/services/agent/agentPromptBuilder.js', 'server/services/cos/cosTaskClaimWork.composition.test.js', "import { attribution } from '../promptSections/prAttribution.js';", "import { buildAgentPrompt } from '../agent/agentPromptBuilder.js';"],
+  ])('selects the suite two hops from %s through %s', (source, importer, test, importerText, testText) => {
+    const files = { [source]: 'export const x = 1;', [importer]: importerText, [test]: testText };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, [source], read);
+    expect(local.server.files).toContain(test);
+    expect(local.relatedOverflow).toEqual([]);
+  });
+
+  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/viaLazy.js': "export const load = () => import('./a.js');",
+      'server/lib/viaMock.js': "vi.mock('./a.js');",
+      'server/lib/hop3.js': "import { load } from './viaLazy.js';",
+      'server/lib/lazy.test.js': "import { load } from './viaLazy.js';",
+      'server/lib/mock.test.js': "import './viaMock.js';",
+      'server/lib/deep.test.js': "import './hop3.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files.sort()).toEqual(['server/lib/lazy.test.js', 'server/lib/mock.test.js']);
+  });
+
+  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', () => {
+    const files = {
+      'scripts/lib/tool.js': '',
+      'scripts/lib/toolUser.js': "import './tool.js';",
+      'scripts/run-ci-tests.test.js': "import './lib/toolUser.js';",
+      'scripts/ci-test-plan.test.js': "import './lib/toolUser.js';",
+      'scripts/lib/toolUser.test.js': "import './toolUser.js';",
+    };
+    const { tracked, read } = plant(files);
+    expect(focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read).server.files).toEqual(['scripts/lib/toolUser.test.js']);
+    const direct = { ...files, 'scripts/run-ci-tests.test.js': "import './lib/tool.js';" };
+    const withDirect = plant(direct);
+    expect(focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read).server.files.sort())
+      .toEqual(['scripts/lib/toolUser.test.js', 'scripts/run-ci-tests.test.js']);
+  });
+
+  it('does not count a suite already selected for another reason against the second hop', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/mid.js': "import './a.js';",
+      'server/lib/both.test.js': "import './a.js'; import './mid.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files).toEqual(['server/lib/both.test.js']);
     expect(local.relatedOverflow).toEqual([]);
   });
 
   it('caps suites per changed source and reports the overflow as skipped', () => {
     const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 3 }, (_, i) => [`server/routes/s${String(i).padStart(2, '0')}.test.js`, "vi.mock('../services/x.js');"]));
-    const tracked = ['server/services/x.js', ...Object.keys(files)];
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], reader(files));
+    const { tracked, read } = plant(files, ['server/services/x.js']);
+    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
-    expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3 }]);
+    expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3, hop: 1 }]);
     const skipped = uncoveredSuites(local);
     expect(skipped).toHaveLength(1);
     expect(skipped[0]).toMatchObject({ suite: 'related tests' });
     expect(skipped[0].reason).toContain('3 suite(s) referencing server/services/x.js');
+  });
+
+  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', () => {
+    const files = {
+      'server/lib/a.js': '',
+      'server/lib/mid.js': "import './a.js';",
+      ...Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 2 }, (_, i) => [`server/aaa/s${String(i).padStart(2, '0')}.test.js`, "import '../lib/mid.js';"])),
+      'server/lib/mid.test.js': "import './mid.js';",
+    };
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
+    expect(local.server.files).toContain('server/lib/mid.test.js');
+    expect(local.relatedOverflow).toEqual([{ source: 'server/lib/a.js', count: 3, hop: 2 }]);
+    const [skipped] = uncoveredSuites(local);
+    expect(skipped.reason).toContain('3 suite(s) two imports away from server/lib/a.js');
+  });
+
+  it('caps the second hop per run across sources and never displaces a first-hop suite', () => {
+    const sources = Array.from({ length: 4 }, (_, i) => `server/lib/src${i}.js`);
+    const files = {};
+    for (const [i, source] of sources.entries()) {
+      files[source] = '';
+      files[`server/lib/mid${i}.js`] = `import './src${i}.js';`;
+      for (let n = 0; n < RELATED_SUITE_CAP; n += 1) files[`server/hop2/${i}/t${String(n).padStart(2, '0')}.test.js`] = `import '../../lib/mid${i}.js';`;
+    }
+    files['server/hop1/direct.test.js'] = "import '../lib/src3.js';";
+    const { tracked, read } = plant(files);
+    const local = focusedLocalPlan(plan(), tracked, sources, read);
+    const added = local.server.files.filter(file => file.startsWith('server/hop2/'));
+    expect(local.server.files).toContain('server/hop1/direct.test.js');
+    expect(added).toHaveLength(SECOND_HOP_RUN_CAP);
+    expect(local.relatedOverflow.every(entry => entry.hop === 2)).toBe(true);
+    expect(local.relatedOverflow.reduce((sum, entry) => sum + entry.count, 0)).toBe(4 * RELATED_SUITE_CAP - SECOND_HOP_RUN_CAP);
+    expect(uncoveredSuites(local).every(entry => entry.reason.includes('-per-run caps'))).toBe(true);
   });
 });
 
