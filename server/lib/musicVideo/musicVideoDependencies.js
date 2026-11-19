@@ -469,22 +469,32 @@ export function musicVideoTakeChanges(project, scene, take) {
 // The old render checksum cannot attest to the newly tracked fields. Preserve
 // that checksum verbatim; record separately the verified pre-write project
 // baseline so the very first edit to one of those fields is still visible.
-function retainLegacyFinalLayerBaseline(before, after) {
+export function retainLegacyFinalLayerBaseline(before, after) {
   const old = before.renderDependencies;
   const next = after.renderDependencies;
   if (!before.renderHistoryId || before.renderHistoryId !== after.renderHistoryId
-    || next !== old || old?.version !== MUSIC_VIDEO_DEPENDENCY_VERSION
-    || !Array.isArray(old.references) || !predatesLayerTreatment(before)) return after;
-  const scenes = new Map((before.scenes || []).map((scene) => [scene.sceneId, scene]));
+    || old?.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || next?.version !== old.version
+    || !Array.isArray(old.references) || !Array.isArray(next.references)) return after;
+  const layers = new Map(old.references.filter((ref) => ref.role === 'layer' && ref.assetId === ref.sceneId)
+    .map((ref) => [ref.sceneId, ref]));
+  const legacy = predatesLayerTreatment(before);
+  let scenes;
   let changed = false;
-  const references = old.references.map((ref) => {
-    const scene = ref.role === 'layer' && scenes.get(ref.sceneId);
-    if (!scene || ref.assetId !== ref.sceneId || ref.legacyLayerTreatmentBaseline
-      || layerRef(scene).revision === ref.revision || layerRef(scene, { legacy: true }).revision !== ref.revision) return ref;
+  const references = next.references.map((ref) => {
+    if (ref.role !== 'layer' || ref.assetId !== ref.sceneId || ref.legacyLayerTreatmentBaseline) return ref;
+    const prior = layers.get(ref.sceneId);
+    if (!prior || prior.revision !== ref.revision) return ref;
+    let baseline = prior.legacyLayerTreatmentBaseline;
+    if (!baseline && legacy) {
+      scenes ??= new Map((before.scenes || []).map((scene) => [scene.sceneId, scene]));
+      const scene = scenes.get(ref.sceneId);
+      if (scene && layerRef(scene, { legacy: true }).revision === ref.revision) baseline = checksum(layerTreatmentEntries(scene));
+    }
+    if (!baseline) return ref;
     changed = true;
-    return { ...ref, legacyLayerTreatmentBaseline: checksum(layerTreatmentEntries(scene)) };
+    return { ...ref, legacyLayerTreatmentBaseline: baseline };
   });
-  return changed ? { ...after, renderDependencies: { ...old, references } } : after;
+  return changed ? { ...after, renderDependencies: { ...next, references } } : after;
 }
 
 /** Before a write, materialize legacy provenance from the PRE-image, never new inputs. */
