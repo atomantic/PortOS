@@ -32,7 +32,7 @@ import { transcribe } from '../voice/stt.js';
 import { navigateToUrlPinned } from '../browserService.js';
 import { lookup } from 'dns/promises';
 import { PATHS, ensureDir, safeJSONParse, writeFileGuarded } from '../../lib/fileUtils.js';
-import { isSafeIngestUrl, isBlockedIngestHost } from '../../lib/catalog/catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from '../../lib/safeUrlFetch.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod

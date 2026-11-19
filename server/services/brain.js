@@ -36,7 +36,7 @@ import {
   extractedIdeaSchema,
   extractedAdminSchema,
   extractedMemorySchema
-} from '../lib/brainValidation.js';
+} from '../lib/brainSchemas.js';
 
 export const TOOL_FREE_REQUIRED = 'TOOL_FREE_REQUIRED';
 

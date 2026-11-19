@@ -422,3 +422,14 @@ export function deckCompletion(cards) {
   counts.percent = counts.total ? Math.round((counts.rendered / counts.total) * 100) : 0;
   return counts;
 }
+
+export const DECK_NAME_MAX = 120;
+export const DECK_DESCRIPTION_MAX = 2000;
+export const DECK_LAYOUT_PROMPT_MAX = 1000;
+export const DECK_CARD_PROMPT_MAX = 4000;
+export const DECK_CARD_NAME_MAX = 120;
+export const DECK_SAMPLES_MAX = 12;
+export const DECK_SAMPLE_TITLE_MAX = 120;
+export const DECK_SAMPLE_PROMPT_MAX = 4000;
+export const DECK_CARD_IMAGE_REFS_MAX = 24;
+export const DECK_CARDS_PER_REQUEST_MAX = 120;

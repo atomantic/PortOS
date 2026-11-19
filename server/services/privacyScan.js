@@ -26,7 +26,7 @@
  */
 
 import { lookup } from 'dns/promises';
-import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/safeUrlFetch.js';
 import { fetchPublicResponse } from '../lib/safeUrlFetch.js';
 import { fetchUrlMainText } from './catalog/catalogIngestSources.js';
 import { listScanEligibleValues } from './privacyVault.js';

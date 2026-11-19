@@ -26,7 +26,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const resolvePublicUrl = vi.hoisted(() => vi.fn());
-vi.mock('../../lib/safeUrlFetch.js', () => ({ resolvePublicUrl }));
+vi.mock('../../lib/safeUrlFetch.js', async (importOriginal) => ({ ...(await importOriginal()), resolvePublicUrl }));
 
 const downloadPinImage = vi.hoisted(() => vi.fn());
 vi.mock('./pinterest.js', () => ({ downloadPinImage }));

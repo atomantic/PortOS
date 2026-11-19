@@ -21,7 +21,7 @@ import { trimTo } from '../lib/textUtils.js';
 import {
   DECK_KIND_LABELS, DEFAULT_LAYOUT_PROMPT, deckCardOrientation, deckCardOrientationPrompt,
 } from '../lib/deckTemplates.js';
-import { DECK_LAYOUT_PROMPT_MAX, DECK_SAMPLE_PROMPT_MAX, DECK_SAMPLE_TITLE_MAX } from '../lib/deckValidation.js';
+import { DECK_LAYOUT_PROMPT_MAX, DECK_SAMPLE_PROMPT_MAX, DECK_SAMPLE_TITLE_MAX } from '../lib/deckTemplates.js';
 import { STYLE_NOTES_MAX } from '../lib/universeBibleLimits.js';
 import { universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
 

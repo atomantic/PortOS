@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import * as obsidian from './obsidian.js';
 import * as ideaLoomLists from './idealoomLists.js';
-import { ideaLoomListInputSchema } from '../lib/brainValidation.js';
+import { ideaLoomListInputSchema } from '../lib/brainSchemas.js';
 
 export const IDEA_LOOM_FOLDER = 'Idea Loom';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

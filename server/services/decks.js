@@ -31,7 +31,7 @@ import {
   DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DEFAULT_DECK_CARD_ORIENTATION, DEFAULT_LAYOUT_PROMPT,
   deckCardOrientation, deckCardRoster, deckCompletion,
 } from '../lib/deckTemplates.js';
-import { DECK_CARD_IMAGE_REFS_MAX, DECK_SAMPLES_MAX } from '../lib/deckValidation.js';
+import { DECK_CARD_IMAGE_REFS_MAX, DECK_SAMPLES_MAX } from '../lib/deckTemplates.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { createRecordWriteQueue } from '../lib/fileWriteQueue.js';
 import {

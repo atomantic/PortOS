@@ -59,7 +59,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { join } from 'path';
-import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
+import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';

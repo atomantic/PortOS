@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { threadInputSchema } from '../lib/brainValidation.js';
+import { threadInputSchema } from '../lib/brainSchemas.js';
 import * as brainStorage from './brainStorage.js';
 
 const LIMIT = 200;

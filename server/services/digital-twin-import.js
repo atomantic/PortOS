@@ -13,7 +13,7 @@ import {
   parseTraitsResponse
 } from './digital-twin-analysis.js';
 import { digitalTwinEvents } from './digital-twin-meta.js';
-import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
+import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 
 /**
  * Parse Goodreads CSV export

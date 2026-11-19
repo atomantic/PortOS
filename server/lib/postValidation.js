@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
+import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
 import { validateCognitivePair } from './postCognitiveConfig.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
@@ -110,7 +110,6 @@ const llmResponseSchema = z.object({
 
 // Drill type configuration
 const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'];
-const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES and POST_SUPPORTED_MEMORY_TYPES live in
 // ./postDrillTypes.js (a zod-free leaf, re-exported by the client's
 // meatspace/post/constants.js) — imported above, so each list has one owner.
