@@ -1447,6 +1447,9 @@ describe('verifyAgentRepoState — divergent runs', () => {
       ['an external hand-off held on capture', { jira: { status: 'held', retryable: true, reason: 'checkout-capture-pending' } }],
       ['a held worktree stage', { pipeline: { status: 'held', reason: 'checkout-retirement-pending' }, worktree: { status: 'held', value: ['warning'] } }],
       ['a held completion signal', { sentinel: { status: 'held' } }],
+      ['an unrecorded regular stage', { notification: undefined, pipeline: { status: 'held', reason: 'checkout-retirement-pending' } }],
+      ['an unfinished optional audit stage', { auditTask: { status: 'running', retryable: true },
+        pipeline: { status: 'held', reason: 'checkout-retirement-pending' } }],
     ])('refuses the recheck for %s', async (_name, stagePatch) => {
       const { pending, owner } = heldOwner(stagePatch);
       expect(await recheckAgentCleanup(owner.id, pending.id)).toEqual({ ok: true, verified: false, reasons: ['completion-stages-pending'] });
