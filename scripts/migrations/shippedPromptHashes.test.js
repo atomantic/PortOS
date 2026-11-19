@@ -14,6 +14,7 @@ import {
   serializeShippedHashes,
 } from './shippedPromptHashes.js';
 import { historicalPromptBodies, isShallowRepository } from './shippedPromptHistory.js';
+import { runMigrations } from '../run-migrations.js';
 
 const migrationsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(migrationsDir, '..', '..');
@@ -157,34 +158,44 @@ describe.skipIf(!historyAvailable)('every historically shipped body (full git hi
     expect(warn).not.toHaveBeenCalled();
   }, 60_000);
 
-  // The frozen numbered chain still runs over the oldest shipped bodies, and
-  // the reconciler then converges whatever it left behind.
-  it('runs the frozen prompt migration chain on a simulated old install', async () => {
+  // #16827 deleted the prompt migrations that only swapped a body, so an old
+  // install reaches today's bodies through the runner's reconcile step alone.
+  // Its ledger predates every prompt migration: the survivors (which create,
+  // retire or seed as well) run for real, then the reconciler converges the rest.
+  it('converges an install whose ledger predates the deleted prompt migrations', async () => {
     linkReference();
     const live = await readReferencePromptHashes(repoRoot);
     const histories = historicalPromptBodies(repoRoot, Object.keys(live));
-    for (const [key, versions] of Object.entries(histories)) {
-      if (versions.length) write(`data/prompts/${key}`, versions.at(-1).body);
+    const seeded = Object.entries(histories).filter(([, versions]) => versions.length);
+    for (const [key, versions] of seeded) write(`data/prompts/${key}`, versions.at(-1).body);
+    // A skill template: only the reconciler ever touches it now.
+    const [customizedKey] = seeded.find(([key, versions]) => key.startsWith('skills/') && versions.length > 1);
+    write(`data/prompts/${customizedKey}`, CUSTOM);
+
+    const survivors = readdirSync(migrationsDir)
+      .filter((file) => /^\d.*\.js$/.test(file) && !file.endsWith('.test.js'))
+      .filter((file) => /ACCEPTED_OLD_MD5|makePromptReplaceMigration/.test(readFileSync(join(migrationsDir, file), 'utf8')))
+      .sort();
+    expect(survivors).toEqual(expect.arrayContaining(['003-update-pipeline-stage-prompts.js', '005-shape-aware-arc-prompts.js']));
+    const chainDir = join(rootDir, 'migrations');
+    mkdirSync(chainDir);
+    for (const file of survivors) {
+      writeFileSync(join(chainDir, file), `export { default } from ${JSON.stringify(pathToFileURL(join(migrationsDir, file)).href)};\n`);
     }
+    // Nonempty, so this is an upgrade and not the fresh-install purge path.
+    write('data/migrations.applied.json', JSON.stringify(['001-earlier.js']));
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const chain = readdirSync(migrationsDir)
-      .filter((file) => /^\d.*\.js$/.test(file) && !file.endsWith('.test.js'))
-      .filter((file) => readFileSync(join(migrationsDir, file), 'utf8').includes('makePromptReplaceMigration'))
-      .sort();
-    expect(chain.length).toBeGreaterThan(90);
-    for (const file of chain) {
-      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
-      await (mod.default ?? mod).up({ rootDir });
-    }
-    await reconcileShippedPrompts({ rootDir });
+    await expect(runMigrations({ rootDir, migrationsDir: chainDir })).resolves.toBe(survivors.length);
 
-    const behind = Object.entries(histories)
-      .filter(([key, versions]) => versions.length && md5(read(`data/prompts/${key}`)) !== live[key])
+    const behind = seeded
+      .filter(([key]) => key !== customizedKey && md5(read(`data/prompts/${key}`)) !== live[key])
       .map(([key]) => key);
     expect(behind).toEqual([]);
-    expect(warn).not.toHaveBeenCalled();
+    expect(read(`data/prompts/${customizedKey}`)).toBe(CUSTOM);
+    const warned = warn.mock.calls.map(([message]) => String(message)).filter((message) => !message.includes(customizedKey));
+    expect(warned).toEqual([]);
   }, 60_000);
 });
 

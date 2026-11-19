@@ -33,8 +33,8 @@ export const repoRoot = join(__dirname, '..', '..');
 
 // pathWithin: each migration test passes its own names, so the test memo keys the
 // shipped prompts tree, and this read may not leave it.
-export const sampleBody = (filename, subdir = 'stages') =>
-  readFileSync(pathWithin(join(repoRoot, 'data.reference', 'prompts'), subdir, filename), 'utf-8');
+export const sampleBody = (filename) =>
+  readFileSync(pathWithin(join(repoRoot, 'data.reference', 'prompts'), 'stages', filename), 'utf-8');
 
 /** Synthetic body that won't match any shipped hash. */
 export const customizedBody = (filename) =>
@@ -42,9 +42,7 @@ export const customizedBody = (filename) =>
 
 /**
  * `prefix` is the `mkdtempSync` directory name — keep migration-specific
- * (`'migration-025-'`) so a debugger leaves a recognizable sandbox in `/tmp`.
- * `subdir` defaults to `'stages'`; pass `'_partials'` for shared mustache
- * fragments that live under `data/prompts/_partials/` instead.
+ * (`'migration-005-'`) so a debugger leaves a recognizable sandbox in `/tmp`.
  *
  * `createIfMissing` mirrors the migration's own `createIfMissing` flag (e.g.
  * migration 005). When true, the "missing on disk" case writes sample → data
@@ -56,7 +54,6 @@ export function runPromptMigrationTests({
   ACCEPTED_OLD_MD5,
   NEW_SHIPPED_MD5,
   prefix,
-  subdir = 'stages',
   createIfMissing = false,
 }) {
   let rootDir;
@@ -64,12 +61,12 @@ export function runPromptMigrationTests({
 
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), prefix));
-    stagesDir = join(rootDir, 'data', 'prompts', subdir);
-    const sampleDir = join(rootDir, 'data.reference', 'prompts', subdir);
+    stagesDir = join(rootDir, 'data', 'prompts', 'stages');
+    const sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     mkdirSync(stagesDir, { recursive: true });
     mkdirSync(sampleDir, { recursive: true });
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
-      writeFileSync(join(sampleDir, filename), sampleBody(filename, subdir));
+      writeFileSync(join(sampleDir, filename), sampleBody(filename));
     }
   });
 
@@ -87,7 +84,7 @@ export function runPromptMigrationTests({
         const dataPath = join(stagesDir, filename);
         if (createIfMissing) {
           expect(existsSync(dataPath)).toBe(true);
-          expect(readFileSync(dataPath, 'utf-8')).toBe(sampleBody(filename, subdir));
+          expect(readFileSync(dataPath, 'utf-8')).toBe(sampleBody(filename));
         } else {
           expect(existsSync(dataPath)).toBe(false);
         }
@@ -99,7 +96,7 @@ export function runPromptMigrationTests({
   // leaves NEW_SHIPPED_MD5 behind (#16090), so this also covers drift.
   it('skips files already at the live reference body (idempotent re-run)', async () => {
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
-      writeFileSync(join(stagesDir, filename), sampleBody(filename, subdir));
+      writeFileSync(join(stagesDir, filename), sampleBody(filename));
     }
     const result = await applyMigration({ rootDir });
     expect(result).toMatchObject({
@@ -118,10 +115,10 @@ export function runPromptMigrationTests({
     const result = await applyMigration({
       rootDir,
       accepted: { [filename]: [fakeOldHash] },
-      current: { [filename]: md5(sampleBody(filename, subdir)) },
+      current: { [filename]: md5(sampleBody(filename)) },
     });
     expect(result).toMatchObject({ updated: 1, skipped: 0 });
-    expect(readFileSync(join(stagesDir, filename), 'utf-8')).toBe(sampleBody(filename, subdir));
+    expect(readFileSync(join(stagesDir, filename), 'utf-8')).toBe(sampleBody(filename));
   });
 
   it('skips (does not clobber) a customized file whose hash matches neither old nor new', async () => {
