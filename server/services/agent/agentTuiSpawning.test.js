@@ -1435,13 +1435,36 @@ describe('spawnTuiAgent runtime', () => {
       + '  Yes, I trust this folder\n'
       + 'Enter to confirm · Esc to cancel\n',
     ));
+    const writes = () => vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data);
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(1500);
+    await flushMicrotasks();
+    // The arrow goes out alone once the dialog settles; Enter waits for proof it landed.
+    expect(writes()).toEqual(['\x1b[B']);
+
+    // Replay of agent-8a2fe161's transcript: the move paints, then Claude's
+    // selector resets to "No, exit". Enter here would exit claude, so PortOS
+    // re-navigates instead of submitting.
+    await capturedOnData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
+    await capturedOnData(Buffer.from('❯ No, exit\n  Yes, I trust this folder\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+    expect(writes()).toEqual(['\x1b[B', '\x1b[B']);
+
+    await capturedOnData(Buffer.from('  No, exit\n❯ Yes, I trust this folder\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+    expect(writes()).toEqual(['\x1b[B', '\x1b[B', '\r']);
+    expect(pasteCount()).toBe(0);
+
+    // The composer comes up only after trust is accepted → now the paste lands.
+    await capturedOnData(Buffer.from(PASTE_ON));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
-
-    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data))
-      .toContain('\x1b[B\r');
-    expect(pasteCount()).toBe(0);
+    expect(pasteCount()).toBe(1);
   });
 
   // Claude Code v2.1.233's auto-mode offer. The trust gate above paints BEFORE
