@@ -18,6 +18,7 @@ const refused = (reason) => Object.assign(
 // `\unrestrict` line after it, so only the tail is searched.
 const DUMP_COMPLETE = '-- PostgreSQL database dump complete';
 const TAIL_BYTES = 4096;
+const TARGET_PROBE_TIMEOUT_MS = 10_000;
 
 function syncPath(path) {
   if (process.platform === 'win32') return;
@@ -59,20 +60,28 @@ function hasCompletionMarker(path) {
  * prove none survive (assertPredecessorCoordinatorsStopped). Output is kept
  * internal: it can name hosts and paths.
  */
-function runDbScript(action, endpoint, argument, dumpDir, expectedSha256) {
+function runDbScript(action, endpoint, { argument, dumpDir, expectedSha256, signal }) {
   const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? PATHS.installRoot,
-    PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: toBashPath(dumpDir), LC_ALL: 'C',
+    PGPASSWORD: process.env.PGPASSWORD || 'portos', LC_ALL: 'C',
     ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].filter(key => process.env[key]).map(key => [key, process.env[key]])),
+    ...(dumpDir ? { PORTOS_DUMP_DIR: toBashPath(dumpDir) } : {}),
     ...(expectedSha256 ? { PORTOS_IMPORT_SHA256: expectedSha256 } : {}) };
   const args = [toBashPath(join(PATHS.root, 'scripts', 'db.sh')), action, '--endpoint',
-    endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, toBashPath(argument)];
+    endpoint.host, String(endpoint.port), endpoint.user, endpoint.database];
+  if (argument) args.push(toBashPath(argument));
   return new Promise((resolve) => {
-    const child = spawn(resolveBashBinary(), args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root), stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(resolveBashBinary(), args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root),
+      stdio: ['ignore', 'pipe', 'ignore'], ...(signal ? { signal, killSignal: 'SIGKILL' } : {}) });
     let stdout = '';
     child.stdout.on('data', chunk => { if (stdout.length < 65536) stdout += chunk; });
     child.once('error', () => resolve({ code: null, stdout: '' }));
     child.once('close', code => resolve({ code, stdout }));
   });
+}
+
+export async function probeDatabaseTransferTarget(endpoint) {
+  const result = await runDbScript('probe-target', endpoint, { signal: AbortSignal.timeout(TARGET_PROBE_TIMEOUT_MS) });
+  return result.code === 0 && result.stdout.trim() === 't';
 }
 
 async function recordOwnGroup(journal, id, token) {
@@ -85,7 +94,9 @@ async function recordOwnGroup(journal, id, token) {
 async function exportRecoveryDump(journal, id, token, operation) {
   const path = journal.transferDumpPath(id);
   journal.assertCoordinatorWorker(id, token);
-  const result = await runDbScript('export', operation.source, basename(path, '.sql').slice('portos-'.length), dirname(path));
+  const result = await runDbScript('export', operation.source, {
+    argument: basename(path, '.sql').slice('portos-'.length), dumpDir: dirname(path),
+  });
   journal.assertCoordinatorWorker(id, token);
   // A failed or incomplete export is never recorded, so it can never be
   // imported; the next attempt exports again after renewed quiescence.
@@ -152,7 +163,7 @@ export async function runDatabaseTransfer(id, token, options = {}) {
   if (!journal.readTransferImport(id)) {
     const path = await assertRecordedDump(journal, id, dump);
     journal.assertCoordinatorWorker(id, token);
-    const result = await runDbScript('import', operation.target, path, dirname(path), dump.sha256);
+    const result = await runDbScript('import', operation.target, { argument: path, dumpDir: dirname(path), expectedSha256: dump.sha256 });
     journal.assertCoordinatorWorker(id, token);
     if (result.code !== 0) throw refused(`the target import failed and was rolled back (exit ${result.code ?? 'spawn'})`);
     journal.recordTransferImport(id, token, { id, target: operation.target, sha256: dump.sha256 });

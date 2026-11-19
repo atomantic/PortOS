@@ -706,21 +706,33 @@ cmd_setup_native() {
 # precedence over -h's network destination, PGSERVICE can supply another
 # endpoint, and PGOPTIONS can redirect statements (search_path). Only the
 # password crosses; every connection parameter is an explicit argument.
-run_explicit_pg() (
+run_explicit_pg() {
   local binary="$1" host="$PGHOST" port="$PGPORT" user="$PGUSER" database="$PGDATABASE" password="$PGPASSWORD"
   shift
   local name
   for name in $(compgen -e); do
     case "$name" in PG*) unset "$name" ;; esac
   done
-  PGPASSWORD="$password" "$binary" -h "$host" -p "$port" -U "$user" -d "$database" "$@"
-)
+  PGPASSWORD="$password" exec "$binary" -h "$host" -p "$port" -U "$user" -d "$database" "$@"
+}
+
+# Admission uses the same host client and credentials as import. Replacing the
+# probe shell lets the caller's timeout terminate psql itself.
+cmd_probe_target() {
+  [ "${1:-}" = "--endpoint" ] || return 1
+  shift
+  set_explicit_endpoint "$@" || return 1
+  run_explicit_pg psql -X -w -At -v ON_ERROR_STOP=1 -c \
+    "SELECT pg_catalog.current_setting('transaction_read_only') = 'off'
+      AND pg_catalog.has_schema_privilege('public', 'USAGE')
+      AND pg_catalog.has_schema_privilege('public', 'CREATE')"
+}
 
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
 run_psql() {
   if [ "$EXPLICIT_ENDPOINT" = true ]; then
     # Never fall back to container-local psql: that is a different endpoint.
-    run_explicit_pg psql "$@"
+    (run_explicit_pg psql "$@")
     return $?
   fi
   if command -v psql >/dev/null 2>&1; then
@@ -736,7 +748,7 @@ run_psql() {
 # Run pg_dump, preferring Docker exec in Docker mode to avoid version mismatch
 run_pg_dump() {
   if [ "$EXPLICIT_ENDPOINT" = true ]; then
-    run_explicit_pg pg_dump "$@"
+    (run_explicit_pg pg_dump "$@")
     return $?
   fi
   if uses_local_docker_endpoint && docker_running; then
@@ -892,6 +904,7 @@ case "${1:-help}" in
   use-native)   cmd_migrate ;;
   migrate)      cmd_migrate ;;
   export|import) action="$1"; shift; cmd_transfer "$action" "$@" ;;
+  probe-target) shift; cmd_probe_target "$@" ;;
   logs)         cmd_logs ;;
   help|--help|-h) cmd_help ;;
   *)            err "Unknown command: $1"; cmd_help; exit 1 ;;

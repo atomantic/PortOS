@@ -23,6 +23,15 @@ native setup provisions without selecting a backend. Do not substitute Sync
 followed by Switch — that copies data without stopping writers or verifying
 the restart, and can strand writes accepted after the snapshot.
 
+Start and provision the destination PostgreSQL service before requesting a
+cutover. Preflight and cutover acceptance use host `psql` with PortOS's
+configured credentials to check that the destination accepts a connection to
+the configured database. The read-only check also verifies that the session
+allows writes and the role can use and create objects in the `public` schema.
+If this check fails, correct the destination prerequisites and retry while the
+source stays online. If the destination fails after acceptance, repair it and
+resume the same recorded operation.
+
 Expect brief downtime while PortOS restarts. The Database tab shows the
 operation's stage (preparing, exporting/importing, restarting and verifying),
 never reports success from an accepted request, a reconnect, or a saved-mode

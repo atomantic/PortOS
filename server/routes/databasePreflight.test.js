@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
@@ -55,9 +56,21 @@ app.use('/api/database', databaseRoutes);
 app.use((err, _req, res, _next) => res.status(err.status ?? 500).json({ error: err.message, code: err.code }));
 const preflight = (body = { source: 'native', target: 'docker' }) => request(app).post('/api/database/maintenance/preflight').send(body);
 const accept = (body = { source: 'native', target: 'docker' }) => request(app).post('/api/database/maintenance/cutover').send(body);
+const simulateProbe = effect => {
+  spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    queueMicrotask(() => effect(child));
+    return child;
+  });
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  simulateProbe(child => {
+    child.stdout.emit('data', 't\n');
+    child.emit('close', 0);
+  });
   snapshotProcesses.mockReset().mockResolvedValue([]);
   for (const [key, value] of Object.entries({ PGHOST: 'localhost', PGPORT: '5432', PORTOS_NATIVE_PGPORT: '5432', PGPORT_DOCKER: '5561', PGUSER: 'example_role', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' })) vi.stubEnv(key, value);
   Object.assign(POOL_CONFIG, { host: 'localhost', port: 5432, user: 'example_role', database: 'example_test' });
@@ -73,7 +86,7 @@ afterEach(() => {
   rmSync(join(PATHS.data, 'database-maintenance-cancelled'), { recursive: true, force: true });
   rmSync(join(PATHS.data, 'database-writers'), { recursive: true, force: true });
   expect(execFile).not.toHaveBeenCalled();
-  expect(spawn).not.toHaveBeenCalled();
+  expect(spawn.mock.calls.every(([, args]) => args[1] === 'probe-target')).toBe(true);
   expect(query).not.toHaveBeenCalled();
 });
 afterAll(cleanupTempDataRoots);
@@ -87,8 +100,46 @@ describe('database maintenance preflight HTTP contract', () => {
     expect(result.status).toBe(200);
     expect(result.headers['cache-control']).toBe('no-store');
     expect(result.body).toEqual({ source, target, advisory: true, accepted: false });
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
+      expect.stringMatching(/scripts[/\\]db\.sh$/), 'probe-target', '--endpoint', 'localhost',
+      target === 'docker' ? '5561' : '5432', 'example_role', 'example_test',
+    ], expect.objectContaining({ env: expect.objectContaining({ PGPASSWORD: 'example-only' }), signal: expect.any(AbortSignal) }));
     expect(createDatabaseMaintenanceJournal(PATHS.data).read()).toBeNull();
     expect(readFileSync(join(PATHS.installRoot, '.env'), 'utf8')).toBe(`PGMODE=${source}\n`);
+  });
+
+  it.each([
+    ['stopped', child => child.emit('close', 2)],
+    ['unprovisioned', child => { child.stdout.emit('data', 'f\n'); child.emit('close', 0); }],
+    ['authentication rejected', child => {
+      child.stdout.emit('data', 'example private credentials');
+      child.emit('close', 2);
+    }],
+    ['probe failed or timed out', child => child.emit('error', new Error('example private connection detail'))],
+  ])('refuses a %s target without fencing the source', async (_reason, effect) => {
+    simulateProbe(effect);
+    for (const call of [preflight, accept]) {
+      const result = await call();
+      expect(result.status).toBe(409);
+      expect(result.body).toMatchObject({ code: 'DATABASE_PREFLIGHT_TARGET_UNREADY', error: expect.stringContaining('Start and provision the Docker PostgreSQL destination') });
+      expect(JSON.stringify(result.body)).not.toContain('example');
+      expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+      expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+    }
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses acceptance if the saved destination changes while the probe runs', async () => {
+    simulateProbe(child => {
+      vi.stubEnv('PGPORT_DOCKER', '6000');
+      child.stdout.emit('data', 't\n');
+      child.emit('close', 0);
+    });
+    const result = await accept();
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    expect(createDatabaseMaintenanceJournal().read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 
   it.each(['pending', 'ambiguous', 'orphaned'])('refuses a %s writer before advice or acceptance closes admission', async verdict => {
