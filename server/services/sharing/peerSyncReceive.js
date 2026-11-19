@@ -14,6 +14,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
+  RECORD_SCHEMA_MIN_SENDER_VERSIONS,
   compareSchemaVersions,
   catalogEnvelopeHasLiveRows,
   scopeVersionDiff,
@@ -172,17 +173,13 @@ async function bindLinkedTrack({ record, linkedTrack, sourceInstanceId, onLookup
 
 /**
  * SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer storage
- * layout can't corrupt local state. Outside catalog, legacy senders without
- * `portosMeta` pass through (absent versions compare as zero, and their records
- * use the existing sanitizer backfill chain). When the sender
- * is AHEAD on any category, throws a structured error the route layer maps
- * to HTTP 409 + body so the sender can persist the gap on the subscription
- * and surface it in the UI. Returns `{ senderSchemaVersions }` on success —
- * the caller threads it into every merge call.
+ * layout can't corrupt local state. Older senders (including those without
+ * `portosMeta`) use the sanitizer backfill chain where the live record's
+ * category has no minimum sender version.
  *
- * Live catalog rows also reject sender-behind (including absent versions):
- * their whole-row LWW payload can erase fields an older sanitizer dropped.
- * Other categories retain their existing sanitizer backfill behavior.
+ * For an incompatible sender, throws a structured error the route maps to
+ * HTTP 409 so the sender can surface the gap. Returns
+ * `{ senderSchemaVersions }` on success for use by the merge functions.
  *
  * Extracted out of `applyIncomingPush`'s own body (#6843) — a self-contained
  * validate-or-throw step with one clear output, and one of the two chunks
@@ -254,8 +251,9 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
   }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
-  const catalogBehind = versionDiff.behind.some((gap) => gap.category === 'catalog');
-  if (versionDiff.ahead.length > 0 || catalogBehind) {
+  const senderTooOld = versionDiff.behind.some(({ category, senderV }) =>
+    senderV < (RECORD_SCHEMA_MIN_SENDER_VERSIONS[category] ?? senderV));
+  if (versionDiff.ahead.length > 0 || senderTooOld) {
     console.log(
       `⏸️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
     );
