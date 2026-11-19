@@ -19,7 +19,7 @@ import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfi
 import { resolveInputImages } from './inputImages.js';
 import { reviewedReferencePreview } from './reviewedReference.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { prepareGenerateParams, quickEditCompositionDigest, previewUploadLabel, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
+import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageModel, selectLocalImageModelFromSettings } from './prepareParams.js';
 import { codexSentPrompt } from './codex.js';
 import { grokSentPrompt } from './grok.js';
 import { agySentPrompt } from './agy.js';

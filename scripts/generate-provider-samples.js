@@ -55,7 +55,7 @@
  * Usage:  node scripts/generate-provider-samples.js
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';

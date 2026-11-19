@@ -3,8 +3,6 @@ import {
   computeSelfEvalSummary,
   SELF_EVAL_MAX_SUPPRESSED_LISTED,
 } from './outcomes.js';
-import {
-} from './constants.js';
 
 describe('computeSelfEvalSummary (#2700)', () => {
   const liMetrics = (over = {}) => ({

@@ -22,7 +22,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { extractJSONArray, safeJSONParse, tryReadFile, tryReadFileStrict, readFileTail, readJSONFileStrict, readJSONFile, safeJSONLParse, readJSONLFile, appendJSONLine, readJSONLines, writeJSONLines } from './jsonIo.js';
+import { safeJSONParse, tryReadFile, tryReadFileStrict, readFileTail, readJSONFileStrict, readJSONFile, safeJSONLParse, readJSONLFile, appendJSONLine, readJSONLines, writeJSONLines } from './jsonIo.js';
 import { withUnreadableFile, loadRealFsPromises } from './fileUtils.testFixtures.js';
 
 beforeAll(loadRealFsPromises);

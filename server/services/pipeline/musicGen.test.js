@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { tmpdir, platform as osPlatform, arch as osArch } from 'os';
+import { tmpdir, } from 'os';
 import { join } from 'path';
 import { rm, readdir } from 'fs/promises';
 import { writeFileSync, mkdtempSync } from 'fs';

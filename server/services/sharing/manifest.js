@@ -20,7 +20,7 @@ import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
-import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
+import { SHARING_SCHEMA_VERSION, } from './version.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { isStr } from '../../lib/textUtils.js';

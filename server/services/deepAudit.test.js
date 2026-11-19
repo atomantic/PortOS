@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';

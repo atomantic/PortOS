@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 

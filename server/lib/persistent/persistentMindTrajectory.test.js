@@ -10,7 +10,6 @@ import {
   buildPersistentMindCallReceipt,
   normalizePersistentMindCallUsage,
   publicPersistentMindCallReceipt,
-  publicPersistentMindTurnExecutions,
 } from './persistentMindTrajectory.js';
 
 const event = ({

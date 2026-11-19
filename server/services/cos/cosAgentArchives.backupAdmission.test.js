@@ -2,7 +2,6 @@
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../../lib/releaseSynchronization.js';
 // Fail-fast cancellation does not stop an async body. Join its remaining writes
 // before either this fixture or the admission setup removes its directories.

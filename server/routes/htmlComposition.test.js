@@ -3,8 +3,6 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
-import { resolveMusicTrackPath } from '../services/pipeline/audioMux.js';
-import { getBeatGrid } from '../lib/beatGrid.js';
 import router from './htmlComposition.js';
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { execFile } from '../lib/childProcess.js';

@@ -23,7 +23,7 @@ import { atomicWrite, PATHS, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
 import {
-  WORKING_SET_COMPLETED_WINDOW_MS, WORKING_SET_KEEP_COMPLETED, completionStamp, rowColumns, selectWorkingSet,
+  WORKING_SET_COMPLETED_WINDOW_MS, WORKING_SET_KEEP_COMPLETED, rowColumns, selectWorkingSet,
 } from '../../lib/cos/cosTaskRows.js';
 import { toPgJson } from '../../lib/pgJson.js';
 

@@ -36,7 +36,7 @@ import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js'
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
-import { forgeDispatchLabels, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
+import { forgeDispatchLabels, } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';

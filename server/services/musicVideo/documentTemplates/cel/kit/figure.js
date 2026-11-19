@@ -1,6 +1,6 @@
 // An original example figure: ochre pinafore, warm skin and shoulder-length moss hair.
 // Builds solids for a solved skeleton; customize the palette and profiles for your own cast.
-import { add, apply, at, clamp, col, dot, frame, len, lerp, lerp3, norm, scale, sub, smooth, TAU } from './core.js';
+import { add, apply, at, clamp, col, dot, frame, len, lerp, lerp3, norm, scale, sub, TAU } from './core.js';
 import { ring, loft, tube, chain, inkLine } from './solid.js';
 import { headSolids, drawFace, hairPoint, hairBottom, HEAD_SCALE } from './head.js';
 

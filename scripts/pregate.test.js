@@ -5,7 +5,7 @@ import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync, utimesSync } from 'fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
 import { delimiter, dirname, join } from 'path';

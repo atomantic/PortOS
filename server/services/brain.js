@@ -37,7 +37,6 @@ import {
   extractedAdminSchema,
   extractedMemorySchema
 } from '../lib/brainValidation.js';
-import { validate } from '../lib/validateRequest.js';
 
 export const TOOL_FREE_REQUIRED = 'TOOL_FREE_REQUIRED';
 

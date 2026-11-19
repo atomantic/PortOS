@@ -6,7 +6,6 @@ import {
 } from './config.js';
 import {
   PORTOS_ONLY_SCOPES,
-  LI_JOB_ID,
 } from './constants.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {

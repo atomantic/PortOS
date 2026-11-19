@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
 
 // vi.hoisted lets us share this constant with the hoisted vi.mock factory.

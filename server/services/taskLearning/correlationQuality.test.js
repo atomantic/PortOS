@@ -4,7 +4,6 @@ import {
   computeCorrelationQuality,
   isCorrelationProven,
   CORRELATION_QUALITY_THRESHOLD,
-  MIN_CORRELATION_SAMPLES
 } from './correlationQuality.js';
 
 // Pure correlation-quality core for issue #2344. No I/O — exercised directly

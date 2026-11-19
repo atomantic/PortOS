@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CHANGE_TOKEN_DOMAINS,
   bumpChangeToken,
   getChangeToken,
 } from './changeToken.js';

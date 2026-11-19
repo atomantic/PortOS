@@ -1,13 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isScopeAllowed,
-} from './config.js';
-import {
   buildPrompt,
 } from './prompt.js';
 import {
-  renderCosMetricsSource,
-  gatherSources,
   plannedWorkUnavailable,
 } from './sources.js';
 import {

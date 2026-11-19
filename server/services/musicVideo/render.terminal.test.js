@@ -92,9 +92,7 @@ vi.mock('./shotSegments.js', () => ({
   sweepPartialSegments: vi.fn(async () => {}),
 }));
 
-import { buildTypographyDocument } from './composition.js';
 import { renderMusicVideo, getRenderJobStatus, getActiveRenderJobId, cancelRender } from './render.js';
-import { removeCompositionScratch } from './compositionRender.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';

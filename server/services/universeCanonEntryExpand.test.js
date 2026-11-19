@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyCanonEntryExpansion, CANON_ENTRY_EXPAND_KINDS } from './universeCanonEntryExpand.js';
+import { applyCanonEntryExpansion, } from './universeCanonEntryExpand.js';
 
 const place = (overrides = {}) => ({ id: 'p1', name: 'The Foundry', ...overrides });
 const object = (overrides = {}) => ({ id: 'o1', name: 'The Ledger', ...overrides });

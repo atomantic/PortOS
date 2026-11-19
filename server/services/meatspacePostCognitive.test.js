@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  COGNITIVE_DRILL_TYPES,
   STROOP_COLORS,
   ROTATION_SHAPES,
   generateNBack,

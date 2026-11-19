@@ -69,7 +69,6 @@ import * as models from '../services/imageTo3d/models.js';
 import { spawn } from '../lib/childProcess.js';
 import { isTrellis2CudaInstalled } from '../services/imageTo3d/trellis2Cuda.js';
 import { isPixal3dCudaInstalled } from '../services/imageTo3d/pixal3dCuda.js';
-import { hfChildEnv } from '../services/hfToken.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {

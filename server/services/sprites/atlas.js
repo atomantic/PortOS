@@ -46,7 +46,6 @@ import { keyChannelSplit } from './chromaKey.js';
 import {
   WALK_PHASES, WALK_FPS,
   pyRound, pyRoundTo, median, premultipliedResize, decodeTransparentSpriteSource,
-  despillKeyFrame,
   alphaBbox, robustBottomRow, rootX, rootBandForManifest, ROOT_BAND_STANCE, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';

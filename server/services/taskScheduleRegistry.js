@@ -7,7 +7,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  */
 
 import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cos/cosValidation.js';
-import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
+import { isAuditTaskType, } from '../lib/auditCatalog.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {

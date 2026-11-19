@@ -23,7 +23,7 @@
  */
 
 import * as memoryBackend from './memoryBackend.js';
-import { loadBridgeMap, bridgeKey } from './brainMemoryBridge.js';
+import { loadBridgeMap, } from './brainMemoryBridge.js';
 import { getBrainProjections } from './brainSearchIndex.js';
 import { getGoals } from './identity.js';
 

@@ -25,7 +25,6 @@ vi.mock('../services/pm2.js', () => ({
   spawnPm2: vi.fn(),
 }));
 
-import * as appsService from '../services/apps.js';
 import * as appProcessStatus from '../services/appProcessStatus.js';
 import * as pm2Service from '../services/pm2.js';
 import logsRoutes from './logs.js';

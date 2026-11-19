@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockJsonResponse } from '../lib/testHelper.js';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';

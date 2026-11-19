@@ -29,7 +29,7 @@ import {
   orderRegenCandidates, modelSupportsRegen, modelUsesFluxVenv,
   resolveRegenBackend, buildRegenParams, DEFAULT_REGEN_STRENGTH,
   REGEN_LIGHT_STRENGTH_DEFAULT, REGEN_SQUEEZE_FACTOR,
-  clampRegenDimensions, resolveRegenStrengthDefault, computePixelDelta,
+  clampRegenDimensions, resolveRegenStrengthDefault, 
 } from './regen.js';
 
 const FLUX2 = { id: 'flux2-klein-9b', runner: 'flux2', cfgDisabled: true };

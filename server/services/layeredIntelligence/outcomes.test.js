@@ -13,9 +13,7 @@ import {
   computeLiExecutionHealth,
 } from './outcomes.js';
 import {
-  LI_DEGRADED_MIN_SAMPLE,
   LI_DELIVERY_MIN_SAMPLE,
-  PROPOSAL_OUTCOMES,
   LOW_MERGE_RATE_THRESHOLD,
   LOW_MERGE_RATE_MIN_SAMPLE,
 } from './constants.js';

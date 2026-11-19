@@ -40,7 +40,6 @@ import {
   DOCKER_CONTAINMENT_LIVE_ENTRIES,
   MACOS_NATIVE_TESTS,
   WINDOWS_CONTRACT_TESTS,
-  WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
 
 // Capture the planner's stderr so a spawn adds nothing to the run's output; a

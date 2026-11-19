@@ -9,7 +9,6 @@ import {
   deriveTargets,
   loadTargets,
   markActionable,
-  renderSummary,
   runCli,
   validateSbom,
   validateScan,

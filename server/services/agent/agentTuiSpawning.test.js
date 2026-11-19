@@ -244,7 +244,6 @@ import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS 
 import * as shellService from '../shell.js';
 import * as agentLifecycle from './agentFinalization.js';
 import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
-import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as gitService from '../git.js';
 import { probePrForBranch } from '../prProbe.js';

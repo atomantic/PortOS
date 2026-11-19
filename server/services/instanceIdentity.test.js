@@ -36,7 +36,6 @@ import {
   ensureSelf,
   getSelf,
   getInstanceId,
-  ensureInstanceId,
   updateSelf, withData, registerInstanceExecutionAuthorityGuard,
 } from './instanceIdentity.js';
 

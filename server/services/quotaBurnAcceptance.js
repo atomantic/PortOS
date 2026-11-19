@@ -51,7 +51,6 @@ import { recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import {
   getQuotaBurnReservations,
   markQuotaBurnReservationCharged,
-  quotaBurnReservationKey,
   releaseQuotaBurnStep,
   reserveQuotaBurnStep,
   settleQuotaBurnRun,

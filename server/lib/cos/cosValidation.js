@@ -40,7 +40,7 @@ import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
-import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
+import { TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
 import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from '../goalFidelityFollowUp.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
@@ -48,7 +48,6 @@ import {
   LOCAL_LLM_REVIEWERS,
   MAX_REVIEWER_MAX_ROUNDS,
   MAX_REVIEWER_MODEL_LENGTH,
-  MODEL_CAPABLE_CLI_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
   REVIEWER_ALIASES,
   isReviewer,
@@ -62,7 +61,6 @@ import {
   normalizeReviewerMaxRounds,
   normalizeReviewerModel,
   normalizeReviewerModels,
-  resolveReviewUsernames,
 } from '../reviewerConfig.js';
 import { nullishString, nonEmptyString } from '../sharedSchemas.js';
 

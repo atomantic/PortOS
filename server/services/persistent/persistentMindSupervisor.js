@@ -19,7 +19,6 @@ import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { isPersistentMindCallDenial } from '../../lib/persistent/persistentMindTrajectory.js';
 import {
   PERSISTENT_MIND_LIMITS,
-  createDefaultPersistentMindState,
   holdPersistentMindWake,
   isPersistentMindAttachmentId,
   normalizePersistentMindMessageImage,
@@ -37,8 +36,6 @@ import { isDaemonRunning, loadState, saveState, withStateLock } from '../cos/cos
 import {
   attachmentFailure,
   cleanupPersistentMindAttachments,
-  createPersistentMindAttachment,
-  deletePersistentMindAttachment,
   removePendingAttachmentMarker,
   resolveMessageAttachments,
 } from './persistentMindAttachments.js';

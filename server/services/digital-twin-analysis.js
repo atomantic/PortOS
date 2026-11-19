@@ -4,7 +4,7 @@ import { join } from 'path';
 import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
-import { DIGITAL_TWIN_DIR, callProviderAI, now } from './digital-twin-helpers.js';
+import { DIGITAL_TWIN_DIR, callProviderAI, } from './digital-twin-helpers.js';
 import { loadMeta, mutateMeta, digitalTwinEvents } from './digital-twin-meta.js';
 import { getDocuments } from './digital-twin-documents.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';

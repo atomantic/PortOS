@@ -43,7 +43,6 @@ import { buildSecurityAuditRuntimeSection } from '../promptSections/securityAudi
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { COMPLETION_MODES, resolveCompletionMode } from '../../lib/agent/agentCompletionMode.js';
 import {
-  DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
   buildExternalRepositoryCompletionSection,
   buildAuditOutputCompletionSection,

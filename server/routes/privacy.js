@@ -94,7 +94,7 @@ import {
   getPrivacyRecheckStatus,
   restartPrivacyRecheckScheduler,
 } from '../services/privacyRecheckScheduler.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { updateSettingsWith } from '../services/settings.js';
 import {
   declareChange,
   listChangeEvents,

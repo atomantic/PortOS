@@ -16,7 +16,6 @@ import { renderOptionArgs } from './renderOptions.js';
 import {
   selectTrellis2DecimationTarget,
   trellis2MeshQualityArgs,
-  trellis2FillHolesStep,
   TRELLIS2_NORMAL_SOURCE_FACE_CAP,
 } from './trellis2MeshQuality.js';
 

@@ -44,7 +44,6 @@ import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
 import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
 import * as morseService from '../services/meatspacePostMorse.js';
-import { parsePagination } from '../lib/queryValidation.js';
 // meatspacePostReminder.js is not imported here — updatePostConfig() itself
 // reschedules the daily reminder (via meatspacePost.js's postConfigEvents) so
 // any current or future caller gets that behavior for free (#2015). Loaded

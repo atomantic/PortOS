@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/fileUtils.js', async importOriginal =>
@@ -29,7 +28,7 @@ vi.mock('../calendarAccounts.js', () => ({
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { DEFAULT_GOALS, GOALS_FILE } from './store.js';
-import { createGoal, getGoalsTree, linkCalendarToGoal, updateGoalProgress } from './goals.js';
+import { createGoal, getGoalsTree, updateGoalProgress } from './goals.js';
 
 beforeEach(async () => {
   await mkdir(PATHS.digitalTwin, { recursive: true });

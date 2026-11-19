@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockNoPeerSync, mockNoPeers } from '../lib/mockPathsDataRoot.js';

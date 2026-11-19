@@ -52,7 +52,6 @@ import {
   deleteLoop,
   triggerLoop,
   updateLoop,
-  getLoops,
   getAvailableProviders,
   loopEvents
 } from './loops.js';

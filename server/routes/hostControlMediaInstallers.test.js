@@ -102,7 +102,6 @@ import superColliderRoutes from './superCollider.js';
 import { spawnSetupScript } from '../lib/setupScriptRunner.js';
 import { isEngineHealthy, isEnginePlatformSupported } from '../services/pipeline/musicGen.js';
 import { isByovRuntimeInstalled, isByovRuntimeCurrent, isByovRuntimeReady,
-  invalidateByovReadyCache, invalidateByovLoraCapabilityCache, invalidateRuntimeFingerprintCache,
 } from '../services/videoGen/runtimes.js';
 import { getSuperColliderStatus, setupSuperColliderRuntime } from '../services/superColliderRuntime.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';

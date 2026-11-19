@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterAll, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mockJsonResponse } from '../lib/testHelper.js'
 

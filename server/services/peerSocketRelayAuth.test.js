@@ -17,7 +17,6 @@ import { io as ioClient } from 'socket.io-client';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
 const { tempRoot, makeProxy, cleanup: cleanupDataRoot } = mockPathsDataRoot({ prefix: 'portos-peer-relay-auth-' });

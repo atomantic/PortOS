@@ -5,7 +5,7 @@
 
 import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antigravityCatalogListsModel, filterSelectableModels } from './provider/providerModels.js';
 import { PORTS } from './ports.js';
-import { isLocalInstanceHost, localEndpointPort } from './localEndpoint.js';
+import { localEndpointPort } from './localEndpoint.js';
 
 /**
  * Which PortOS page manages each local runtime (source for `LOCAL_RUNTIMES[*].manageUrl`); in this leaf
