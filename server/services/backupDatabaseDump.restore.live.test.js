@@ -21,9 +21,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from '../lib/databaseMaintenanceSchema.js';
 import { inspectDatabaseDump, prepareDatabaseReplay, SNAPSHOT_PG_DUMP_FLAGS } from './backupDatabaseDump.js';
+import { getDatabaseResetPlan } from './backupDatabaseReset.js';
 import { createScratchDb, dropScratchDb, resolveAdminConnection } from '../../scripts/rehearsal-scratch-db.js';
 import { PINNED_DB_IMAGE } from '../../scripts/lib/dbImage.js';
 
@@ -155,3 +157,55 @@ describe.skipIf(!LIVE)('restore of a real pg_dump into a scratch database', () =
     });
   });
 });
+
+it.skipIf(!LIVE)('cutover retires destination-only usage tables atomically and permits snapshot restore', async ({ onTestFinished }) => {
+  const connection = resolveAdminConnection();
+  const directory = await mkdtemp(join(tmpdir(), 'portos-cutover-live-'));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const scratchDatabase = async () => {
+    const { database } = await createScratchDb(connection, { empty: true });
+    onTestFinished(() => dropScratchDb(database, connection));
+    return database;
+  };
+  const source = await scratchDatabase();
+  const target = await scratchDatabase();
+  const env = { ...process.env, PGPASSWORD: connection.password, PORTOS_DUMP_DIR: directory };
+  const script = fileURLToPath(new URL('../../scripts/db.sh', import.meta.url));
+  const transfer = (action, db, ...args) => run('bash', [script, action, '--endpoint',
+    connection.host, String(connection.port), connection.user, db, ...args], { env }).trim();
+  const sql = (db, statement) => run('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1',
+    '-h', connection.host, '-p', String(connection.port), '-U', connection.user, '-d', db],
+  { env, input: statement }).trim();
+  const migration = '030-drop-retired-native-usage-tables.sql';
+  const retired = 'CREATE TABLE public.native_usage_sources (id int); CREATE TABLE public.native_usage_snapshots (id int);';
+  const { preflight } = await getDatabaseResetPlan();
+  const records = db => sql(db, 'SELECT content FROM public.memories; SELECT id FROM public.schema_migrations');
+  for (const db of [source, target]) {
+    sql(db, 'CREATE TABLE public.memories (content text); CREATE TABLE public.schema_migrations (id text)');
+  }
+  sql(source, `INSERT INTO public.memories VALUES ('source'); INSERT INTO public.schema_migrations VALUES ('${migration}')`);
+  sql(target, `INSERT INTO public.memories VALUES ('target'); ${retired}
+    CREATE SCHEMA external; CREATE VIEW external.usage AS SELECT * FROM public.native_usage_snapshots;
+    CREATE TABLE public.unrecognized (id int); INSERT INTO public.unrecognized VALUES (42)`);
+  const dump = transfer('export', source, 'cutover');
+  const cutover = () => transfer('import', target, '--cutover', dump);
+  expect(cutover).toThrow(/depend/i);
+  expect(records(target)).toBe('target');
+  expect(records(source)).toBe(`source\n${migration}`);
+  sql(target, 'DROP VIEW external.usage');
+  cutover();
+  cutover();
+  expect(records(target)).toBe(`source\n${migration}`);
+  expect(sql(target, 'SELECT id FROM public.unrecognized')).toBe('42');
+  sql(target, 'DROP TABLE public.unrecognized');
+  sql(target, preflight);
+
+  // A completed older cutover already has 030 in its ledger. Repair only the
+  // retired tables, preserving everything written since the transfer.
+  sql(target, `${retired} UPDATE public.memories SET content = 'after cutover'`);
+  expect(() => sql(target, preflight)).toThrow(/native_usage_/);
+  const repair = fileURLToPath(new URL(`../scripts/db-migrations/${migration}`, import.meta.url));
+  transfer('import', target, repair);
+  expect(records(target)).toBe(`after cutover\n${migration}`);
+  sql(target, preflight);
+}, 60000);

@@ -155,6 +155,12 @@ cmd_transfer() {
     set_explicit_endpoint "$2" "$3" "$4" "$5" || return 1
     shift 5
   fi
+  if [ "$action" = import ] && [ "$EXPLICIT_ENDPOINT" = true ] && [ "$#" -eq 2 ] && [ "$1" = --cutover ]; then
+    # pg_dump --clean only drops source objects. Replay the fixed retirement
+    # even if the imported ledger already records it, in the same transaction.
+    cmd_import "$2" -X -f - -f "$ROOT_DIR/server/scripts/db-migrations/030-drop-retired-native-usage-tables.sql"
+    return
+  fi
   if [ "$#" -gt 1 ] || { [ "$action" = "import" ] && [ "$#" -ne 1 ]; }; then
     err "Expected one import file or an optional export label" >&2
     return 1
@@ -808,6 +814,7 @@ cmd_export() {
 # Import SQL dump into database
 cmd_import() (
   local dumpfile="$1"
+  shift
 
   if [ ! -f "$dumpfile" ]; then
     err "Dump file not found: $dumpfile"
@@ -824,7 +831,7 @@ cmd_import() (
   if ! replay="$(node "$ROOT_DIR/scripts/prepare-database-replay.mjs" "$dumpfile" "$stage")"; then
     return 1
   fi
-  run_psql -v ON_ERROR_STOP=1 --single-transaction < "$replay"
+  run_psql -v ON_ERROR_STOP=1 --single-transaction "$@" < "$replay" || return $?
 
   log "Import complete"
 )

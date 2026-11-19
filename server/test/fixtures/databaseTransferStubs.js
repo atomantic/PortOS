@@ -18,7 +18,11 @@
 // the disposable root is removed.
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isProcessAlive } from '../processAlive.js';
+
+export const CUTOVER_PSQL_ARGS = '-v ON_ERROR_STOP=1 --single-transaction -X -f - -f '
+  + fileURLToPath(new URL('../../scripts/db-migrations/030-drop-retired-native-usage-tables.sql', import.meta.url));
 
 export const STUB_DUMP_BODY = 'CREATE TABLE example_record (id int);\n';
 export const STUB_DUMP_COMPLETE = `${STUB_DUMP_BODY}--\n-- PostgreSQL database dump complete\n--\n\n`;
