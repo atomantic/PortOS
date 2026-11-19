@@ -12,6 +12,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { processAncestors, probeTestPid, readTestProcesses, testProcessRoot, testProcessSettlement } from './testOwnedProcesses.js';
 import { processAttribution, processIdentity } from './testProcessAttribution.js';
 import { killWithEscalation } from '../../server/lib/killWithEscalation.js';
@@ -160,8 +161,10 @@ function rootIsOrphaned(root, probe, now) {
 // Only fixed categories leave the private process snapshot; never argv or env.
 function processKind({ args = [] }) {
   const executable = basename(args[0] ?? '').toLowerCase();
+  if (executable === 'vitest-watchdog') return 'vitest-watchdog';
   if (executable === 'esbuild') return 'esbuild';
   if (/^(node|nodejs)(\.exe)?$/.test(executable)) {
+    if (/[/\\]vitest[/\\]dist[/\\]workers[/\\]watchdog\.js$/.test(args[1] ?? '')) return 'vitest-watchdog';
     if (args.some(arg => /[/\\]tinypool[/\\]/.test(arg))) return 'tinypool';
     if (args.some(arg => /[/\\]vitest[/\\]/.test(arg))) return 'vitest';
     return 'node';
@@ -182,7 +185,7 @@ function ownedSnapshot(parent, prefix, read, onInspection = () => {}) {
   const owned = records.flatMap(record => {
     if (record.terminal || !Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
     const root = testProcessRoot(record, parent, prefix);
-    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, start: record.start, root, kind: processKind(record), parent: ancestors.has(record.ppid) ? 'runner' : 'descendant', identity: processIdentity(record) }] : [];
+    return root && !ancestors.has(record.pid) ? [{ pid: record.pid, ppid: record.ppid, start: record.start, root, kind: processKind(record), parent: ancestors.has(record.ppid) ? 'runner' : 'descendant', identity: processIdentity(record) }] : [];
   });
   return { ancestors, owned, records };
 }
@@ -203,6 +206,25 @@ export function terminatePid(record, { valid, kill = (pid, signal) => process.ki
   };
   return killWithEscalation({ exitCode: null, signalCode: null, kill: signal },
     { label: 'Orphaned test process', stillRunning: valid, delayMs: 2000 });
+}
+
+// Vitest disconnects its fork watchdog at pool close without awaiting exit.
+// Yield the runner's event loop so pending IPC writes can finish. A watchdog
+// still present after the grace period goes through ordinary containment.
+export async function waitForVitestWatchdog(root, {
+  read = readTestProcesses, probePid = probeTestPid, now = () => performance.now(), wait = delay, graceMs = 500,
+} = {}) {
+  const snapshot = ownedSnapshot(dirname(root), basename(root), read);
+  const watchdogs = snapshot?.owned.filter(record =>
+    record.root === root && record.kind === 'vitest-watchdog' && record.ppid === process.pid);
+  if (!watchdogs?.length) return;
+  const pids = watchdogs.map(record => record.pid);
+  const deadline = now() + graceMs;
+  while (now() < deadline) {
+    const records = read(pids);
+    if (watchdogs.every(record => testProcessSettlement(record, records, probePid) === 'terminated')) return;
+    await wait(Math.min(25, Math.max(0, deadline - now())));
+  }
 }
 
 /** Only individually proven processes are signalled; an unowned group member is never collateral cleanup.

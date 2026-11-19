@@ -80,7 +80,8 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
             sweepStaleRunRoots(${JSON.stringify(host)}, {
               terminate(record, options) {
                 const current = readTestProcesses([record.pid]);
-                observed.signals.push({ targetIsWorker: record.pid === mark.worker, identityMatches: current?.some(item => item.pid === record.pid && item.start === record.start), valid: options.valid() });
+                const target = record.pid === mark.worker ? 'worker' : record.kind;
+                observed.signals.push({ target, sameRunner: record.ppid === mark.runner, identityMatches: current?.some(item => item.pid === record.pid && item.start === record.start), valid: options.valid() });
                 return terminatePid(record, options);
               },
             });
@@ -94,7 +95,9 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
           expect(secondResult.status).toBe(0);
           const observed = JSON.parse(readFileSync(observations, 'utf8'));
           expect(observed).toMatchObject({ ownerMatchesRunner: true, ownerAlive: !legacyEstimate, runnerAlive: true, rootBefore: true, rootAfterSweep: true });
-          expect(observed.signals).toEqual(legacyEstimate ? [{ targetIsWorker: true, identityMatches: true, valid: true }] : []);
+          expect(observed.signals.sort((left, right) => left.target.localeCompare(right.target))).toEqual(
+            (legacyEstimate ? ['vitest-watchdog', 'worker'] : []).map(target => ({ target, sameRunner: true, identityMatches: true, valid: true })),
+          );
           writeFileSync(release, 'release');
           firstResult = await closed;
           expect(firstResult.error).toBeUndefined();

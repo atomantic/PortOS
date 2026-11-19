@@ -926,7 +926,7 @@ describe('fixture-owned CDP artifacts root', () => {
     let observed;
     try {
       process.exitCode = undefined;
-      onClose.mock.calls[0][0]();
+      await onClose.mock.calls[0][0]();
       observed = process.exitCode;
     } finally { process.exitCode = originalExit; }
     expect(warn.mock.calls.map(([line]) => line)).toEqual(warnings);

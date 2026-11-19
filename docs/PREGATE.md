@@ -110,9 +110,10 @@ change the POSIX signal behavior.
 ## Test process containment
 
 Test process containment keeps signal delivery separate from verified
-termination. After worker-pool closure, any discovered owned child gets a
-bounded report in `.cache/test-process-diagnostics/`; the CI launcher also
-retains `processes.json` in its attempt diagnostics. Reports contain
+termination. After worker-pool closure, the runner gives its Vitest watchdog
+a brief window to exit on IPC disconnect. Owned children that require
+containment get a bounded report in `.cache/test-process-diagnostics/`. The CI
+launcher also retains `processes.json` in its attempt diagnostics. Reports contain
 repository-relative suite names, bounded worker IDs and fixed
 lifecycle/settlement categories, never raw process arguments, environments,
 PIDs or private paths. Suite attribution is captured at child construction and

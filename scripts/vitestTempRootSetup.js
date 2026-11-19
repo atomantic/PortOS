@@ -9,13 +9,16 @@ import { PROCESS_OWNERS_DIR } from './lib/testProcessAttribution.js';
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
-import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
+import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder, verifyPendingTestProcesses, waitForVitestWatchdog } from './lib/vitestStaleRunRoots.js';
 
 export function setup({ vitest }) {
   const root = process.env.PORTOS_TEST_TEMP_ROOT;
   // Vitest runs global teardown before closing its worker pool. Its close hook
   // runs after pool.close(), so live runner workers are not mistaken for leaks.
-  vitest.onClose(() => cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, durable: true }));
+  vitest.onClose(async () => {
+    if (root && process.platform !== 'win32') await waitForVitestWatchdog(root);
+    cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, durable: true });
+  });
 }
 
 // Vitest's nanoid transform scratch still exists when global teardown runs.

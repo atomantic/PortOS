@@ -38,7 +38,7 @@ describe('vitestTempRootSetup teardown', () => {
     return result;
   }
 
-  it('defers root cleanup until Vitest closes its pool and retains the setup root', () => {
+  it('defers root cleanup until Vitest closes its pool and retains the setup root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pvt-close-test-'));
     const onClose = vi.fn();
     try {
@@ -47,7 +47,7 @@ describe('vitestTempRootSetup teardown', () => {
       expect(existsSync(root)).toBe(true);
       expect(onClose).toHaveBeenCalledTimes(1);
       process.env.PORTOS_TEST_TEMP_ROOT = originalRoot;
-      onClose.mock.calls[0][0]();
+      await onClose.mock.calls[0][0]();
       expect(existsSync(root)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
