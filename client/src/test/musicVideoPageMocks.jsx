@@ -122,6 +122,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
   transcribeMusicVideoMidi: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
+  getMusicVideoMidiPlanning: vi.fn(async () => ({ facts: null })),
   musicVideoMidiEventsUrl: (jobId) => `/api/music-video/transcribe-midi/${jobId}/events`,
   cancelMusicVideoMidiTranscription: vi.fn(async () => ({ ok: true })),
   addMusicVideoSceneTake: vi.fn(),

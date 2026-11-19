@@ -1,4 +1,5 @@
 import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { midiSongSummary, midiWindowFacts } from '../../lib/musicVideo/musicVideoMidiDigest.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video — Cast & Sets creative direction (pure): the LLM prompt, the
@@ -376,7 +377,7 @@ function storyBlock(project, guides = {}) {
  * `medium` defaults to the previous direction's, else the project's.
  * `guides` are the director's own art-direction guides (see storyBlock).
  */
-export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [], guides = {} } = {}) {
+export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [], guides = {}, midi = null } = {}) {
   // A saved direction without a medium predates the procedural one: photographic.
   const procedural = (medium || (previous ? (previous.medium || 'photographic') : castAndSetsMedium(project))) === 'procedural';
   const concept = project?.concept || {};
@@ -391,7 +392,11 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const boardStyle = withoutPeople(trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500));
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
-  const sectionLines = sections.map((s) => `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}`);
+  // The audio→MIDI transcription (songMidiDigest.js), when the director made one: what plays in each section.
+  const sectionLines = sections.map((s) => {
+    const music = midiWindowFacts(midi, s.startSec, s.endSec);
+    return `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}${music ? ` — ${music}` : ''}`;
+  });
   // The character style is given in full below, so the bible leaves it out.
   const bible = musicVideoCreativeContext({ ...concept, characterStyle: undefined });
 
@@ -410,6 +415,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 
   const facts = [
     `Duration: ${fmtTime(analysis.durationSec)}${analysis.bpm ? ` · ${Math.round(analysis.bpm)} BPM` : ''}`,
+    midi && `${midiSongSummary(midi)}. Let the instrumentation and each section's arc (where parts enter, hits land and the top line climbs) shape which set each section plays in.`,
     concept.prompt && `Concept: ${trimTo(concept.prompt, 2000)}`,
     visualStyle && `Director's visual style: ${visualStyle}`,
     guidance && `Director guidance: ${guidance}`,
@@ -490,7 +496,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     storyBlock(project, guides),
     songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
-    sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
+    sectionLines.length ? `Song sections (index. label start–end${midi ? ' — what the transcription shows' : ''}):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,
     rules,
     standingBlock,
@@ -890,6 +896,10 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     look: pick('look', ''),
     ...((hasOwn(parsed, 'renderingMedium') || hasOwn(base, 'renderingMedium'))
       ? { renderingMedium: pick('renderingMedium', '') } : {}),
+    // A new photographic direction uses the standard people sheet; an older one
+    // keeps its five-view sheet until the director switches it (castAndSetsPlan.js).
+    ...(!procedural && (!previous || hasOwn(parsed, 'sheetLayout') || hasOwn(base, 'sheetLayout'))
+      ? { sheetLayout: pick('sheetLayout', 'standard') } : {}),
     protagonist,
     looks,
     // Procedural directions created before cast prose existed keep their shape.
@@ -973,7 +983,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  * catalog-linked supporting character (`fixedCast`; unlink it in Creative setup).
  */
 export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [], fixedCast = [] } = {}) {
-  if (!hasOwn(edits, 'renderingMedium') && edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
+  if (!hasOwn(edits, 'renderingMedium') && !hasOwn(edits, 'sheetLayout') && edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
     const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
     if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
       throw new ServerError('Unknown set', { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
@@ -985,6 +995,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [],
   const procedural = previous?.medium === 'procedural';
   const parsed = {};
   if (hasOwn(edits, 'renderingMedium')) parsed.renderingMedium = edits.renderingMedium;
+  if (hasOwn(edits, 'sheetLayout')) parsed.sheetLayout = edits.sheetLayout;
   let renamedLooks = new Map(), currentLookNames = new Set(), currentLookNamesExact = new Set();
   if (edits?.protagonist) {
     const protagonist = pickText(edits.protagonist, procedural ? CAST_SETS_EDITABLE_PROTAGONIST : CAST_SETS_EDITABLE_PHOTO_PROTAGONIST);
@@ -1081,6 +1092,7 @@ function describeEdits(previous, direction) {
   };
   return [
     ...((hasOwn(previous, 'renderingMedium') !== hasOwn(direction, 'renderingMedium') || differs(previous.renderingMedium, direction.renderingMedium)) ? ['rendering medium'] : []),
+    ...(differs(previous.sheetLayout || 'five-view', direction.sheetLayout || 'five-view') ? ['character sheet layout'] : []),
     ...Object.keys({ ...CAST_SETS_EDITABLE_PROTAGONIST, ...CAST_SETS_EDITABLE_PHOTO_PROTAGONIST }).filter((key) => differs(p0[key], p1[key])),
     ...['expressions', 'forms'].filter((key) => differs(p0[key] || [], p1[key] || [])),
     ...Object.keys(CAST_SETS_EDITABLE_WORLD).filter((key) => differs(previous.world?.[key], direction.world?.[key])).map((key) => `world ${key}`),

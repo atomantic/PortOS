@@ -25,16 +25,17 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { isPaginationRequested, parsePagination } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
-import { PATHS } from '../lib/fileUtils.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
-import { listProjects, listProjectNames, listProjectPage, listProjectCompletion, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, setProjectMidiTranscription, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listProjectPage, listProjectCompletion, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
-import { startMidiTranscription, attachMidiTranscriptionSseClient, getActiveMidiTranscriptionJobId, cancelMidiTranscription } from '../services/audioMidiTranscription.js';
+import { attachMidiTranscriptionSseClient, getActiveMidiTranscriptionJobId, cancelMidiTranscription } from '../services/audioMidiTranscription.js';
+import { projectMidiPlanningFacts } from '../services/musicVideo/songMidiDigest.js';
+import { startProjectMidiTranscription } from '../services/musicVideo/projectMidi.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { analyzeProjectSong, resolveProjectAudioPath, setSectionsFromLyrics } from '../services/musicVideo/projectAudio.js';
 import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
@@ -541,37 +542,14 @@ router.get('/:id/active-jobs', asyncHandler(async (req, res) => {
 router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
   const { model } = validateRequest(musicVideoTranscribeMidiRequestSchema, req.body || {});
   const project = await requireProject(req.params.id);
-  const audioPath = await resolveProjectAudioPath(project);
-  const projectId = project.id;
-  // Audio-source identity at kickoff — the completion callback re-checks it so
-  // a transcription of the OLD track can't land on a project whose audio was
-  // swapped mid-run (another client / peer sync). applyProjectPatch clears
-  // midiTranscription on the swap; without this guard the in-flight job would
-  // reintroduce the stale pointer right after.
-  const sourceTrackId = project.trackId ?? null;
-  const sourceUpload = project.uploadedAudioFilename ?? null;
-  res.status(202).json(await startMidiTranscription({
-    audioPath,
-    outputName: `${project.name || 'music-video'}-midi`,
-    model,
-    ownerKey: projectId,
-    // Land the .mid in the music dir (not uploads) so the peer-sync asset
-    // manifest federates it with the project's other audio — the manifest
-    // only ships known asset kinds/directories, and `music` is one.
-    destDir: PATHS.music,
-    onComplete: async ({ filename, model: usedModel }) => {
-      const current = await getProject(projectId);
-      if (!current) throw new Error('Project was deleted during transcription');
-      if ((current.trackId ?? null) !== sourceTrackId || (current.uploadedAudioFilename ?? null) !== sourceUpload) {
-        // The service deletes the orphaned .mid and reports a discarded (not
-        // "ready") completion to the client.
-        return { discarded: true, reason: `audio source of ${projectId} changed mid-transcription` };
-      }
-      const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
-      await setProjectMidiTranscription(projectId, midiTranscription);
-      return { midiTranscription };
-    },
-  }));
+  res.status(202).json(await startProjectMidiTranscription(project, { model }));
+}));
+
+// What shot planning and Cast & Sets read from the transcription: a song line
+// plus one line per analyzed section, the exact text the prompts quote.
+router.get('/:id/midi-planning', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  res.json({ facts: await projectMidiPlanningFacts(project) });
 }));
 
 // Two-segment paths — distinct from the one-segment GET /:id project read.

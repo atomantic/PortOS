@@ -74,7 +74,8 @@ import {
   getRunwayVideoModel,
   resolveRunwayVideoResolution,
 } from '../runwayVideoModels.js';
-import { normalizePreMusic, preMusicClipSound } from './musicVideoColdOpen.js';
+import { normalizePreMusic } from './musicVideoColdOpen.js';
+import { shotWantsClipSound } from './musicVideoClipSound.js';
 
 /** How a scene is generated (#14241): `sequence` joins its run of cutaway footage shots into one timed request. */
 export const MUSIC_VIDEO_COVERAGE_MODES = Object.freeze(['per-shot', 'sequence']);
@@ -701,7 +702,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
   }
   const seconds = coerceFalVideoSeconds(model, hostedClipRequestSec(scene, scenes, settings.falDuration));
   const resolution = resolveFalVideoResolution(model, settings.falResolution);
-  const generateAudio = Boolean(model.audio) && preMusicClipSound(scene);
+  const generateAudio = Boolean(model.audio) && shotWantsClipSound(scene);
   return {
     performance: false, modelId, seconds, resolution, generateAudio,
     costUsd: estimateFalVideoCostUsd({ modelId, seconds, resolution, generateAudio }),

@@ -144,6 +144,11 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
 
         {!reusingSong && <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />}
 
+        <div>
+          <ToggleChip id="mv-auto-transcribe-midi" label="Transcribe the song to MIDI for planning" checked={draft.transcribeMidi} onToggle={() => patch({ transcribeMidi: !draft.transcribeMidi })} />
+          <p className="text-[11px] text-port-text-muted mt-1">After analysis, MuScriptor transcribes the song on this machine; shot planning and Cast &amp; Sets then read its parts, low hits, melody and chords. Skipped if MuScriptor is not installed.</p>
+        </div>
+
         <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
         <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} onValidityChange={setAuthoringReady} disabled={submitting} />
         <ToolPicker tools={draft.tools} models={draft.models} onChange={patch} />

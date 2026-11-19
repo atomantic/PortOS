@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
-import { chordNoteNames } from '../../lib/midiChords';
+import { chordNoteNames } from '../../../../server/lib/midiChords.js';
 import { roundRect, layerColor, ROLL_BG } from '../../lib/canvasRoll.js';
 import { formatTimecode, formatDurationSec } from '../../utils/formatters';
 import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
@@ -9,7 +9,7 @@ import useCanvasRollPalette from '../../hooks/useCanvasRollPalette.js';
 // DAW-style horizontal piano-roll for inspecting a transcribed `.mid` file
 // (time × pitch grid) — NOT the Synthesia falling-note <PianoRoll>, which is
 // score-playback pedagogy. Presentational: gets the parsed view-model from
-// midiNotes.js via props and only draws + handles pointer/keyboard input.
+// server/lib/midiFile.js via props and only draws + handles pointer/keyboard input.
 //
 // The canvas is virtualized — it stays the container's width and pans by a
 // scroll offset (a full-duration canvas at high zoom would blow past browser

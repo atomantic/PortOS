@@ -155,6 +155,34 @@ describe('sound-design bed (#8988)', () => {
   });
 });
 
+// A song shot's own clip sound (musicVideoClipSound.js) over the music, with the song dipped under it.
+describe('clip sound over the song', () => {
+  const filterOf = (args) => args[args.indexOf('-filter_complex') + 1];
+  const mapsOf = (args) => args.reduce((acc, a, i) => (a === '-map' ? [...acc, args[i + 1]] : acc), []);
+
+  it('plays a shot\'s clip sound over the song in its own span and dips the song there', () => {
+    const clips = [clip({ videoPath: '/v/a.mp4' }), clip({ videoPath: '/v/line.mp4', inSec: 0.5, outSec: 2.5, clipSound: { volume: 1.2, musicLevel: 0.4 } })];
+    const { args, voices } = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30 });
+    const fc = filterOf(args);
+    const inputs = args.reduce((acc, a, i) => (a === '-i' ? [...acc, args[i + 1]] : acc), []);
+    // inputs: 0,1 clips · 2 song · 3 the second clip again, for its sound
+    expect(inputs).toEqual(['/v/a.mp4', '/v/line.mp4', '/music/song.wav', '/v/line.mp4']);
+    expect(voices).toEqual([expect.objectContaining({ startSec: 2, durationSec: 2, offsetSec: 0.5, volume: 1.2, musicLevel: 0.4 })]);
+    expect(fc).toContain("[2:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=enable='between(t,2,4)':volume=0.4[master]");
+    expect(fc).toMatch(/\[3:a\][^;]*atrim=start=0\.5:end=2\.5,[^;]*volume=1\.2,afade=t=in[^;]*adelay=2000\|2000\[bed0\]/);
+    expect(fc).toContain('[master][bed0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[bedmix]');
+    expect(mapsOf(args)).toEqual(['[outv]', '[mixa]']);
+  });
+
+  it('keeps a re-timed, reversed or re-cut clip silent, since its sound would not match the picture', () => {
+    const sound = { volume: 1, musicLevel: 1 };
+    const clips = [clip({ clipSound: sound, rate: 2 }), clip({ clipSound: sound, reverse: true }), clip({ clipSound: sound, intercutOf: 'other' })];
+    const { args, voices } = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30 });
+    expect(voices).toEqual([]);
+    expect(filterOf(args)).not.toContain('amix');
+  });
+});
+
 describe('excerptBoundaryTimes (#8986)', () => {
   // No encoded file has a frame timestamped at its own total duration, so the
   // trailing boundary is always guarded back to `span - 1/fps` (default 24fps)

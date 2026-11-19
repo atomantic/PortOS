@@ -53,7 +53,9 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(['lyricSize', 'textZone', 'lyricText'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     .concat(scene.shotSheet?.cameraId ? [['shotSheetCameraId', scene.shotSheet.cameraId]] : [])
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
-    .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : []))) });
+    .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : [])
+    // A song shot's clip sound over the music changes the mix; a silent shot keeps its evidence.
+    .concat(scene.clipSound ? [['clipSound', scene.clipSound]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
 
 // Keep the project's selected clip guides with the take, so an in-flight clip

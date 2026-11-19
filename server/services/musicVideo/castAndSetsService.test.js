@@ -444,7 +444,7 @@ describe('Cast & Sets check-in', () => {
     const character = jobs.find((j) => keyOf(j) === 'character');
     for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
-    expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
+    expect(character.params.prompt).toMatch(/FACE, one large head-and-shoulders portrait.*FRONT, a full-body standing view from the front with the head absent.*BACK, a full-body standing view/);
     expect(character.params.prompt).toContain('Hands empty and relaxed');
     expect(character.params.prompt).toContain('signature: a brass lantern');
     expect(character.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
@@ -2062,7 +2062,7 @@ it('keeps an age sheet neutral while carrying memory era and film stock into sce
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
   const prompt = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
-  expect(prompt('form:age-7')).toContain(`Era: 1965. Five views`);
+  expect(prompt('form:age-7')).toContain('Era: 1965. Three panels side by side');
   expect(prompt('form:age-7')).not.toContain('Look:');
   expect(prompt('form:age-7')).not.toContain(memory);
   expect(prompt('set:home')).toContain('Era: 1965, with period-correct buildings, vehicles');

@@ -4,7 +4,8 @@
 // `parseMidiFile(arrayBuffer)` parses SMF format 0/1 (running status, note-on vel-0-as-off, tempo map
 // incl. mid-file changes, SMPTE division, track names) into the piano-roll view-model `{ durationSec,
 // minMidi, maxMidi, notes:[{id,midi,startSec,durationSec,velocity,track,name}], tracks, tempos }`.
-// Throws on non-MIDI bytes. Consumed by `useMidiNotes` → `<MidiPianoRoll>`. NOT the lead-sheet parser
+// Throws on non-MIDI bytes. Consumed by the client's `useMidiNotes` → `<MidiPianoRoll>` and the music
+// video song digest (`musicVideoMidiDigest.js`). NOT the lead-sheet parser
 // (`scoreNotation.js`).
 //
 // Minimal Standard MIDI File (SMF) parser + normalizer for the MIDI
@@ -19,11 +20,11 @@
 // {
 //   durationSec, minMidi, maxMidi,
 //   notes: [{ id, midi, startSec, durationSec, velocity, track, name }],
-//   tracks: [{ index, name?, noteCount }],
+//   tracks: [{ index, name?, noteCount, program (GM 0-127 or null), drums }],
 //   tempos: [{ timeSec, bpm }],
 // }
 
-import { midiNoteName } from './pianoKeyboard.js';
+import { midiNoteName } from './pitchNames.js';
 
 const DEFAULT_TEMPO_US = 500000; // 120 BPM — the SMF default until a Set Tempo event
 
@@ -106,7 +107,9 @@ const parseTrackEvents = (view, start, end) => {
     const channel = status & 0x0f;
     const dataLen = kind === 0xc0 || kind === 0xd0 ? 1 : 2;
     if (pos + dataLen > end) break;
-    if (kind === 0x90 || kind === 0x80) {
+    if (kind === 0xc0) {
+      events.push({ tick, type: 'program', program: view.getUint8(pos), channel });
+    } else if (kind === 0x90 || kind === 0x80) {
       const midi = view.getUint8(pos);
       const velocity = view.getUint8(pos + 1);
       if (kind === 0x90 && velocity > 0) events.push({ tick, type: 'on', midi, velocity, channel });
@@ -168,7 +171,7 @@ const buildTickToSec = (division, tempoEvents) => {
  * @param {ArrayBuffer|Uint8Array} buffer — raw `.mid` bytes.
  * @returns {{ durationSec:number, minMidi:number, maxMidi:number,
  *   notes:Array<{id:string,midi:number,startSec:number,durationSec:number,velocity:number,track:number,name:string}>,
- *   tracks:Array<{index:number,name:string|null,noteCount:number}>,
+ *   tracks:Array<{index:number,name:string|null,noteCount:number,program:number|null,drums:boolean}>,
  *   tempos:Array<{timeSec:number,bpm:number}> }}
  * @throws {Error} when the buffer is not a parseable SMF file.
  */
@@ -205,9 +208,14 @@ export const parseMidiFile = (buffer) => {
     // channel's note-off truncate a same-pitch note held on another channel.
     const open = new Map(); // (channel<<8)|midi → { startTick, velocity } (last-on wins)
     let name = null;
+    let program = null;
+    let drumNotes = 0;
     let noteCount = 0;
     events.forEach((ev) => {
       if (ev.type === 'name' && !name) name = ev.name;
+      if (ev.type === 'program' && program === null) program = ev.program;
+      // General MIDI channel 10 (index 9) is the percussion kit.
+      if (ev.type === 'on' && ev.channel === 9) drumNotes += 1;
       if (ev.type !== 'on' && ev.type !== 'off') return;
       const key = ((ev.channel || 0) << 8) | ev.midi;
       if (ev.type === 'on') {
@@ -237,7 +245,7 @@ export const parseMidiFile = (buffer) => {
       });
       noteCount += 1;
     }
-    tracks.push({ index: trackIndex, name, noteCount });
+    tracks.push({ index: trackIndex, name, noteCount, program, drums: noteCount > 0 && drumNotes * 2 >= noteCount });
   });
 
   notes.sort((a, b) => a.startSec - b.startSec || a.midi - b.midi);
