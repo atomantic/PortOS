@@ -148,13 +148,12 @@ async function resolvePromptPlaceholders(prompt) {
   return prompt;
 }
 
-export async function getTaskPrompt(taskType, { claimFlow = false, claimIssueOptions = null, withSource = false } = {}) {
-  const interval = await getTaskInterval(taskType);
-  const storedDefault = claimFlow && interval.promptSource !== 'user'
-    && promptMatchesShippedDefault(interval.prompt, taskType);
-  const customized = Boolean(interval.prompt && !storedDefault);
-  let prompt = (interval.prompt && !storedDefault ? interval.prompt : null)
-    || (claimFlow ? CLAIM_FLOW_DEFAULT_PROMPTS[taskType] : null)
+/**
+ * Resolve the shipped prompt template for `taskType` without reading or mutating
+ * `data/cos/task-schedule.json`.
+ */
+export async function getShippedTaskPrompt(taskType, { claimFlow = false, claimIssueOptions = null } = {}) {
+  let prompt = (claimFlow ? CLAIM_FLOW_DEFAULT_PROMPTS[taskType] : null)
     || DEFAULT_TASK_PROMPTS[taskType]
     || `[Improvement] ${taskType} analysis
 
@@ -163,18 +162,30 @@ Repository: {repoPath}
 Perform ${taskType} analysis on {appName}.
 Analyze the codebase and make improvements. Commit changes with clear descriptions.`;
 
-  // Compose only a recognized shipped default. A stored user prompt remains
-  // intact, including text that resembles a shipped section or phase heading.
-  const composed = claimFlow && !customized && claimIssueOptions
-    && (taskType === 'claim-issue' || taskType === 'claim-issue-gitlab');
-  if (composed) {
+  if (claimFlow && claimIssueOptions && (taskType === 'claim-issue' || taskType === 'claim-issue-gitlab')) {
     prompt = composeClaimIssuePrompt({
       ...claimIssueOptions,
       forge: taskType === 'claim-issue' ? 'github' : 'gitlab',
     });
   }
-  const resolvedPrompt = await resolvePromptPlaceholders(prompt);
-  return withSource ? { prompt: resolvedPrompt, composed: Boolean(composed) } : resolvedPrompt;
+  return resolvePromptPlaceholders(prompt);
+}
+
+export async function getTaskPrompt(taskType, { claimFlow = false, claimIssueOptions = null, withSource = false } = {}) {
+  const interval = await getTaskInterval(taskType);
+  const storedDefault = claimFlow && interval.promptSource !== 'user'
+    && promptMatchesShippedDefault(interval.prompt, taskType);
+  const customized = Boolean(interval.prompt && !storedDefault);
+  // Compose only a recognized shipped default. A stored user prompt remains
+  // intact, including text that resembles a shipped section or phase heading.
+  if (customized) {
+    const resolvedPrompt = await resolvePromptPlaceholders(interval.prompt);
+    return withSource ? { prompt: resolvedPrompt, composed: false } : resolvedPrompt;
+  }
+  const composed = Boolean(claimFlow && claimIssueOptions
+    && (taskType === 'claim-issue' || taskType === 'claim-issue-gitlab'));
+  const resolvedPrompt = await getShippedTaskPrompt(taskType, { claimFlow, claimIssueOptions });
+  return withSource ? { prompt: resolvedPrompt, composed } : resolvedPrompt;
 }
 
 /**

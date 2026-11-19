@@ -170,10 +170,7 @@ describe('claim reviewer resolution', () => {
     expect(pinned).toContain('--arg effort high');
     expect(pinned).toContain('run-local-code-review.mjs');
     expect(pinned).not.toContain('localhost:5555');
-    expect(pinned).toContain('missing/empty findings is INCONCLUSIVE');
-    expect(pinned).toContain('REVIEW_STATUS=review-blocked');
-    expect(pinned).toContain('continue to publish the MR/PR');
-    expect(pinned).toContain('leave it open and do not merge until the required review completes');
+    expect(pinned).toContain('otherwise treat the invocation as unavailable under the Phase 5 Required-review publication rule');
 
     const bare = buildLocalReviewerInstructions(['lmstudio']);
     expect(bare).toContain('git diff "origin/$DEFAULT_BRANCH...HEAD"');
@@ -2013,8 +2010,7 @@ describe('buildClaimWorkTask reviewer pin', () => {
     expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined, without forge or cloud credentials');
     expect(prompt).toContain('Prefer an enforced no-tool or read-only vendor profile when available');
     expect(prompt).toContain('Lack of enforceable isolation alone does not make a code reviewer unavailable');
-    expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
-    expect(prompt).toContain('an optional inconclusive result remains non-blocking');
+    expect(prompt).toContain('otherwise treat the invocation as unavailable under the Phase 5 Required-review publication rule');
     expect(prompt).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings');
   });
 

@@ -5143,6 +5143,7 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
   const resolveRoot = (text) => text.replaceAll('{portosRoot}', () => PATHS.installRoot);
   const githubPrompt = resolveRoot(composeClaimIssuePrompt({ forge: 'github' }));
   const githubSections = [
+    ['claim-issue-filing-github', mandatoryDispatchHintGuidance({ cli: 'gh' })],
     ['claim-epic-github', buildClaimEpicSection('github', false)],
     ['claim-handoff-github', buildClaimGithubHandoff(false)],
     ['claim-linked-screen-github', resolveRoot(buildClaimLinkedScreen('github'))],
@@ -5178,6 +5179,7 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     const composed = resolveRoot(composeClaimIssuePrompt({ forge: 'gitlab', target: 42, prCompletion: 'leave-open' }));
     const prompt = await render(composed, 'cli', 'description');
     expect(stagedSections()).toEqual([
+      ['claim-issue-filing-gitlab', mandatoryDispatchHintGuidance({ cli: 'glab' })],
       ['claim-epic-gitlab', buildClaimEpicSection('gitlab', true)],
       ['claim-linked-screen-gitlab', resolveRoot(buildClaimLinkedScreen('gitlab'))],
       ['claim-ci-recovery-gitlab', buildClaimCheckRecovery('gitlab', true)],
@@ -5210,6 +5212,6 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     const prompt = await render(edited, 'cli');
     expect(prompt).toContain('Produce 2–6 slices');
     expect(prompt).not.toContain('When Phase 1 lands on an epic');
-    expect(stagedSections()).toEqual(githubSections.slice(1));
+    expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
   });
 });

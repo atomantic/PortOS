@@ -739,7 +739,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(resumeOverride ? ['When the relaunch section above applies, finish this task\'s existing claim in the worktree named there.'] : []),
     '',
     ...(!isMergeOnGreen ? [
-      `Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as \`review-blocked\` rather than substituting a self-review. Still push and open the PR/MR, leave it open, preserve the claim markers and branch, and stop before merge. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} An unresolved accepted finding or rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.`,
+      'Required-review publication rule: follow the Phase 5 rule when any required local reviewer cannot return a verdict.',
       '',
     ] : []),
     'For a successful claim, signal completion only after the prompt\'s prescribed PR/MR and cleanup steps are complete. For a clean no-work, blocked, or review-stuck exit, follow the prompt\'s prescribed leave-open/cleanup path first.'
