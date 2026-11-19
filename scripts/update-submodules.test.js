@@ -1,75 +1,112 @@
-/**
- * Cross-platform self-update contract. Executing either updater for real would
- * pull, install, rebuild, migrate, and restart the live instance, so source
- * inspection is the highest safe boundary for pinning their command parity.
- */
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { afterEach, describe, expect, it } from 'vitest';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { delimiter, join, normalize } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { installUpdateContract, readUpdateLog, recordedSteps } from './lib/updateContractHarness.js';
+import { SKIP_HEAVY_INTEGRATION } from '../server/lib/gitTestRepo.js';
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const roots = [];
+const windows = process.platform === 'win32';
+afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
-const SCRIPT_COMMANDS = [
-  {
-    path: 'update.sh',
-    pull: 'run git pull --rebase',
-    sync: 'run git submodule sync --recursive',
-    update: 'run git submodule update --init --recursive',
-    preflight: 'if ! repair_stale_submodules; then',
-    dirtyGuard: 'if has_local_changes; then',
-  },
-  {
-    path: 'update.ps1',
-    pull: 'Invoke-Logged git pull --rebase',
-    sync: 'Invoke-Logged git submodule sync --recursive',
-    update: 'Invoke-Logged git submodule update --init --recursive',
-    preflight: 'if (-not (Repair-StaleSubmodules)) {',
-    dirtyGuard: 'if ($hasChanges) {',
-  },
-];
+function sandbox() {
+  const dir = mkdtempSync(join(tmpdir(), 'portos-updater-submodules-'));
+  roots.push(dir);
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  for (const [command, status] of [['npm', 0], ['pm2', 4], ['npx', 5]]) {
+    const shim = join(bin, windows ? `${command}.cmd` : command);
+    writeFileSync(shim, windows ? `@exit /b ${status}\r\n` : `#!/bin/sh\nexit ${status}\n`);
+    chmodSync(shim, 0o755);
+  }
+  const env = { ...process.env, GIT_ALLOW_PROTOCOL: 'file', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(dir, 'empty-git-config') };
+  writeFileSync(env.GIT_CONFIG_GLOBAL, '');
+  const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH';
+  env[pathKey] = [bin, env[pathKey]].filter(Boolean).join(delimiter);
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const commit = (repo, message) => {
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', message);
+    return git(repo, 'rev-parse', 'HEAD');
+  };
+  const init = name => { const repo = join(dir, name); git(dir, 'init', '-b', 'main', repo); return repo; };
+  const run = repo => {
+    const childEnv = { ...env, PORTOS_DATA_ROOT: repo };
+    delete childEnv.VITEST; // isolate the standalone install from Vitest's fixture write guard
+    const result = spawnSync(windows ? 'powershell' : 'bash', windows
+      ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'update.ps1'), '--automatic']
+      : [join(repo, 'update.sh'), '--automatic'],
+    { cwd: repo, encoding: 'utf8', timeout: 30_000, env: childEnv });
+    if (result.error) throw result.error;
+    return result;
+  };
+  return { dir, git, commit, init, run };
+}
 
-describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull, sync, update, preflight, dirtyGuard }) => {
-  const source = readFileSync(join(REPO_ROOT, path), 'utf8');
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('updater submodule and dirty-checkout behavior', () => {
+  it('repairs a stale gitlink and lock before checking a clean tree, then syncs the new URL and pins the reviewed commit', () => {
+    const { dir, git, commit, init, run } = sandbox();
+    const module = init('module');
+    const moduleFile = join(module, 'module.txt');
+    const advanceModule = contents => { writeFileSync(moduleFile, contents); return commit(module, contents); };
+    const stale = advanceModule('stale');
+    const originalPin = advanceModule('old parent pin');
 
-  it('syncs recursive metadata and then checks out pinned commits after pulling', () => {
-    const pullIndex = source.indexOf(pull);
-    const syncIndex = source.lastIndexOf(sync);
-    const updateIndex = source.lastIndexOf(update);
+    const parent = init('parent');
+    installUpdateContract(parent);
+    git(parent, 'submodule', 'add', module, 'module');
+    commit(parent, 'Initial parent');
+    const checkout = join(dir, 'checkout');
+    git(dir, 'clone', '--recurse-submodules', parent, checkout);
+    const localModule = join(checkout, 'module');
+    expect(git(localModule, 'rev-parse', 'HEAD')).toBe(originalPin);
+    git(localModule, 'checkout', '--detach', stale);
+    expect(git(checkout, 'status', '--porcelain')).not.toBe('');
+    const staleLock = join(checkout, '.git', 'index.lock');
+    writeFileSync(staleLock, '');
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(staleLock, old, old);
 
-    expect(pullIndex).toBeGreaterThanOrEqual(0);
-    expect(syncIndex).toBeGreaterThan(pullIndex);
-    expect(updateIndex).toBeGreaterThan(syncIndex);
-  });
+    const newPin = advanceModule('new parent pin');
+    const unreviewed = advanceModule('remote tip not pinned');
+    const replacement = join(dir, 'replacement.git');
+    git(dir, 'clone', '--bare', module, replacement);
+    git(join(parent, 'module'), 'fetch');
+    git(join(parent, 'module'), 'checkout', '--detach', newPin);
+    git(parent, 'config', '-f', '.gitmodules', 'submodule.module.url', replacement);
+    const target = commit(parent, 'Switch module URL and pin');
 
-  it('repairs an interrupted submodule checkout before the dirty-tree guard', () => {
-    const preflightIndex = source.indexOf(preflight);
-    const dirtyIndex = source.indexOf(dirtyGuard);
-    const pullIndex = source.indexOf(pull);
+    const result = run(checkout);
+    expect(result.status, result.stdout + result.stderr + readUpdateLog(checkout)).toBe(19);
+    expect(recordedSteps(result).filter(step => step !== 'waiting:running')).toEqual([
+      'waiting:done', 'git-pull:running', 'git-pull:done',
+      'submodules:running', 'submodules:done', 'runtime-preflight:running', 'runtime-preflight:done',
+      'pm2-stop:running', 'pm2-stop:done', 'npm-install:running', 'restart:running', 'restart:error',
+    ]);
+    expect(existsSync(staleLock)).toBe(false);
+    expect(git(checkout, 'rev-parse', 'HEAD')).toBe(target);
+    expect(git(localModule, 'rev-parse', 'HEAD')).toBe(newPin);
+    expect(git(localModule, 'rev-parse', 'HEAD')).not.toBe(unreviewed);
+    expect(normalize(git(localModule, 'remote', 'get-url', 'origin'))).toBe(normalize(replacement));
+  }, 45_000);
 
-    expect(preflightIndex).toBeGreaterThanOrEqual(0);
-    expect(dirtyIndex).toBeGreaterThan(preflightIndex);
-    expect(preflightIndex).toBeLessThan(pullIndex);
-    expect(source.indexOf(preflight, preflightIndex + preflight.length)).toBeGreaterThan(dirtyIndex);
-  });
-
-  it('does not advance submodules past the commits reviewed by PortOS', () => {
-    expect(source).not.toMatch(/git submodule update[^\n]*--remote/);
-  });
-
-  it('never uses stash as an implicit update transport', () => {
-    expect(source).not.toMatch(/git\s+stash|--autostash/);
-    expect(source).toContain('Checkout is dirty; no stash was created');
-  });
-
-  // This script is the most likely producer of an abandoned lock (PM2 tree-kills
-  // it mid-run), and without the sweep every later self-update fails identically
-  // on a file under `.git/` only a human would find. Both platforms call the one
-  // Node helper rather than each reimplementing "is this lock abandoned?".
-  it('clears locks a previously killed update left behind, before it takes any', () => {
-    const sweepIndex = source.indexOf('clearStaleGitLocksIn');
-    expect(sweepIndex).toBeGreaterThanOrEqual(0);
-    expect(sweepIndex).toBeLessThan(source.indexOf(preflight));
-    expect(sweepIndex).toBeLessThan(source.indexOf(pull));
-  });
+  it('refuses a dirty working tree without stashing or advancing it', () => {
+    const { dir, git, commit, init, run } = sandbox();
+    const parent = init('parent');
+    installUpdateContract(parent);
+    writeFileSync(join(parent, 'tracked'), 'base');
+    const initial = commit(parent, 'Initial parent');
+    const checkout = join(dir, 'checkout');
+    git(dir, 'clone', parent, checkout);
+    writeFileSync(join(checkout, 'tracked'), 'local edit');
+    writeFileSync(join(parent, 'tracked'), 'remote edit');
+    commit(parent, 'Upstream update');
+    const result = run(checkout);
+    expect(result.status, result.stdout + result.stderr + readUpdateLog(checkout)).toBe(1);
+    expect(result.stdout, readUpdateLog(checkout)).toContain('Checkout is dirty; no stash was created');
+    expect(git(checkout, 'rev-parse', 'HEAD')).toBe(initial);
+    expect(git(checkout, 'diff', '--name-only')).toBe('tracked');
+    expect(git(checkout, 'stash', 'list')).toBe('');
+  }, 45_000);
 });

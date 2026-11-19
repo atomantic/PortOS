@@ -258,18 +258,6 @@ describe('the wrappers do not regrow their own pipeline', () => {
     expect(read(file)).not.toMatch(INSTALLER);
   });
 
-  it.each(['update.sh', 'update.ps1'])('%s calls both helpers inside its ffmpeg and slash-do steps', (file) => {
-    const source = read(file);
-    const stepOrder = (name, helper) => {
-      const running = source.search(new RegExp(`Step "${name}" "running"|step "${name}" "running"`, 'i'));
-      const call = source.indexOf(helper, running);
-      const done = source.slice(call).search(new RegExp(`Step "${name}" "done"|step "${name}" "done"`, 'i'));
-      return running >= 0 && call > running && done >= 0;
-    };
-    expect(stepOrder('ffmpeg', 'scripts/ensure-ffmpeg.js'), `${file} ffmpeg step`).toBe(true);
-    expect(stepOrder('slash-do', 'scripts/install-slashdo.js'), `${file} slash-do step`).toBe(true);
-  });
-
   it('only the helper contains the slash-do install', () => {
     expect(read('scripts/install-slashdo.js')).toContain('slash-do@');
     for (const file of [...WRAPPERS, 'scripts/setup.js']) {

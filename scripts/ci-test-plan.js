@@ -283,7 +283,7 @@ const FULL_TRIGGER_RULES = [
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
-  /^scripts\/(?:deferred-update\.mjs|update-headless-recovery\.test\.js)$/,
+  /^(?:update\.sh|scripts\/(?:deferred-update\.mjs|update\.mjs|update-headless-recovery\.test\.js))$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|windowsAgentProcess|windowsAgentSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
@@ -301,6 +301,7 @@ export const WINDOWS_RISK_RULES = [
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
   'scripts/update-headless-recovery.test.js',
+  'scripts/update-submodules.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
   'server/cos-runner/allowedCommands.test.js',
   'server/lib/agentGuard/index.test.js',
@@ -784,7 +785,7 @@ const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
 ]);
 
 const ENSURE_DEPS_INPUTS = new Set([
-  'scripts/ensure-deps.js', 'update.sh', 'update.ps1',
+  'scripts/ensure-deps.js', 'scripts/update.mjs', 'update.sh', 'update.ps1',
   'package-lock.json', 'client/package-lock.json', 'server/package-lock.json',
 ]);
 

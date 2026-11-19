@@ -33,11 +33,11 @@ describe('slash-do install pin', () => {
     expect(read('scripts/install-slashdo.js')).toContain('`slash-do@${version}`');
   });
 
-  it.each(['scripts/setup.js', 'update.sh', 'update.ps1'])('%s installs through the helper', (file) => {
+  it.each(['scripts/setup.js', 'scripts/update.mjs'])('%s installs through the helper', (file) => {
     expect(read(file)).toMatch(/install-slashdo\.js/);
   });
 
-  it.each(['setup.sh', 'setup.ps1', 'update.sh', 'update.ps1', 'scripts/setup.js'])('%s carries no slash-do install of its own', (file) => {
+  it.each(['setup.sh', 'setup.ps1', 'update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/setup.js'])('%s carries no slash-do install of its own', (file) => {
     const src = read(file);
     expect(src).not.toMatch(/slash-do@/);
     expect(src).not.toMatch(/(Get-Content|<)[^\n]*SLASHDO_VERSION/);

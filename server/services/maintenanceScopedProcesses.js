@@ -12,7 +12,7 @@ import { escapeRegExp } from '../lib/textUtils.js';
 
 const runFile = promisify(execFile);
 const CLI = /(?:^|[\s/\\'"=])(?:claude|codex|gemini|grok|agy|antigravity|opencode|pi|cursor-agent)(?:[\s./\\'"-]|$)/i;
-const APP_CHILD = /(?:^|[\s/\\'"=])(?:git|npm|npx|pnpm|yarn|bun)(?:[\s./\\'"-]|$)|\b(?:update\.(?:sh|ps1)|deploy\.sh)\b/i;
+const APP_CHILD = /(?:^|[\s/\\'"=])(?:git|npm|npx|pnpm|yarn|bun)(?:[\s./\\'"-]|$)|\b(?:update\.(?:sh|ps1|mjs)|deploy\.sh)\b/i;
 const OWN_SERVICES = /[\\/]server[\\/](?:start\.js|cos-runner[\\/]index\.js)|[\\/]browser[\\/]server\.js|[\\/]autofixer[\\/](?:server|ui)\.js/i;
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,200}$/i;
 const executable = value => basename(String(value ?? '').replaceAll('\\', '/')).toLowerCase();

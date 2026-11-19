@@ -138,15 +138,15 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const normalize = value => platform === 'win32' ? value.replaceAll('\\', '/').toLowerCase() : value;
   const canonical = value => { try { return realpathSync(value); } catch { return resolve(value); } };
   const install = normalize(canonical(root));
-  const script = /(?:^|[\s"'=])((?:\.[\\/])?(?:scripts[\\/])?(?:deferred-update\.mjs|update\.(?:sh|ps1)))(?=$|[\s"'])/i;
+  const script = /(?:^|[\s"'=])((?:\.[\\/])?(?:scripts[\\/])?(?:deferred-update\.mjs|update\.(?:sh|ps1|mjs)))(?=$|[\s"'])/i;
   const child = /(?:^|[\s"'/\\])(?:git|npm|npx|pnpm|yarn|npm-cli\.js)(?:\.exe)?(?=$|[\s"'])|scripts[\\/](?:setup-[\w-]+|run-migrations|trusted-rebuilds|pm2-[\w-]+)\.js/i;
   const candidates = rows.filter(row => !ancestors.has(row.pid) && !String(row.state ?? '').startsWith('Z')
     && (script.test(String(row.command ?? '')) || child.test(String(row.command ?? ''))
-      || /(?:update\.(?:sh|ps1)|deferred-update\.mjs)/i.test(String(row.command ?? ''))));
+      || /(?:update\.(?:sh|ps1|mjs)|deferred-update\.mjs)/i.test(String(row.command ?? ''))));
   const cwds = await probeCwds(candidates.map(row => row.pid), platform).catch(() => new Map());
   const escaped = install.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const absolute = new RegExp(`(?:^|[\\s"'=])${escaped}/(?:scripts/)?(?:deferred-update\\.mjs|update\\.(?:sh|ps1))(?=$|[\\s"'])`);
-  const expectedPaths = new Set(['update.sh', 'update.ps1', 'scripts/deferred-update.mjs']
+  const absolute = new RegExp(`(?:^|[\\s"'=])${escaped}/(?:scripts/)?(?:deferred-update\\.mjs|update\\.(?:sh|ps1|mjs))(?=$|[\\s"'])`);
+  const expectedPaths = new Set(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/deferred-update.mjs']
     .map(path => normalize(canonical(join(root, path)))));
   const inInstall = cwd => {
     const path = normalize(canonical(cwd));
