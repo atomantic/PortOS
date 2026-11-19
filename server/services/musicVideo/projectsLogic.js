@@ -19,7 +19,7 @@ import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/
  * already on the record, so federation was purely additive (no record migration).
  */
 
-import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainLegacyFinalLayerBaseline, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'node:crypto';
 import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideo/musicVideoSections.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideo/musicVideoMediumPlan.js';
@@ -1649,7 +1649,9 @@ export function mergeProjectRecord(local, remoteRaw) {
       ...Object.fromEntries(['backend', 'renderPool'].filter((key) => Object.hasOwn(local.videoSettings, key)).map((key) => [key, local.videoSettings[key]])) };
   }
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
-  const next = remoteWins ? remote : local;
+  // An older peer may omit the baseline. Carry it only for exactly matching
+  // evidence of the same export, from our pre-merge record rather than its edits.
+  const next = remoteWins ? retainLegacyFinalLayerBaseline(local, remote) : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }

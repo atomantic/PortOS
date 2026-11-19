@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as checksums from '../snapshotChecksum.js';
-import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies, restampLegacyFrameCasts } from './musicVideoDependencies.js';
+import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoDependencyChanges, musicVideoRenderDependencyState, musicVideoTakeChanges, presentMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from './musicVideoDependencies.js';
 import { canonicalSnapshotChecksum } from '../snapshotChecksum.js';
 import { musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
@@ -38,6 +38,50 @@ it('bounds checksum work by distinct current inputs across historical snapshots 
   project.scenes[0].referenceImageId = 'replacement.png';
   expect(presentMusicVideoDependencies(project).renderDependencyState.reasons).toEqual(['Selected plate or its crop/mask inputs changed']);
   expect(dependencies).toEqual(project.excerpts[0].dependencies);
+});
+
+
+// #16418 added fields to the existing layer revision, not a separate role.
+// Build the historical evidence from exactly the same underlying inputs but
+// without the four newly hashed fields.
+const legacyFinalWithLyricTreatment = () => {
+  const project = { ...projectFixture(), status: 'complete', updatedAt: '2026-11-05T12:00:00Z', renderHistoryId: 'final' };
+  project.renderDependencies = captureMusicVideoEvidence(project);
+  Object.assign(project.scenes[0], { lyricText: 'A lyric', lyricSize: 'large', textZone: 'top', shotSheet: { cameraId: 'cam' } });
+  return project;
+};
+
+it('preserves an untouched legacy final without accepting changed timing, composition or later evidence', () => {
+  const project = legacyFinalWithLyricTreatment();
+  expect(musicVideoRenderDependencyState(project)).toEqual({ status: 'current', reasons: [] });
+  expect(presentMusicVideoDependencies(project).renderDependencyState.status).toBe('current');
+  expect(musicVideoDependencyChanges(project, project.renderDependencies)).toEqual([]);
+  expect(musicVideoDependencyChanges(project, structuredClone(project.renderDependencies))).not.toEqual([]);
+  expect(musicVideoRenderDependencyState({ ...project, updatedAt: '2026-11-16T15:53:22Z' }).status).toBe('stale');
+  expect(musicVideoRenderDependencyState({ ...project, updatedAt: undefined }).status).toBe('stale');
+  const changed = structuredClone(project);
+  changed.composition.textCues[0].text = 'Updated cue';
+  expect(musicVideoRenderDependencyState(changed).reasons).toEqual(['Composition changed']);
+  changed.scenes[0].endSec -= 0.5;
+  expect(musicVideoRenderDependencyState(changed).reasons).toEqual(['Shot timing or composition layer changed', 'Composition changed']);
+});
+
+it('preserves the old checksum and records a pre-write baseline on the first edit', () => {
+  const project = legacyFinalWithLyricTreatment();
+  const updatedAt = '2026-11-19T12:00:00Z';
+  const first = retainMusicVideoDependencies(project, { ...project, name: 'Renamed', updatedAt });
+  const priorLayer = project.renderDependencies.references.find((ref) => ref.role === 'layer');
+  const retainedLayer = first.renderDependencies.references.find((ref) => ref.role === 'layer');
+  expect(retainedLayer.revision).toBe(priorLayer.revision);
+  expect(retainedLayer.legacyLayerTreatmentBaseline).toBeTruthy();
+  expect(first.renderDependencyState.status).toBe('current');
+  const scenes = first.scenes.map((scene, i) => i ? scene : { ...scene, lyricText: null, lyricSize: null, textZone: null, shotSheet: null });
+  expect(retainMusicVideoDependencies(first, { ...first, scenes }).renderDependencyState.status).toBe('stale');
+  expect(retainMusicVideoDependencies(project, { ...project, updatedAt, scenes }).renderDependencyState.status).toBe('stale');
+  const superseding = captureMusicVideoEvidence(first);
+  const rerendered = retainMusicVideoDependencies(project, { ...first, renderHistoryId: 'new', renderDependencies: superseding });
+  expect(rerendered.renderDependencies).toBe(superseding);
+  expect(rerendered.renderDependencyState.status).toBe('current');
 });
 
 it('marks a reviewed render stale when Use end frame turns off', () => {
