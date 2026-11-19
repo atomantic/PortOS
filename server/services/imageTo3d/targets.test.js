@@ -1,4 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  UNAVAILABLE_REASONS,
+  UNAVAILABLE_REASON_FALLBACK,
+  unavailableReasonLabel,
+} from '../../lib/imageTo3dReasons.js';
 import {
   EXECUTION_LANE,
   OUTPUT_KIND,
@@ -12,6 +19,7 @@ import {
   listTargets,
   detectHostCapabilities,
   renderOptionSupportFor,
+  UNFIXABLE_HARDWARE_REASONS,
 } from './targets.js';
 import { DEFAULT_DETAIL_TIER, DETAIL_TIERS } from './renderOptions.js';
 
@@ -134,6 +142,47 @@ describe('unavailableReason / isTargetAvailable (local-mps gating)', () => {
   it('treats absent capabilities as un-runnable rather than throwing', () => {
     expect(unavailableReason('trellis2')).toBe('requires-apple-silicon');
     expect(isTargetAvailable('trellis2', {})).toBe(false);
+  });
+});
+
+// A code is identified by its kebab shape: every OTHER single-quoted literal in `unavailableReason()` is a
+// dash-free status token ('unknown', the cudaProbe state). Comments are stripped so prose can't count as a return.
+const KEBAB_CODE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+
+function reasonCodesInSource() {
+  const src = readFileSync(fileURLToPath(new URL('./targets.js', import.meta.url)), 'utf8');
+  const start = src.indexOf('export function unavailableReason(');
+  expect(start, 'unavailableReason() not found in targets.js').toBeGreaterThan(-1);
+  // End at whatever export follows, so reordering or inserting a declaration can't widen the window.
+  const after = src.indexOf('\nexport ', start + 1);
+  expect(after, 'no export follows unavailableReason() — cannot bound its body').toBeGreaterThan(start);
+  const body = src.slice(start, after).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  return [...body.matchAll(/'([a-z][a-z0-9-]*)'/g)].map((m) => m[1]).filter((s) => KEBAB_CODE.test(s));
+}
+
+describe('unavailable reason labels (#3579)', () => {
+  // Without this, a new code with no label renders as the generic fallback under a fully green suite.
+  it('labels exactly the codes unavailableReason() can return, all kebab-case', () => {
+    for (const code of Object.keys(UNAVAILABLE_REASONS)) {
+      expect(code, `${code} must be kebab-case for the source guard to see it`).toMatch(KEBAB_CODE);
+    }
+    const codes = reasonCodesInSource();
+    expect(codes.length).toBeGreaterThan(0);
+    expect([...new Set(codes)].sort()).toEqual(Object.keys(UNAVAILABLE_REASONS).sort());
+  });
+
+  it('labels every unfixable-hardware reason', () => {
+    for (const code of UNFIXABLE_HARDWARE_REASONS) {
+      expect(UNAVAILABLE_REASONS[code], `${code} has no label`).toBeTruthy();
+    }
+  });
+
+  it('falls back for an unknown or absent code rather than rendering the raw code', () => {
+    expect(unavailableReasonLabel(null)).toBe(UNAVAILABLE_REASON_FALLBACK);
+    expect(unavailableReasonLabel('brand-new-code')).toBe(UNAVAILABLE_REASON_FALLBACK);
+    expect(unavailableReasonLabel('__proto__')).toBe(UNAVAILABLE_REASON_FALLBACK);
+    expect(unavailableReasonLabel('brand-new-code', 'custom')).toBe('custom');
+    expect(unavailableReasonLabel('requires-cuda', 'custom')).toBe(UNAVAILABLE_REASONS['requires-cuda']);
   });
 });
 

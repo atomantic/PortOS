@@ -62,10 +62,13 @@
 
 import { ServerError } from './errorHandler.js';
 import { APACHE_2, GEMMA_TERMS } from './videoDisclosure.js';
+import { STOCK_TEXT_ENCODER_ID, isStockTextEncoder } from './videoRequestDefaults.js';
 
-// Every runtime's built-in conditioner option: always present, so the picker never renders a single-option
-// select and an omitted `textEncoderId` behaves as stock.
-export const STOCK_TEXT_ENCODER_ID = 'stock';
+// The no-override sentinel and its predicate live in the browser-safe leaf the client form shares.
+export { STOCK_TEXT_ENCODER_ID, isStockTextEncoder };
+
+// Every runtime's built-in conditioner option (`STOCK_TEXT_ENCODER_ID`): always present, so the picker never
+// renders a single-option select and an omitted `textEncoderId` behaves as stock.
 
 const STOCK_MINIMAX_H3 = Object.freeze({
   id: STOCK_TEXT_ENCODER_ID,
@@ -274,13 +277,6 @@ export const videoTextEncoderRuntimes = () => Object.keys(TEXT_ENCODERS_BY_RUNTI
 /** Resolve one option by id, or `null` when the model can't render with it. */
 export const videoTextEncoderOption = (model, id) =>
   videoTextEncoderOptions(model).find((entry) => entry.id === id) || null;
-
-/**
- * `true` when `id` is absent or names the runtime's built-in conditioner —
- * i.e. the render needs no override plumbing at all. A model with no
- * substitutions accepts only the stock id (and absence).
- */
-export const isStockTextEncoder = (id) => !id || id === STOCK_TEXT_ENCODER_ID;
 
 /**
  * `true` when this model can actually render with `id` — i.e. the id names one

@@ -3,12 +3,13 @@
  * host with no Blender runtime says so by name instead of a mysterious spawn error.
  *
  * Mirrors the image-to-3D lane's vocabulary (`imageTo3d/targets.js`, `degradedInstall.js`):
- * stable kebab-case codes here, labels mirrored to `client/src/lib/riggingReasons.js`, drift
- * pinned by `unavailableReasons.parity.test.js`. `riggingUnavailableReason` is a PURE reducer
- * over a collected host picture, so every branch is unit-testable with no real install.
+ * stable kebab-case codes here, labels in the browser-safe leaf `lib/riggingReasons.js` that the client
+ * re-exports. `riggingUnavailableReason` is a PURE reducer over a collected host picture, so every branch
+ * is unit-testable with no real install.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { riggingReasonLabel } from '../../lib/riggingReasons.js';
 import {
   RIGGING_INSTALL_COMMAND,
   RIGGING_MODULE_REQUIREMENT,
@@ -17,37 +18,6 @@ import {
   probeBlenderModule,
   resolveRiggingPython,
 } from './runtime.js';
-
-/**
- * Every reason code `riggingUnavailableReason` can return, mapped to its user-facing label.
- * MIRRORED verbatim to `client/src/lib/riggingReasons.js` (the client cannot import this
- * module); the parity test pins drift and that the key set EQUALS the returned codes.
- * Labels are never interpolated: machine-specific values travel in `detail`.
- */
-export const RIGGING_UNAVAILABLE_REASONS = Object.freeze({
-  'unsupported-platform': 'Rigging needs macOS on Apple Silicon, or Linux',
-  'runtime-not-installed': 'The Blender rigging runtime is not installed yet',
-  // The failure this phase exists to name: the env resolved, the module did not import.
-  // Reporting it as ready would trade a named blocker for a render-time crash.
-  'module-unimportable': 'The rigging runtime is only half installed',
-  // "We could not look" is not "there is nothing there" — never report an absent
-  // runtime we failed to probe (AGENTS.md sentinel rule).
-  'runtime-probe-failed': 'Could not check the rigging runtime on this host',
-});
-
-/** Label for a reason code the map doesn't know (or a null/absent code). */
-export const RIGGING_REASON_FALLBACK = 'Rigging is unavailable on this host';
-
-/**
- * User-facing label for a reason code. Own-property lookup only, so a code that
- * happens to name an Object.prototype key can't render as a function/object.
- * @param {string|null} [reason]
- * @param {string} [fallback]
- * @returns {string}
- */
-export function riggingReasonLabel(reason, fallback = RIGGING_REASON_FALLBACK) {
-  return Object.hasOwn(RIGGING_UNAVAILABLE_REASONS, reason ?? '') ? RIGGING_UNAVAILABLE_REASONS[reason] : fallback;
-}
 
 /**
  * Why rigging can't run, or `null` when it can. Pure: the host picture is passed in.
@@ -89,7 +59,7 @@ const detailFor = (reason, { platform, python, probe }) => {
  * Assemble the readiness payload from an already-collected host picture. Pure.
  * `installCommand` is omitted for `unsupported-platform` (a remedy that cannot work is worse
  * than none). The payload carries the reason CODE, never its label: the client renders
- * labels from its mirror (`client/src/lib/riggingReasons.js`).
+ * labels from `lib/riggingReasons.js`.
  *
  * @param {{supportedPlatform: boolean, platform: string, python: string|null,
  *          probe: {status?: string, version?: string|null, error?: string|null}|null}} host

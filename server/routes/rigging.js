@@ -60,7 +60,7 @@ const retargetRequestSchema = z.object({
 
 /**
  * Whether this host can run character rigging, and — when it cannot — WHY, by a stable
- * reason code the client mirrors to a label (`client/src/lib/riggingReasons.js`).
+ * reason code the client renders as a label (`lib/riggingReasons.js`, shared with the client).
  *
  * Read-only and on-demand: the Blender import probe runs from here (and from the
  * instance-feature detector), never from `server/index.js` boot, so a fresh install
