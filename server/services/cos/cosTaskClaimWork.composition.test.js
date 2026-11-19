@@ -76,7 +76,7 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).not.toContain('Run each LOCAL reviewer');
     expect(prompt).not.toContain('REVIEW_ATTEMPTED_HEAD=');
     expect(prompt).not.toContain('Required-review publication rule');
-    expect(prompt).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(prompt).toContain('## PR Model Attribution');
     expect(prompt).toContain('self-review');
     if (tracker === 'github') {
       expect(prompt.indexOf('Before assigning a contributor')).toBeLessThan(prompt.indexOf('gh issue edit "${CANDIDATE}" --add-assignee'));
@@ -201,7 +201,7 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt.indexOf('Effective PR completion policy: leave-open')).toBeLessThan(claim.prompt.indexOf(custom));
     expect(claim.prompt).toContain('Target Issue Constraint');
     expect(claim.prompt).not.toContain('## Before claim mutation');
-    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(renderAgent(claim)).toContain('## PR Model Attribution');
   });
 
   it.each(['github', 'gitlab'])('renders the configured %s reviewer budget and no hardcoded three-round cap', async (tracker) => {
@@ -228,7 +228,7 @@ describe('assembled forge claim prompts', () => {
     expect(claim.prompt).toContain(custom);
     expect(claim.prompt).toContain('Effective PR completion policy: merge-on-green');
     expect(claim.prompt).toContain('Target Issue Constraint');
-    expect(renderAgent(claim)).toContain('If this workflow actually runs local pre-PR reviewers');
+    expect(renderAgent(claim)).toContain('## PR Model Attribution');
   });
 
   it('fetches the full issue when a direct claim snapshot is oversized', async () => {
