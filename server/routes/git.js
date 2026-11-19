@@ -9,7 +9,12 @@ import { protectedAgentIds } from '../services/agent/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema, gitPathBodySchema, gitCleanupMergedBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema, gitOptionalBranchBodySchema, gitBranchComparisonBodySchema, gitDiffBodySchema, gitCommitsBodySchema, gitRemoteBranchesBodySchema } from '../lib/validation.js';
+import {
+  submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema, gitPathBodySchema,
+  gitCleanupMergedBodySchema, gitStageBodySchema, gitCommitBodySchema, gitBranchBodySchema,
+  gitOptionalBranchBodySchema, gitBranchComparisonBodySchema, gitDiffBodySchema, gitCommitsBodySchema,
+  gitRemoteBranchesBodySchema
+} from '../lib/gitValidation.js';
 
 /**
  * Assert that a caller-supplied workspace path exists, is a directory, and

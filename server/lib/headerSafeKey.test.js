@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertHeaderSafeKey, isHeaderSafeKey } from './headerSafeKey.js';
-import { videoGenSettingsSchema } from './validation.js';
+import { videoGenSettingsSchema } from './settingsValidation.js';
 
 const UNSAFE = { emoji: 'abc\u{1F600}def', 'inner space': 'abc def', 'trailing newline': 'abc\n', 'latin-1 only': 'abcé' };
 

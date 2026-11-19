@@ -113,7 +113,7 @@ All under `/api/writers-room` (`server/routes/writersRoom.js`, client wrapper `c
 - **Story bible** — `GET/POST /works/:id/{characters,places,objects}`, `PATCH/DELETE /works/:id/{characters,places,objects}/:entityId`
 - **Cast augmentation** — `POST /works/:id/characters/:characterId/augment` (propose, writes nothing), `POST /works/:id/characters/:characterId/augment/apply` (apply the ticked subset; 409 on a stale fingerprint)
 
-Route inputs are Zod-validated at the boundary (`server/lib/validation.js`), except the scene-image attach route, which validates its fields inside `attachSceneImage` instead.
+Route inputs are Zod-validated at the boundary (`server/lib/pipelineValidation.js`), except the scene-image attach route, which validates its fields inside `attachSceneImage` instead.
 
 ## Tests
 

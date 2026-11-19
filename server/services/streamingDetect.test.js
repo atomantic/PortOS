@@ -1560,7 +1560,7 @@ describe('isStandardizable', () => {
     // `type` lives on the app record, and an app created without one defaults to
     // this. A positive gate that missed it would silently hide the standardize
     // button on every such app across every install.
-    const { appSchema } = await import('../lib/validation.js');
+    const { appSchema } = await import('../lib/appValidation.js');
     const defaultType = appSchema.parse({ name: 'Example App', repoPath: '/srv/example-app' }).type;
     expect(isStandardizable(defaultType)).toBe(true);
   });

@@ -28,9 +28,12 @@ import { fileInvestigationTask } from '../services/investigationTaskProducer.js'
 import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibration.js';
 import { projectPreflightSource, projectPreflightTask } from '../services/preflightActivity.js';
 import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
-import { createCosTaskSchema, slashdoTaskSchema, updateCosTaskSchema, challengeTaskSchema, resolveChallengeSchema, goalFidelityFalsePositiveSchema, cosTaskDeleteQuerySchema } from '../lib/cos/cosValidation.js';
+import {
+  createCosTaskSchema, slashdoTaskSchema, updateCosTaskSchema, challengeTaskSchema, resolveChallengeSchema,
+  goalFidelityFalsePositiveSchema, cosTaskDeleteQuerySchema, cosTaskReorderBodySchema, cosTaskSpawnBodySchema
+} from '../lib/cos/cosValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { cosTaskReorderBodySchema, cosTaskSpawnBodySchema, isPaginationRequested, parsePagination } from '../lib/validation.js';
+import { isPaginationRequested, parsePagination } from '../lib/queryValidation.js';
 
 const enhanceTaskSchema = z.object({
   description: z.string().min(1),

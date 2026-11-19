@@ -94,7 +94,7 @@ export function composeAdherencePremise({ clause, evidence } = {}) {
 }
 
 /**
- * Route input for the advisory endpoint. Validated from HERE, not `lib/validation.js` (as `jevScoreRequestSchema`): re-exporting a one-route schema through that barrel grows every suite's static import closure
+ * Route input for the advisory endpoint. Validated from HERE, not a shared validation module (as `jevScoreRequestSchema`): re-exporting a one-route schema through one grows every suite's static import closure
  * (`lib/importScoping.test.js`). `.strict()`: the endpoint is advisory and fixed-shape, so an unexpected key is a caller reaching for a nonexistent knob. No `repoPath`/`appId`: the checkout comes from the route's
  * loaded app record, since a client-supplied path would make an advisory endpoint an arbitrary-file reader.
  */

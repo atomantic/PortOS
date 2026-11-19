@@ -10,7 +10,7 @@ import { observeModelMutations } from '../services/modelObservation.js'
 import * as lmStudioManager from '../services/lmStudioManager.js'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest } from '../lib/validateRequest.js';
-import { lmStudioModelIdSchema } from '../lib/validation.js';
+import { lmStudioModelIdSchema } from '../lib/lmstudioValidation.js';
 
 const router = Router()
 router.use(observeModelMutations('loaded-models', 'provider-readiness'));

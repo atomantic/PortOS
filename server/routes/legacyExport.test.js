@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { LEGACY_EXPORT_SECTIONS } from '../lib/validation.js';
 import { getSectionKeys } from '../services/legacyExport.js';
+import { LEGACY_EXPORT_SECTIONS } from '../lib/documentValidation.js';
 
 // Mock the service so the route test stays fast and binary-free — the bundle
 // itself is covered by legacyExport.test.js.

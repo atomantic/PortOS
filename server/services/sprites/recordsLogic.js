@@ -21,7 +21,7 @@ import { SPRITE_RECORD_KINDS } from '../../lib/spriteVocabulary.js';
 
 // The one import is lib/renderTargets.js, itself a dependency-free leaf, so
 // this module stays safe to import from mocked suites (see the note on
-// SPRITE_ID_PATTERN in lib/validation.js).
+// SPRITE_ID_PATTERN in lib/spriteValidation.js).
 import { recordRenderPin } from '../../lib/renderTargets.js';
 
 // Record ids double as the on-disk directory name under data/sprites/ — keep

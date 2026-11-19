@@ -11,7 +11,6 @@ import { createApp, notifyAppsChanged } from '../services/apps.js';
 import { allocatePorts } from '../services/ports.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { scaffoldDirectoriesQuerySchema, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -19,6 +18,7 @@ import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldXcode } from '../services/xcodeScaffold.js';
 import { toTargetName } from '../services/xcodeScripts.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
+import { scaffoldDirectoriesQuerySchema, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/scaffoldValidation.js';
 
 const execAsync = promisify(exec);
 

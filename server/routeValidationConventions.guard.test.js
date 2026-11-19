@@ -1,6 +1,6 @@
 /**
  * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
- * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
+ * Fix: Add a Zod schema to the route family's domain `lib/<domain>Validation.js` file (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
@@ -134,7 +134,7 @@ describe('route handlers validate req.body (#9950, #10024)', () => {
     expect(
       offenders,
       'These POST/PUT/PATCH handlers read `req.body` with no schema. Add a Zod schema to '
-      + '`lib/validation.js` and call `validateRequest(schema, req.body)` (root AGENTS.md: '
+      + 'the route family\'s domain `lib/<domain>Validation.js` file (the only home for a schema) and call `validateRequest(schema, req.body)` (root AGENTS.md: '
       + 'all route inputs are validated). Do NOT add an allowlist entry for a JSON body.\n'
       + `Offenders:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);

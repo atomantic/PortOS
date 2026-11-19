@@ -9,6 +9,7 @@ import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { canonicalThreadRefKind } from './threadRefKinds.js';
 import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
+import { nullishString } from './sharedSchemas.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
 // short-circuit (a pasted URL is filed straight to the links collection) — the
@@ -963,3 +964,11 @@ export const youtubeIngestSettingsSchema = z.object({
   defaultIngestAudio: z.boolean().optional(),
   taskPriority: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional()
 }).strict();
+
+// Brain journal / inbox
+export const brainInboxRetryBodySchema = z.object({ providerOverride: nullishString, modelOverride: nullishString });
+export const brainJournalAppendBodySchema = z.object({
+  text: z.string().refine((text) => text.trim().length > 0, 'text is required'),
+  source: nullishString,
+});
+export const brainJournalReplaceBodySchema = z.object({ content: z.string(), ifMatchUpdatedAt: nullishString });

@@ -15,8 +15,7 @@ import { reviewEvents } from '../services/review.js';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { creativeCommissionCreateSchema, creativeCommissionUpdateSchema, commissionFeedbackSchema } from '../lib/creativeCommissionValidation.js';
-import { isPaginationRequested, paginateArray } from '../lib/validation.js';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import * as svc from '../services/creativeCommissions/store.js';
 
 const router = Router();

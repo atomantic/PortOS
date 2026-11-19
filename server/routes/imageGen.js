@@ -18,7 +18,6 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../s
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
@@ -69,6 +68,11 @@ import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 import { attachGeneratedMedia } from '../services/catalog/catalogDB.js';
 import { catalogEvents } from '../services/catalog/catalogEvents.js';
+import {
+  hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  imageCancelBodySchema, imageVisibilityBodySchema
+} from '../lib/mediaGenerationValidation.js';
+import { imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/sharedSchemas.js';
 const router = Router();
 
 router.get('/runway-models', asyncHandler(async (_req, res) => {

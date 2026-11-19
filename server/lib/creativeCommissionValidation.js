@@ -19,7 +19,7 @@ import {
 } from './creativeCommissionSpec.js';
 
 // Re-exported for every existing importer of this module (abilityAdapters.js,
-// validation.js's `export *`, the barrel's namespace, tests): the spec itself
+// tests): the spec itself
 // now lives in creativeCommissionSpec.js (#6816) — a zod-free leaf the browser
 // form imports directly — and this module keeps building the Zod schema from
 // it exactly as before.
@@ -39,9 +39,9 @@ export {
 // policy: it only ever runs because the user created it, and it never generates
 // at boot (the scheduler arms a cron; nothing fires until the cadence elapses).
 //
-// This module is a leaf (like creativeDirectorValidation.js): it must NOT import
-// back from validation.js — validation.js re-exports it, and ESM hoists
-// `export * from`, so a read-back here would hit the TDZ. It also stays free of
+// This module is a leaf (like creativeDirectorValidation.js): it imports no
+// other domain validation file (shared fragments live in sharedSchemas.js /
+// zodCompat.js). It also stays free of
 // heavy service imports (eventScheduler, etc.) so pulling it into a mocked test
 // suite doesn't drag the scheduler graph along. The authoritative cron-validity
 // check (isValidCron) lives in the service layer, not here.

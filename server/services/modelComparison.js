@@ -14,7 +14,7 @@ import { readFile } from 'fs/promises';
 import { PATHS } from '../lib/paths.js';
 import { atomicWrite } from '../lib/fileCore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { modelComparisonCatalogSchema, modelComparisonImportSchema } from '../lib/validation.js';
+import { modelComparisonCatalogSchema, modelComparisonImportSchema } from '../lib/modelComparisonValidation.js';
 
 const queueWrite = createFileWriteQueue();
 const catalogPath = () => join(PATHS.data, 'model-comparison.json');

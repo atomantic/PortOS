@@ -9,7 +9,7 @@ import * as jiraReports from '../services/jiraReports.js';
 import { getAppById } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { jiraTicketKeySchema } from '../lib/validation.js';
+import { jiraTicketKeySchema } from '../lib/appValidation.js';
 
 // Scalar-only query strings (Express turns a repeated key into an array); values keep the services' own handling.
 const boardColumnsQuerySchema = z.object({ boardId: z.string().optional() });

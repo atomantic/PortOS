@@ -8,7 +8,7 @@
  * `runtimeContract` field names it occupies, so adding a track is a row plus its
  * pipeline, never a hunt for hard-coded 6/16 literals.
  *
- * **Sharp-free leaf, deliberately.** `server/lib/validation.js` builds its Zod
+ * **Sharp-free leaf, deliberately.** `server/lib/spriteValidation.js` builds its Zod
  * ranges from these rows and must not pull the native image graph (sharp/ffmpeg)
  * into request validation. This module imports NOTHING; `animationTracks.test.js`
  * asserts that transitively.
@@ -110,7 +110,7 @@ export const ANIMATION_TRACKS = Object.freeze({
 
 /**
  * The min/default/max triples every row must keep in order. Shared by the assert
- * below, the request schemas in `server/lib/validation.js`, and the client's
+ * below, the request schemas in `server/lib/spriteValidation.js`, and the client's
  * pre-submit check.
  */
 export const TRACK_BOUND_TRIPLES = Object.freeze([

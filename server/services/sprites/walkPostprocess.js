@@ -34,7 +34,7 @@ import { decodeRgbaFrame, encodePng } from '../../lib/imageRgba.js';
 import { keyChannelSplit, keyness, keyShareFn, hexToRgb } from './chromaKey.js';
 
 // Authoring bounds + pure label/clamp helpers live in a sharp-free leaf module
-// so server/lib/validation.js can share the SAME frame-count/fps range without
+// so server/lib/spriteValidation.js can share the SAME frame-count/fps range without
 // pulling this module's native image graph in. Re-exported here so existing
 // consumers (walk.js, atlas.js) keep importing them from walkPostprocess.
 import {

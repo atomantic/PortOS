@@ -192,9 +192,9 @@ describe('absent vs. empty vs. corrupt (the sentinel rules)', () => {
   });
 
   it('degrades to walk alone when the read never reached a filesystem', () => {
-    // Why this matters: `server/lib/validation.js` builds its sprite Zod ranges from
+    // Why this matters: `server/lib/spriteValidation.js` builds its sprite Zod ranges from
     // the effective registry at MODULE LOAD, and nearly every route and service
-    // imports validation.js — so this store gets resolved inside suites that have
+    // imports a validation module — so this store gets resolved inside suites that have
     // nothing to do with sprites, including ones that stub `fs` with a partial
     // factory (`vi.mock('fs', () => ({ existsSync }))`). Such a read throws a
     // TypeError with NO errno; classifying that as "no store" is what keeps those

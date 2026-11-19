@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as portsService from '../services/ports.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { portsAllocateSchema } from '../lib/validation.js';
+import { portsAllocateSchema } from '../lib/databaseValidation.js';
 
 const router = Router();
 

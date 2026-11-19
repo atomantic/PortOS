@@ -125,7 +125,7 @@ export function resetProviderGraphState() {
 const providerService = () => requireToolkit().services.providers;
 
 // Deferred: the bootstrap-app table is read only when a preset is derived, and
-// its module reaches `lib/validation.js` — a closure nothing on the graph's
+// its module reaches the provider validation schemas — a closure nothing on the graph's
 // boot path otherwise pays for (server/AGENTS.md "Import scoping").
 const bootstrapApps = async () => (await import('../credentialBootstrapApps.js')).listCredentialBootstraps();
 

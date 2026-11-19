@@ -25,8 +25,7 @@ const SAFE_URL_MESSAGE = 'must be an http(s) URL';
 // =============================================================================
 // Zod schemas for the encrypted PII Vault. Records are db-primary Postgres
 // (`privacy_vault_records` / `privacy_consents`), machine-local (federation is
-// a deferred child issue). validation.js re-exports everything here so deep
-// imports keep working.
+// a deferred child issue).
 
 // =============================================================================
 // HOUSEHOLD SUBJECTS (issue #3658)
@@ -139,10 +138,10 @@ const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-
 // Opt-in pagination query params (?limit=&offset=) spread into the .strict()
 // list-query schemas below so the paginateArray envelope can be requested
 // without the strict guard rejecting the keys. Kept as passthrough strings —
-// parsePagination (validation.js) does the parseInt + clamp, so garbage falls
+// parsePagination (queryValidation.js) does the parseInt + clamp, so garbage falls
 // back to the default page rather than 400-ing. Defined locally (not imported
-// from validation.js) to avoid a circular import: validation.js re-exports this
-// module. Mirror any change into validation.js's parsePagination contract.
+// from queryValidation.js) so this module imports no other validation file.
+// Mirror any change into queryValidation.js's parsePagination contract.
 const paginationQueryFields = {
   limit: z.string().optional(),
   offset: z.string().optional(),

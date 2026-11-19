@@ -9,7 +9,7 @@
   that ADR are unchanged and still govern.
 - **Related:** epic #4348 (federated media providers),
   [`server/lib/federatedMediaWire.js`](../../server/lib/federatedMediaWire.js),
-  [`server/lib/validation.js`](../../server/lib/validation.js),
+  [`server/lib/federatedMediaValidation.js`](../../server/lib/federatedMediaValidation.js),
   [`docs/FEDERATED_MEDIA_PROVIDERS.md`](../FEDERATED_MEDIA_PROVIDERS.md),
   ADR [privacy records machine-local](./2026-08-08-privacy-records-machine-local.md) (#2148).
 

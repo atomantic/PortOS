@@ -18,8 +18,7 @@ import { isDeliveryCleanupHeld, retryHoldOwnerId } from '../lib/taskRetryHold.js
 import { getDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { resumeCosAgentSchema, relaunchCosAgentSchema } from '../lib/cos/cosValidation.js';
-import { cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
+import { resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/cos/cosValidation.js';
 
 import { releasePublicationRequestSchema, releaseCandidateRequestSchema } from '../lib/releasePublication.js';
 import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cos/cosClaimOwnership.js';

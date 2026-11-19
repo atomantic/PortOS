@@ -9,10 +9,9 @@ import { emptyToUndefined } from './zodCompat.js';
 // =============================================================================
 // UNIFIED STORY BUILDER SCHEMAS
 // =============================================================================
-// Split out of validation.js (issue #1151); validation.js re-exports
-// everything here so existing deep imports keep working. The import from
-// zodCompat.js (not validation.js) supplies emptyToUndefined — see
-// creativeDirectorValidation.js for the cycle rationale.
+// Split out of the retired validation.js catch-all (issue #1151). The import from
+// zodCompat.js supplies emptyToUndefined — see creativeDirectorValidation.js for
+// the cycle rationale.
 
 const storyProviderField = z.preprocess(emptyToUndefined, z.string().trim().max(120).optional());
 const storyModelField = z.preprocess(emptyToUndefined, z.string().trim().max(200).optional());

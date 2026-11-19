@@ -98,7 +98,7 @@ PortOS/
 │   │   └── browserService.js  # Browser CDP/health/PM2 control
 │   ├── lib/                   # Shared utilities
 │   │   ├── errorHandler.js    # Error normalization
-│   │   ├── validation.js      # Zod schemas
+│   │   ├── *Validation.js     # Zod schemas, one file per route family
 │   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
 │   └── cos-runner/            # Isolated agent runner
 │       └── index.js           # Standalone Express server
@@ -436,7 +436,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 
 ### Adding an API Endpoint
 1. Create route file in `server/routes/` and mount it in `server/index.js`.
-2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in `server/lib/validation.js` or domain-specific validation modules).
+2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in the route family's domain `server/lib/*Validation.js` module, or `server/lib/sharedSchemas.js` for fragments two domains share).
 3. Register detailed API operation metadata and schemas in `server/lib/apiOperationContracts.js`. Add `x-portos-tool` if the operation should be exposed as an agent-callable tool, and declare thrown error codes in `x-portos-error-codes`.
 4. If the endpoint or domain emits real-time Socket.IO events, declare their payload contracts in `server/lib/socketEventContracts.js`.
 

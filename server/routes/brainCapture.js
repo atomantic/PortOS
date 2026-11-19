@@ -9,14 +9,9 @@ import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { brainInboxRetryBodySchema } from '../lib/validation.js';
 import {
-  captureInputSchema,
-  resolveReviewInputSchema,
-  fixInputSchema,
-  updateInboxInputSchema,
-  markInboxSentToCatalogSchema,
-  inboxQuerySchema
+  captureInputSchema, resolveReviewInputSchema, fixInputSchema, updateInboxInputSchema,
+  markInboxSentToCatalogSchema, inboxQuerySchema, brainInboxRetryBodySchema
 } from '../lib/brainValidation.js';
 
 const router = Router();

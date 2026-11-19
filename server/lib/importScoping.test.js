@@ -324,7 +324,8 @@ it('keeps Video compilation independent of project storage and execution', () =>
   expect(closure.has(abs('lib/reactorVideoClip.js'))).toBe(true);
   expect(closure.has(abs('services/creativeDirector/projectsLogic.js'))).toBe(false);
   expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
-  expect(closure.has(abs('lib/validation.js'))).toBe(false);
+  // The compiler is a pure render-pin leaf: no route-schema module (or the shared fragments they use) may enter its closure.
+  expect([...closure].filter((file) => /(?:Validation|sharedSchemas)\.js$/.test(file))).toEqual([]);
 });
 
 describe('shared provider type leaf', () => {

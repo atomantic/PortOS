@@ -1,7 +1,7 @@
 /**
  * The per-track animation registry (#3015) — the rows themselves, the
  * unknown-track error boundary, the per-track clamps, and the sharp-free
- * property `server/lib/validation.js` depends on.
+ * property `server/lib/spriteValidation.js` depends on.
  *
  * The walk row is pinned to its historical values on purpose: #3015 is a
  * refactor, and a registry that quietly moved walk's floor would change every
@@ -487,19 +487,19 @@ describe('walkBounds re-reads the walk row (no call-site churn)', () => {
 });
 
 describe('sharp-free leaf property', () => {
-  // The property that actually matters is on `server/lib/validation.js`: it
+  // The property that actually matters is on `server/lib/spriteValidation.js`: it
   // builds its sprite frame-count/fps ranges from this registry, and the whole
   // reason walkBounds.js was split out (and now animationTracks.js beneath it)
   // is to keep the native image graph out of REQUEST VALIDATION. Asserting only
-  // the three leaves would pass while someone routed sharp into validation.js
-  // through any of its ~90 other closure members, so validation.js is the first
+  // the three leaves would pass while someone routed sharp into the schema module
+  // through any of its other closure members, so spriteValidation.js is the first
   // entry point here, not an afterthought.
   const NATIVE = ['sharp', 'canvas', 'fluent-ffmpeg', '@ffmpeg-installer/ffmpeg'];
 
   it.each([
-    ['the request-validation graph', join(SERVER_DIR, 'lib', 'validation.js')],
+    ['the request-validation graph', join(SERVER_DIR, 'lib', 'spriteValidation.js')],
     ['spriteAnimationTracks.js', join(LIB_DIR, 'spriteAnimationTracks.js')],
-    // #3152: the store sits BETWEEN the leaf registry and validation.js — every
+    // #3152: the store sits BETWEEN the leaf registry and spriteValidation.js — every
     // sprite Zod range now resolves through it — so if it ever reached sharp, the
     // whole split collapses at its narrowest point. It does file I/O (which the
     // leaf below may not), but native image deps are still forbidden.
@@ -547,9 +547,9 @@ describe('sharp-free leaf property', () => {
     expect([...packer.packages], 'walkPostprocess is the native-graph module this split exists to fence off')
       .toContain('sharp');
 
-    // …and that validation.js's closure is genuinely large, so a resolver gap
+    // …and that spriteValidation.js's closure is genuinely large, so a resolver gap
     // can't make its clean result meaningless.
-    expect(staticImportClosure(join(SERVER_DIR, 'lib', 'validation.js')).files.size).toBeGreaterThan(20);
+    expect(staticImportClosure(join(SERVER_DIR, 'lib', 'spriteValidation.js')).files.size).toBeGreaterThan(20);
   });
 });
 

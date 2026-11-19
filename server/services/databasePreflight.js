@@ -7,10 +7,10 @@ import { PATHS } from '../lib/paths.js';
 import { POOL_CONFIG } from '../lib/db.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal, databaseMaintenanceEndpointSchema } from '../lib/databaseMaintenanceJournal.js';
-import { databaseMaintenancePreflightSchema } from '../lib/validation.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { classifyWriterQuiescence, createDatabaseWriterRegistry } from '../lib/databaseWriterRegistry.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
+import { databaseMaintenancePreflightSchema } from '../lib/databaseValidation.js';
 
 const require = createRequire(import.meta.url);
 const refuse = (code, message) => new ServerError(message, { status: 409, code });

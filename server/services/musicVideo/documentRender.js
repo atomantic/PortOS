@@ -44,7 +44,6 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideo/musicVideoLayers.js';
@@ -57,6 +56,7 @@ import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVide
 import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 
 import { safeUnder, findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, probeVideoGeometry, edgeFadeFilter } from '../../lib/ffmpeg.js';
+import { htmlCompositionContractSchemaFor } from '../../lib/htmlCompositionValidation.js';
 export { documentRenderClock, documentSongDuration } from './documentTiming.js';
 // The frame each project aspect renders at (the composition browser's sizes).
 export const DOCUMENT_FRAME_SIZES = Object.freeze({

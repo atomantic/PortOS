@@ -6,9 +6,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { presetProviderIdSchema, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
-import { appUpdateSchema, providerSchema as hostProviderSchema, credentialBootstrapsSettingsSchema, featureProviderConfigSchema, harnessSettingsSchema, llmSchema, runSchema } from './validation.js';
 import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cos/cosValidation.js';
 import { providerActiveSchema, providerCreateSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
+import { appUpdateSchema } from './appValidation.js';
+import { providerSchema as hostProviderSchema, credentialBootstrapsSettingsSchema, harnessSettingsSchema } from './providerValidation.js';
+import { featureProviderConfigSchema } from './settingsValidation.js';
+import { llmSchema } from './sharedSchemas.js';
+import { runSchema } from './processValidation.js';
 
 const ACCEPTED = ['claude-code', 'pi.tui@nvidia-nim-free', 'claude.cli@anthropic+corp-auth', 'direct.api@ollama'];
 const REJECTED = ['pi.tui@Nvidia', 'pi.tui@', 'pi.gui@x', 'direct.api@ollama+corp-auth', '__proto__'];

@@ -17,8 +17,8 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { mediaSketchSaveSchema } from '../lib/validation.js';
 import * as svc from '../services/mediaSketches.js';
+import { mediaSketchSaveSchema } from '../lib/mediaValidation.js';
 
 const router = Router();
 

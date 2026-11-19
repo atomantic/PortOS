@@ -6,7 +6,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { logsQuerySchema, pm2ProcessNameSchema } from '../lib/validation.js';
+import { logsQuerySchema, pm2ProcessNameSchema } from '../lib/sharedSchemas.js';
 
 const router = Router();
 

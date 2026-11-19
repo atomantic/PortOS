@@ -1,6 +1,6 @@
 // The registry of optional per-install features — the single list that Settings
-// > Features renders, `server/lib/validation.js` validates against, and
-// `server/lib/navManifest.js` gates navigation on.
+// > Features renders, `instanceSettingsValidation.js` validates against, and
+// `navManifest.js` gates navigation on.
 //
 // It lives in lib/ (pure data, no I/O) so both a lib and a service can read it
 // without a service→lib inversion. Runtime resolution — stored overrides,

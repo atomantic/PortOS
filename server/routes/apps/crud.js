@@ -24,7 +24,6 @@ import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest } from '../../lib/validateRequest.js';
-import { appSchema, appUpdateSchema } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
@@ -34,6 +33,7 @@ import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
 import { isRepo } from '../../services/git.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
+import { appSchema, appUpdateSchema } from '../../lib/appValidation.js';
 
 const router = Router();
 

@@ -1,9 +1,9 @@
 /**
  * Sprites: the user-defined animation-track store (#3152).
  *
- * The EFFECTIVE track table is the compiled built-ins merged with the user store (one small JSON config), so sprite schemas stay module-load constants. Separate from `animationTracks.js`, which must stay a TRUE LEAF (`animationTracks.test.js`): `validation.js` builds sprite Zod ranges from it and must not pull the native image graph in; this module imports the leaf, never the reverse, and reaches only `fileUtils.js`.
+ * The EFFECTIVE track table is the compiled built-ins merged with the user store (one small JSON config), so sprite schemas stay module-load constants. Separate from `animationTracks.js`, which must stay a TRUE LEAF (`animationTracks.test.js`): `spriteValidation.js` builds sprite Zod ranges from it and must not pull the native image graph in; this module imports the leaf, never the reverse, and reaches only `fileUtils.js`.
  *
- * Reads are SYNCHRONOUS on purpose: every registry reader is sync and `validation.js` builds `spriteRuntimeContractSchema` at MODULE LOAD, where Zod can't await and ESM hoisting breaks "store is read before validation.js imports" ordering. One `readFileSync` per process keeps signatures untouched.
+ * Reads are SYNCHRONOUS on purpose: every registry reader is sync and `spriteValidation.js` builds `spriteRuntimeContractSchema` at MODULE LOAD, where Zod can't await and ESM hoisting breaks "store is read before spriteValidation.js imports" ordering. One `readFileSync` per process keeps signatures untouched.
  * The shipped seed is the fallback: when `data/sprites/animation-tracks.json` is ABSENT it reads `data.reference/sprites/animation-tracks.json` (module load precedes boot migrations, else a first boot after upgrade builds a contract schema missing `scannerFrameCount`). An EXISTING store file is authoritative and never merged with the seed, so a deleted `scanner` stays deleted.
  * Storage: `file-primary`, machine-local, never federated; inseparable from the on-disk sprite tree (rows name the `setKind` strings approved sets carry); backed up by the rsync snapshot.
  * A bad stored row fails loudly at LOAD via `assertAnimationTrackRows` (same guard as the compiled table), naming the field instead of surfacing later as a `NaN` frame count.
@@ -60,7 +60,7 @@ function readStoreDoc(path) {
 }
 
 /**
- * The authoritative store doc: the user copy if it exists, else the shipped seed, else `null` (walk alone). The whole resolution is guarded because `validation.js` builds sprite Zod ranges from this registry AT MODULE LOAD and nearly
+ * The authoritative store doc: the user copy if it exists, else the shipped seed, else `null` (walk alone). The whole resolution is guarded because `spriteValidation.js` builds sprite Zod ranges from this registry AT MODULE LOAD and nearly
  * everything imports it, so it runs in suites that stub `fs` partially or double `fileUtils.js` without `PATHS`: with no filesystem the answer is "no store", not an import-time failure. Scoped to the *environment* being unusable,
  * never a real read failure (an existing but unparseable store still throws; a TypeError from a missing mock export can't occur on a real install).
  */

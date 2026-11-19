@@ -15,7 +15,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   privacySubjectCreateSchema,
   privacySubjectUpdateSchema,
@@ -104,6 +103,7 @@ import {
   markOrgRemoved,
   draftUpdateEmail,
 } from '../services/privacyChanges.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 
 const router = Router();
 

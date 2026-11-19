@@ -3,9 +3,8 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { gameCreateSchema, gameArtworkBindingSchema, gameArtworkBindingUpdateSchema, gameArtworkPublishSchema, gameFeedbackSchema, gameMusicBindingSchema, gameMusicBindingUpdateSchema, gameMusicPublishSchema, gameSpriteBindingSchema, gameUpdateSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   bindMusic,
@@ -27,6 +26,11 @@ import {
   updateGame,
   updateMusic,
 } from '../services/games/index.js';
+import {
+  gameCreateSchema, gameArtworkBindingSchema, gameArtworkBindingUpdateSchema, gameArtworkPublishSchema,
+  gameFeedbackSchema, gameMusicBindingSchema, gameMusicBindingUpdateSchema, gameMusicPublishSchema,
+  gameSpriteBindingSchema, gameUpdateSchema
+} from '../lib/gameValidation.js';
 
 const router = Router();
 

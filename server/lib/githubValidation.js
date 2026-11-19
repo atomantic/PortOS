@@ -1,8 +1,8 @@
 /**
  * Zod schemas and constants for the GitHub routes: managed repos and secrets, notification accounts, agent rules, the inbox, deployment review and audit.
  *
- * Kept out of the validation.js barrel so GitHub schema edits do not conflict with other
- * domains there. Callers import this module directly; the barrel does not re-export it.
+ * Its own module so GitHub schema edits do not conflict with other domains. Callers import
+ * this module directly.
  */
 
 import { z } from 'zod';

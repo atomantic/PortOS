@@ -4,7 +4,7 @@
 
 import { request } from './apiCore.js';
 
-// Per-content-type radio values mirror server/lib/validation.js
+// Per-content-type radio values mirror server/lib/creativeDirectorValidation.js
 // IMPORTER_CONTENT_TYPES; UI strings stay client-side.
 export const IMPORTER_CONTENT_TYPES = ['short-story', 'novel', 'screenplay', 'comic-script'];
 

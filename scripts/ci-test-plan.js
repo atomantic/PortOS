@@ -253,7 +253,7 @@ const FULL_TRIGGER_RULES = [
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
   // Widely imported, but pure cross-platform schema logic: no spawn, path or
   // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
+  { re: /^server\/lib\/schemaVersions\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.

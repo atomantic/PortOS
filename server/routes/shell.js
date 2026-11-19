@@ -13,8 +13,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { shellImageDropSchema } from '../lib/validation.js';
 import { dropImageIntoShellSession } from '../services/shellImageDrop.js';
+import { shellImageDropSchema } from '../lib/shellValidation.js';
 
 const router = Router();
 

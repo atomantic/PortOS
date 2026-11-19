@@ -1,6 +1,6 @@
 /**
  * Google Cloud Agent Platform configuration vocabulary, a dependency-free leaf shared by the settings
- * schema (lib/validation.js) and the transport (services/googleCloudApi.js).
+ * schema (lib/settingsValidation.js) and the transport (services/googleCloudApi.js).
  *
  * Google Cloud Agent Platform settings vocabulary (dependency-free): `GOOGLE_DEFAULT_LOCATION`, the
  * region / project-id patterns and their `isValidGoogleLocation` / `isValidGoogleProjectId` checks,

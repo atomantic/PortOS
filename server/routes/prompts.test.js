@@ -213,7 +213,7 @@ describe('prompts routes — name validation (#9152)', () => {
 
   it('every shipped stage name and variable key passes the schemas', async () => {
     const { readFileSync } = await import('fs');
-    const { promptStageNameSchema, promptVariableKeySchema } = await import('../lib/validation.js');
+    const { promptStageNameSchema, promptVariableKeySchema } = await import('../lib/promptValidation.js');
     const dir = new URL('../../data.reference/prompts/', import.meta.url);
     const stages = Object.keys(JSON.parse(readFileSync(new URL('stage-config.json', dir), 'utf-8')).stages);
     const vars = Object.keys(JSON.parse(readFileSync(new URL('variables.json', dir), 'utf-8')).variables);
