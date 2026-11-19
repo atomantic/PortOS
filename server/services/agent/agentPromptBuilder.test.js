@@ -110,7 +110,7 @@ import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashd
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
 import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen } from '../promptSections/claimOnDemand.js';
-import { sanitizeTaskMetadata } from '../../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';

@@ -63,7 +63,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { handBackBlockedPrRemediation } from '../blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from '../healthCriticalNotifier.js';
 

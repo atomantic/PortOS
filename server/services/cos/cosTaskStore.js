@@ -25,7 +25,7 @@ import { isTruthyMeta, sameMetaValue } from '../../lib/metadataFlags.js';
 import { reviewerModelsFromDefaults } from '../../lib/reviewerConfig.js';
 import { createSingleFlight } from '../../lib/singleFlight.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../../lib/taskParser.js';
-import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';

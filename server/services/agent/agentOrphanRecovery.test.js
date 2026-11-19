@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { MAX_ORPHAN_RETRIES, ORPHAN_GUARDS, ORPHAN_RETRY_COOLDOWN_MS, classifyOrphanGuard, decideOrphanRetry } from './agentOrphanRecovery.js';
 
 const NOW = Date.parse('2026-06-01T12:00:00.000Z');

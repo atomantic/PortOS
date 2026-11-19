@@ -31,7 +31,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { pullRequestProviderOverrideSchema, pullRequestRunSettingsSchema, reviewerConfigMetadata, claimSafeReviewers, normalizeReviewers } from '../../lib/cos/cosValidation.js';
+import { pullRequestProviderOverrideSchema, pullRequestRunSettingsSchema } from '../../lib/cos/cosValidation.js';
+import { reviewerConfigMetadata } from '../../lib/cos/cosTaskMetadata.js';
+import { claimSafeReviewers, normalizeReviewers } from '../../lib/reviewerConfig.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { PR_COMPLETIONS, isSelfReviewMode } from '../../lib/prDisposition.js';
 import { isTruthyMeta } from '../../services/agent/agentState.js';

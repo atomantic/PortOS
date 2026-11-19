@@ -152,7 +152,7 @@ import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import {

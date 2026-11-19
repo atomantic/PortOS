@@ -4,7 +4,7 @@ import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { loadState } from '../cos/cosState.js';
 import { hasActiveTaskOwner } from './agentState.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { isRetryHeld } from '../../lib/taskRetryHold.js';
 import { MAX_SPAWNS_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';

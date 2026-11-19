@@ -73,7 +73,8 @@ import {
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
-import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cos/cosValidation.js'
+import { codeReviewSettingsSchema } from '../lib/cos/cosValidation.js'
+import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/reviewerConfig.js'
 import { taskObjective } from '../lib/goalFidelity.js'
 import { updateSettingsWith } from './settings.js'
 

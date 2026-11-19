@@ -7,7 +7,7 @@
  */
 
 import { isLegacyDeepAudit } from '../../lib/auditWorkflow.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
 import { isRetryHeld } from '../../lib/taskRetryHold.js';
 
