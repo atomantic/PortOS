@@ -22,7 +22,8 @@
  * map, and the `source: 'download'` video-history entry.
  */
 
-import { join } from 'path';
+import { basename, join } from 'path';
+import { access } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId, PATHS, unlinkGuarded } from '../lib/fileUtils.js';
@@ -81,13 +82,22 @@ export function cancelVideoDownload(jobId) {
   return true;
 }
 
+// Paths are response-only: history may sync to installations with different roots.
+async function withLocalFilePath(entry) {
+  const { filename } = entry;
+  if (typeof filename !== 'string' || !filename || basename(filename) !== filename) return entry;
+  const filePath = join(PATHS.videos, filename);
+  const present = await access(filePath).then(() => true, () => false);
+  return present ? { ...entry, filePath } : entry;
+}
+
 /** List downloaded videos — the `source: 'download'` slice of video-history, newest first. */
 export async function listDownloads() {
   // No `.catch(() => [])`: that re-swallowed exactly what `loadHistory`'s strict
   // read exists to surface (#4115), turning an unreadable history into a
   // confident "you have no downloads". Let it bubble to the error middleware.
   const history = await loadHistory();
-  return (Array.isArray(history) ? history : []).filter((h) => h?.source === 'download');
+  return Promise.all((Array.isArray(history) ? history : []).filter((h) => h?.source === 'download').map(withLocalFilePath));
 }
 
 /**
@@ -250,7 +260,7 @@ export async function startVideoDownload(url) {
 
       const { entry } = result;
       console.log(`📥 Video download ${shortId(jobId)} complete — "${entry.title}" (${entry.filename})`);
-      broadcastSse(job, { type: 'complete', id: jobId, video: entry });
+      broadcastSse(job, { type: 'complete', id: jobId, video: await withLocalFilePath(entry) });
     } catch (err) {
       console.error(`❌ Video download ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });
