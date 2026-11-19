@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -97,6 +97,40 @@ describe('test process ownership boundaries', () => {
           signal: mode === 'signal-failed' ? 'failed' : 'delivered',
           settlement: terminated ? 'terminated' : mode === 'unknown' ? 'unknown' : 'unconfirmed' }));
         expect(JSON.stringify(onOutcome.mock.calls)).not.toMatch(/fixture-secret|900001|original|example/);
+      }
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
+  it.each(['disconnects', 'hangs'])('gives the pool watchdog time to exit before containment when it %s', async mode => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-watchdog-'));
+    const root = join(host, 'pvt-owned');
+    mkdirSync(root);
+    writeFileSync(join(root, '.owner.pid'), '999999 0\n');
+    const runner = { pid: process.pid, ppid: process.ppid };
+    const watchdog = { pid: 900001, ppid: process.pid, start: 'original', args: ['vitest-watchdog'],
+      env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+    let elapsed = 0;
+    let killed = false;
+    const read = () => [runner, { ...watchdog, terminal: killed || (mode === 'disconnects' && elapsed >= 25) }];
+    const kill = vi.fn(() => {
+      expect(elapsed).toBe(50);
+      killed = true;
+    });
+    const onOutcome = vi.fn();
+    try {
+      await waitForVitestWatchdog(root, { read, graceMs: 50, now: () => elapsed, wait: async ms => { elapsed += ms; } });
+      const result = killTestProcessesUnder(root, { read, probe: () => false, kill, onOutcome });
+      if (mode === 'disconnects') {
+        expect(elapsed).toBe(25);
+        expect(result).toBe(0);
+        expect(kill).not.toHaveBeenCalled();
+        expect(onOutcome).not.toHaveBeenCalled();
+      } else {
+        expect(result).toBe(1);
+        expect(kill).toHaveBeenCalledExactlyOnceWith(watchdog.pid, 'SIGKILL');
+        expect(onOutcome).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          kind: 'vitest-watchdog', signal: 'delivered', settlement: 'terminated',
+        }));
       }
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
