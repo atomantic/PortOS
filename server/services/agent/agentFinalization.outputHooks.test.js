@@ -16,8 +16,6 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => {
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
 });
 import { tryReadFile } from '../../lib/fileUtils.js';
-const deep = vi.hoisted(() => ({ checkpointDeepAudit: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })), settleDeepAuditDelivery: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })) }));
-vi.mock('../deepAudit.js', () => deep);
 vi.mock('../../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 vi.mock('../appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
 import { recordAuditQuality } from '../appQuality.js';
@@ -402,7 +400,6 @@ describe('recovery output-hook dispatch (#3182)', () => {
         duration: 1000, workspacePath, finalSummary, outputBuffer: 'Thinking: inspect files\nexec\npython command output' });
       expect(persistedAgent.metadata.taskSummary).toBe(expected);
       expect(persistedAgent.metadata.simplifySummary).toBeNull();
-      expect(deep.checkpointDeepAudit).toHaveBeenCalled();
     } finally {
       await rm(workspacePath, { recursive: true, force: true });
     }
@@ -1192,8 +1189,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
   recordAuditQuality.mockResolvedValue(true);
   await finalizeAgent({ agentId: 'extended-summary', task, success: true, exitCode: 0, duration: 1000,
     workspacePath: '/example/repo', finalSummary: 'Investigated high-risk paths and fixed two coherent defects. Coverage remains partial.', outputBuffer: 'tool transcript' });
-  expect(deep.checkpointDeepAudit).not.toHaveBeenCalled();
-  expect(deep.settleDeepAuditDelivery).not.toHaveBeenCalled();
   expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome: null }) }), expect.anything());
   expect(persistedAgent.metadata.taskSummary).toContain('Coverage remains partial');
   expect(persistedAgent.metadata.taskSummarySource).toBe('terminal-result');
@@ -1206,7 +1201,6 @@ it('finishes extended Deep with an honest partial summary through ordinary compl
       errorAnalysis: { type: 'transient', retryable: true, error: 'context exhausted' } });
     expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'in_progress', metadata: expect.objectContaining({ retryPendingCleanup: expect.any(String) }) }), expect.anything());
-    expect(deep.checkpointDeepAudit).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
   it('distinguishes a clean execution with no usable assessment from a failed execution', async () => {

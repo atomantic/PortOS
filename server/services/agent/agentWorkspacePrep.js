@@ -248,9 +248,6 @@ async function prepareRequestedWorktree({
     return refusePinnedAttach(task, workspacePath, `Task ${task.id} must attach at a reviewed head commit but records none; refusing to check out ${existingBranch}`);
   }
   const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
-  const baseCommit = isLegacyDeepAudit(task.metadata)
-    ? await (await import('../deepAudit.js')).getDeepAuditSourceRevision(task)
-    : null;
   // Detecting the base branch and resolving the branch holder are independent
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
@@ -314,7 +311,6 @@ async function prepareRequestedWorktree({
   let worktreeError = null;
   const create = () => createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
-    ...(baseCommit ? { baseCommit } : {}),
     existingBranch: resolveTaskRemoteBranch(task.metadata) || undefined,
     ...(task.metadata?.existingBranch && task.metadata?.resumedFromAgentId ? { resumeBranch: existingBranch } : {}),
     // Fork coordinates select the remote head, independent of the local branch name.

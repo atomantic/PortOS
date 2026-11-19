@@ -83,7 +83,6 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 const handBackPrRemediationMock = vi.fn().mockResolvedValue(true);
 vi.mock('../prRemediationFollowUp.js', () => ({ handBackPrRemediation: (...args) => handBackPrRemediationMock(...args) }));
 
-vi.mock('../deepAudit.js', () => ({ getDeepAuditSourceRevision: vi.fn().mockResolvedValue('a'.repeat(40)) }));
 vi.mock('../featureAgents.js', () => ({ getFeatureAgent: vi.fn().mockResolvedValue(null) }));
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal();
@@ -149,20 +148,10 @@ describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () =
 });
 
 describe('prepareAgentWorkspace', () => {
-  it('provisions a Deep replacement from its server-owned source pin', async () => {
-    createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/agent-deep', branchName: 'cos/deep', baseBranch: 'main' });
-    const task = { id: 'deep', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep' } };
-    expect(await prepareAgentWorkspace({ agentId: 'agent-deep', task })).toMatchObject({ outcome: 'ready' });
-    expect(createWorktree).toHaveBeenCalledWith('agent-deep', expect.any(String), 'deep', expect.objectContaining({ baseCommit: 'a'.repeat(40) }));
-  });
-
-  it('provisions extended Deep from the ordinary source without reading old coverage pins', async () => {
-    const { getDeepAuditSourceRevision } = await import('../deepAudit.js');
-    getDeepAuditSourceRevision.mockClear();
+  it('provisions extended Deep from the ordinary source without a pinned base commit', async () => {
     createWorktree.mockResolvedValue({ worktreePath: '/mock/worktrees/extended', branchName: 'cos/extended', baseBranch: 'main' });
     const task = { id: 'extended', taskType: 'internal', metadata: { useWorktree: true, auditDepth: 'deep', auditWorkflow: 'extended-v1' } };
     expect(await prepareAgentWorkspace({ agentId: 'agent-extended', task })).toMatchObject({ outcome: 'ready' });
-    expect(getDeepAuditSourceRevision).not.toHaveBeenCalled();
     expect(createWorktree.mock.calls[0][3]).not.toHaveProperty('baseCommit');
     expect(createWorktree).toHaveBeenCalledWith('agent-extended', expect.any(String), 'extended', expect.objectContaining({ baseBranch: 'main' }));
   });
