@@ -1,9 +1,9 @@
 /**
  * Shared scaffolding for migrations. Several families live here:
  *
- *   1. Hash-driven prompt-replace migrations — every one from 003 onward uses
- *      `makePromptReplaceMigration` to collapse onto ~50 lines (hash table +
- *      label + customized-skip hint).
+ *   1. Hash-driven prompt-replace migrations — `makePromptReplaceMigration`
+ *      (hash table + label + customized-skip hint). Only 003 and 005 remain;
+ *      a template edit needs no migration (`shippedPromptHashes.js`).
  *   2. Dashboard-layout seeding migrations — `readLayoutsDoc` /
  *      `writeLayoutsDoc` collapse the read → JSON.parse → `Array.isArray`
  *      guard → write shell shared by every migration that mutates built-in
@@ -396,10 +396,10 @@ export const md5 = (str) => {
  *   003 to handle the `pipeline-tv-script.md` → `pipeline-teleplay.md`
  *   rename.
  *
- * `subdirs` mirrors a migration's `DRIFT_SUBDIRS` export: a per-filename
- * override of the `prompts/<subdir>/` directory both sides resolve under.
- * Stage prompts (the default, `'stages'`) need no entry; prompt fragments in
- * `prompts/_partials/` do.
+ * Both sides resolve under `prompts/stages/`: 003 and 005 are the only
+ * callers left. Every migration that used this for the swap alone was deleted
+ * in #16827, because `reconcileShippedPrompts` makes that swap after each full
+ * pass; a new one is refused by `shippedPromptHashes.guard.test.js`.
  *
  * "Current" is the live reference body, not the migration's declared
  * `current` hash (#16090): a later template edit would otherwise make this
@@ -415,11 +415,9 @@ export async function applyPromptReplaceMigration({
   customizedHint,
   createIfMissing = false,
   retireOnSampleMissing = false,
-  subdirs = {},
 }) {
-  const subdirFor = (filename) => subdirs[filename] || 'stages';
-  const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', subdirFor(filename), filename);
-  const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', subdirFor(filename), filename);
+  const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', 'stages', filename);
+  const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', 'stages', filename);
   const filenames = Object.keys(accepted);
   // Lazy: shippedPromptHashes.js imports this module.
   const { readShippedHashes } = await import('./shippedPromptHashes.js');
@@ -465,7 +463,7 @@ export async function applyPromptReplaceMigration({
     const shipped = new Set([
       ...accepted[filename],
       current[filename],
-      ...(shippedHashes[`${subdirFor(filename)}/${filename}`]?.retired || []),
+      ...(shippedHashes[`stages/${filename}`]?.retired || []),
     ]);
     const matchesCurrent = sampleContent === null
       ? existingMd5 === current[filename]
@@ -484,7 +482,7 @@ export async function applyPromptReplaceMigration({
         return {
           counter: 'skipped',
           warn: `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
-            `   Check data.reference/prompts/${subdirFor(filename)}/ for the replacement file and merge any custom edits manually.`,
+            `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
         };
       }
     }
@@ -532,7 +530,6 @@ export function makePromptReplaceMigration({
   skipFooter,
   createIfMissing = false,
   retireOnSampleMissing = false,
-  subdirs = {},
 }) {
   const applyMigration = (opts = {}) =>
     applyPromptReplaceMigration({
@@ -542,7 +539,6 @@ export function makePromptReplaceMigration({
       customizedHint,
       createIfMissing,
       retireOnSampleMissing,
-      subdirs,
       ...opts,
     });
 

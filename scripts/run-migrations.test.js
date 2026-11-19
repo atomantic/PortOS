@@ -294,6 +294,35 @@ export default {
     await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
     expect(readFileSync(installed, 'utf-8')).toBe('# new\n');
   });
+
+  // #16827 deleted the migrations that only swapped a shipped prompt body. An
+  // install that never ran one and an install whose ledger still names it must
+  // both end on the live body, with the ledger left exactly as it was.
+  it.each([
+    ['predates the deleted prompt migration', ['001-fixture.js']],
+    ['still names the deleted prompt migration', ['001-fixture.js', '431-security-audit-skill-trust-model.js']],
+  ])('upgrades a retired shipped prompt when the ledger %s', async (_name, ledger) => {
+    const md5 = (body) => createHash('md5').update(body).digest('hex');
+    const reference = join(rootDir, 'data.reference', 'prompts');
+    const installed = join(dataDir, 'prompts');
+    for (const dir of [reference, installed]) mkdirSync(join(dir, 'skills'), { recursive: true });
+    for (const name of ['security-audit.md', 'code-review.md']) writeFileSync(join(reference, 'skills', name), '# new\n');
+    writeFileSync(join(reference, 'shipped-hashes.json'), JSON.stringify({
+      'skills/security-audit.md': { current: md5('# new\n'), retired: [md5('# old\n')] },
+      'skills/code-review.md': { current: md5('# new\n'), retired: [md5('# old\n')] },
+    }));
+    writeFileSync(join(installed, 'skills', 'security-audit.md'), '# old\n');
+    writeFileSync(join(installed, 'skills', 'code-review.md'), '# my own edit\n');
+    const ledgerText = JSON.stringify(ledger);
+    writeFileSync(appliedFile, ledgerText);
+
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual([]);
+    await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
+
+    expect(readFileSync(appliedFile, 'utf-8')).toBe(ledgerText);
+    expect(readFileSync(join(installed, 'skills', 'security-audit.md'), 'utf-8')).toBe('# new\n');
+    expect(readFileSync(join(installed, 'skills', 'code-review.md'), 'utf-8')).toBe('# my own edit\n');
+  });
 });
 
 describe('runMigrations purge-migration guard (#2770)', () => {

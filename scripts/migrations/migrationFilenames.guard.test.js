@@ -24,11 +24,13 @@ const MIGRATIONS_DIR = 'scripts/migrations';
 
 // Migrations deliberately retired from the tree. Add an entry only with the
 // retirement rationale in the same change; never add one to silence a rename.
+// An applied-list entry naming a missing file is inert either way: pending =
+// files on disk minus applied.
+
 // Log-only registration stubs deleted in #16815. Each up() only logged; the
 // work its comment describes runs at boot (ensureSchema or a server backfill) or
-// is additive and absent-tolerant, so no transform is dropped. An applied-list
-// entry naming a missing file is inert: pending = files on disk minus applied.
-export const RETIRED_MIGRATIONS = new Set([
+// is additive and absent-tolerant, so no transform is dropped.
+const RETIRED_LOG_ONLY_STUBS = [
   '049-catalog-payload-schemaversion.js',
   '050-catalog-ingredient-relations.js',
   '051-catalog-tags-table.js',
@@ -75,6 +77,119 @@ export const RETIRED_MIGRATIONS = new Set([
   '434-catalog-media-reference-library.js',
   '435-storyboards-table.js',
   '436-storyboard-recipes-table.js',
+];
+
+// Pure prompt-replace migrations deleted in #16827. Each up() was only
+// `makePromptReplaceMigration` over prompts that still ship: swap an installed
+// copy whose hash is a known shipped body for the live reference body.
+// `reconcileShippedPrompts` makes the same swap after every full pass from
+// `data.reference/prompts/shipped-hashes.json`, which records every hash these
+// files declared, so an install with one still pending ends on the same body.
+// None of them created a missing file or retired a renamed one (003 and 005
+// do, and stay), and no surviving migration reads a body one of them replaced.
+const RETIRED_PROMPT_REPLACE_MIGRATIONS = [
+  '004-augment-idea-expansion-context.js',
+  '006-extract-scenes-shots.js',
+  '010-simplify-cos-agent-briefing.js',
+  '013-comic-script-back-cover.js',
+  '019-arc-volume-prompts-canon-context.js',
+  '023-resolve-prompt-episode-anchor.js',
+  '025-idea-stage-character-detail.js',
+  '027-text-stage-prompts-entities-summary.js',
+  '042-fix-editorial-analysis-prompt.js',
+  '054-source-agnostic-stage-prompts.js',
+  '055-story-builder-idea-backfill-prompt.js',
+  '056-manuscript-anchored-findings-prompt.js',
+  '057-comic-structure-completeness-prompt.js',
+  '060-manuscript-multi-edit-fix-prompt.js',
+  '063-comic-script-panel-decomposition-prompt.js',
+  '066-manuscript-finding-replacement-strategy-prompts.js',
+  '083-completeness-with-edits-prompt.js',
+  '084-manuscript-fix-example-placeholders.js',
+  '098-idea-stage-ticking-clock.js',
+  '114-extract-scenes-shot-grammar.js',
+  '122-script-verify-continuity-loop-prompt.js',
+  '123-arc-resolve-episode-corrections.js',
+  '124-idea-stage-scope-discipline.js',
+  '126-comic-script-visible-text-prompt.js',
+  '127-pipeline-scene-markers-prompts.js',
+  '128-teleplay-canonical-scene-list-prompt.js',
+  '137-editorial-telling-emotion-broaden.js',
+  '138-editorial-chekhov-setup-payoff-taxonomy.js',
+  '144-editorial-on-the-nose-subtype.js',
+  '155-heal-cd-treatment-cast-strand.js',
+  '166-craft-knowledge-prompt-upgrades.js',
+  '169-prose-cross-issue-continuity.js',
+  '171-character-framework-prompt.js',
+  '172-structure-rules-season-episodes.js',
+  '173-mice-thread-nesting-arc-overview.js',
+  '179-series-multi-concept-ideation.js',
+  '181-writers-room-voice-exemplars.js',
+  '187-cos-agent-briefing-target-app-label.js',
+  '193-cd-plan-locked-render-settings.js',
+  '199-cd-plan-result-references.js',
+  '228-craft-partial-zoom-into-the-moment.js',
+  '240-character-foundation-exhaustive-cast.js',
+  '241-foundation-judge-repair-ownership.js',
+  '243-post-arc-character-transition-ownership.js',
+  '245-arc-resolve-finding-keyed-patches.js',
+  '248-foundation-judge-author-intent.js',
+  '249-arc-overview-author-intent.js',
+  '250-arc-spine-checkpoint-prompts.js',
+  '251-arc-resolve-field-sparsity.js',
+  '252-arc-resolve-avoid-list.js',
+  '253-arc-resolve-spine-scope.js',
+  '254-arc-resolve-character-arcs.js',
+  '255-character-visual-foundation.js',
+  '256-series-linked-character-profiles.js',
+  '257-complete-character-expand-fields.js',
+  '258-arc-resolve-exact-text-patches.js',
+  '259-arc-resolve-text-budgets.js',
+  '260-arc-resolve-isolated-repairs.js',
+  '261-exhaustive-arc-verification.js',
+  '263-arc-verify-world-category-canon.js',
+  '266-resolve-outcome-telemetry-legend.js',
+  '267-arc-resolve-character-arc-budgets.js',
+  '275-pipeline-planning-economy.js',
+  '276-distinct-climax-arc-role-prompts.js',
+  '277-cd-plan-commission-controls.js',
+  '288-fableloom-scene-format.js',
+  '310-fableloom-camera-cuts.js',
+  '311-fableloom-audience-participation.js',
+  '319-fableloom-protagonist-continuity.js',
+  '321-fableloom-outline-expansion-contract.js',
+  '324-fableloom-playable-challenge-contract.js',
+  '349-fableloom-plan-synopsis-sync.js',
+  '350-fableloom-opening-comprehension.js',
+  '352-fableloom-shot-visual-continuity.js',
+  '360-character-psychology-prompts.js',
+  '361-series-concept-character-engines.js',
+  '362-writers-room-character-framework.js',
+  '364-foundation-judge-cast-integrity.js',
+  '365-fableloom-editorial-cast-integrity.js',
+  '366-writers-room-evaluate-psychology.js',
+  '367-character-evolution-editorial-prompts.js',
+  '368-fableloom-plan-review-evolution.js',
+  '369-writers-room-evaluate-character-evolution.js',
+  '371-video-treatment-contract.js',
+  '372-video-source-context.js',
+  '373-video-review-revisions.js',
+  '377-pilot-developmental-gate.js',
+  '378-arc-countdown-repair.js',
+  '379-arc-episode-metadata-repair.js',
+  '380-arc-spine-existing-plans.js',
+  '383-pipeline-series-design.js',
+  '384-fableloom-series-design.js',
+  '385-pipeline-scene-progression.js',
+  '385-stranded-stage-prompt-history.js',
+  '394-factual-extraction-lens-prompts.js',
+  '431-security-audit-skill-trust-model.js',
+  '453-writers-room-cd-bridge-continue-from-prior.js',
+];
+
+export const RETIRED_MIGRATIONS = new Set([
+  ...RETIRED_LOG_ONLY_STUBS,
+  ...RETIRED_PROMPT_REPLACE_MIGRATIONS,
 ]);
 
 // Same selection as `scanMigrationFiles` in scripts/lib/migrationFiles.js.
