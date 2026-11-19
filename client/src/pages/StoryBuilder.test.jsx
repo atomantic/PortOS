@@ -42,6 +42,7 @@ const api = vi.hoisted(() => ({
   retryImporterIssues: vi.fn(),
   IMPORTER_CONTENT_TYPES: ['short-story', 'novel', 'screenplay', 'comic-script'],
   getProviders: vi.fn(),
+  getProviderCatalog: vi.fn(),
   getSettings: vi.fn(),
   generateImage: vi.fn(),
   updateUniverse: vi.fn(),
@@ -112,6 +113,7 @@ vi.mock('../components/pipeline/ArcCanvas', () => ({
 }));
 
 import StoryBuilder, { composeSeedFromIngredients } from './StoryBuilder';
+import { __resetProviderCatalogCache } from '../hooks/useProviderCatalog';
 
 const renderAt = (entry) => render(
   <MemoryRouter initialEntries={[entry]}>
@@ -124,11 +126,16 @@ const renderAt = (entry) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetProviderCatalogCache();
   unexpectedRequests.length = 0;
   vi.stubGlobal('fetch', vi.fn(rejectUnexpectedRequest));
   api.getStoryBuilderSteps.mockResolvedValue({ steps: STEPS });
   api.listStorySessions.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }] });
+  api.getProviderCatalog.mockResolvedValue({
+    harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {},
+    presets: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }],
+  });
   api.updateStorySession.mockResolvedValue({});
   api.getSettings.mockResolvedValue({});
   api.generateImage.mockResolvedValue({ jobId: 'job-1' });

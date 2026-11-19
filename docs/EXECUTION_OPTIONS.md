@@ -123,6 +123,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/settings/OrchestrationTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/VoiceTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/songs/SongScoreParts.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/storyBuilder/ProviderModelPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/system-resources/StoragePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/universe/VisionProviderPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/universeBuilder/MoodBoardStyleSynthesis.jsx` | Shared structured options or saved provider reference |
@@ -137,7 +138,6 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/pages/PipelineEditorialChecks.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/PipelineManuscriptEditor.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/RunnerPage.jsx` | Shared structured options or saved provider reference |
-| `client/src/pages/StoryBuilder.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModelDetail.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModels.jsx` | Shared structured options or saved provider reference |
 
