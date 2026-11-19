@@ -9,6 +9,8 @@ vi.mock('./github.js', () => ({
   findPullRequestForBranch: vi.fn().mockResolvedValue({ status: 'none', url: null, detail: null }),
   getPullRequestState: vi.fn().mockResolvedValue({ status: 'unavailable', state: null, detail: null }),
 }));
+const resolveForgeExecOptions = vi.hoisted(() => vi.fn());
+vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions }));
 const hasQueuedMergeHandoff = vi.hoisted(() => vi.fn());
 vi.mock('./cos/cosMergeHandoff.js', () => ({ hasQueuedMergeHandoff }));
 vi.mock('./gitlab.js', () => ({
@@ -19,7 +21,7 @@ import { execGit } from '../lib/execGit.js';
 import { resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
-import { readMergedPrTip, isMergedPrHead, probeChangeRequestState, probePrForBranch } from './prProbe.js';
+import { readMergedPrTip, isMergedPrHead, probeChangeRequestState, probePrForBranch, readPullRequest, readPullRequestOutcome, isOpenSameRepoPr } from './prProbe.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -194,5 +196,71 @@ describe('probeChangeRequestState', () => {
       .toEqual({ prState: null, cli: null, readable: false });
     expect(getPullRequestState).not.toHaveBeenCalled();
     expect(findMergeRequestForBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe('readPullRequest', () => {
+  const FIELDS = ['state', 'headRefOid'];
+
+  it('resolves forge options from repoPath, passes --repo, and keys the gh backoff on the repo spec', async () => {
+    resolveForgeExecOptions.mockResolvedValue({ cwd: '/repo', env: { GH_TOKEN: 'x' } });
+    const execGh = vi.fn().mockResolvedValue('{"state":"OPEN","headRefOid":"abc"}');
+
+    const view = await readPullRequest(7, FIELDS, { repoPath: '/repo', forgeAccount: 'work', repoSpec: 'github.com/o/r', timeoutMs: 10000, execGh });
+
+    expect(view).toEqual({ state: 'OPEN', headRefOid: 'abc' });
+    expect(resolveForgeExecOptions).toHaveBeenCalledWith('/repo', { forgeAccount: 'work' });
+    expect(execGh).toHaveBeenCalledWith(['pr', 'view', '7', '--repo', 'github.com/o/r', '--json', 'state,headRefOid'], 10000,
+      { cwd: '/repo', env: { GH_TOKEN: 'x' }, backoffKey: 'github.com/o/r' });
+  });
+
+  it('derives the backoff key from a PR URL and does not add --repo for it', async () => {
+    const execGh = vi.fn().mockResolvedValue('{"state":"MERGED"}');
+    await readPullRequest('https://github.com/o/r/pull/9', 'state', { cwd: '/w', env: null, execGh });
+    expect(resolveForgeExecOptions).not.toHaveBeenCalled();
+    expect(execGh).toHaveBeenCalledWith(['pr', 'view', 'https://github.com/o/r/pull/9', '--json', 'state'], undefined,
+      { cwd: '/w', env: null, backoffKey: 'github.com/o/r' });
+  });
+
+  it('maps gh failure, unparseable output and non-object output to null with a reason, never throwing', async () => {
+    const outcome = (execGh) => readPullRequestOutcome(1, 'state', { cwd: '/w', execGh });
+    expect(await outcome(vi.fn().mockRejectedValue(new Error('boom')))).toEqual({ view: null, reason: 'boom' });
+    expect(await outcome(vi.fn().mockResolvedValue('not json'))).toEqual({ view: null, reason: 'gh returned unparseable output' });
+    expect(await outcome(vi.fn().mockResolvedValue('[{"state":"OPEN"}]'))).toEqual({ view: null, reason: 'gh returned unparseable output' });
+    expect(await outcome(vi.fn().mockResolvedValue('null'))).toEqual({ view: null, reason: 'gh returned unparseable output' });
+  });
+
+  it('lets a forge-credential failure propagate instead of reading as the active gh login', async () => {
+    resolveForgeExecOptions.mockRejectedValue(new Error('pinned account unavailable'));
+    const execGh = vi.fn();
+    await expect(readPullRequest(1, 'state', { repoPath: '/repo', forgeAccount: 'gone', execGh })).rejects.toThrow('pinned account unavailable');
+    expect(execGh).not.toHaveBeenCalled();
+  });
+});
+
+describe('isOpenSameRepoPr', () => {
+  const view = { state: 'OPEN', isDraft: false, isCrossRepository: false, headRefName: 'feat', headRefOid: 'a'.repeat(40) };
+
+  it('accepts an open, non-draft, same-repository PR at the expected branch and head', () => {
+    expect(isOpenSameRepoPr(view, { branch: 'feat', head: 'a'.repeat(40) })).toBe(true);
+    expect(isOpenSameRepoPr(view)).toBe(true);
+  });
+
+  it.each([
+    ['closed', { state: 'CLOSED' }],
+    ['merged', { state: 'MERGED' }],
+    ['draft', { isDraft: true }],
+    ['draft not fetched', { isDraft: undefined }],
+    ['cross-repository', { isCrossRepository: true }],
+    ['cross-repository not fetched', { isCrossRepository: undefined }],
+    ['branch moved', { headRefName: 'other' }],
+    ['head moved', { headRefOid: 'b'.repeat(40) }],
+  ])('refuses a %s PR', (_label, patch) => {
+    expect(isOpenSameRepoPr({ ...view, ...patch }, { branch: 'feat', head: 'a'.repeat(40) })).toBe(false);
+  });
+
+  it('ignores draft only when the caller never fetched it, and refuses a missing view', () => {
+    expect(isOpenSameRepoPr({ ...view, isDraft: undefined }, { allowDraft: true })).toBe(true);
+    expect(isOpenSameRepoPr(null, {})).toBe(false);
   });
 });

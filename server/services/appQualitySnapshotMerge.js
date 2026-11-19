@@ -56,14 +56,12 @@ export async function sweepSettledSnapshotCheckouts(app, git, deps) {
   const { cli, env } = await resolveForge(app.repoPath, { forgeAccount: app.forgeAccount || null });
   if (cli !== 'gh') return [];
   const execGh = deps.execGh || (await import('./github.js')).execGh;
+  const { readPullRequest } = await import('./prProbe.js');
   const settled = new Map();
   const isSettled = async prUrl => {
     if (!settled.has(prUrl)) {
-      settled.set(prUrl, execGh(['pr', 'view', prUrl, '--json', 'state'], undefined, { cwd: app.repoPath, env })
-        .then(raw => {
-          const state = JSON.parse(raw)?.state;
-          return ['MERGED', 'CLOSED'].includes(state) ? { merged: state === 'MERGED' } : null;
-        }, () => null));
+      settled.set(prUrl, readPullRequest(prUrl, 'state', { cwd: app.repoPath, env, execGh })
+        .then(view => ['MERGED', 'CLOSED'].includes(view?.state) ? { merged: view.state === 'MERGED' } : null));
     }
     return settled.get(prUrl);
   };

@@ -12,8 +12,8 @@ vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn() }));
 vi.mock('../appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
 vi.mock('../swarmCleanupDelivery.js', () => ({ validCleanupRefillSource }));
-const removeWorktree = vi.hoisted(() => vi.fn(async () => ({ removed: true })));
-vi.mock('../worktreeManager.js', () => ({ removeWorktree }));
+const removeWorktreeAtPath = vi.hoisted(() => vi.fn(async () => ({ removed: true })));
+vi.mock('../worktreeManager.js', () => ({ removeWorktreeAtPath }));
 
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
@@ -155,8 +155,8 @@ describe('cleanupOnError — a server-provisioned claim checkout (#15517)', () =
     context.spawnClaimCheckout = { repoPath: '/repos/example', worktreePath: '/worktrees/claim-example-issue-42', branchName: 'claim/issue-42', baseBranch: 'main' };
     await context.cleanupOnError('spawn failed');
     await context.cleanupOnError('spawn failed again');
-    expect(removeWorktree).toHaveBeenCalledTimes(1);
-    expect(removeWorktree).toHaveBeenCalledWith('/repos/example', '/worktrees/claim-example-issue-42',
+    expect(removeWorktreeAtPath).toHaveBeenCalledTimes(1);
+    expect(removeWorktreeAtPath).toHaveBeenCalledWith('/repos/example', '/worktrees/claim-example-issue-42',
       { branchName: 'claim/issue-42', deleteBranch: true, force: true });
   });
 });

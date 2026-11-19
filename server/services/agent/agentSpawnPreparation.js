@@ -55,9 +55,9 @@ export function createAgentSpawnContext(task) {
     if (context.spawnClaimCheckout) {
       const { repoPath, worktreePath, branchName } = context.spawnClaimCheckout;
       context.spawnClaimCheckout = null;
-      const { removeWorktree } = await import('../worktreeManager.js');
+      const { removeWorktreeAtPath } = await import('../worktreeManager.js');
       // Nothing has run in it yet, so the fresh branch carries no work to keep.
-      await removeWorktree(repoPath, worktreePath, { branchName, deleteBranch: true, force: true }).catch((cleanupErr) => {
+      await removeWorktreeAtPath(repoPath, worktreePath, { branchName, deleteBranch: true, force: true }).catch((cleanupErr) => {
         emitLog('warn', `Failed to remove the claim checkout of failed spawn ${context.agentId}: ${cleanupErr.message}`, { agentId: context.agentId, taskId: context.task.id });
       });
     }

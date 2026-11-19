@@ -14,6 +14,14 @@ export async function prepareExplicitOrphanBudgetReset(task) {
   const owners = Object.values(state.agents || {}).filter(agent => agent.taskId === task.id);
   if (owners.some(agent => ['running', 'paused'].includes(agent.status))) return { error: 'An agent still owns this task' };
   const completed = owners.filter(agent => agent.status === 'completed');
+  if (!completed.length) {
+    // Completed runs leave live state after completedAgentRetentionMs, so none left is not ambiguity.
+    // A blocked task already dropped its resume pointer and restarts clean exactly as Unblock does;
+    // forceSpawnTask's inactive-owner fence still refuses the write if an agent appears. An
+    // in_progress task may hold uncommitted work only the archived run could identify, so it stays held.
+    if (task.status === 'blocked') return { owner: null, pointer: null };
+    return { error: 'No stopped run of this task is left in agent history; inspect its checkout before retrying' };
+  }
   // A task at its spawn cap has several stopped runs. The one whose dispatch
   // receipt still matches the task ran last, and its checkout is the one to resume.
   const latest = completed.length > 1 ? completed.filter(agent => matchesLatestTaskDispatch(agent, task)) : completed;

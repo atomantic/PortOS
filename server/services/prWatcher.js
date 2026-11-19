@@ -12,6 +12,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
+import { readPullRequest } from './prProbe.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { getAppById, updateApp, getActiveApps } from './apps.js';
 import * as git from './git.js';
@@ -360,12 +361,9 @@ export function isPendingMergeReady(prView) {
 }
 
 async function readPendingPullRequest(repoSpec, prNumber, { cwd, env } = {}) {
-  const raw = await execGh([
-    'pr', 'view', String(prNumber), '--repo', repoSpec,
-    '--json', 'number,title,body,commits,headRefOid,author,state,isDraft,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup'
-  ], undefined, { cwd, env, backoffKey: repoSpec }).catch(() => null);
-  const parsed = raw === null ? null : safeJSONParse(raw, null);
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  return readPullRequest(prNumber,
+    'number,title,body,commits,headRefOid,author,state,isDraft,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup',
+    { repoSpec, cwd, env });
 }
 
 const HANDOFF_POLICIES = new Set([PR_COMPLETIONS.MERGE_ON_GREEN, PR_COMPLETIONS.REVIEW_THEN_MERGE]);
