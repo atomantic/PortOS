@@ -4,7 +4,7 @@ These apply to Express/service/model code; the root `AGENTS.md` rules always app
 
 ## Validation and schema parity
 
-- **Schema parity when adding fields.** A field added to a sanitizer, `createXxx` or payload shape gets its Zod schema entry in the same change ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)).
+- **Schema parity**: a new sanitizer, `createXxx` or payload field needs its Zod schema ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
 - **A POST/PUT/PATCH handler reading `req.body` validates it with a schema** (`validateRequest(schema, req.body ?? {})`, schema in `server/lib/validation.js` or the domain `*Validation.js`), not a hand-rolled check. *Enforced:* `server/routeValidationConventions.guard.test.js` over `server/routes/`, `lib/aiToolkit/routes/` (schemas in `lib/aiToolkit/validation.js`) and `cos-runner/index.js` (`requestSchemas.js`). Its `ALLOWED_UNVALIDATED` list (raw-binary and multipart bodies) may only shrink; never add a JSON-body handler (#9950).
 - **A handler reading `req.query` validates the whole query object** on any method (`validateRequest(schema, req.query)` or `validate` / `parseBody` / `safeParse` / `Schema.parse` on it or a name assigned from it; one field or `req.params` doesn't count, nor does `parsePagination`). Shared lenient shapes (pagination, flags) live in `lib/queryValidation.js`; the same test has no allowlist for query reads (#10024, #16428).
 
@@ -19,18 +19,18 @@ These apply to Express/service/model code; the root `AGENTS.md` rules always app
 
 ## PostgreSQL parameters
 
-**Serialize a `json`/`jsonb` parameter with `toPgJson` (`server/lib/pgJson.js`), never bare `JSON.stringify`**; Postgres rejects a lone surrogate or NUL, so the write throws and the record is lost (#12815; *Enforced:* `server/pgJsonConventions.guard.test.js`) ([why](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)).
+**Serialize a `json`/`jsonb` parameter with `toPgJson` (`server/lib/pgJson.js`), never bare `JSON.stringify`**; Postgres rejects a lone surrogate or NUL, so the write throws and the record is lost (#12815; *Enforced:* `server/pgJsonConventions.guard.test.js`) ([why](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
 
 ## Async boundaries
 
 - **An `async` timer callback owns its rejections**: every `await` inside `setTimeout(async …)` / `setInterval(async …)` has an enclosing `try`/`catch` or a `.catch(…)`, because an unhandled rejection is fatal on Node ≥15 (#5668). Log and continue unless the callback owns a failure verdict. *Enforced:* `server/timerCallbackConventions.guard.test.js` (example: `services/mediaJobQueue/index.js` watchdog).
 - **A statement-level call to an `async` function is `await`ed, ends in `.catch(…)`, or starts with `void`** (`void` = it owns its rejections); a bare call's rejection becomes an `unhandledRejection` that `autoFixer` turns into an AI task (#12978). *Enforced:* `server/floatingAsyncConventions.guard.test.js`.
 - **An `async` Socket.IO handler owns its rejections** the same way (whole-body `try`/`catch` as in `voice.js`, or `.catch` on the awaited chain as in `logs.js`); an escaped rejection terminates the process (#5661). *Enforced:* `server/sockets/asyncHandlerGuard.test.js`.
-- **Attach a spawned child's terminal listeners before the function next `await`s**: a failed spawn reports on `process.nextTick`, so an unlistened `error` crashes the process and an unlistened `close` strands the job `running`; do awaited work before `spawn()`, or call `bufferChildExit(child)` (`services/videoGen/generateVideoHelpers.js`) in the same tick (#11761; [detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)). *Enforced:* `server/childListenerOrderConventions.guard.test.js`.
+- **Attach child listeners before any `await`** ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)). *Enforced:* `childListenerOrderConventions.guard.test.js`.
 
 ## Tests and peer fan-out
 
-Record writes reach peer sync only through the subscription adapter in `server/services/sharing/recordEvents.js` (a no-op until `peerSync.js` registers); a suite loading the peer-sync graph, even transitively, mocks `services/instances.js` with `mockNoPeers()` and `services/sharing/peerSync.js` with `mockNoPeerSync()` from `server/lib/mockPathsDataRoot.js` ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)).
+Record writes sync only via `recordEvents.js`; peer-sync suites use `mockNoPeers()` / `mockNoPeerSync()` ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
 
 ## Import scoping
 
@@ -39,7 +39,7 @@ Every suite reaching a module instantiates its whole closure. `server/lib/import
 - **Don't drag a subtree in for one constant.** Import from the declaring module (`CHECK_SCOPES` from `server/lib/editorial/checkInfra/taxonomy.js`, not the `checkRegistry.js` barrel), and `await import()` a dependency only a boot/rare path needs (`ensureSchemaImpl()` composes DDL that way).
 - **A lazy `import()` cuts instantiation, not CI selection**: `vitest related` follows dynamic imports too (#12285). To cut selection, move the needed piece into a leaf both sides import (`services/readinessSignal.js`), or have the heavy service register a callback at boot (`initAutoFixer()` → `services/provider/providerRecoveryHooks.js`). Cut edges are pinned in `SELECTION_CUTS`; a suite that `vi.mock`ed the heavy module registers test doubles instead.
 - **Outside an async scope, defer with `import('./x.js').then(…).catch(handler)`** (how `services/promptRunner.js` defers `tuiPromptRunner.js`), ideally inside an existing predicate gate (`runner.js` defers `ollamaAgentContext.js` in the `isOllamaBackedProvider` ternary).
-- **The tree-wide guard is base-relative growth** (`scripts/lib/importGrowth.js`): summed closure growth of suites existing on both sides, against the merge base (`CI_BASE_SHA`), stays under `EXISTING_SUITE_GROWTH_LIMIT`; new test files don't spend it, and a missing base fails. On failure, narrow or defer the import; raising the limit is the intentional-regression path ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)).
+- **Import growth is base-relative**: narrow or defer, or raise `EXISTING_SUITE_GROWTH_LIMIT` on purpose ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)).
 - **Never narrow an import around a barrel a suite mocks**: `vi.mock('./cos.js')` intercepts the specifier, so re-pointing a caller at `./cosTaskStore.js` silently bypasses the double. Grep for `vi.mock` of the module first; a lazy `await import()` has no such hazard.
 
 ## Generated manifests
