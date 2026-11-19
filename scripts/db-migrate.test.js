@@ -378,12 +378,20 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
       for (const command of ['migrate', 'use-native', 'use-docker']) {
         const result = run([command], 'ok');
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toMatch(/migration and switching are temporarily unavailable/);
+        expect(result.stderr).toContain('Use Settings → Database for a coordinated cutover.');
         expect(readFileSync(stubLog, 'utf8')).toBe('');
         expect(existsSync(importLog)).toBe(false);
         expect(existsSync(dumpDir)).toBe(false);
         expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
       }
+    }
+  });
+
+  it('directs operators to the coordinated cutover in help for all legacy commands', () => {
+    const result = run(['--help'], 'ok');
+    expect(result.status).toBe(0);
+    for (const command of ['migrate', 'use-native', 'use-docker']) {
+      expect(result.stdout).toMatch(new RegExp(`^  ${command} +Legacy command; use Settings → Database$`, 'm'));
     }
   });
 
@@ -394,7 +402,9 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     const log = readFileSync(stubLog, 'utf8');
     expect(log).toContain('--single-transaction');
     expect(log).not.toMatch(/SOURCE_STOP|docker compose stop/);
-    expect(result.stdout).toContain('selected mode is unchanged');
+    expect(result.stdout).toContain('Native PostgreSQL is ready!');
+    expect(result.stdout).toContain('selected mode is unchanged; Docker data has not been migrated.');
+    expect(result.stdout).toContain('To move existing data, use Settings → Database for a coordinated cutover.');
   });
 
   // #10757: every host libpq client the script starts — readiness, bootstrap
