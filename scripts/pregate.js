@@ -362,6 +362,18 @@ const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const baseName = path => path.slice(path.lastIndexOf('/') + 1).replace(MODULE_FILE, '');
 
 /**
+ * Text a file must contain to import `target`: its base name, or for a directory
+ * index (`dir/index.js`) the directory name or a bare `'.'`/`'..'` specifier,
+ * because `import './dir'` never spells "index".
+ */
+function importNeedles(target) {
+  const name = baseName(target);
+  if (name !== 'index') return [escapeRegExp(name)];
+  const dir = target.split('/').slice(-2, -1)[0];
+  return [escapeRegExp(name), ...(dir ? [escapeRegExp(dir)] : []), '[\'"`]\\.{1,2}[\'"`]'];
+}
+
+/**
  * Which of `files` reference each of `targets` through a relative import,
  * `import()` or `vi.mock` specifier that resolves to it.
  *
@@ -371,8 +383,8 @@ function referrersOf(targets, files, readText) {
   if (!targets.length) return new Map();
   const referrers = new Map(targets.map(target => [target, new Set()]));
   const known = new Set(targets);
-  // Cheap prefilter: a resolved specifier always spells the target's base name.
-  const spelled = new RegExp([...new Set(targets.map(baseName))].map(escapeRegExp).join('|'));
+  // Cheap prefilter: a resolved specifier always spells one of the target's needles.
+  const spelled = new RegExp([...new Set(targets.flatMap(importNeedles))].join('|'));
   for (const file of files) {
     const text = readText(file);
     if (text == null || !spelled.test(text)) continue;
