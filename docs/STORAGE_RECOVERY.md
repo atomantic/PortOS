@@ -66,11 +66,8 @@ claiming any output was saved; failures after callback entry remain unresolved.
 Legacy generic `Output publication` reservations lack destination/batch identity.
 They cannot be swept as finished work. A dead admitting process is recorded as
 uncertainty, not deleted. After explicit operator disposition of
-inspected evidence, an owning service may use `reconcilePublicationRefusal` with
-the exact original operation and hold. Its synchronous publisher must preserve a
-durable, replayable evidence receipt before retirement; the journal validates and
-retires that exact owner under one lock. Missing ownership can only replay the
-existing receipt, never create an owner. This does not certify a complete
+inspected evidence, use `scripts/reconcile-maintenance-reservations.mjs` to
+retire the unsettled reservation. This does not certify a complete
 transcript, clear transcript warnings, or change the original task outcome.
 
 ### Interrupted maintenance transactions
@@ -196,26 +193,13 @@ resume the hold and retry the update; do not delete journal files by hand.
 
 ### Unsettled generic output publications
 
-Use the local operator command below after journal transaction recovery, with a
-normal maintenance hold in place. It never steals an interrupted transaction lock,
-resumes a hold, or settles an exclusive maintenance owner. Run from the install
-checkout. From a reviewed isolated checkout, append
-`--install-root <absolute-install-root>` (the parent of `data/`) to each command.
-This explicit target does not depend on the inherited `PORTOS_DATA_ROOT` pin,
-which worktree code deliberately ignores.
-
-```bash
-# Read-only inventory, including unrelated owners and the exact selected operation.
-node scripts/reconcile-output-publication.mjs diagnose
-node scripts/reconcile-output-publication.mjs diagnose <operation-id>
-
-# Read-only inspection: fingerprint the explicit evidence specification below.
-# Save these private JSON files outside the source tree; do not publish them.
-node scripts/reconcile-output-publication.mjs inspect <operation-id> evidence-spec.json > inspected-request.json
-
-# Review the request, then explicitly acknowledge uncertainty for that owner only.
-node scripts/reconcile-output-publication.mjs reconcile inspected-request.json --confirm-disposition
-```
+Use `scripts/reconcile-maintenance-reservations.mjs` (see above) after journal
+transaction recovery, with a normal maintenance hold in place. It never steals
+an interrupted transaction lock, resumes a hold, or settles an exclusive
+maintenance owner. Run from the install checkout. From a reviewed isolated
+checkout, append `--install-root <absolute-install-root>` (the parent of `data/`)
+to each command. This explicit target does not depend on the inherited
+`PORTOS_DATA_ROOT` pin, which worktree code deliberately ignores.
 
 Generic reservations contain no parent, destination, run, or batch identity. The
 operator must trace the owning workflow and explain how its records relate to
