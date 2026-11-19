@@ -62,7 +62,7 @@ import { getTaskTypeConfidence } from '../taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from '../taskLearning/safetyKind.js';
 import { isRecoveryTask } from '../recoveryTasks.js';
 import { getCodeReviewDefaults } from '../codeReview.js';
-import { getSkipReason } from './cosTaskClaim.js';
+import { getDispatchSkipReason } from './cosBehindPeerHold.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { resolveAppPrCompletion } from '../../lib/prDisposition.js';
 import { applyStageExecution } from '../../lib/pipelineStageExecution.js';
@@ -220,8 +220,9 @@ export async function recordDeferredPerpetualDispatch(pendingPerpetualDispatch, 
  * `rejects(task, hooks)` is pure (it may await a read-only probe); every side
  * effect (logging, persisting a block, deferral records) belongs to `onReject`.
  * `hooks` carries the engine-specific predicates: `notRunnableHere` (pinned to
- * another instance #4520, or a peer's live lease #1650 — returns a truthy
- * reason), `extraSkip` (disabled analysis type), `cooldownExempt`, `isOnCooldown`.
+ * another instance #4520, a peer's live lease #1650, or left to a behind-schema
+ * peer #16871 — returns a truthy reason), `extraSkip` (disabled analysis type),
+ * `cooldownExempt`, `isOnCooldown`.
  */
 const AUTO_APPROVED_GATES = Object.freeze([
   {
@@ -293,7 +294,7 @@ async function firstRejectingGate(task, hooks) {
  * @param {(appId: string) => Promise<boolean>} ctx.isOnCooldown - async cooldown probe
  * @param {(task: object) => boolean} [ctx.cooldownExempt] - true ⇒ skip the cooldown gate for this task
  * @param {(task: object) => boolean} [ctx.extraSkip] - true ⇒ task ineligible (engine-specific gate)
- * @param {(task: object) => boolean} [ctx.notRunnableHere] - true ⇒ this instance would pass over the task anyway: it is pinned to another instance (#4520) or a federated peer holds a live lease on it (#1650). The execute path skips it before spawning, so the dry-run plan must too
+ * @param {(task: object) => boolean} [ctx.notRunnableHere] - true ⇒ this instance would pass over the task anyway: it is pinned to another instance (#4520), a federated peer holds a live lease on it (#1650), or it is left to a peer on an older task schema (#16871). The execute path skips it before spawning, so the dry-run plan must too
  * @returns {Promise<object[]>} the tasks execute mode would spawn, in order
  */
 export async function selectDryRunAutoApproved(autoApproved, ctx) {
@@ -588,7 +589,7 @@ export async function admitAutoApprovedSystemTasks(ctx, adapter) {
     isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
     cooldownExempt: isCooldownExemptTask,
     extraSkip: (task) => isDisabledAnalysisType(task, taskSchedule),
-    notRunnableHere: (task) => getSkipReason(task.metadata, instanceId)
+    notRunnableHere: (task) => getDispatchSkipReason(task, instanceId)
   };
 
   if (cosAutonomyMode !== 'execute') {
@@ -664,12 +665,13 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
     if (capacityExhausted()) break;
     // Already spawning or admitted this cycle — not deferred, just not a candidate.
     if (isOwned(task)) continue;
-    // Not runnable here: the task is pinned to another instance (#4520), or a
+    // Not runnable here: the task is pinned to another instance (#4520), a
     // federated peer holds a live lease on it (#1650) and is working it on the
-    // other machine. Skip it during candidate selection so it doesn't consume
-    // this cycle's spawn slot (the spawn guard would return null anyway) and
-    // starve later runnable tasks.
-    const skipReason = getSkipReason(task.metadata, instanceId);
+    // other machine, or a peer on an older task schema holds it and could not
+    // see a claim made here (#16871). Skip it during candidate selection so it
+    // doesn't consume this cycle's spawn slot (the spawn guard would return null
+    // anyway) and starve later runnable tasks.
+    const skipReason = getDispatchSkipReason(task, instanceId);
     if (skipReason) {
       emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
       continue;

@@ -9,6 +9,7 @@
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
 import { isMachineLocalCosTask } from '../../lib/cos/cosFederationPolicy.js';
+import { clearBehindPeer, recordBehindPeerSweep, trackBehindPeerSweep } from '../cos/cosBehindPeerHold.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { mkdtemp, readFile, readdir } from 'fs/promises';
@@ -519,6 +520,17 @@ export async function syncCosTasksFromPeer(peer) {
       return { merged: 0, skipped: 'invalid' };
     }
     const payload = parsed.data;
+    // A peer BEHIND this schema skips every payload sent from here, so it never
+    // sees a claim made here and would run a shared task a second time. Leave
+    // what it holds to it, re-read on every sweep that reaches it (an unchanged
+    // payload included), until its payload carries this schema or a newer one.
+    if (payload.schemaVersion < PORTOS_SCHEMA_VERSIONS.cosTasks) {
+      if (recordBehindPeerSweep(peer.instanceId, payload.tasks.filter((t) => !isMachineLocalCosTask(t)))) {
+        console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} is on cos-tasks schema v${payload.schemaVersion} < local v${PORTOS_SCHEMA_VERSIONS.cosTasks} and cannot see claims made here — leaving the unfinished tasks it holds to it until it updates`);
+      }
+    } else if (clearBehindPeer(peer.instanceId)) {
+      console.log(`▶️ peerSync: ${peer.name || peer.instanceId} is no longer behind on the cos-tasks schema — its shared tasks dispatch here again`);
+    }
     // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
     // upgrade rather than mis-merge against a payload shape we can't read.
     if (payload.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosTasks) {
@@ -551,11 +563,7 @@ export async function syncCosTasksFromPeer(peer) {
   }
 }
 
-/**
- * Periodic driver: merge the live task backlog from every full-sync peer.
- * Each peer's sweep is independent + best-effort.
- */
-export async function syncCosTasksWithAllPeers() {
+async function sweepCosTasksFromAllPeers() {
   const peers = await getPeers().catch(() => []);
   const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
   for (const peer of fullSyncPeers) {
@@ -564,3 +572,10 @@ export async function syncCosTasksWithAllPeers() {
     });
   }
 }
+
+/**
+ * Periodic driver: merge the live task backlog from every full-sync peer.
+ * Each peer's sweep is independent + best-effort. Tracked by the behind-peer
+ * hold, whose first dispatch after boot waits on (or starts) the first pass.
+ */
+export const syncCosTasksWithAllPeers = trackBehindPeerSweep(sweepCosTasksFromAllPeers);

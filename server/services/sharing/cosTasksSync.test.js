@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHash } from 'crypto';
 
 // Live CoS task-list + claim-metadata federation (#1712). We exercise
@@ -49,7 +49,7 @@ vi.mock('../cos/cosTaskStore.js', () => {
 import {
   buildCosTasksPayload,
 } from './peerSync.js';
-import { syncCosTasksFromPeer } from './peerCosSync.js';
+import { syncCosTasksFromPeer, syncCosTasksWithAllPeers } from './peerCosSync.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -60,6 +60,8 @@ const endlessChunkedRes = () => {
   return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
 };
 import { getUserTasks, getCosTasks, mergePeerTasks } from '../cos/cosTaskStore.js';
+import { behindPeersKnown, clearBehindPeer, getBehindPeerHolder } from '../cos/cosBehindPeerHold.js';
+import { LEASE_DURATION_MS } from '../cos/cosTaskClaim.js';
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 
@@ -255,5 +257,122 @@ describe('syncCosTasksFromPeer', () => {
     const r = await syncCosTasksFromPeer(PEER); // second identical sweep
     expect(r).toEqual({ merged: 0, skipped: 'unchanged' });
     expect(mergePeerTasks).not.toHaveBeenCalled();
+  });
+});
+
+// A peer on an older cosTasks schema skips every payload this install sends, so
+// it never sees a claim made here. Until it updates, this install leaves the
+// tasks that peer holds to it (#16871). The schema gate itself is unchanged.
+describe('syncCosTasksFromPeer: tasks left to a behind-schema peer (#16871)', () => {
+  const BEHIND = { ...PEER, instanceId: 'behind-peer' };
+  const LOCAL = 'local-instance';
+  const OLDER = PORTOS_SCHEMA_VERSIONS.cosTasks - 1;
+  const T0 = Date.parse('2026-01-01T00:00:00.000Z');
+  const entry = (id, status = 'pending', metadata = {}) => ({ id, taskType: 'user', status, priority: 'MEDIUM', description: `d ${id}`, metadata });
+  const respond = (schemaVersion, tasks, hash = 'behind') => vi.mocked(peerFetch)
+    .mockResolvedValue(payloadRes({ schemaVersion, listHash: sha(hash), tasks }));
+  const holder = (id, now, metadata = {}) => getBehindPeerHolder({ id, metadata }, LOCAL, now);
+  let clock;
+
+  beforeEach(() => { clock = vi.spyOn(Date, 'now').mockReturnValue(T0); });
+  afterEach(() => { clock.mockRestore(); clearBehindPeer(BEHIND.instanceId); });
+
+  it('holds the unfinished tasks in an older payload and nothing else, and still merges that payload', async () => {
+    const tasks = [
+      entry('shared-pending'), entry('shared-running', 'in_progress'), entry('shared-blocked', 'blocked'),
+      entry('shared-done', 'completed'), entry('peer-video', 'pending', { machineLocal: true }),
+    ];
+    respond(OLDER, tasks);
+    vi.mocked(mergePeerTasks).mockResolvedValue({ changed: true });
+
+    expect(await syncCosTasksFromPeer(BEHIND)).toEqual({ merged: 2 });
+    expect(vi.mocked(mergePeerTasks).mock.calls.find(([type]) => type === 'user')[1].map((t) => t.id))
+      .toEqual(['shared-pending', 'shared-running', 'shared-blocked', 'shared-done']);
+
+    for (const id of ['shared-pending', 'shared-running', 'shared-blocked']) expect(holder(id, T0)).toBe(BEHIND.instanceId);
+    // Created here during the window, finished there, or never federated: all run here as before.
+    for (const id of ['created-here', 'shared-done', 'peer-video']) expect(holder(id, T0)).toBeNull();
+    // A pin to this install is the user choosing where the task runs.
+    expect(holder('shared-pending', T0, { targetInstanceId: LOCAL })).toBeNull();
+    expect(holder('shared-pending', T0, { targetInstanceId: 'third-instance' })).toBe(BEHIND.instanceId);
+  });
+
+  it('releases the hold at the first sweep where the peer carries the local schema', async () => {
+    respond(OLDER, [entry('shared-pending')]);
+    await syncCosTasksFromPeer(BEHIND);
+    expect(holder('shared-pending', T0)).toBe(BEHIND.instanceId);
+
+    respond(PORTOS_SCHEMA_VERSIONS.cosTasks, [entry('shared-pending')], 'updated');
+    await syncCosTasksFromPeer(BEHIND);
+    expect(holder('shared-pending', T0)).toBeNull();
+  });
+
+  it('releases the hold when the peer jumps ahead of the local schema, while still skipping its payload', async () => {
+    respond(OLDER, [entry('shared-pending')]);
+    await syncCosTasksFromPeer(BEHIND);
+    respond(PORTOS_SCHEMA_VERSIONS.cosTasks + 1, [entry('shared-pending')], 'ahead');
+    expect(await syncCosTasksFromPeer(BEHIND)).toEqual({ merged: 0, skipped: 'schema-ahead' });
+    expect(holder('shared-pending', T0)).toBeNull();
+  });
+
+  it('lapses once the peer has gone a whole lease without a successful sweep', async () => {
+    respond(OLDER, [entry('shared-pending')]);
+    await syncCosTasksFromPeer(BEHIND);
+
+    vi.mocked(peerFetch).mockRejectedValue(new Error('Synthetic network failure'));
+    clock.mockReturnValue(T0 + LEASE_DURATION_MS);
+    expect(await syncCosTasksFromPeer(BEHIND)).toEqual({ merged: 0, skipped: 'unreachable' });
+    expect(holder('shared-pending', T0 + LEASE_DURATION_MS)).toBe(BEHIND.instanceId);
+    expect(holder('shared-pending', T0 + LEASE_DURATION_MS + 1)).toBeNull();
+  });
+
+  it('keeps holding across unchanged sweeps, however long the peer stays behind', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    respond(OLDER, [entry('shared-pending')]);
+    await syncCosTasksFromPeer(BEHIND);
+
+    clock.mockReturnValue(T0 + LEASE_DURATION_MS);
+    expect(await syncCosTasksFromPeer(BEHIND)).toEqual({ merged: 0, skipped: 'unchanged' });
+    expect(holder('shared-pending', T0 + LEASE_DURATION_MS + 1)).toBe(BEHIND.instanceId);
+    // The window is announced when it opens, not on every sweep of it.
+    const announced = log.mock.calls.filter(([line]) => String(line).includes('cannot see claims made here'));
+    log.mockRestore();
+    expect(announced).toHaveLength(1);
+  });
+
+  it('follows the latest payload: a task the peer finished or dropped is no longer held', async () => {
+    respond(OLDER, [entry('shared-pending'), entry('finishing')]);
+    await syncCosTasksFromPeer(BEHIND);
+    respond(OLDER, [entry('finishing', 'completed')], 'next');
+    await syncCosTasksFromPeer(BEHIND);
+    expect(holder('shared-pending', T0)).toBeNull();
+    expect(holder('finishing', T0)).toBeNull();
+  });
+
+  // The restart that installs a newer schema opens the window, so the spawn guard
+  // waits on the first all-peers sweep of the process. Once per module instance.
+  it('lets the first dispatch wait for the first all-peers sweep, which records the hold', async () => {
+    vi.mocked(getPeers).mockResolvedValue([BEHIND]);
+    let answer;
+    vi.mocked(peerFetch).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+
+    const sweep = syncCosTasksWithAllPeers();
+    let known = false;
+    const waiting = behindPeersKnown().then(() => { known = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(known).toBe(false);
+    expect(holder('shared-pending', T0)).toBeNull();
+
+    answer(payloadRes({ schemaVersion: OLDER, listHash: sha('boot'), tasks: [entry('shared-pending')] }));
+    await waiting;
+    await sweep;
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    expect(holder('shared-pending', T0)).toBe(BEHIND.instanceId);
+  });
+
+  it('holds nothing for a peer on the local schema', async () => {
+    respond(PORTOS_SCHEMA_VERSIONS.cosTasks, [entry('shared-pending')], 'current');
+    await syncCosTasksFromPeer(BEHIND);
+    expect(holder('shared-pending', T0)).toBeNull();
   });
 });

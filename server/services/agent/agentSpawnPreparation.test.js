@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const loadState = vi.hoisted(() => vi.fn());
 const hasActiveTaskOwner = vi.hoisted(() => vi.fn());
@@ -21,6 +21,8 @@ import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { clearBehindPeer, recordBehindPeerSweep, trackBehindPeerSweep } from '../cos/cosBehindPeerHold.js';
+import { buildClaim } from '../cos/cosTaskClaim.js';
 
 describe('prepareAgentSpawn — duplicate dispatch', () => {
   it('skips a task another run already owns and reports the skip on stdout, not stderr', async () => {
@@ -118,6 +120,91 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     expect(await prepareAgentSpawn(task, context)).toBeNull();
     expect(emitLog).toHaveBeenCalledWith('warn', 'Holding task sys-release: claim write failed: null', { taskId: 'sys-release' });
     expect(context.cleanupOnError).toHaveBeenCalledWith('task or claim changed during dispatch');
+  });
+});
+
+// A full-sync peer on an older cosTasks schema never sees a claim made here, so
+// this install leaves the tasks that peer holds to it (#16871). The sweep that
+// records what the peer holds is covered in cosTasksSync.test.js.
+describe('prepareAgentSpawn — tasks left to a behind-schema peer (#16871)', () => {
+  const BEHIND = 'behind-peer';
+  const arrange = (task) => {
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockReset().mockResolvedValue(task);
+    updateTask.mockReset().mockResolvedValue(task);
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    return context;
+  };
+  const pendingTask = (id, metadata = {}) => ({ id, taskType: 'user', status: 'pending', metadata });
+  const holdForPeer = (...ids) => recordBehindPeerSweep(BEHIND, ids.map((id) => ({ id, status: 'pending' })));
+
+  afterEach(() => { clearBehindPeer(BEHIND); vi.restoreAllMocks(); });
+
+  it('leaves an unpinned task the peer holds pending and unclaimed, and says why on stdout', async () => {
+    holdForPeer('task-shared');
+    const context = arrange(pendingTask('task-shared'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(await prepareAgentSpawn(context.task, context)).toBeNull();
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏸️ Task task-shared stays pending: left to peer instance behind-peer/));
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    // Refused before the budget, settlement and claim steps: a held task is not
+    // blocked at the spawn cap or settled here on the peer's behalf.
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(context.cleanupOnError).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(context.claimAcquired).toBe(false);
+  });
+
+  it.each([
+    ['a task the peer does not hold', pendingTask('task-created-here')],
+    ['a held task pinned to this install', pendingTask('task-shared', { targetInstanceId: 'local' })],
+  ])('dispatches %s during the window', async (_label, task) => {
+    holdForPeer('task-shared');
+    const context = arrange(task);
+    expect(await prepareAgentSpawn(task, context)).toBe(context);
+    expect(context.claimAcquired).toBe(true);
+  });
+
+  it('yields when the sweep that reveals the peer lands during dispatch', async () => {
+    const task = pendingTask('task-shared');
+    const context = arrange(task);
+    getTaskById.mockResolvedValueOnce(task).mockImplementationOnce(async () => { holdForPeer('task-shared'); return task; });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+
+    expect(context.cleanupOnError).toHaveBeenCalledWith('left to a behind-schema peer');
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('still reports the peer\'s own claim on a held task as the claim it is', async () => {
+    holdForPeer('task-shared');
+    const context = arrange(pendingTask('task-shared', buildClaim(BEHIND)));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(await prepareAgentSpawn(context.task, context)).toBeNull();
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('🔒 Task task-shared is claimed by instance behind-peer (live lease)'));
+  });
+
+  // Last in this block: the wait is once per process, so it is spent after this.
+  it('learns which peers are behind before the first dispatch of a fresh process', async () => {
+    const sweep = vi.fn(async () => { await new Promise((resolve) => setImmediate(resolve)); holdForPeer('task-shared'); });
+    trackBehindPeerSweep(sweep);
+    const context = arrange(pendingTask('task-shared'));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(await prepareAgentSpawn(context.task, context)).toBeNull();
+
+    expect(sweep).toHaveBeenCalledTimes(1);
+    // Refused at the first check, before any task read: the sweep was awaited, not raced.
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(context.claimAcquired).toBe(false);
   });
 });
 

@@ -6,7 +6,8 @@
  * `leaseExpiresAt`; a peer spawns only a task whose lease is unset/expired or owned
  * by itself. The lease is time-bounded so a crashed claimant can't block its peer:
  * the owner renews it on the health-check sweep and the claim is released when the
- * task leaves `in_progress`.
+ * task leaves `in_progress`. A peer on an older task schema never receives this
+ * install's claims; `cosBehindPeerHold.js` covers that direction.
  *
  * Pure: every function takes a plain task-metadata object and returns a boolean or
  * a patch to merge via `cosTaskStore.updateTask`.

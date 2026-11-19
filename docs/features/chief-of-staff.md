@@ -368,6 +368,31 @@ remain private until redacted. A failed HTTP request, refusal, or malformed
 body leaves the branch untouched. A second request cannot retroactively
 authorize an unreadable first result.
 
+## Shared queues across installs
+
+Full-sync peers share both task queues, and a claim with a 30-minute lease
+(`server/services/cos/cosTaskClaim.js`) keeps two installs from running the same
+task. A task can also be pinned to one install (`targetInstanceId`).
+
+The task payload is version-gated in one direction: an install skips a payload
+from a peer on a newer `cosTasks` schema and merges one from a peer on the same
+or an older schema. While two installs are on different versions, the older one
+cannot see the newer one's claims. So the newer install leaves every unfinished
+task the older peer also holds to that peer
+(`server/services/cos/cosBehindPeerHold.js`), and logs
+`⏸️ Task <id> stays pending: left to peer instance <id>`. Tasks created on the
+newer install during that window, and tasks pinned to it, run there as usual.
+
+The hold is kept in memory and rebuilt by every task sweep. Updating restarts the
+server, so the first dispatch of a new process waits once for the first sweep of
+its full-sync peers (bounded by that sweep's own request timeout) and learns
+which of them are behind before it runs anything.
+
+The hold ends at the first sweep after the peer updates, and lapses if the peer
+has not answered a sweep for one lease. A peer that is reachable but not running
+its queue keeps the shared tasks waiting until it updates; pin a task to the
+newer install to run it there sooner.
+
 ## Task File Format
 
 ```markdown

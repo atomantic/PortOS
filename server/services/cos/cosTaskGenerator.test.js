@@ -98,6 +98,7 @@ import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 import { cosEvents } from './cosEvents.js';
+import { clearBehindPeer, recordBehindPeerSweep } from './cosBehindPeerHold.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { createDequeueCapacity } from './cosDequeue.js';
@@ -334,22 +335,26 @@ describe('isConfiguredApprovalRequired', () => {
   });
 });
 
-// #1650/#4520: a task this instance must not run — a live lease held by ANOTHER
-// instance, or a pin naming another instance — must be skipped during candidate
+// #1650/#4520/#16871: a task this instance must not run — a live lease held by
+// ANOTHER instance, a pin naming another instance, or a task left to a peer on
+// an older task schema — must be skipped during candidate
 // selection, BEFORE the engine emits `task:ready` + trackSpawn. Otherwise that
 // task (often the highest-priority pick) consumes this instance's spawn slot
 // every cycle (the spawn guard then returns null, spawning nothing) and starves
 // later runnable tasks. Both spawn engines (dequeueNextTask in cos.js,
 // evaluateTasks here) must apply it, in both their execute loops AND their
-// dry-run plan. `getSkipReason` answers both halves in one call.
-describe('not-runnable-here skip during candidate selection (#1650, #4520)', () => {
-  it('cosTaskGenerator.js imports getSkipReason from the shared claim module', () => {
+// dry-run plan. `getDispatchSkipReason` answers all three in one call.
+describe('not-runnable-here skip during candidate selection (#1650, #4520, #16871)', () => {
+  it('cosTaskGenerator.js imports getDispatchSkipReason from the behind-peer hold module', () => {
     // Both the Priority-1 (admitPendingUserTasks) and Priority-2
     // (admitAutoApprovedSystemTasks) shared passes live here (#7523) and both
-    // consult getSkipReason, so this is the one module that needs the import.
-    // cos.js no longer imports it directly — dequeueNextTask's Priority-1 tier
+    // consult getDispatchSkipReason, so this is the one module that needs the
+    // import. cos.js does not import it — dequeueNextTask's Priority-1 tier
     // delegates to admitPendingUserTasks instead of re-checking the lease itself.
-    expect(GEN_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+    expect(GEN_SRC).toMatch(/import\s*\{[^}]*getDispatchSkipReason[^}]*\}\s*from\s*'\.\/cosBehindPeerHold\.js'/);
+    // The bare claim check knows nothing of a behind-schema peer; calling it here
+    // would let a held task take a spawn slot every cycle.
+    expect(GEN_SRC).not.toMatch(/\bgetSkipReason\b/);
   });
 
   it('both engines resolve this instance id once per cycle via ensureInstanceId', () => {
@@ -358,10 +363,10 @@ describe('not-runnable-here skip during candidate selection (#1650, #4520)', () 
   });
 
   it('the Priority-1 pass keeps its not-runnable-here skip; Priority-2 gets it from the shared gate table', () => {
-    // Priority-1 (admitPendingUserTasks) consults getSkipReason inline; Priority-2
-    // reaches it through AUTO_APPROVED_GATES (behaviorally pinned by the
+    // Priority-1 (admitPendingUserTasks) consults getDispatchSkipReason inline;
+    // Priority-2 reaches it through AUTO_APPROVED_GATES (behaviorally pinned by the
     // dry-run/execute parity test below), so a second inline call must not return.
-    const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\)/g) || [];
+    const genSkips = GEN_SRC.match(/getDispatchSkipReason\(task,\s*instanceId\)/g) || [];
     expect(genSkips.length).toBe(2);
   });
 });
@@ -1032,6 +1037,22 @@ describe('admitPendingUserTasks', () => {
     const { adapter } = makeAdapter();
     const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
     expect(admitted.map(t => t.id)).toEqual(['here']);
+  });
+
+  it('leaves a task a behind-schema peer holds to that peer, unless it is pinned here (#16871)', async () => {
+    recordBehindPeerSweep('behind-peer', [{ id: 'shared', status: 'pending' }, { id: 'shared-pinned-here', status: 'pending' }]);
+    const pendingUserTasks = [
+      task('shared'),
+      task('shared-pinned-here', { targetInstanceId: 'local' }),
+      task('created-here'),
+    ];
+    const { adapter, emitted, tracked } = makeAdapter();
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter)
+      .finally(() => clearBehindPeer('behind-peer'));
+    expect(admitted.map(t => t.id)).toEqual(['shared-pinned-here', 'created-here']);
+    // The held row never reaches emit/track, so it costs this cycle no spawn slot.
+    expect(emitted).toEqual(['shared-pinned-here', 'created-here']);
+    expect(tracked).toEqual(['shared-pinned-here', 'created-here']);
   });
 
   it('stops admitting once capacityExhausted() reports true, without touching later rows', async () => {

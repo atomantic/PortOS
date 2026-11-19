@@ -13,6 +13,7 @@ import { getAppWorkspace } from './agentPromptBuilder.js';
 import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/provider/providerVendors.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from '../cos/cosTaskClaim.js';
+import { behindPeerHoldReason, behindPeersKnown, getBehindPeerHolder } from '../cos/cosBehindPeerHold.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { isExpectedUnpersistedMiss } from '../../lib/autonomousJobTask.js';
@@ -130,6 +131,14 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
     return null;
   }
+  // Once per process: a restart onto a newer task schema must learn which peers
+  // are behind before its first dispatch, not at the first timed sweep after it.
+  await behindPeersKnown();
+  const behindPeer = getBehindPeerHolder(task, instanceId);
+  if (behindPeer !== null) {
+    console.log(`⏸️ Task ${task.id} stays pending: ${behindPeerHoldReason(behindPeer)} — skipping spawn on ${instanceId}`);
+    return null;
+  }
 
   const checked = await getTaskById(task.id).then(value => ({ value }), () => ({ failed: true }));
   const checkedTask = checked.value;
@@ -195,6 +204,13 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     if (!isClaimableBy(freshTask.metadata, instanceId)) {
       console.log(`🔒 Task ${task.id} was claimed by instance ${getClaimOwner(freshTask.metadata)} during dispatch — yielding on ${instanceId}`);
       await context.cleanupOnError('claimed by another instance');
+      return null;
+    }
+    // A sweep can land during dispatch, and the pin is read from the fresh row.
+    const freshBehindPeer = getBehindPeerHolder(freshTask, instanceId);
+    if (freshBehindPeer !== null) {
+      console.log(`⏸️ Task ${task.id} stays pending: ${behindPeerHoldReason(freshBehindPeer)} — yielding on ${instanceId}`);
+      await context.cleanupOnError('left to a behind-schema peer');
       return null;
     }
     const claimUpdate = await updateTask(task.id, {
