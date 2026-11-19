@@ -54,7 +54,8 @@ export function buildAudioBedMix({ beds, firstInputIdx, mainLabel, outLabel, lim
       `atrim=start=${fmtSec(tr.offsetSec)}:end=${fmtSec(tr.offsetSec + tr.durationSec * rate)}`,
       'asetpts=PTS-STARTPTS',
     ];
-    if (rate !== 1) parts.push(atempoChain(rate), `atrim=duration=${fmtSec(tr.durationSec)}`);
+    const tempo = atempoChain(rate);
+    if (tempo) parts.push(tempo, `atrim=duration=${fmtSec(tr.durationSec)}`);
     const volume = tr.volume == null ? 1 : tr.volume;
     if (volume !== 1) parts.push(`volume=${fmtSec(volume)}`);
     if (tr.fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fmtSec(tr.fadeInSec)}`);

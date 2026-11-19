@@ -48,9 +48,9 @@ function buildColdOpenAudioArgs(shots, outputPath) {
     const clip = shot.clip;
     if (clip) {
       const idx = addInput(clip.path, { loop: clip.loop });
-      const tempo = clip.rate && clip.rate !== 1 ? `,${atempoChain(clip.rate)}` : '';
+      const tempo = atempoChain(clip.rate || 1);
       const lead = clip.leadSec > 0 ? `,adelay=${Math.round(clip.leadSec * 1000)}:all=1` : '';
-      filters.push(`[${idx}:a]${clip.reverse ? 'areverse,' : ''}atrim=start=${round3(clip.sourceInSec || 0)},asetpts=PTS-STARTPTS${tempo},${FORMAT},volume=${clip.volume}${lead}[clip${i}]`);
+      filters.push(`[${idx}:a]${clip.reverse ? 'areverse,' : ''}atrim=start=${round3(clip.sourceInSec || 0)},asetpts=PTS-STARTPTS${tempo ? `,${tempo}` : ''},${FORMAT},volume=${clip.volume}${lead}[clip${i}]`);
       legs.push(`[clip${i}]`);
     }
     (shot.layers || []).forEach((layer, j) => {
