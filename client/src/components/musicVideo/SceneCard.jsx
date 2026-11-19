@@ -591,7 +591,8 @@ export default function SceneCard({
       )}
       {!preMusic && layer === 'footage' && (
         <ShotEditorGroup title="Sound" summary={(clipSoundSummary(scene) || 'silent under the song').toLowerCase()} testId="shot-group-sound">
-          <SceneClipSound fieldId={fieldId} scene={scene} onChange={applyPatch} />
+          <SceneClipSound fieldId={fieldId} scene={scene} onChange={applyPatch} documentComposition={documentComposition}
+            hasSelectedTake={Boolean(sourceWindow?.videoHistoryId || scene.videoHistoryId)} />
         </ShotEditorGroup>
       )}
       <ShotEditorGroup title="Transitions & effects" summary={effectsSummary} testId="shot-group-effects">

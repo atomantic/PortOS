@@ -6,7 +6,7 @@ import { LevelSlider } from './ScenePreMusic.jsx';
  * such as a spoken line: its level, and how far the song dips under it. While it
  * is on, a new render of the shot asks its video model for sound.
  */
-export default function SceneClipSound({ fieldId, scene, onChange, disabled = false }) {
+export default function SceneClipSound({ fieldId, scene, onChange, disabled = false, documentComposition = false, hasSelectedTake = false }) {
   const sound = songClipSound(scene);
   const save = (patch) => onChange({ clipSound: { ...sound, ...patch } });
   return (
@@ -28,7 +28,13 @@ export default function SceneClipSound({ fieldId, scene, onChange, disabled = fa
         )}
         {!sound && <span className="text-port-text-muted">Silent under the song</span>}
       </div>
-      {sound && <p className="text-port-text-muted">A clip rendered while this was off has no sound: render the shot again to hear it.</p>}
+      {sound && <p className="text-port-text-muted">
+        {documentComposition
+          ? hasSelectedTake
+            ? 'Document finals and excerpts need audio in the selected take when this is on. If the take is silent, select a take with audio or render the shot again.'
+            : 'Select or render a video take with audio before rendering a document final or an excerpt that includes this shot.'
+          : 'A clip rendered while this was off has no sound, so render the shot again to hear it.'}
+      </p>}
     </div>
   );
 }

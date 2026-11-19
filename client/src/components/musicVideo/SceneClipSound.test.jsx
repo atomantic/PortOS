@@ -19,4 +19,13 @@ describe('SceneClipSound', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Clip sound over the music' }));
     expect(onChange).toHaveBeenLastCalledWith({ clipSound: null });
   });
+
+  it('shows the missing take prerequisite for document finals and excerpts', () => {
+    const scene = { sceneId: 's', clipSound: { volume: 1, musicLevel: 0.55 } };
+    const onChange = vi.fn();
+    const { rerender } = render(<SceneClipSound fieldId={fieldId} scene={scene} onChange={onChange} documentComposition />);
+    expect(screen.getByText(/Select or render a video take with audio/)).toBeTruthy();
+    rerender(<SceneClipSound fieldId={fieldId} scene={scene} onChange={onChange} documentComposition hasSelectedTake />);
+    expect(screen.getByText(/Document finals and excerpts need audio in the selected take/)).toBeTruthy();
+  });
 });
