@@ -8,6 +8,7 @@ vi.mock('../services/api', () => ({
   getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
   createTribeTouchpoint: vi.fn(),
   updateTribePerson: vi.fn(),
+  deleteTribePerson: vi.fn(() => Promise.resolve({ success: true })),
   // Non-blocking duplicate-identifier report (#5908); defaults to clean so
   // tests unrelated to it never see the banner.
   getTribeDuplicateIdentifiers: vi.fn(() => Promise.resolve({ emails: [], phones: [] })),
@@ -509,5 +510,78 @@ describe('Tribe person panels and outreach — failed reads', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Waiting on a reply')).toBeTruthy();
     expect(screen.queryByText(/Could not load threads/)).toBeNull();
+  });
+});
+
+describe('Tribe URL-backed selection, delete confirmation, and form labels', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockClear();
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    api.deleteTribePerson.mockClear();
+    api.deleteTribePerson.mockResolvedValue({ success: true });
+    window.localStorage.clear();
+  });
+
+  it('updates ?person=<id> when clicking a person card and clears it on New relationship', async () => {
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/tribe?tab=circle&person=p1')
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New relationship' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/tribe?tab=circle')
+    );
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+  });
+
+  it('requires inline confirmation before deleting a person and clears ?person= on confirm', async () => {
+    renderAt('/tribe?person=p1');
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=circle'));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Example Person'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(api.deleteTribePerson).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete?')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel delete relationship' }));
+    expect(api.deleteTribePerson).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm delete relationship' }));
+    await waitFor(() => expect(api.deleteTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/tribe?tab=circle')
+    );
+    expect(screen.queryByText('Example Person')).toBeNull();
+    await act(async () => {});
+  });
+
+  it('pairs htmlFor with id for all 12 ContactForm fields', async () => {
+    renderAt('/tribe?tab=circle');
+    await screen.findByLabelText('Name');
+
+    const labels = [
+      'Name',
+      'Relationship',
+      'Ring',
+      'Cadence',
+      'Last Contact',
+      'Energy',
+      'Channel',
+      'Tags',
+      'Emails & handles',
+      'Phone numbers',
+      'Next Move',
+      'Notes',
+    ];
+    for (const labelText of labels) {
+      const control = screen.getByLabelText(labelText);
+      expect(control.id).toBeTruthy();
+      const labelEl = document.querySelector(`label[for="${control.id}"]`);
+      expect(labelEl).not.toBeNull();
+    }
   });
 });
