@@ -66,10 +66,23 @@ describe('stripAnsi (one-shot)', () => {
     expect(stripAnsi('a\x1B_b')).toBe('ab');
   });
 
-  it('strips a bare \\x1B not followed by 0x40-0x5F (lookahead branch)', () => {
-    // `(` is 0x28, not in [@-_], so the bare-ESC catch-all fires and only
-    // the ESC is removed.
-    expect(stripAnsi('\x1B(plain')).toBe('(plain');
+  it('strips a bare \\x1B that starts no escape form (lookahead branch)', () => {
+    // `❯` is outside every ECMA-35 final/intermediate range, so the bare-ESC
+    // catch-all fires and only the ESC is removed.
+    expect(stripAnsi('\x1B❯plain')).toBe('❯plain');
+  });
+
+  // Claude Code 2.1.328 emits `ESC 7 … ESC 8` around its startup paint and
+  // `ESC ( B` + SI before each bracketed-paste toggle; these leaked `78` and
+  // `(B(B(B…` into the captured output of a failed agent's trust dialog.
+  it('strips nF escapes (charset select) and the SO/SI bytes paired with them', () => {
+    expect(stripAnsi('a\x1B(Bb\x1B)0c\x1B%Gd')).toBe('abcd');
+    expect(stripAnsi('x\x1B(B\x0F\x1B[?2004hy\x0Ez')).toBe('xyz');
+  });
+
+  it('strips two-byte Fp and Fs escapes (DECSC/DECRC, keypad mode, RIS)', () => {
+    expect(stripAnsi('\x1B7\x1B[r\x1B8hi')).toBe('hi');
+    expect(stripAnsi('a\x1B=b\x1B>c\x1Bcd')).toBe('abcd');
   });
 
   it('strips NUL bytes', () => {
@@ -121,6 +134,12 @@ describe('createStreamingAnsiStripper', () => {
     expect(strip('abc\x1B')).toBe('abc');
     // Next chunk completes a single-byte escape form (`\x1B@`).
     expect(strip('@xyz')).toBe('xyz');
+  });
+
+  it('buffers an nF escape split after its intermediate byte', () => {
+    const strip = createStreamingAnsiStripper();
+    expect(strip('a\x1B(')).toBe('a');
+    expect(strip('Bb')).toBe('b');
   });
 
   it('buffers a bare \\x1B at chunk end and resolves into a CSI on the next chunk', () => {
@@ -200,8 +219,8 @@ describe('createStreamingAnsiStripper', () => {
     // A bare `\x1B` followed by enough plain text that lastEsc lives outside
     // the 4096-byte trailing window. The buffer-candidate branch is skipped
     // and we fall through to STRIP. The bare-ESC lookahead branch removes
-    // the lone `\x1B` (since `y` is 0x79, not in [@-_]) leaving plain text.
-    const padding = 'y'.repeat(5000);
+    // the lone `\x1B` (`é` starts no escape form) leaving plain text.
+    const padding = 'é'.repeat(5000);
     expect(strip(`\x1B${padding}`)).toBe(padding);
     // Nothing held over.
     expect(strip('done')).toBe('done');
