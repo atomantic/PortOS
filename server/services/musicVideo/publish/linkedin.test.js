@@ -42,7 +42,13 @@ function fakePage({ url = 'https://www.linkedin.com/feed/?shareActive=true', sho
           log.push(['click', name || sel]);
           if (name === 'Next') composer = true;
         },
-        evaluate: async (_fn, text) => { if (pasteWorks) typed[sel] = text; log.push(['paste', sel, text]); },
+        // No argument: the reachability probe (the composer is on top once Next is pressed).
+        evaluate: async (_fn, ...args) => {
+          if (!args.length) return sel === EDITOR && composer;
+          const [text] = args;
+          if (pasteWorks) typed[sel] = text;
+          log.push(['paste', sel, text]);
+        },
         innerText: async () => (isEditor ? typed[sel] || '' : ''),
       };
       return el;

@@ -33,7 +33,7 @@ function fixtureHtml({ legacy, posted = false }) {
     const end = ${legacy} ? '</div>' : '</dialog>';
     root.innerHTML = ${posted}
       ? '<article><p>Example film.</p><div class="comments-comment-texteditor">' + editor('comment') + '<button id="comment-send">Comment</button></div></article>'
-      : composer + '<section id="post-body">' + editor('post') + '<button id="media" aria-label="${legacy ? 'Add media' : 'Media'}">Attach clip</button><input type="file" hidden id="file"><button id="post-send">Post</button></section><section id="media-body" hidden><video></video><button id="next">Next</button></section>' + end;
+      : composer + '<section id="post-body">' + editor('post') + '<button id="media" aria-label="${legacy ? 'Add media' : 'Media'}">Attach clip</button><input type="file" hidden id="file"><button id="post-send">Post</button></section><section id="media-body" hidden style="position: fixed; inset: 0; background: white; z-index: 10;"><video></video><button id="next">Next</button></section>' + end;
     for (const id of ['post-send', 'comment-send']) root.querySelector('#' + id)?.addEventListener('click', () => window.publishClicks.push(id));
     root.querySelector('#comment')?.addEventListener('input', () => window.commentInputs++);
     if (${legacy}) {
@@ -51,14 +51,9 @@ function fixtureHtml({ legacy, posted = false }) {
     }
     if (!${posted}) {
       root.querySelector('#media').onclick = () => root.querySelector('#file').click();
-      root.querySelector('#file').onchange = () => {
-        root.querySelector('#post-body').hidden = true;
-        root.querySelector('#media-body').hidden = false;
-      };
-      root.querySelector('#next').onclick = () => {
-        root.querySelector('#post-body').hidden = false;
-        root.querySelector('#media-body').hidden = true;
-      };
+      // Like LinkedIn, the media editor covers the composer, which stays visible underneath.
+      root.querySelector('#file').onchange = () => { root.querySelector('#media-body').hidden = false; };
+      root.querySelector('#next').onclick = () => { root.querySelector('#media-body').hidden = true; };
       if (!${legacy}) root.querySelector('#composer').showModal();
     }
   </script></body></html>`;
