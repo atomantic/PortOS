@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { expectAuthorizedWorkflows } from './hostControlTestHarness.js';
+import { expectAuthorizedWorkflows, expectRemoteRefusal } from './hostControlTestHarness.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
@@ -23,6 +23,7 @@ vi.mock('../services/settings.js', () => ({
 const effects = vi.hoisted(() => ({
   isInstalled: vi.fn(() => true),
   isMuscriptorRuntimeReady: vi.fn(async () => true),
+  installYtDlp: vi.fn(async () => ({ success: true, version: '1.0.1' })),
   updateYtDlp: vi.fn(async () => ({ success: true, version: '1.0.1' })),
 }));
 vi.mock('../lib/setupScriptRunner.js', async (importOriginal) => ({
@@ -36,6 +37,7 @@ vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
 }));
 vi.mock('../services/ytdlpUpdate.js', () => ({
   getYtDlpUpdateStatus: vi.fn(async () => ({ version: '1.0.0' })),
+  installYtDlp: effects.installYtDlp,
   updateYtDlp: effects.updateYtDlp,
 }));
 vi.mock('../services/videoDownload.js', () => ({}));
@@ -65,10 +67,15 @@ beforeEach(() => {
 });
 
 describe('runtime installers behind the default-deny gate (#16114)', () => {
+  it('refuses remote installation on a password-free host', async () => {
+    await expectRemoteRefusal(mounts, ['post', '/api/devtools/video-download/yt-dlp/install', undefined, effects.installYtDlp]);
+  });
+
   it('still runs each installer for a local operator and a delegated agent session', async () => {
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [
       ['post', '/api/image-to-3d/targets/trellis2/install', {}, effects.isInstalled, 200],
       ['post', '/api/midi-runtime/install', {}, effects.isMuscriptorRuntimeReady, 200],
+      ['post', '/api/devtools/video-download/yt-dlp/install', undefined, effects.installYtDlp, 200],
       ['post', '/api/devtools/video-download/yt-dlp/update', {}, effects.updateYtDlp, 200],
     ] });
   });

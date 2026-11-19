@@ -1,7 +1,6 @@
 /**
- * `findYtDlp()`: cached discovery of the `yt-dlp` binary on PATH, mirroring `findFfmpeg()` in `./ffmpeg.js` (a system binary, not an npm dependency, with the same "install it yourself" posture.
- *
- * PortOS shouldn't vendor or auto-install a Python downloader). Used by the track YouTube-import job; `resetYtDlpCache()` drops the cache after an in-place update or fresh install so neither needs a restart.
+ * Discover the system yt-dlp binary for video downloads and imports. Reset the
+ * cached lookup after a package change so it takes effect without a restart.
  */
 
 import { existsSync } from 'fs';
