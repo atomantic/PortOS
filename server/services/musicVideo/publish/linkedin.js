@@ -79,6 +79,19 @@ async function openComposer(page) {
   }
 }
 
+/**
+ * Whether the composer's editor takes clicks: LinkedIn's media editor opens as a
+ * second dialog over the composer, which stays visible underneath, so visibility
+ * alone would stop before its Next is pressed.
+ */
+const editorReachable = (page) => page.locator(EDITOR).evaluateAll(([el]) => {
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const hit = el.getRootNode().elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 20));
+  return Boolean(hit) && el.contains(hit);
+}).catch(() => false);
+
 async function attachVideo(page, video) {
   await step(label, 'attach the video', async () => {
     const button = page.locator(`${DIALOG} button:is([aria-label="Media"], [aria-label="Add media"], [aria-label="Add a video"])`).first();
@@ -90,11 +103,15 @@ async function attachVideo(page, video) {
     await page.locator(`${DIALOG} video`).first().waitFor({ timeout: 120_000 }).catch(() => {});
     await page.waitForTimeout(1500);
     for (const name of ['Next', 'Done']) {
-      if (await page.locator(EDITOR).first().isVisible().catch(() => false)) break;
+      if (await editorReachable(page)) break;
       await button(page, name).click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(1500);
     }
-    await page.locator(EDITOR).first().waitFor({ timeout: T });
+    const deadline = Date.now() + T;
+    while (!(await editorReachable(page))) {
+      if (Date.now() > deadline) throw new Error('the media editor did not return to the post');
+      await page.waitForTimeout(1000);
+    }
   });
 }
 

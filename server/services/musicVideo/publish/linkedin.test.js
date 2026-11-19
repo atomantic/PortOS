@@ -36,13 +36,16 @@ function fakePage({ url = 'https://www.linkedin.com/feed/?shareActive=true', sho
         count: async () => (/progressbar/.test(sel) ? 0 : 1),
         isEnabled: async () => true,
         waitFor: async () => { if (sel === EDITOR && !composer) throw new Error('timeout'); },
-        isVisible: async () => (sel === EDITOR ? composer : true),
         click: async () => {
           if (sel === EDITOR && !composer) throw new Error('not attached');
           log.push(['click', name || sel]);
           if (name === 'Next') composer = true;
         },
-        evaluate: async (_fn, text) => { if (pasteWorks) typed[sel] = text; log.push(['paste', sel, text]); },
+        evaluateAll: async () => sel === EDITOR && composer,
+        evaluate: async (_fn, text) => {
+          if (pasteWorks) typed[sel] = text;
+          log.push(['paste', sel, text]);
+        },
         innerText: async () => (isEditor ? typed[sel] || '' : ''),
       };
       return el;
