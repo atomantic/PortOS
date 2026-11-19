@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
+import { CUTOVER_PSQL_ARGS, STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 import { toBashPath as toBashPathForTest } from '../lib/bashResolver.js';
 
 const context = vi.hoisted(() => ({ root: undefined, scriptRoot: undefined, bashBinary: undefined,
@@ -206,7 +206,7 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     const [dump] = stubs.invocations('pg_dump');
     const [load] = stubs.invocations('psql');
     expect(dump).toBe(`pg_dump ${endpointArgs(source)} --no-owner --no-privileges --no-comments --if-exists --clean`);
-    expect(load).toBe(`psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`);
+    expect(load).toBe(`psql ${endpointArgs(target)} ${CUTOVER_PSQL_ARGS}`);
     // Inherited libpq endpoint/option variables never reach the client tools.
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);
     // The caller's TMPDIR is forwarded so import staging stays inside it.
@@ -322,8 +322,8 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     // No second export: the retry cannot pick up post-fence source state.
     expect(stubs.invocations('pg_dump')).toHaveLength(1);
     expect(stubs.invocations('psql')).toEqual([
-      `psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`,
-      `psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`,
+      `psql ${endpointArgs(target)} ${CUTOVER_PSQL_ARGS}`,
+      `psql ${endpointArgs(target)} ${CUTOVER_PSQL_ARGS}`,
     ]);
     expect(readFileSync(dumpPath(), 'utf8')).toBe(recorded);
     expect(journal.transferStatus(operation.id)).toEqual({ dump: 'recorded', import: 'committed' });
