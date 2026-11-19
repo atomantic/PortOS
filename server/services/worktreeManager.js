@@ -79,12 +79,12 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
-  await Promise.all(dependencyPaths.map(async (relativePath) => {
+  const outcomes = await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
     const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
-    if (!sourceExists) return;
     const targetStat = await lstat(targetPath).catch(() => null);
+    if (!sourceExists) return { path: relativePath, status: targetStat ? 'existing' : 'absent' };
     if (targetStat) {
       const isSymlink = targetStat.isSymbolicLink?.() ?? false;
       const isDir = targetStat.isDirectory?.() ?? !isSymlink;
@@ -94,15 +94,17 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
           await rm(targetPath, { recursive: true, force: true });
         } else {
           console.warn(`⚠️ linkWorktreeDependencies: skipping existing ${targetPath} (not a cache-only directory)`);
-          return;
+          return { path: relativePath, status: 'existing' };
         }
       } else {
-        return;
+        return { path: relativePath, status: 'existing' };
       }
     }
-    if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return;
+    if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return { path: relativePath, status: 'linked' };
     await symlink(sourcePath, targetPath, 'dir');
+    return { path: relativePath, status: 'linked' };
   }));
+  return outcomes;
 }
 
 /**

@@ -189,6 +189,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const promptTrace = {};
     const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
       promptTrace,
+      claimDependencies: claimCheckout?.dependencies,
       providerType: provider.type,
       providerId: provider.id,
       providerCommand: provider.command,

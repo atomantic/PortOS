@@ -246,6 +246,19 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it.each(['api', 'cli'])('renders provisioned dependency state in the %s claim prompt', async providerType => {
+    const { composeClaimIssuePrompt } = await import('../taskPromptDefaults/prompts.js');
+    const description = composeClaimIssuePrompt({ target: '42', preverified: true, nonEpic: true, serverCheckout: true });
+    const task = makeTask({ description, metadata: { claimFlow: true } });
+    const missing = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'absent' }] });
+    expect(missing).toContain('source checkout has no installed dependencies to link');
+    expect(missing).toContain('Install dependencies inside this worktree');
+    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked' }] });
+    expect(linked).toContain('linked or provisioned: node_modules');
+    expect(linked).toContain('Never install through dependency paths linked to the source checkout');
+    expect(linked).not.toContain('CLAIM_DEPENDENCY_PROVISIONING_STATUS');
+  });
+
   it('uses provider merge authority in both prompt paths and carries recovery evidence', async () => {
     for (const app of ['portos-default', 'example-app']) {
       const task = makeTask({ description: 'Finish the selected issue', metadata: { app, claimFlow: true,
