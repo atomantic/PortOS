@@ -9,6 +9,8 @@ vi.mock('../../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOrigin
 vi.mock('../prProbe.js', async (importOriginal) => ({ ...(await importOriginal()), probeChangeRequestState: mergedTarget.probeChangeRequestState }));
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('../claimDisposition.js', () => claimVerifier);
+const reviewHandoffVerifier = vi.hoisted(() => ({ verifyClaimReviewHandoff: vi.fn() }));
+vi.mock('../claimReviewHandoff.js', () => reviewHandoffVerifier);
 vi.mock('../../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
@@ -992,6 +994,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     const taskOutcome = { status: 'blocked', reason: 'Required CI logs need unavailable credentials; no safe rerun is authorized.' };
     persistedAgent.taskId = task.id;
     claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'claim-still-open' });
+    reviewHandoffVerifier.verifyClaimReviewHandoff.mockResolvedValue({ status: 'unverified', reason: 'pull-request-not-awaiting-human-review' });
     try {
       await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
         finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) });
@@ -999,7 +1002,44 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'blocked',
         metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted' }) }), task.taskType);
       expect(addTask).not.toHaveBeenCalled();
-    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      reviewHandoffVerifier.verifyClaimReviewHandoff.mockReset();
+    }
+  });
+
+  // Regression: a claim whose PR passed CI but needed a code owner's approval
+  // reported `blocked`, was retried to its spawn limit and then parked as
+  // task-recovery-exhausted for the operator, duplicating the open PR's review.
+  it.each(['normal', 'restart'])('completes a claim held only by a required human approval during %s completion', async mode => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42', failureCount: MAX_TASK_RETRIES - 1 } };
+    const reported = { status: 'blocked', reason: 'PR is green; branch protection still needs a code-owner approval.' };
+    const prUrl = 'https://github.example.test/example/project/pull/7';
+    const handoff = { status: 'verified', taskId: task.id, agentId: persistedAgent.id,
+      pullRequests: [{ branch: 'claim/issue-42', number: 7, url: prUrl, head: 'a'.repeat(40), state: 'OPEN', awaitingHumanReview: true }] };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.taskOutcome = reported;
+    persistedAgent.metadata.taskOutcomeSource = 'terminal-result';
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'issue-not-closed-or-mismatched' });
+    reviewHandoffVerifier.verifyClaimReviewHandoff.mockResolvedValue(handoff);
+    try {
+      if (mode === 'normal') await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: reported.reason, taskOutcome: reported }) });
+      else await retireDeadAgent({ agent: persistedAgent, task, success: true, exitCode: 0, duration: 100 });
+      expect(reviewHandoffVerifier.verifyClaimReviewHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ task,
+        agent: expect.objectContaining({ id: persistedAgent.id, taskId: task.id }), reportedOutcome: reported, success: true }));
+      const taskOutcome = { status: 'completed', reason: expect.stringContaining(prUrl) };
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: true, taskOutcome }));
+      expect(persistedAgent.metadata).toMatchObject({ taskOutcomeSource: 'forge-verification', reportedTaskOutcome: reported, reviewHandoff: handoff });
+      expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+      expect(addTask).not.toHaveBeenCalled();
+      if (mode === 'normal') expect(updateTask).toHaveBeenLastCalledWith(task.id,
+        expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ taskOutcome }) }), task.taskType);
+    } finally {
+      isProgrammaticIoTaskType.mockReturnValue(true);
+      reviewHandoffVerifier.verifyClaimReviewHandoff.mockReset();
+    }
   });
 
   it('preserves a failed delivery gate during claim no-op recovery', async () => {

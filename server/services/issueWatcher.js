@@ -33,6 +33,7 @@ import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
 import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
+import { classifyChecks } from '../lib/pullRequestReadiness.js';
 import { getProviderById } from './provider/providers.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -56,8 +57,6 @@ const MAX_HANDBACK_LEDGER_ENTRIES = 200;
 const CI_FAILING_HANDBACK_REASON = 'the PR was approved but CI is failing';
 export const MAX_PENDING_APPROVAL_TICKS = 12;
 export const MAX_PENDING_ISSUE_COMMENT_TICKS = 12;
-const GREEN_CHECKS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
-const FAILED_CHECKS = new Set(['ACTION_REQUIRED', 'CANCELLED', 'ERROR', 'FAILURE', 'STALE', 'STARTUP_FAILURE', 'TIMED_OUT']);
 
 let stateWriteTail = Promise.resolve();
 
@@ -179,13 +178,6 @@ export function parseAddedDiffLines(diff) {
     }
   }
   return anchors;
-}
-
-export function classifyChecks(statusCheckRollup) {
-  const checks = Array.isArray(statusCheckRollup) ? statusCheckRollup : [];
-  if (checks.some((check) => FAILED_CHECKS.has(String(check?.conclusion || check?.state || '').toUpperCase()))) return 'failed';
-  if (checks.length > 0 && checks.every((check) => GREEN_CHECKS.has(String(check?.conclusion || check?.state || '').toUpperCase()))) return 'green';
-  return 'pending';
 }
 
 // One key for a screened issue comment across screening, assignment, coverage and ageing.
