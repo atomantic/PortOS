@@ -16,7 +16,6 @@ import { Router } from 'express';
 import { sharingSubscriptionsQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { bucketCreateSchema, bucketUpdateSchema, sharingExportSchema, subscriptionCreateSchema } from '../lib/validation.js';
 import {
   listBuckets, getBucket, createBucket, updateBucket, deleteBucket, readBucketJson,
 } from '../services/sharing/buckets.js';
@@ -30,6 +29,7 @@ import {
   listSubscriptions, subscribe, unsubscribe,
 } from '../services/sharing/subscriptions.js';
 import { listManifestFilenames, readManifest } from '../services/sharing/manifest.js';
+import { bucketCreateSchema, bucketUpdateSchema, sharingExportSchema, subscriptionCreateSchema } from '../lib/sharingValidation.js';
 
 const router = Router();
 

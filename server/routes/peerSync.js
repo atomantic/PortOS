@@ -9,7 +9,7 @@ import { isPlainObject } from '../lib/objects.js';
  *   POST   /api/peer-sync/subscriptions              → subscribe a record to a peer
  *   DELETE /api/peer-sync/subscriptions/:id          → unsubscribe
  *
- * POST bodies flow through Zod schemas in `server/lib/validation.js`. Query
+ * POST bodies flow through Zod schemas in `server/lib/peerSyncValidation.js`. Query
  * params on GET and the `:id` path param on DELETE are guarded inline:
  *   - GET /subscriptions filter values are accepted only when `typeof === 'string'`
  *     (Express returns arrays for repeated keys; the guard prevents those from

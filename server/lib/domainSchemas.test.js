@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { agentActivityAgentParamsSchema, processSchema, appSchema, appUpdateSchema, providerSchema, runSchema, validate, featureProviderConfigSchema, locationSettingsSchema, restoreRequestSchema, subdirFilterSchema, isPaginationRequested, paginateArray, parseIndexParam, parsePagination, seriesAutopilotSettingsSchema, portsAllocateSchema, databaseSwitchSchema, databaseBackendSchema, databaseExportSchema, datadogInstanceRequestSchema, datadogSearchErrorsRequestSchema, providerVisionTestSchema, providerVisionSuiteSchema, uploadRequestSchema, attachmentUploadRequestSchema } from './validation.js';
 import { featureAgentSchema, featureAgentUpdateSchema } from './agent/agentValidation.js';
 import { sanitizeTaskMetadata, normalizeReviewers, normalizeReviewUsernames, resolveReviewUsernames, normalizeOptionalReviewers, resolveOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerMaxRounds, MAX_REVIEWER_MAX_ROUNDS, normalizeReviewerModels, resolveReviewerModels, reviewerModelsFromDefaults, MAX_REVIEWER_MODEL_LENGTH, resolveKeyedReviewers, buildReviewersCsv, buildReviewWithArgs, createCosTaskSchema, updateCosTaskSchema, codeReviewSettingsSchema } from './cos/cosValidation.js';
 import { stageConfigUpdateSchema, writersRoomCharacterUpdateSchema, writersRoomObjectUpdateSchema, editorialCustomCheckUpdateSchema, pipelineEditorialChecksSettingsSchema, storyboardShotSchema, storyboardSceneSchema } from './pipelineValidation.js';
@@ -21,8 +20,19 @@ import {
 import {
   brainDigestRunSchema,
 } from './brainValidation.js';
+import { agentActivityAgentParamsSchema } from './agentActivityValidation.js';
+import { processSchema, appSchema, appUpdateSchema, datadogInstanceRequestSchema, datadogSearchErrorsRequestSchema } from './appValidation.js';
+import { providerSchema, providerVisionTestSchema, providerVisionSuiteSchema } from './providerValidation.js';
+import { runSchema } from './processValidation.js';
+import { validate } from './validateRequest.js';
+import { featureProviderConfigSchema, seriesAutopilotSettingsSchema } from './settingsValidation.js';
+import { locationSettingsSchema } from './instanceSettingsValidation.js';
+import { restoreRequestSchema, subdirFilterSchema } from './backupValidation.js';
+import { isPaginationRequested, paginateArray, parseIndexParam, parsePagination } from './queryValidation.js';
+import { portsAllocateSchema, databaseSwitchSchema, databaseBackendSchema, databaseExportSchema } from './databaseValidation.js';
+import { uploadRequestSchema, attachmentUploadRequestSchema } from './uploadValidation.js';
 
-describe('validation.js', () => {
+describe('domain validation schemas', () => {
   describe('issue #4922 request schemas', () => {
     it('accepts the DataDog instance and error-search request shapes', () => {
       expect(datadogInstanceRequestSchema.safeParse({
@@ -2361,11 +2371,10 @@ describe('ad-hoc route schemas (#2521)', () => {
     });
   });
 
-  // Pins the transitional re-export added by the #5698 Eidoverse split: the
-  // schemas live in eidoverseValidation.js but must keep resolving through
-  // validation.js so no consumer has to change its import specifier.
-  describe('transitional eidoverse re-export', () => {
-    it('resolves eidoverseWorldConfigPatchSchema through validation.js', () => {
+  // The #5698 Eidoverse split's transitional catch-all re-export is gone;
+  // the schema resolves from its declaring module.
+  describe('eidoverse world config patch', () => {
+    it('resolves eidoverseWorldConfigPatchSchema from eidoverseValidation.js', () => {
       expect(typeof eidoverseWorldConfigPatchSchema?.safeParse).toBe('function');
       expect(eidoverseWorldConfigPatchSchema.safeParse({ cosEnabled: true }).success).toBe(true);
       expect(eidoverseWorldConfigPatchSchema.safeParse({ notAField: 1 }).success).toBe(false);

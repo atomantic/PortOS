@@ -23,7 +23,6 @@ import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOuts
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
-import { isPaginationRequested, parsePagination } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
@@ -66,6 +65,7 @@ import deliveryRoutes from './musicVideoDelivery.js';
 import compositionRoutes from './musicVideoComposition.js';
 import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool, searchMediaLibraryForPool, addLibraryMediaToPool, deleteMusicVideoPoolAssets } from '../services/musicVideo/mediaPool.js';
 import { getMusicVideoOutroStats } from '../services/musicVideo/statsOutro.js';
+import { isPaginationRequested, parsePagination } from '../lib/queryValidation.js';
 
 const router = Router();
 // A take decision's reply carries the change, so its own tab can skip the refetch its broadcast asks for.
@@ -78,7 +78,7 @@ router.use(writeOriginScope);
 // so the pin stays a route-level concern and musicVideoProjectCreateSchema keeps
 // the shape peers sync against. (Since #3873 the fragment lives in the leaf
 // sharedSchemas.js, so musicVideoValidation.js COULD import it without the
-// TDZ cycle that re-exporting through validation.js used to cause — the route
+// TDZ cycle that re-exporting through the old catch-all validation module used to cause — the route
 // layer is now a choice, not a workaround.)
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);

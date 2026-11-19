@@ -569,7 +569,7 @@ export const TIMEOUT_INPUT_STEP_MS = 1000;
  * server's Zod schema would 400.
  *
  * Digit-only strings (`^\d+$`) only: stricter than `Number(v)` ("1e3", "1000.5"); mirrored in `stageConfigUpdateSchema`'s
- * preprocess in server/lib/validation.js, so loosen both in lockstep.
+ * preprocess in server/lib/pipelineValidation.js, so loosen both in lockstep.
  */
 export function parseTimeoutMs(raw) {
   if (raw == null) return null;

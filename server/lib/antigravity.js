@@ -32,9 +32,9 @@ export function isAntigravityCliProvider(provider) {
 // is anchored on a TAB, not "first whitespace token": a prose line ("Available models")
 // would otherwise surrender a regex-valid first word and be persisted as a model id.
 //
-// The id charset matches `validation.js#cloudModelIdString`; restated rather than
-// imported because `validation.js` pulls in the whole route-schema graph, which several
-// mocked suites cannot absorb.
+// The id charset matches `sharedSchemas.js#cloudModelIdString`; restated rather than
+// imported because the schema graph is wider than this parser needs and several
+// mocked suites cannot absorb it.
 const MODEL_ID_CHARS = '[A-Za-z0-9][A-Za-z0-9._:/-]*';
 const ANTIGRAVITY_MODEL_ID = new RegExp(`^${MODEL_ID_CHARS}$`);
 const ANTIGRAVITY_MODEL_LINE = new RegExp(`^(${MODEL_ID_CHARS})(?:\\t.*)?$`);

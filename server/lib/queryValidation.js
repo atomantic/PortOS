@@ -7,6 +7,7 @@
  * values see no change; unknown keys are stripped, never rejected, for older clients and peers.
  */
 import { z } from 'zod';
+import { ServerError } from './errorHandler.js';
 
 const scalar = z.string().optional();
 
@@ -63,3 +64,62 @@ export const providerReadinessSetupQuerySchema = z.object({ provider: scalar, ru
 
 /** POST /api/providers/readiness/serve-model. */
 export const providerServeModelQuerySchema = z.object({ provider: scalar });
+
+export const searchQuerySchema = z.object({
+  q: z.string().min(2).max(200).trim()
+});
+
+/**
+ * Parse a zero-based array index from an Express route parameter.
+ * @param {unknown} raw - Route parameter value
+ * @returns {number}
+ */
+export function parseIndexParam(raw) {
+  const index = Number(raw);
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw) || !Number.isSafeInteger(index)) {
+    throw new ServerError('Invalid index', { status: 400, code: 'INVALID_INDEX' });
+  }
+  return index;
+}
+
+/**
+ * Parse limit/offset pagination from query params with defaults and clamping.
+ * @param {object} query - req.query object
+ * @param {object} options - { defaultLimit, maxLimit }
+ * @returns {{ limit: number, offset: number }}
+ */
+export function parsePagination(query, { defaultLimit = 50, maxLimit = 200 } = {}) {
+  const rawLimit = parseInt(query?.limit, 10);
+  const rawOffset = parseInt(query?.offset, 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, maxLimit) : defaultLimit;
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+  return { limit, offset };
+}
+
+/**
+ * Did the caller explicitly ask for pagination? True when either `limit` or
+ * `offset` is present in the query string. Lets a list endpoint stay
+ * backward-compatible (return the full array when neither is set) while opting
+ * into a bounded `{ items, total, limit, offset }` envelope the moment a client
+ * passes a pagination param.
+ * @param {object} query - req.query object
+ * @returns {boolean}
+ */
+export function isPaginationRequested(query) {
+  return query?.limit !== undefined || query?.offset !== undefined;
+}
+
+/**
+ * Slice an array into a bounded page using the same limit/offset parsing as
+ * `parsePagination`. Returns the page plus the metadata needed to render the
+ * envelope every paginated PortOS list endpoint shares.
+ * @param {Array} items - the full list (already filtered/sorted by the caller)
+ * @param {object} query - req.query object
+ * @param {object} options - { defaultLimit, maxLimit }
+ * @returns {{ items: Array, total: number, limit: number, offset: number }}
+ */
+export function paginateArray(items, query, options = {}) {
+  const list = Array.isArray(items) ? items : [];
+  const { limit, offset } = parsePagination(query, options);
+  return { items: list.slice(offset, offset + limit), total: list.length, limit, offset };
+}

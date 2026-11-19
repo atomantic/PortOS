@@ -15,7 +15,6 @@
 
 import { Router } from 'express';
 import { asyncHandler, failValidation } from '../lib/errorHandler.js';
-import { referenceRepoCreateSchema, referenceRepoUpdateSchema, referenceRepoReviewedBodySchema } from '../lib/validation.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   listReferenceRepos,
@@ -27,6 +26,7 @@ import {
   triggerReferenceAnalysis,
 } from '../services/referenceRepos.js';
 import { getAppById } from '../services/apps.js';
+import { referenceRepoCreateSchema, referenceRepoUpdateSchema, referenceRepoReviewedBodySchema } from '../lib/referenceRepoValidation.js';
 
 const router = Router({ mergeParams: true });
 

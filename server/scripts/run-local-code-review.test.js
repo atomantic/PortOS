@@ -29,6 +29,8 @@ function withSavedProviderReview(context, run) {
       // A temporary install path preserves test-only module paths without
       // weakening the CoS worktree's live-data protection.
       await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+      // server/lib/sharedSchemas.js imports the repo-root lib/pm2ProcessName.js, so the install shape needs both trees.
+      await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
       const harness = join(root, 'harness.cjs');
       await writeFile(join(root, 'context.txt'), 'example surrounding source');
       await writeFile(harness, `
@@ -176,6 +178,7 @@ it('classifies a CLI command-permission refusal without exposing its private dia
 it('shuts down the Codex app-server child and cleans up scratch resources after successful and timed-out reviews', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-codex-test-'));
   await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+  await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
 
   const binDir = join(root, 'bin');
   await mkdir(binDir);
@@ -507,6 +510,7 @@ it('projects malformed diagnostics through the bridge and health store, clearing
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
   try {
     await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
     await mkdir(join(root, 'data'));
     await writeFile(join(root, 'data/providers.json'), JSON.stringify({ activeProvider: 'example-reviewer', providers: {
       'example-reviewer': { id: 'example-reviewer', name: 'Example Reviewer', type: 'api', enabled: true,
@@ -565,6 +569,7 @@ it('supports --report-failure and --active-group directly via the standalone bri
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-report-test-'));
   try {
     await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+    await symlink(fileURLToPath(new URL('../../lib/', import.meta.url)), join(root, 'lib'), 'junction');
     const data = join(root, 'data');
     await mkdir(data);
     await writeFile(join(data, 'settings.json'), JSON.stringify({

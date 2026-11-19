@@ -1,8 +1,8 @@
 import { DIRECT_HARNESS_ID, PROVIDER_HARNESSES, harnessById } from '../lib/provider/providerHarnesses.js';
 import { isPlainObject } from '../lib/objects.js';
-import { harnessSettingsSchema } from '../lib/validation.js';
 import { PROVIDER_RUNTIMES, peekProviderRuntimeStatuses } from './provider/providerRuntimeInstaller.js';
 import { getSettings, settingsEvents, updateSettingsWith } from './settings.js';
+import { harnessSettingsSchema } from '../lib/providerValidation.js';
 
 /**
  * Per-HARNESS enablement (#7564, epic #7561) — the harness axis of "an enabled

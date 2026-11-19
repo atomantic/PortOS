@@ -31,7 +31,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   threadInputSchema,
   threadUpdateSchema,
@@ -44,6 +43,7 @@ import { isTerminalThreadStatus as isTerminal, compareThreads } from '../lib/bra
 import { canonicalThreadRefKind } from '../lib/threadRefKinds.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { resolveThreadRefs } from '../services/threadRefs.js';
+import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 
 const router = Router();
 

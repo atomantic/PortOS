@@ -1,5 +1,5 @@
 /**
- * Leaf module of cross-domain Zod fragments shared by `validation.js` and per-domain validation files
+ * Leaf module of cross-domain Zod fragments shared by the per-domain `*Validation.js` files
  * without circular imports.
  */
 
@@ -10,10 +10,11 @@ import { SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } fro
 import { RENDER_TARGET_BACKEND_AUTO, RECORD_RENDER_MODEL_MAX } from './renderTargets.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
+import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
+import { providerRefSchema } from './zodCompat.js';
 
 /**
- * Cross-domain Zod primitives: fragments more than one validation domain needs. Lives in a leaf module, not `validation.js`, for the same TDZ-cycle reason as `zodCompat.js`:
- * `validation.js` re-exports every `*Validation.js` with `export * from` (hoisted above the module body), so a domain file importing a value back from it would read it uninitialized.
+ * Cross-domain Zod primitives: fragments more than one validation domain needs. Lives in a leaf module, for the same TDZ-cycle reason as `zodCompat.js`: a domain validation file never imports another one, so a schema two domains need (including the file-private helpers they share, such as `nonEmptyString`) is declared here and imported by both.
  * `zodCompat.js` holds Zod-version compatibility helpers; this holds PortOS-domain vocabulary (render pins, model-id charset, clip lengths, path safety).
  */
 
@@ -60,7 +61,7 @@ export const csvIdsParam = ({ max, maxIdLength = 64, truncate = false } = {}) =>
 
 // subdirFilter is interpolated into an rsync `--include=${subdirFilter}/***` arg (shell:false, so not shell injection, but `*` would defeat the filter chain and `../foo` would escape the
 // snapshot subdir). Restrict to a relative path of safe characters: no wildcard, traversal, absolute, or empty/`.` segment (`brain/`, `./brain`, `a//b` spell one path differently).
-// Exported as a predicate so the restoreSnapshot guard and sprite run-id schemas reuse it (mirrors isSafeRecordId in validation.js; #1822).
+// Exported as a predicate so the restoreSnapshot guard and sprite run-id schemas reuse it (mirrors isSafeRecordId in zodCompat.js; #1822).
 export const isSafeSubdirFilter = (v) =>
   typeof v === 'string'
   && /^[a-z0-9._/-]+$/i.test(v)
@@ -107,7 +108,7 @@ export function anchorUserExclude(pattern) {
   return anchored.length <= EXCLUDE_PATTERN_MAX_LENGTH ? anchored : null;
 }
 
-/** Whether a pattern survives normalization; shared with `lib/validation.js` so the settings boundary rejects exactly what `computeEffectiveExcludes` would drop.
+/** Whether a pattern survives normalization; shared with `lib/backupValidation.js` so the settings boundary rejects exactly what `computeEffectiveExcludes` would drop.
  * @param {unknown} pattern
  * @returns {boolean}
  */
@@ -175,3 +176,30 @@ export const imageEdgeSchema = z.number().int().min(64).max(MAX_IMAGE_EDGE).opti
 export const refineImagePixelCap = (d) =>
   !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
 export const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;
+
+// Reject option-shaped names before PM2 interprets positional arguments.
+export const pm2ProcessNameSchema = z.string().min(1).max(PM2_PROCESS_NAME_MAX)
+  .regex(PM2_PROCESS_NAME_RE, 'Must start with an alphanumeric character or underscore');
+
+export const logsQuerySchema = z.object({
+  lines: z.coerce.number().int().min(1).max(5000).default(100),
+  follow: z.enum(['true', 'false']).optional(),
+});
+
+// A service account JSON key is ~2.4 KB; leave room for a long one.
+export const GOOGLE_CREDENTIAL_MAX_LENGTH = 16_000;
+
+// Per-request LLM provider/model override. Shared by universe-builder expand
+// routes and pipeline arc-planning routes. Optional so callers that omit the
+// llm field fall back to the server's active provider.
+export const llmSchema = z.object({
+  provider: providerRefSchema.nullable().optional(),
+  model: z.string().trim().max(200).nullable().optional(),
+}).optional();
+
+export const nonEmptyString = z.string().min(1);
+export const optionalString = z.string().optional();
+export const nullishString = z.string().nullish();
+
+// A file name on the media static mounts: no path separators, no traversal.
+export const mediaFilenameSchema = z.string().min(1).max(255).refine((v) => !/[\\/]/.test(v) && v !== '.' && v !== '..', 'Invalid file name');

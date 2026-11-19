@@ -3,7 +3,7 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, parsePagination } from '../lib/queryValidation.js';
 import * as memory from '../services/memoryBackend.js';
 import { ensureBackend } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
@@ -12,7 +12,6 @@ import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { parsePagination } from '../lib/validation.js';
 import {
   memoryCreateSchema,
   memoryUpdateSchema,

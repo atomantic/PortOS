@@ -13,10 +13,9 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { videoDownloadSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   startVideoDownload,
   attachDownloadSseClient,
@@ -25,6 +24,7 @@ import {
   deleteDownload,
 } from '../services/videoDownload.js';
 import { getYtDlpUpdateStatus, updateYtDlp } from '../services/ytdlpUpdate.js';
+import { videoDownloadSchema } from '../lib/mediaGenerationValidation.js';
 
 const router = Router();
 

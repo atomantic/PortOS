@@ -18,7 +18,7 @@ and the six changes that follow from it.
   and hundreds of suites reach that module. Over half of each shard is import.
 - ~70 merges a day (peak 135) at 8 to 17 jobs per run saturate the 20-job
   concurrency; 22 of 76 runs were cancelled (supersession or capacity).
-- Every full plan in the sample came from a lockfile change, `lib/validation.js`
+- Every full plan in the sample came from a lockfile change, the old catch-all validation module
   or `ci.yml`. A pure-JS lockfile bump ran three Windows shards.
 - 11% of green runs needed a flake rerun (#11911). A PR handed to the
   pending-merge coordinator while CI is running waits for the 30-minute sweep.
@@ -48,7 +48,7 @@ to 100% CI ran.
    heads created by the repository owner and skips the attested stages. Fork
    and Dependabot PRs see no change. CI stays the authority for outsiders.
 4. **Narrower full-plan triggers**: lockfile changes escalate Windows only when a
-   platform-sensitive package changed; `validation.js` stops escalating Windows.
+   platform-sensitive package changed; the catch-all validation module stops escalating Windows.
 5. **Handed-off PRs are polled** at 60 to 120 s until their checks settle
    instead of waiting for the 30-minute sweep.
 6. **Fewer jobs per run**: `prompt-history` and `linux-containment` are

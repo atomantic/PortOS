@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { legacyExportSchema } from '../lib/validation.js';
 import { buildLegacyZip, previewLegacyExport } from '../services/legacyExport.js';
+import { legacyExportSchema } from '../lib/documentValidation.js';
 
 const router = Router();
 

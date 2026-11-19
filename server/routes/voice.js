@@ -12,7 +12,6 @@ import { TTS_ENGINE_IDS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { voicePiperFetchBodySchema } from '../lib/validation.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
@@ -41,6 +40,7 @@ import {
 } from '../services/voice/fineTuning.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
+import { voicePiperFetchBodySchema } from '../lib/voiceValidation.js';
 
 const router = Router();
 router.use(observeModelMutations('voice-readiness'));

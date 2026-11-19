@@ -141,7 +141,7 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 - **Live Node inspector**: no dynamic `import()` from an inspector-evaluated callback ([safe cleanup](docs/TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling)).
 - **Functional programming**: no classes; hooks in React.
 - **Lint is Biome** (`server/biome.jsonc`, `client/biome.jsonc`); `eslint-disable` does nothing. Suppress an enabled rule with `// biome-ignore lint/<group>/<rule>: <reason>`.
-- **Zod validation** for all route inputs via `lib/validation.js`.
+- **Zod** route validation: domain `lib/*Validation.js`.
 - **Command allowlists**: preserve the operator and unattended execution policies in `server/lib/commandSecurity.js` and the agent guard (PortOS runtime execution; dev-agent tool permissions come from the host).
 - **Push, don't poll**: the server emits a Socket.IO event when data changes; own mutations apply their response locally; never refetch on a timer ([exceptions](docs/UX_DESIGN_GUIDE.md#realtime-updates-not-polling); client rules in `client/src/AGENTS.md`).
 - **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/logLevelConventions.guard.test.js`; [marker table](docs/INSTRUCTION_RULE_DETAIL.md#logging-levels)).

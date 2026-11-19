@@ -393,7 +393,7 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
 export { SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, MAX_SELF_MANAGED_PR_AUTHORS, normalizeSelfManagedPrAuthors } from '../../../../server/lib/selfManagedPrAuthors.js';
 
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
-// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues
+// ISSUE_AUTHOR_FILTERS in server/lib/cos/cosValidation.js. 'self' = only claim issues
 // YOU filed (the slashdo /do:next --self security boundary; the default);
 // 'collaborators' = you plus everyone with repo/project access; 'owner' = only
 // claim issues the repo owner filed; 'any' = claim any open issue. Listed

@@ -8,9 +8,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/validation.js';
-import { validateRequest } from '../lib/validateRequest.js';
+import { validateRequest, validate } from '../lib/validateRequest.js';
 import * as socialAccounts from '../services/socialAccounts.js';
+import { socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/socialAccountValidation.js';
 
 const router = Router();
 

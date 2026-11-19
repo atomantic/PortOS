@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { dataPurgeSchema, dataArchiveBodySchema } from '../lib/validation.js';
 import {
   getDataOverview,
   getCategoryDetail,
@@ -11,6 +10,7 @@ import {
   getBackups,
   deleteBackup
 } from '../services/dataManager.js';
+import { dataPurgeSchema, dataArchiveBodySchema } from '../lib/databaseValidation.js';
 
 const router = Router();
 

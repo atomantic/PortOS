@@ -174,7 +174,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
   ...(await importOriginal()),
   tryReadFile: vi.fn().mockResolvedValue(null),
   // `data` is required alongside `root`: this module pulls in taskTypeHooks.js
-  // -> ... -> lib/validation.js -> subscriptionSavings.js -> postStreak.js ->
+  // -> ... -> lib/subscriptionSavings.js -> postStreak.js ->
   // activeDays.js -> timezone.js -> services/settings.js, whose module-scope
   // `join(PATHS.data, 'settings.json')` throws on load without it (#4211
   // added the activeDays.js edge). The bare `PATHS: {...}` below fully

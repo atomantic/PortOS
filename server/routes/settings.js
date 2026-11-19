@@ -29,7 +29,6 @@ import { agentContextSettingsSchema } from '../lib/agent/agentContextValidation.
 import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { federationSettingsSchema } from '../lib/federatedMediaValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchemaFor, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema, imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema } from '../lib/validation.js';
 import { codeReviewSettingsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema } from '../lib/cos/cosValidation.js';
 import { imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema } from '../lib/mediaValidation.js';
 import { pipelineEditorialChecksSettingsSchema } from '../lib/pipelineValidation.js';
@@ -37,6 +36,26 @@ import { privacySettingsSchema } from '../lib/privacyValidation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 import { codeAnimationExecutionArmedSchema } from '../lib/codeAnimationContainment.js';
+import {
+  settingsSlicePatchSchema, autoUpdateSettingsSchema, featureProviderConfigSchema, autofixerSettingsSchema,
+  localLlmSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, seriesAutopilotSettingsSchema,
+  imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema,
+  imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema,
+  imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema
+} from '../lib/settingsValidation.js';
+import {
+  privateCredentialParamsSchema, privateCredentialInputSchemaFor, harnessSettingsSchema,
+  credentialBootstrapsSettingsSchema
+} from '../lib/providerValidation.js';
+import { backupConfigSchema } from '../lib/backupValidation.js';
+import { sharingSettingsPatchSchema } from '../lib/sharingValidation.js';
+import {
+  locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema,
+  apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema,
+  instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema
+} from '../lib/instanceSettingsValidation.js';
+import { layeredIntelligenceSettingsSchema } from '../lib/appValidation.js';
+import { subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema } from '../lib/usageValidation.js';
 
 const router = Router();
 

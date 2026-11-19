@@ -2,7 +2,7 @@
  * Sprites — the write half of the user-defined animation-track store.
  *
  * **Separate from `animationTrackStore.js`.** That module is imported by
- * `server/lib/validation.js` (which builds sprite Zod ranges from the effective
+ * `server/lib/spriteValidation.js` (which builds sprite Zod ranges from the effective
  * registry at load), and its tests pin how narrow its import graph may be.
  * Refusing to delete a track with authored work means scanning every record, which
  * reaches `records.js` and the native image graph (sharp). Reads stay in the
@@ -25,7 +25,7 @@
  * Every mutation ends in `__resetAnimationTrackStore()`.
  *
  * **A mutation still reports `restartRequired`.** The registry is live after the
- * cache reset, but `validation.js` builds `spriteRuntimeContractSchema`'s per-track
+ * cache reset, but `spriteValidation.js` builds `spriteRuntimeContractSchema`'s per-track
  * fields once at module load, so a new track's `<id>FrameCount` key is stripped by
  * Zod until the process restarts.
  */

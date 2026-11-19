@@ -16,8 +16,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { isPaginationRequested, paginateArray } from '../lib/validation.js';
-import { paginationQuerySchema } from '../lib/queryValidation.js';
+import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 import * as albums from '../services/albums/index.js';
 import { createAlbumWithTracks, updateAlbumWithTracks, deleteAlbumWithTracks } from '../services/trackAlbumMembership.js';
 

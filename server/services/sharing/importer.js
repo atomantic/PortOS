@@ -29,7 +29,6 @@ import { existsSync, constants } from 'fs';
 import { EventEmitter } from 'events';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { PATHS, unlinkGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { isSafeRecordId } from '../../lib/validation.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, markRefused, readCursor, hasBeenProcessed, isRefusalCurrent, forgetProcessed } from './manifest.js';
@@ -53,6 +52,7 @@ import { ASSET_PULL_MAX_BYTES, SIDECAR_MAX_BYTES } from './assetLimits.js';
 import { importArchivedJobs } from '../mediaJobQueue/index.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { stripImageSidecarLocalBytes } from '../../lib/assetHash.js';
+import { isSafeRecordId } from '../../lib/zodCompat.js';
 
 // Record kinds that participate in the non-blocking conflict journal. Universe,
 // series, AND issue all seed a base hash on first import and archive a losing

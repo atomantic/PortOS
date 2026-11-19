@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { htmlCompositionRenderSchema } from '../lib/validation.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../lib/motionSkills.js';
 import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 
 import { execFile } from '../lib/childProcess.js';
+import { htmlCompositionRenderSchema } from '../lib/htmlCompositionValidation.js';
 const router = Router();
 
 // What the optional motion toolkit (`npm run setup:motion`) has installed, so

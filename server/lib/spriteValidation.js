@@ -5,8 +5,7 @@
  * Sprite Manager Zod schemas — record import/create/update, reference generate/lock/unlock + fork,
  * walk-cycle generate/approve/reopen/trim, per-track generate/approve schemas built from the
  * animation-track registry, publish binding + runtime contract, atlas publish/compile, and
- * user-defined animation-track create/update. Split out of `validation.js` (#3873), which re-exports
- * it.
+ * user-defined animation-track create/update. Split out of the retired validation.js catch-all (#3873).
  */
 
 import { z } from 'zod';
@@ -33,8 +32,7 @@ import {
 
 /**
  * Cycle note: like every other per-domain `*Validation.js` file, this module
- * must NOT import from `validation.js` (ESM hoists its `export * from` lines, so
- * values read back would hit the TDZ); shared fragments live in `sharedSchemas.js`.
+ * imports no other domain validation file; shared fragments live in `sharedSchemas.js`.
  */
 
 // Animation-track-aware bounds: frame-count / fps ranges come from a track's

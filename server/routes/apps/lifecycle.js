@@ -14,7 +14,6 @@
  */
 
 import { Router } from 'express';
-import { logsQuerySchema, pm2ProcessNameSchema } from '../../lib/validation.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { join, extname } from 'path';
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
@@ -29,6 +28,7 @@ import { usesPm2, isDesktopType } from '../../services/appProcessTypes.js';
 import { detectAppIcon, isUsableSvg, resolveContainedIcon } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
 import { EIDOVERSE_PROCESS_NAME, EIDOVERSE_MAX_MEMORY_RESTART } from '../../services/eidoverse.js';
+import { logsQuerySchema, pm2ProcessNameSchema } from '../../lib/sharedSchemas.js';
 
 const router = Router();
 

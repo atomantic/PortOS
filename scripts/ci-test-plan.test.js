@@ -387,10 +387,10 @@ describe('real shared-source import chains', () => {
     expect(plan.server.sources).toEqual([source]);
     // Explicit guards stay additive to the traversal.
     expect(plan.server.files).toEqual(expect.arrayContaining(getAlwaysRunTests().filter((path) => path.startsWith('server/'))));
-    // validation.test.js reaches the leaf only through pipelineValidation; it names
+    // domainSchemas.test.js reaches the leaf only through pipelineValidation; it names
     // neither the leaf nor the editorial feature, so only traversal selects it.
-    expect(plan.server.files).not.toContain('server/lib/validation.test.js');
-    expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
+    expect(plan.server.files).not.toContain('server/lib/domainSchemas.test.js');
+    expect(staticImportClosure(join(cwd, 'server/lib/domainSchemas.test.js')).files)
       .toContain(join(cwd, source));
   });
 });
@@ -947,7 +947,7 @@ describe('CI test impact planner', () => {
       'server/vitest.config.js',
       'client/vitest.config.js',
       'client/src/test/setup.js',
-      'server/lib/validation.js',
+      'server/lib/schemaVersions.js',
       // The client lint configuration. Both of these carry real enforced rules —
       // the .grit plugins include the crypto.randomUUID ban — so a change to
       // either must widen CI the same way the former eslint.config.js did. This
@@ -2408,7 +2408,7 @@ describe('dependency manifest Windows escalation', () => {
   });
 
   it('runs shared schema contracts on the primary platform', () => {
-    for (const path of ['server/lib/validation.js', 'server/lib/schemaVersions.js']) {
+    for (const path of ['server/lib/schemaVersions.js']) {
       const plan = planFor([path], {});
       expect(plan.full, path).toBe(true);
       expect(plan.server.mode, path).toBe('full');

@@ -1,8 +1,8 @@
 /** Offer GPT-6 Sol/Luna; retain public evidence now used by the PortOS composite. */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { modelComparisonCatalogSchema } from '../../server/lib/validation.js';
 import { makeAdditiveProviderInsertMigration } from './_lib.js';
+import { modelComparisonCatalogSchema } from '../../server/lib/modelComparisonValidation.js';
 
 const offerGpt6Models = makeAdditiveProviderInsertMigration({
   label: 'GPT-6 Sol/Luna',

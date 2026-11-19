@@ -6,10 +6,10 @@ import { request } from '../lib/testHelper.js';
 
 // --- Mock the filesystem + subprocess boundary so we can assert ZERO
 // mutations happen when a request fails validation (issue #2390). ---
-// PATHS.data is required here too: scaffold.js pulls in lib/validation.js ->
-// subscriptionSavings.js -> postStreak.js -> activeDays.js -> timezone.js ->
-// services/settings.js, whose module-scope `join(PATHS.data, 'settings.json')`
-// throws on load if this mock omits PATHS (#4211 added the activeDays.js edge).
+// PATHS.data is required here too: the mock replaces the real object, and a module in
+// scaffold.js's closure that joins `PATHS.data` at load (services/settings.js, reached
+// through subscriptionSavings.js -> postStreak.js -> activeDays.js -> timezone.js before
+// the catch-all validation module was split) would throw if this mock omitted it (#4211).
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
   expandHome: (p) => p,

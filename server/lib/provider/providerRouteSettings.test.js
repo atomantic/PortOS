@@ -19,7 +19,7 @@ import {
   routeSettingsFor,
   routeSettingsRevision,
 } from './providerRouteSettings.js';
-import { providerRouteSettingsUpdateSchema } from '../validation.js';
+import { providerRouteSettingsUpdateSchema } from '../providerValidation.js';
 
 /** One legal value per published key, so the schema can be probed key by key. */
 const SAMPLE = {
