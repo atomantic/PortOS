@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { castInputsFromReferences, castLookForTake } from './musicVideoCastLook.js';
-import { musicVideoTakeInputSchema } from './musicVideoValidation.js';
+import { musicVideoTakeInputSchema } from './musicVideoRouteValidation.js';
 
 const guide = (mediaKey, age) => ({ mediaKey, kind: 'reference', library: { variant: { age }, guide: true } });
 const sceneFor = (ingredientId, age) => ({ sceneId: 's1', characterVariant: { ingredientId, age } });

@@ -9,7 +9,7 @@ import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoDevArtifactImportSchema, musicVideoDevArtifactNoteSchema, musicVideoDevArtifactNoteUpdateSchema, musicVideoDevArtifactReviewSchema, musicVideoDevArtifactFileQuerySchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { musicVideoDevArtifactImportSchema, musicVideoDevArtifactNoteSchema, musicVideoDevArtifactNoteUpdateSchema, musicVideoDevArtifactReviewSchema, musicVideoDevArtifactFileQuerySchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { listDevArtifacts, getDevArtifact, importDevArtifact, resolveDevArtifactDownload, addNote as addDevArtifactNote, setNoteResolved as setDevArtifactNoteResolved, reviewArtifact as reviewDevArtifact, removeDevArtifact } from '../services/musicVideo/devArtifactService.js';
 import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
