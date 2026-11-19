@@ -44,3 +44,6 @@ export const getYtDlpStatus = (options = {}) => request('/devtools/video-downloa
 
 export const updateYtDlp = (options = {}) =>
   request('/devtools/video-download/yt-dlp/update', { method: 'POST', ...options });
+
+export const installYtDlp = (options = {}) =>
+  request('/devtools/video-download/yt-dlp/install', { method: 'POST', ...options });

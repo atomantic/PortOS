@@ -5,6 +5,7 @@ import YtDlpUpdateCard from './YtDlpUpdateCard';
 
 vi.mock('../../services/apiVideoDownload.js', () => ({
   getYtDlpStatus: vi.fn(),
+  installYtDlp: vi.fn(),
   updateYtDlp: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
@@ -17,7 +18,7 @@ vi.mock('../../hooks/useSocket.js', () => ({
   }),
 }));
 
-import { getYtDlpStatus, updateYtDlp } from '../../services/apiVideoDownload.js';
+import { getYtDlpStatus, installYtDlp, updateYtDlp } from '../../services/apiVideoDownload.js';
 import toast from '../ui/Toast';
 
 const STALE = {
@@ -67,6 +68,20 @@ describe('YtDlpUpdateCard', () => {
     render(<YtDlpUpdateCard />);
     expect(await screen.findByText('yt-dlp is pinned in Homebrew.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /update yt-dlp/i })).not.toBeInTheDocument();
+  });
+
+  it('installs on click and shows the installed version without a page reload', async () => {
+    getYtDlpStatus
+      .mockResolvedValueOnce({ installed: false, canInstall: true })
+      .mockResolvedValue({ ...STALE, version: '2026.08.19', updateAvailable: false });
+    installYtDlp.mockResolvedValue({ success: true, version: '2026.08.19' });
+
+    render(<YtDlpUpdateCard />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Install yt-dlp' }));
+
+    expect(await screen.findByText('yt-dlp 2026.08.19')).toBeInTheDocument();
+    expect(installYtDlp).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(updateYtDlp).not.toHaveBeenCalled();
   });
 
   it('points at install instructions when yt-dlp is missing entirely', async () => {
