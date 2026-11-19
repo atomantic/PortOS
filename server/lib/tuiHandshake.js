@@ -197,6 +197,28 @@ const TUI_TRUST_HIGHLIGHTED_DECLINE_PATTERN = new RegExp(
   'i',
 );
 
+// Claude Code 2.1.3xx resets its trust selector to the "No, exit" default shortly after first paint
+// (its terminal-capability probe re-renders the dialog). An arrow sent inside that window is undone
+// and the Enter bundled with it is lost, so every later paste lands in the selector (reproduced:
+// Down at +50ms reverts, Down at +300ms sticks). Arrow navigation therefore waits for the dialog to
+// age and settle, goes out ALONE, and Enter follows only once a repaint shows the affirmative choice
+// highlighted and the screen has gone quiet again. A revert is re-navigated, within a bound.
+export const TUI_TRUST_NAVIGATION_MIN_AGE_MS = 1000;
+export const TUI_TRUST_SETTLE_MS = 400;
+export const TUI_TRUST_MAX_NAVIGATIONS = 4;
+const TUI_TRUST_ARROW_KEYS = new Set(['\x1b[A', '\x1b[B']);
+const TUI_TRUST_HIGHLIGHT_SCAN_PATTERN = new RegExp(
+  `${TUI_HIGHLIGHT_PATTERN_PREFIX}(?:(yes,?itrustthisfolder|yes,?continue|trustandcontinue)|no,?(?:exit|quit)|quit)`,
+  'gi',
+);
+
+/** Which trust option the LATEST highlight glyph in `text` sits on, or null when none painted. */
+function latestTrustHighlight(text) {
+  let latest = null;
+  for (const m of text.matchAll(TUI_TRUST_HIGHLIGHT_SCAN_PATTERN)) latest = m[1] ? 'accept' : 'decline';
+  return latest;
+}
+
 // Claude Code's auto-mode opt-in offer ("Make auto mode your default permission mode? → 1. Yes,
 // set auto mode as my default permission mode / 2.
 export const TUI_AUTO_MODE_PROMPT_PATTERN =
@@ -293,6 +315,14 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
   let trustAnswered = false;
   let trustChoiceReady = false;
   let trustSelectionKey = '';
+  // Highlight chrome (not option order) chose the arrow, so a repaint can confirm it landed.
+  let trustKeyFromHighlight = false;
+  let trustFirstSeenAt = 0;
+  let trustLastOutputAt = 0;
+  let trustNavigations = 0;
+  // Output since the last arrow went out. The rolling tail still holds the pre-arrow screen, so
+  // only this text can say where the highlight is NOW.
+  let trustNavTail = '';
   let sawReadyText = false;
   // Auto-mode offer: latched when seen, cleared once answered. `autoModeAnswered` makes the ack
   // TERMINAL — `tail` is a rolling 4000-char window, so the modal's text lingers in it long after
@@ -335,6 +365,37 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
     get needsTrust() { return needsTrust; },
     get trustChoiceReady() { return trustChoiceReady; },
     get trustSelectionKey() { return trustSelectionKey; },
+    get trustNavigationExhausted() { return trustNavigations >= TUI_TRUST_MAX_NAVIGATIONS; },
+    /**
+     * The trust-gate keystrokes due right now, or null to keep waiting. `final` means the write
+     * submits a choice; otherwise it only moves the highlight and the dialog stays pending.
+     * @param {number} [now]
+     * @returns {{ keys: string, final: boolean } | null}
+     */
+    trustAnswer(now = Date.now()) {
+      if (!needsTrust || !trustChoiceReady) return null;
+      const settled = now - trustLastOutputAt >= TUI_TRUST_SETTLE_MS;
+      if (trustNavigations > 0) {
+        if (!settled) return null;
+        const highlight = latestTrustHighlight(trustNavTail);
+        if (highlight === 'accept') return { keys: SUBMIT_KEY, final: true };
+        if (highlight === 'decline' && trustNavigations < TUI_TRUST_MAX_NAVIGATIONS) {
+          return { keys: trustSelectionKey, final: false };
+        }
+        return null;
+      }
+      if (!TUI_TRUST_ARROW_KEYS.has(trustSelectionKey)) return { keys: `${trustSelectionKey}${SUBMIT_KEY}`, final: true };
+      if (now - trustFirstSeenAt < TUI_TRUST_NAVIGATION_MIN_AGE_MS || !settled) return null;
+      // Without highlight chrome no repaint can confirm the move, so keep the bundled answer.
+      if (!trustKeyFromHighlight) return { keys: `${trustSelectionKey}${SUBMIT_KEY}`, final: true };
+      return { keys: trustSelectionKey, final: false };
+    },
+    /** Spawner wrote `answer` (from trustAnswer) to the TUI. */
+    ackTrustAnswer(answer) {
+      if (answer.final) { needsTrust = false; trustAnswered = true; return; }
+      trustNavigations += 1;
+      trustNavTail = '';
+    },
     get needsAutoModeChoice() { return needsAutoModeChoice; },
     get needsExternalImportsChoice() { return needsExternalImportsChoice; },
     get needsHookReview() { return needsHookReview; },
@@ -365,9 +426,16 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
           rawTail = possibleTogglePrefix;
         }
       }
+      if (needsTrust && (rawText || strippedText)) trustLastOutputAt = Date.now();
       if (strippedText) {
-        tail = (tail + strippedText.replace(/\s+/g, '')).slice(-OBSERVE_TAIL_MAX_LEN);
-        if (!needsTrust && !trustAnswered && TUI_TRUST_PROMPT_PATTERN.test(tail)) needsTrust = true;
+        const compact = strippedText.replace(/\s+/g, '');
+        tail = (tail + compact).slice(-OBSERVE_TAIL_MAX_LEN);
+        if (!needsTrust && !trustAnswered && TUI_TRUST_PROMPT_PATTERN.test(tail)) {
+          needsTrust = true;
+          trustFirstSeenAt = Date.now();
+          trustLastOutputAt = trustFirstSeenAt;
+        }
+        if (needsTrust && trustNavigations > 0) trustNavTail = (trustNavTail + compact).slice(-OBSERVE_TAIL_MAX_LEN);
         if (needsTrust && !trustChoiceReady) {
           const acceptMatch = TUI_TRUST_ACCEPT_OPTION_PATTERN.exec(tail);
           const declineMatch = TUI_TRUST_DECLINE_OPTION_PATTERN.exec(tail);
@@ -379,6 +447,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
               trustSelectionKey = 'a';
             } else if (TUI_TRUST_HIGHLIGHTED_DECLINE_PATTERN.test(tail)) {
               trustSelectionKey = declineMatch && declineMatch.index < acceptMatch.index ? '\x1b[B' : '\x1b[A';
+              trustKeyFromHighlight = true;
             } else if (TUI_TRUST_HIGHLIGHTED_ACCEPT_PATTERN.test(tail)) {
               trustSelectionKey = '';
             } else if (declineMatch) {
@@ -403,6 +472,25 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
         }
       }
     },
+  };
+}
+
+
+/**
+ * Why a folder-trust gate was still up at the readiness deadline: its affirmative choice never
+ * painted recognizably, or the selector would not hold it.
+ * @returns {{ reason: string, error: string }}
+ */
+export function describeTrustGateFailure(inputReady, command) {
+  if (!inputReady.trustChoiceReady) {
+    return {
+      reason: 'tui-trust-choice-unrecognized',
+      error: `${command} presented a folder-trust prompt whose affirmative choice PortOS could not identify, so no prompt was sent.`,
+    };
+  }
+  return {
+    reason: 'tui-trust-choice-unconfirmed',
+    error: `${command} folder-trust prompt never showed the trust choice selected${inputReady.trustNavigationExhausted ? ` after ${TUI_TRUST_MAX_NAVIGATIONS} attempts to move to it` : ''}, so no choice was submitted and no prompt was sent.`,
   };
 }
 
@@ -456,10 +544,17 @@ const STARTUP_DIALOGS = [
     id: 'folder-trust',
     stage: 'before-composer',
     answered: 'trustAccepted',
-    asks: (inputReady) => inputReady.needsTrust && inputReady.trustChoiceReady,
-    keys: (inputReady) => `${inputReady.trustSelectionKey}${SUBMIT_KEY}`,
-    ack: (inputReady) => inputReady.ackTrustChoice(),
-    describe: (command) => `Auto-confirmed ${command} folder-trust prompt`,
+    asks: (inputReady) => Boolean(inputReady.needsTrust) && inputReady.trustAnswer() !== null,
+    keys: (inputReady) => inputReady.trustAnswer().keys,
+    // Navigation-only writes leave the gate pending; the row is answered once Enter goes out.
+    ack: (inputReady) => {
+      const answer = inputReady.trustAnswer();
+      inputReady.ackTrustAnswer(answer);
+      return answer.final;
+    },
+    describe: (command, final) => (final
+      ? `Auto-confirmed ${command} folder-trust prompt`
+      : `Moved ${command} folder-trust selection to the trust choice`),
   },
   // Decline claude's "make auto mode your default permission mode?" offer (v2.1.233+). Unlike the
   // trust gate this one paints AFTER the composer is live, so it swallows the paste and every
@@ -503,10 +598,11 @@ export function answerStartupDialogs({ inputReady, answers, stage, command, writ
     if (dialog.stage !== stage) continue;
     if (answers[dialog.answered]) continue;
     if (!dialog.asks(inputReady)) continue;
-    answers[dialog.answered] = true;
     write(dialog.keys(inputReady));
-    dialog.ack(inputReady);
-    return { id: dialog.id, message: dialog.describe(command) };
+    // An ack returning false is an intermediate step (trust navigation); the dialog is still up.
+    const final = dialog.ack(inputReady) !== false;
+    if (final) answers[dialog.answered] = true;
+    return { id: dialog.id, message: dialog.describe(command, final) };
   }
   return null;
 }

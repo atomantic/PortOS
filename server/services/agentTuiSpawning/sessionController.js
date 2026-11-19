@@ -74,6 +74,7 @@ import {
   shapeHasLoginShell,
   createStartupDialogAnswers,
   answerStartupDialogs,
+  describeTrustGateFailure,
   AGY_INPUT_READY_PATTERN,
   OPENCODE_INPUT_READY_PATTERN,
   CODEX_COMPOSER_READY_PATTERN,
@@ -1516,20 +1517,19 @@ export function createTuiSessionController({
         return;
       }
 
-      // A recognized trust heading with unknown choices is not an input prompt.
-      // Never fall through to either positive-readiness or idle delivery and paste
-      // the task into it. Fail explicitly at the provider's normal readiness cap
-      // so a future wording change is diagnosable without accepting an unknown
-      // highlighted default (which may be "No, exit").
-      if (inputReady.needsTrust && !inputReady.trustChoiceReady) {
+      // A trust gate still up (choices unknown, or waiting to settle/confirm a
+      // highlight move) is not an input prompt. Never fall through to either
+      // positive-readiness or idle delivery and paste the task into it. Fail
+      // explicitly at the provider's normal readiness cap so a wording change or
+      // a selector that will not hold the trust choice is diagnosable without
+      // accepting an unknown highlighted default (which may be "No, exit").
+      if (inputReady.needsTrust) {
         const trustDeadlineMs = requireInputReady ? TUI_INPUT_READY_DEADLINE_MS : PASTE_DEADLINE_MS;
         if (elapsed >= trustDeadlineMs) {
           clearInterval(promptTimer);
           promptTimer = null;
-          safeFinishStartupFailure(
-            'tui-trust-choice-unrecognized',
-            `${tuiConfig.command} presented a folder-trust prompt whose affirmative choice PortOS could not identify, so no prompt was sent.`,
-          );
+          const failure = describeTrustGateFailure(inputReady, tuiConfig.command);
+          safeFinishStartupFailure(failure.reason, failure.error);
         }
         return;
       }
