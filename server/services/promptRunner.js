@@ -1465,8 +1465,8 @@ async function executeProviderRunOnce({
         // the response file the model was directed to write, falling back
         // to cleanTuiResponse on the screen scrape). Trust `result.text`
         // — the accumulated `text` here is the raw chrome-laden stream.
-        // Codex CLI likewise supplies stdout as its authoritative final text;
-        // its diagnostic stream includes prompt examples that are not answers.
+        // Codex and Claude CLI likewise supply stdout as their final text;
+        // the accumulated stream includes diagnostics alongside the reply.
         const finalText = effectiveProvider.type === PROVIDER_TYPES.TUI
           ? (typeof result?.text === 'string' ? result.text : '')
           : effectiveProvider.type === PROVIDER_TYPES.CLI && typeof result?.text === 'string'

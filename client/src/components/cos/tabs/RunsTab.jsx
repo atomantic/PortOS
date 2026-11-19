@@ -403,6 +403,14 @@ export default function RunsTab() {
                   </div>
                 </div>
 
+                {run.claudeSignInExpiring === true && (
+                  <div className="px-3 pb-3 sm:px-4 sm:pb-4 min-w-0">
+                    <Banner tone="warning" size="md" title="Claude Code sign-in expires soon" srLabel={false} role="note">
+                      <p>Renew the sign-in with <code>claude auth login</code>. The CLI notice in the run output has the expiry window.</p>
+                    </Banner>
+                  </div>
+                )}
+
                 {/* Failure guidance stays visible; only execution diagnostics collapse. */}
                 {(run.error || run.success === false) && (() => {
                   const exitInfo = getExitCodeInfo(run.exitCode);
