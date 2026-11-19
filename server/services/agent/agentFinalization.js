@@ -1177,6 +1177,24 @@ async function completionClaimOutcome(agentId, reportedOutcome, claimDisposition
   return taskOutcome;
 }
 
+// A claim held only by a required human approval has done everything a run
+// can: the open PR is the human's queue item, so a retry or an operator block
+// would only duplicate it. An unverifiable hold keeps its bounded retry.
+async function completionReviewHandoff({ task, agent, agentId, reportedOutcome, eligible }) {
+  if (!eligible || !['blocked', 'incomplete'].includes(reportedOutcome?.status)
+    || reportedOutcome.recovery || !hasClaimFlowContract(task)) return null;
+  const handoff = await import('../claimReviewHandoff.js').then(async ({ verifyClaimReviewHandoff }) =>
+    verifyClaimReviewHandoff({ task, agent: agent || await getAgentRecord(agentId), reportedOutcome, success: true }))
+    .catch(() => null);
+  if (handoff?.status !== 'verified') return null;
+  const waiting = handoff.pullRequests.filter(pr => pr.awaitingHumanReview).map(pr => pr.url || `#${pr.number}`);
+  const taskOutcome = { status: 'completed',
+    reason: `Handed off for human review: ${waiting.join(', ')} ${waiting.length === 1 ? 'is' : 'are'} published with passing checks and waiting only on a required approving review that a person must give. The claim branch and checkout stay in place until the PR merges.` };
+  await updateAgent(agentId, { metadata: { taskOutcome, taskOutcomeSource: 'forge-verification',
+    reportedTaskOutcome: reportedOutcome, reviewHandoff: handoff } });
+  return { ...handoff, taskOutcome };
+}
+
 /**
  * Validation verdict for a recovered run: the retirement / programmatic-I/O /
  * saved verdict first, then a merged-review or claim disposition. A disposition
@@ -1281,6 +1299,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome,
     success: recoveryEligible && agent.result?.validationPassed !== false });
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
+  const reviewHandoff = await completionReviewHandoff({ task, agent, agentId: agent.id, reportedOutcome,
+    eligible: recoveryEligible && agent.result?.validationPassed !== false });
+  if (reviewHandoff) reportedOutcome = reviewHandoff.taskOutcome;
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
   let deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
@@ -1909,6 +1930,9 @@ async function finalizeAgentInCompletionContext({
   const claimDisposition = await completionClaimDisposition({ task, agentId, reportedOutcome: reportedTaskOutcome,
     success: forgeVerifiable });
   reportedTaskOutcome = await completionClaimOutcome(agentId, reportedTaskOutcome, claimDisposition);
+  const reviewHandoff = await completionReviewHandoff({ task, agentId, reportedOutcome: reportedTaskOutcome,
+    eligible: forgeVerifiable });
+  if (reviewHandoff) reportedTaskOutcome = reviewHandoff.taskOutcome;
   const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
   ({ reportedSuccess, error, reportedErrorAnalysis, executionInterruption } = await settleReportedExecution({
     agentId, task, reportedTaskOutcome, deliveryHeld,
