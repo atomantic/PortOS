@@ -22,7 +22,15 @@ const assetRef = (scene, role, assetId = scene?.[slots[role]]) => ({
   role, sceneId: scene.sceneId, assetId: assetId || null,
   revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [] }),
 });
-const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: scene.sceneId,
+// #16418 entered main at this instant. A final export on a record last touched
+// before it could not have captured the four new keys. Do not infer age from
+// the absence of a version marker: newer v1 records used the same version.
+const LAYER_TREATMENT_CUTOFF = Date.parse('2026-11-16T15:53:22Z');
+const predatesLayerTreatment = (project) => Date.parse(project.updatedAt) < LAYER_TREATMENT_CUTOFF;
+const layerTreatmentEntries = (scene) => ['lyricSize', 'textZone', 'lyricText']
+  .filter((key) => scene[key]).map((key) => [key, scene[key]])
+  .concat(scene.shotSheet?.cameraId ? [['shotSheetCameraId', scene.shotSheet.cameraId]] : []);
+const layerRef = (scene, { legacy = false } = {}) => ({ role: 'layer', sceneId: scene.sceneId, assetId: scene.sceneId,
   revision: checksum(Object.fromEntries(['startSec', 'endSec', 'visualLayer', 'stillMove', 'cardText', 'cardColor', 'shotMode', 'performanceSpeaker', 'loop']
     .map((key) => [key, scene[key] ?? null]).concat([['actionContract', scene.direction?.actionContract || null]])
     // #10589: only a planned camera joins the revision, so pre-camera evidence stays current.
@@ -50,8 +58,7 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
     // Per-shot lyric treatment and camera assignment (documentRender, applyCameraCutDefaults) change the render; unset keeps evidence.
-    .concat(['lyricSize', 'textZone', 'lyricText'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
-    .concat(scene.shotSheet?.cameraId ? [['shotSheetCameraId', scene.shotSheet.cameraId]] : [])
+    .concat(legacy ? [] : layerTreatmentEntries(scene))
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
     .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : [])
     // A song shot's clip sound over the music changes the mix; a silent shot keeps its evidence.
@@ -391,7 +398,7 @@ function createDependencyReader(project) {
   };
 }
 
-function dependencyChanges(dependencies, readCurrent) {
+function dependencyChanges(dependencies, readCurrent, matchFinalLayer = null) {
   if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
     return [{ role: 'unknown', reason: 'Dependency evidence was not recorded; review again' }];
   }
@@ -410,16 +417,34 @@ function dependencyChanges(dependencies, readCurrent) {
         continue;
       }
     }
-    if (!current || !sameAsset || current.catalogUnavailable || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
+    const sameRevision = matchFinalLayer && ref.role === 'layer' && ref.legacyLayerTreatmentBaseline
+      ? matchFinalLayer(ref)
+      : current?.revision === ref.revision || current?.legacyRevision === ref.revision || matchFinalLayer?.(ref);
+    if (!current || !sameAsset || current.catalogUnavailable || !sameRevision) {
       changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
   }
   return changes;
 }
 
+// Scope the fallback to the stored final, never a proof, pilot, or review.
+function finalLayerMatcher(project) {
+  let scenes;
+  const legacy = predatesLayerTreatment(project);
+  return (ref) => {
+    if (ref.role !== 'layer' || (!legacy && !ref.legacyLayerTreatmentBaseline)) return false;
+    scenes ??= new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+    const scene = scenes.get(ref.sceneId);
+    if (!scene || layerRef(scene, { legacy: true }).revision !== ref.revision) return false;
+    return !ref.legacyLayerTreatmentBaseline
+      || checksum(layerTreatmentEntries(scene)) === ref.legacyLayerTreatmentBaseline;
+  };
+}
+
 /** Absent legacy evidence is unknown, never an affirmative current verdict. */
 export function musicVideoDependencyChanges(project, dependencies) {
-  return dependencyChanges(dependencies, createDependencyReader(project));
+  return dependencyChanges(dependencies, createDependencyReader(project),
+    dependencies && project.renderHistoryId && dependencies === project.renderDependencies ? finalLayerMatcher(project) : null);
 }
 
 function takeChanges(project, scene, take, readCurrent) {
@@ -441,6 +466,27 @@ export function musicVideoTakeChanges(project, scene, take) {
   return takeChanges(project, scene, take, createDependencyReader(project));
 }
 
+// The old render checksum cannot attest to the newly tracked fields. Preserve
+// that checksum verbatim; record separately the verified pre-write project
+// baseline so the very first edit to one of those fields is still visible.
+function retainLegacyFinalLayerBaseline(before, after) {
+  const old = before.renderDependencies;
+  const next = after.renderDependencies;
+  if (!before.renderHistoryId || before.renderHistoryId !== after.renderHistoryId
+    || next !== old || old?.version !== MUSIC_VIDEO_DEPENDENCY_VERSION
+    || !Array.isArray(old.references) || !predatesLayerTreatment(before)) return after;
+  const scenes = new Map((before.scenes || []).map((scene) => [scene.sceneId, scene]));
+  let changed = false;
+  const references = old.references.map((ref) => {
+    const scene = ref.role === 'layer' && scenes.get(ref.sceneId);
+    if (!scene || ref.assetId !== ref.sceneId || ref.legacyLayerTreatmentBaseline
+      || layerRef(scene).revision === ref.revision || layerRef(scene, { legacy: true }).revision !== ref.revision) return ref;
+    changed = true;
+    return { ...ref, legacyLayerTreatmentBaseline: checksum(layerTreatmentEntries(scene)) };
+  });
+  return changed ? { ...after, renderDependencies: { ...old, references } } : after;
+}
+
 /** Before a write, materialize legacy provenance from the PRE-image, never new inputs. */
 export function retainMusicVideoDependencies(before, after) {
   const previousScenes = new Map((before.scenes || []).map((scene) => [scene.sceneId, scene]));
@@ -458,7 +504,8 @@ export function retainMusicVideoDependencies(before, after) {
   });
   // Existing evidence without a trustworthy snapshot remains unknown. Do not
   // bless historical passes by taking a snapshot of today's selections.
-  return presentMusicVideoDependencies({ ...after, scenes });
+  const next = before === after ? after : retainLegacyFinalLayerBaseline(before, after);
+  return presentMusicVideoDependencies({ ...next, scenes });
 }
 
 /** Read-only downstream preview. Generation count is an upper bound, not a price quote. */
@@ -480,7 +527,8 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   const affected = new Set(shots.map((shot) => shot.sceneId));
   const evidence = [];
   const check = (kind, id, dependencies, scope = {}) => {
-    const changes = dependencyChanges(dependencies, readCurrent).filter((change) => !change.catalogUnavailable);
+    const changes = dependencyChanges(dependencies, readCurrent, kind === 'render' ? finalLayerMatcher(project) : null)
+      .filter((change) => !change.catalogUnavailable);
     const transitive = (dependencies?.references || []).some((ref) => affected.has(ref.sceneId));
     if (changes.length || transitive) evidence.push({ kind, id, reasons: [...new Set([
       ...changes.map((entry) => entry.reason), ...(transitive ? ['Derived clip is stale'] : []),
@@ -507,7 +555,7 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
 /** The final render's validity without projecting every historical take and review. */
 export function musicVideoRenderDependencyState(project) {
   if (!project?.renderHistoryId || !project.renderDependencies) return project?.renderDependencyState;
-  return dependencyStateFromChanges(dependencyChanges(project.renderDependencies, createDependencyReader(project)));
+  return dependencyStateFromChanges(dependencyChanges(project.renderDependencies, createDependencyReader(project), finalLayerMatcher(project)));
 }
 
 /**
@@ -521,7 +569,7 @@ export function presentMusicVideoDependencies(project) {
   const state = (dependencies) => dependencyStateFromChanges(dependencyChanges(dependencies, readCurrent));
   return presentCharacterReferenceStates({ ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
-    ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
+    ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: dependencyStateFromChanges(dependencyChanges(project.renderDependencies, readCurrent, finalLayerMatcher(project))) } : {}),
     scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => {
       const frame = take.kind === 'image' || take.kind === 'endImage' ? imageFrameDependencyState(project, scene, take) : null;
       const inherited = inheritedFrameReasons(project, scene, take);
