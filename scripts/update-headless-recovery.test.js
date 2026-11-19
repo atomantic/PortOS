@@ -197,8 +197,9 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
     writeFileSync(preload, `
       import imports from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
+      import { basename } from 'node:path';
       const spawn = imports.spawn;
-      imports.spawn = (cmd, args, options) => cmd === 'git' && args.join(' ') === 'rev-parse HEAD'
+      imports.spawn = (cmd, args, options) => /^git(?:[.]exe)?$/i.test(basename(cmd)) && args.join(' ') === 'rev-parse HEAD'
         ? spawn(process.execPath, ['-e', 'process.exitCode = 1'], options) : spawn(cmd, args, options);
       syncBuiltinESMExports();
     `);
