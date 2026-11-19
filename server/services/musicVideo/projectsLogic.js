@@ -1,4 +1,5 @@
 import { festivalPacketSchema } from '../../lib/musicVideo/musicVideoFestivalPacket.js';
+import { normalizeClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 
@@ -648,6 +649,7 @@ function buildScene(input, { order }) {
     ...(input.lyricRole ? { lyricRole: input.lyricRole } : {}),
     ...(input.lyricSize ? { lyricSize: input.lyricSize } : {}),
     ...(input.preMusic ? { preMusic: normalizePreMusic(input.preMusic) } : {}),
+    ...(normalizeClipSound(input.clipSound) ? { clipSound: normalizeClipSound(input.clipSound) } : {}),
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
@@ -917,7 +919,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'sourceTake', 'lyricAnchor',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'clipSound', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**
@@ -956,7 +958,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(sheet) } : parsed;
   const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
   const finished = 'templateEffects' in looked ? { ...looked, templateEffects: normalizeTemplateEffects(looked.templateEffects) } : looked;
-  const data = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
+  const premused = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
+  const data = 'clipSound' in premused ? { ...premused, clipSound: normalizeClipSound(premused.clipSound) } : premused;
   const patched = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
   const kept = keepAnchorOnItsWord(scenes[idx], patched, project.lyricCues);
   // A shot turning into a still takes the nearest move to its planned camera (#10589) unless

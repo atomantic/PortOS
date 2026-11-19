@@ -6,7 +6,7 @@ import { googleShotRequestFields } from '../../lib/googleVideoModels.js';
 
 import { ServerError, failValidation } from '../../lib/errorHandler.js';
 import { musicVideoClipConditioningReferences } from '../../lib/musicVideo/musicVideoConditioning.js';
-import { preMusicClipSound } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { shotWantsClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideo/musicVideoEndFrame.js';
 import { authoredShotPrompt } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
@@ -142,8 +142,8 @@ async function buildShortClipBody(project, scene, input) {
           modelId: settings.modelId || undefined,
           ...(useLtx ? { numFrames: ltxFrames, icReferenceImageFiles: ltxFiles }
             : input.target?.numFrames ? { numFrames: input.target.numFrames } : {}),
-          disableAudio: !preMusicClipSound(scene),
-        } : { grokDuration: settings.grokDuration, disableAudio: !preMusicClipSound(scene) };
+          disableAudio: !shotWantsClipSound(scene),
+        } : { grokDuration: settings.grokDuration, disableAudio: !shotWantsClipSound(scene) };
   return {
     prompt,
     ...(settings.backend ? { backend: settings.backend } : {}),

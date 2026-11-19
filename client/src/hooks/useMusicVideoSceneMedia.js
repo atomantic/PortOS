@@ -8,7 +8,7 @@ import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.j
 import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideo/musicVideoConditioning.js';
-import { preMusicClipSound } from '../../../server/lib/musicVideo/musicVideoColdOpen.js';
+import { shotWantsClipSound } from '../../../server/lib/musicVideo/musicVideoClipSound.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideo/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
@@ -457,7 +457,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project?.scenes, videoSettings: settings }))
       : null;
     // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
-    const disableAudio = !preMusicClipSound(scene);
+    const disableAudio = !shotWantsClipSound(scene);
     const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
     return renderMusicVideoSceneClip(project.id, scene.sceneId, {
       prompt,

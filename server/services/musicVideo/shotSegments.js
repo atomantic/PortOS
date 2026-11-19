@@ -43,7 +43,7 @@ import { activeShotColorMatch, colorMatchVideoFilter, segmentCacheName, segmentL
 import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideo/musicVideoTitleCard.js';
 import { projectFrameHold } from './frameHold.js';
 import { endingParts } from '../../lib/musicVideo/musicVideoEnding.js';
-import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
+import { buildSongAudioMix } from './clipSoundMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender, isProjectRenderActive } from './render.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays, typographyOverlayWindows } from './compositionRender.js';
@@ -154,7 +154,7 @@ export async function planShotSegments(project, options) {
   const beats = project.audioAnalysis?.beats;
   const common = { audioDurationSec, frameGrid: true, grade, beats, aspect };
   const full = buildMusicVideoFfmpegArgs(clips, audioPath, join(tmpdir(), 'portos-segment-plan.mp4'), common);
-  const { sections, totalDuration, canonW: width, canonH: height, fps } = full;
+  const { sections, totalDuration, canonW: width, canonH: height, fps, voices } = full;
   const { cues, style } = projectTypographyPlan(project, clips, sections, totalDuration);
   const card = normalizeTitleCard(project.titleCard);
   // Held pictures are finished before the card is drawn, even on neutral shots.
@@ -202,7 +202,7 @@ export async function planShotSegments(project, options) {
   const outro = await planOutroSegment(project, { dir, width, height, fps, offsetSec: songSec });
   const opening = coldOpen ? await planColdOpenSegments(project, coldOpen, { dir, width, height, fps, grade, aspect, tagFilter }) : null;
   return {
-    project, ffmpeg, audioPath, soundBed, clips, common, cues, style, lyricWindows,
+    project, ffmpeg, audioPath, soundBed, voices, clips, common, cues, style, lyricWindows,
     width, height, fps, totalDuration, songSec, outro, dir, deferredTitleCard,
     // The song's shot spans (sceneId = the clip's own shot, partners included), for the stepped hold.
     sections,
@@ -529,14 +529,12 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
     const filters = [];
     const inputs = ['-i', silent, '-i', plan.audioPath];
     let master = '[1:a]';
-    if (plan.soundBed?.path) {
-      filters.push(`[1:a]${AUDIO_NORM}[master]`);
-      const bed = buildAudioBedMix({
-        beds: [{ assetPath: plan.soundBed.path, offsetSec: 0, durationSec: songSec, volume: plan.soundBed.volume }],
-        firstInputIdx: 2, mainLabel: '[master]', outLabel: '[mixa]', limitPeak: true,
-      });
-      inputs.push(...bed.inputs);
-      filters.push(...bed.filters);
+    // The bed under the song and any shot's own clip sound over it, on song time.
+    const voices = (plan.voices || []).filter((v) => v.startSec < songSec);
+    const mix = buildSongAudioMix({ mainLabel: '[1:a]', soundBed: plan.soundBed, voices, firstInputIdx: 2, durationSec: songSec, outLabel: '[mixa]' });
+    if (mix) {
+      inputs.push(...mix.inputs);
+      filters.push(...mix.filters);
       master = '[mixa]';
     }
     const songAudio = `${master}atrim=end=${songSec},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo`;
@@ -960,7 +958,7 @@ export async function buildRenderPreview(projectId, { light = false } = {}) {
   if (lead.length === plan.segments.length && plan.outro && segmentRendered(plan.outro)) lead.push(plan.outro);
   if (!lead.length) throw new ServerError('No shot is rendered yet: the first shot plays here once it is done', { status: 409, code: 'NO_SHOTS_RENDERED' });
   // The cold open's mix is part of the sound: a volume or layer edit alone changes no segment path.
-  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null, coldOpen: plan.coldOpen?.audio || null });
+  const key = hash({ parts: lead.map((s) => s.path), audio: plan.audioPath, bed: plan.soundBed || null, voices: plan.voices || [], coldOpen: plan.coldOpen?.audio || null });
   const name = `preview-${key}${light ? '-light' : ''}.mp4`;
   const path = join(plan.dir, name);
   const shots = new Set(lead.filter((s) => !s.outro).map((s) => s.sceneId)).size;

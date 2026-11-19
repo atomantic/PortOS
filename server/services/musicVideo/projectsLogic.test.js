@@ -1307,6 +1307,7 @@ describe('create-schema parity', () => {
     panelArt: 'panel-art.png',
     setReference: { subjectId: 'set-example', greyboxShotId: 'wide' },
     preMusic: { durationSec: 3.5, clipVolume: 0.8, layers: [{ effect: 'play-button', atSec: 3, durationSec: null, volume: 1 }] },
+    clipSound: { volume: 1.2, musicLevel: 0.4 },
   };
 
   it('stores every accepted video setting key on the project record', () => {

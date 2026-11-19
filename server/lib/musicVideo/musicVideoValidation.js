@@ -2,6 +2,7 @@
  * Music Video project/scene/reorder + cached audio-analysis schemas.
  */
 
+import { CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_VOLUME_RANGE } from './musicVideoClipSound.js';
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
 import { SPEND_ADJUSTMENT_LANES } from './musicVideoSpend.js';
 import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
@@ -1078,6 +1079,12 @@ const sceneLayerFields = {
   // The shot plays before the song, in the cold open (lib/musicVideo/musicVideoColdOpen.js), with
   // its own length and sound: the clip's audio and/or sound layers. null returns it to the song.
   preMusic: musicVideoPreMusicSchema.nullable().optional(),
+  // A song shot's own clip sound over the music (lib/musicVideo/musicVideoClipSound.js): its level and
+  // the song's level under it. null returns the shot to silent under the song.
+  clipSound: z.object({
+    volume: z.number().min(CLIP_SOUND_VOLUME_RANGE.min).max(CLIP_SOUND_VOLUME_RANGE.max).optional(),
+    musicLevel: z.number().min(CLIP_SOUND_MUSIC_RANGE.min).max(CLIP_SOUND_MUSIC_RANGE.max).optional(),
+  }).strict().nullable().optional(),
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
   lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),
