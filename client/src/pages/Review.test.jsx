@@ -1014,3 +1014,44 @@ describe('Actions view tabs wiring', () => {
     expect(tab.id).toBe(`tab-${view}`);
   });
 });
+
+describe('Legacy review-item fetch gating (#16924)', () => {
+  it('does not fetch legacy review items on mount or review:item:* events when canonical actions exist', async () => {
+    api.getReviewQueue.mockResolvedValue({
+      partial: false,
+      sources: {},
+      items: [{
+        id: 'threads:thread-1',
+        source: 'threads',
+        sourceRef: 'thread-1',
+        sourceLabel: 'Commitment',
+        title: 'Canonical action',
+        summary: 'Active item',
+        required: true,
+        operations: [{ id: 'complete', label: 'Complete', available: true }],
+      }],
+    });
+
+    try {
+      render(<Review />);
+      expect(await screen.findByText('Canonical action')).toBeInTheDocument();
+      expect(api.getReviewItems).not.toHaveBeenCalled();
+
+      await act(async () => socketHandler('review:item:created')?.({ ...CREATED_PENDING_ITEM }));
+      expect(api.getReviewItems).not.toHaveBeenCalled();
+    } finally {
+      api.getReviewQueue.mockResolvedValue({ items: [], sources: {}, partial: false });
+    }
+  });
+
+  it('fetches legacy review items only after the canonical queue resolves empty', async () => {
+    let resolveQueue;
+    api.getReviewQueue.mockReturnValueOnce(new Promise((resolve) => { resolveQueue = resolve; }));
+
+    render(<Review />);
+    expect(api.getReviewItems).not.toHaveBeenCalled();
+
+    await act(async () => resolveQueue({ partial: false, sources: {}, items: [] }));
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenCalledTimes(1));
+  });
+});
