@@ -53,6 +53,18 @@ const FILE_WATCH_FALLBACK_POLL_MS = 5000;
 // instead of on every write.
 const unsyncableDirs = new Set();
 
+// Test-only: a suite that persists hundreds of times into a throwaway data root
+// (one fsync of the temp file plus one of the directory costs ~6 ms per write on
+// macOS, over half of a write-heavy suite) can skip the crash-durability syncs
+// (#12025). Refused outside a Vitest worker so no production or smoke-boot path
+// can disable them, and module-local so each test file starts durable and the
+// atomicWrite durability suites never see it.
+let durableWrites = true;
+export function setAtomicWriteDurabilityForTests(durable) {
+  if (!isVitestRunner()) throw new Error("setAtomicWriteDurabilityForTests is only available under Vitest");
+  durableWrites = durable !== false;
+}
+
 /**
  * fsync a directory so a just-completed rename inside it survives a crash.
  * Best-effort once the rename is visible: the bytes are already in place, so a
@@ -337,7 +349,7 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
     // Own cleanup from that first write, and publish only once its mode is set.
     // `flush` fsyncs the temp file's bytes before the handle closes, so the
     // rename below never publishes an inode the disk has not yet received.
-    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: true });
+    await writeFile(tmp, payload, { ...(existingMode !== null ? { mode: existingMode } : {}), flush: durableWrites });
     if (existingMode !== null) await chmod(tmp, existingMode);
     onStage?.('replace');
     await replace();
@@ -346,7 +358,7 @@ export async function atomicWrite(filePath, data, { onStage } = {}) {
     throw err;
   }
   onStage?.('dirSync');
-  await syncDirectory(dirname(filePath));
+  if (durableWrites) await syncDirectory(dirname(filePath));
 }
 
 /**
