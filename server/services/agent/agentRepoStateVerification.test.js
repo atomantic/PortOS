@@ -245,7 +245,6 @@ const run = (overrides = {}) => verifyAgentRepoState({
   task: task(),
   agentState: agentState(),
   success: true,
-  prExpected: true,
   ...overrides,
 });
 
@@ -1181,6 +1180,26 @@ describe('verifyAgentRepoState — clean runs', () => {
     localBranch(true);
     const result = await run();
     expect(result.observed.prState).toBe('MERGED');
+    expect(findPullRequestForBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])('uses the current cleanup task when its openPR setting is %s', async openPR => {
+    const previous = task({ openPR: !openPR });
+    const current = { ...task({ openPR, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' }), status: 'in_progress' };
+    const state = { ...agentState(), result: { cleanupPending: true } };
+    getTaskById.mockResolvedValue(current);
+    localBranch(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'unavailable' });
+
+    const result = await run({ task: previous, agentState: state, success: false });
+
+    expect(findPullRequestForBranch).toHaveBeenCalledTimes(openPR ? 1 : 0);
+    expect(result.observed.unreadable).toEqual(openPR ? ['pull-request'] : []);
+  });
+
+  it('honors a legacy explicit branch probe request when openPR is disabled', async () => {
+    localBranch(true);
+    await run({ task: task({ openPR: false }), prExpected: true });
     expect(findPullRequestForBranch).toHaveBeenCalledTimes(1);
   });
 });
@@ -2769,6 +2788,21 @@ describe('durable completion replay', () => {
     const verified = recordRepoStateVerification.mock.invocationCallOrder.at(-1);
     expect(replayAgentCompletionCleanup.mock.invocationCallOrder[0]).toBeLessThan(verified);
     expect(replayAgentCompletionCleanup.mock.invocationCallOrder[1]).toBeGreaterThan(verified);
+  });
+
+  it.each(['task', 'agent'])('replays an unparseable %s review target as a branch lookup hint', async source => {
+    const target = 'incomplete review target';
+    const fresh = archived();
+    if (source === 'agent') fresh.metadata.reviewLoopMergeTarget = { url: target };
+    const current = task({ openPR: false, ...(source === 'task' && { reviewLoopPRUrl: target }) });
+    readBranchCompletionPolicies.mockResolvedValue([fresh]);
+    getAgentRecord.mockResolvedValue(fresh);
+    getTaskById.mockResolvedValue(current);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', url: 'https://github.com/example/repo/pull/7' });
+
+    expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
+    expect(findPullRequestForBranch).toHaveBeenCalledTimes(1);
+    expect(getPullRequestState).not.toHaveBeenCalled();
   });
 
   // An unreadable task store is not proof the task is gone, so only a definite
