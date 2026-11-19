@@ -501,6 +501,23 @@ describe('mergeTaskLists', () => {
       const [merged] = bothWays(dispatched, staleEdit);
       for (const other of [dispatched, staleEdit]) expect(bothWays(merged, other)).toEqual([merged, merged]);
     });
+
+    // Three installs can meet in any order: one still holds the charged count, one
+    // reset it, and one edited a copy from before the dispatch. Whichever two merge
+    // first, the reset stands and the edit's content wins.
+    it('reaches the same accounting whichever copies meet first', () => {
+      const charged = copy(past(5000), { totalSpawnCount: 5, lastSpawnedAt: past(6000) });
+      const reset = copy(past(3000), { lastSpawnedAt: past(6000) });
+      const staleEdit = copy(past(1000), { totalSpawnCount: '1', lastSpawnedAt: past(60_000) }, { description: 'edited on the peer' });
+      const orders = [[charged, reset, staleEdit], [charged, staleEdit, reset], [reset, charged, staleEdit],
+        [reset, staleEdit, charged], [staleEdit, charged, reset], [staleEdit, reset, charged]];
+      for (const [first, ...rest] of orders) {
+        const settled = rest.reduce((held, next) => mergeTaskLists([held], [next], { now: NOW })[0], first);
+        expect(settled.description).toBe('edited on the peer');
+        expect(settled.metadata.totalSpawnCount).toBeUndefined();
+        expect(settled.metadata.lastSpawnedAt).toBe(past(6000));
+      }
+    });
   });
 
   describe('cross-peer investigation fingerprint dedup (#2628)', () => {
