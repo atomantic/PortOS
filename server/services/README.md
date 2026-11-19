@@ -11,7 +11,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `nativeUsageEvents.js` | Emitter for `usage:native-history-updated` after a refresh changes a store. |
 | `codexUsageSources.js` | Explicit bounded, read-only streamed Codex raw/Zstandard/archive inspection; accounting-only projection, logical-session deduplication, source-integrity coverage and unknown ledger overlap. |
 | `cos/cosSpawnBudget.js` | The spawn budget's vocabulary: the per-run dispatch accounting keys and the count parser. The budget itself is one counter, `totalSpawnCount`, which `cos/cosTaskStore.js` keeps monotonic; only an explicit reset lowers it. |
-| `explicitSpawnBudgetReset.js` | Resolves a unique stopped orphan and its retained checkout before an explicit reset-and-run action. |
+| `explicitSpawnBudgetReset.js` | Resolves the stopped run (the only one, or the task's latest dispatch among several) and its retained checkout before an explicit reset-and-run action. |
 | `catalog/catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
 | `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |
 | `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`), image-owner lookup by media key (`findMediaOwnersByKeys`) and integrity checks that can reuse already-read media rows. |

@@ -1149,7 +1149,7 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
     const remoteCompletedIds = remoteTasks.filter((task) => task?.status === 'completed').map((task) => task.id);
     const knownCompleted = await getCompletedTaskIds(taskType, remoteCompletedIds);
     // A peer on an older schema still sends the retired proof metadata. The spawn
-    // count is not merged per field: it travels with the copy the merge selects.
+    // count itself is merged by cosTaskMerge: it follows the later dispatch.
     const incoming = (knownCompleted.size === 0
       ? remoteTasks
       : remoteTasks.filter((task) => !(task?.status === 'completed' && knownCompleted.has(task.id))))

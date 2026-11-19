@@ -7,6 +7,7 @@ import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { isRetryHeld } from '../../lib/taskRetryHold.js';
+import { MAX_SPAWNS_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { getAppWorkspace } from './agentPromptBuilder.js';
 import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/provider/providerVendors.js';
@@ -156,7 +157,7 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     return context.blockAndBail({
       reason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`,
-      category: 'max-spawns',
+      category: MAX_SPAWNS_BLOCKED_CATEGORY,
       emit: 'none',
     });
   }
