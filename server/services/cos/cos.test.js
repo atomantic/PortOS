@@ -64,6 +64,7 @@ const SPAWN_WINDOW_SRC = readFileSync(join(__dirname, '../../lib/cos/cosSpawnWin
 // listener) stays in cos.js. Source-level guards below read each invariant from
 // whichever module now owns it.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
+const IMP_SRC = readFileSync(join(__dirname, 'cosImprovementTasks.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
 // The pure capacity tracker + idle tier-eligibility predicate that
@@ -1729,13 +1730,13 @@ describe('cos.js source — priority + capacity invariants', () => {
     // queue path no longer special-cases any type: there is no in-process handler
     // dispatch that bypasses the agent-spawn path, so a scheduled reasoning task is
     // a visible, TUI-capable agent like everything else.
-    expect(GEN_SRC).not.toMatch(/dispatchHandlerBackedTask/);
-    expect(GEN_SRC).not.toMatch(/runHandlerBackedTaskForApp/);
-    expect(GEN_SRC).not.toMatch(/layeredIntelligenceHandler\.js/);
+    expect(IMP_SRC).not.toMatch(/dispatchHandlerBackedTask/);
+    expect(IMP_SRC).not.toMatch(/runHandlerBackedTaskForApp/);
+    expect(IMP_SRC).not.toMatch(/layeredIntelligenceHandler\.js/);
 
     // The generator runs a task type's optional buildTaskInput hook before dispatch
     // (the pre-agent programmatic slot LI's gather layer fills).
-    expect(GEN_SRC).toMatch(/getTaskInputHook/);
+    expect(IMP_SRC).toMatch(/getTaskInputHook/);
   });
 
   it('queueEligibleImprovementTasks routes through prepareManagedAppImprovementTask', () => {
@@ -1747,15 +1748,15 @@ describe('cos.js source — priority + capacity invariants', () => {
     // `claim/<slug>` PR, and produced a duplicate. The fix routes the queue
     // path through the shared generator so `applyPlanIdMetadata` runs and
     // the full prompt + planId metadata land on the queued task.
-    const fnStart = GEN_SRC.indexOf('async function queueEligibleImprovementTasks');
+    const fnStart = IMP_SRC.indexOf('async function queueEligibleImprovementTasks');
     expect(fnStart, 'queueEligibleImprovementTasks must exist').toBeGreaterThan(-1);
-    const fnBody = extractFnBody(GEN_SRC, fnStart);
+    const fnBody = extractFnBody(IMP_SRC, fnStart);
 
     expect(
       fnBody,
       'queue path must call prepareManagedAppImprovementTask so applyPlanIdMetadata runs + the full prompt is used'
     ).toMatch(/prepareTask\s*\(/);
-    expect(GEN_SRC).toContain('prepareTask = prepareManagedAppImprovementTask');
+    expect(IMP_SRC).toContain('prepareTask = prepareManagedAppImprovementTask');
 
     // Match the call shape, not the specific variable name — `task` could
     // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
@@ -1767,7 +1768,7 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
     ).toMatch(/persistTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\b/);
-    expect(GEN_SRC).toContain('persistTask = addTask');
+    expect(IMP_SRC).toContain('persistTask = addTask');
 
     // The old buggy path called `getTaskDescription` to build a one-line
     // description and then passed app/context/approvalRequired fields to
@@ -1855,10 +1856,10 @@ describe('cos.js source — priority + capacity invariants', () => {
     // contains a `for (...) { try { ... } catch }` block and the
     // brace-balanced scanner doesn't always match the right closer when
     // there are template-literal braces nested inside.
-    const fnStart = GEN_SRC.indexOf('async function prepareManagedAppImprovementTask');
+    const fnStart = IMP_SRC.indexOf('async function prepareManagedAppImprovementTask');
     expect(fnStart, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
-    const fnEnd = GEN_SRC.indexOf('\nasync function ', fnStart + 1);
-    const fnBody = GEN_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+    const fnEnd = IMP_SRC.indexOf('\nasync function ', fnStart + 1);
+    const fnBody = IMP_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
     // The updateAppActivity call must appear AFTER applyPlanIdMetadata —
     // otherwise a `planMeta.skipReason` early-return still rotates the pointer.
@@ -1889,13 +1890,13 @@ describe('cos.js source — priority + capacity invariants', () => {
     // in-flight scan in applyPlanIdMetadata must stay (it gates dispatch), but
     // the planId stamp must be fenced behind PLAN_SELF_CLAIM_TASK_TYPES.
     expect(
-      GEN_SRC,
+      IMP_SRC,
       'plan-task must be registered as a self-claiming task type'
     ).toMatch(/PLAN_SELF_CLAIM_TASK_TYPES\s*=\s*new Set\(\[\s*'plan-task'\s*\]\)/);
 
-    const fnStart = GEN_SRC.indexOf('async function applyPlanIdMetadata');
+    const fnStart = IMP_SRC.indexOf('async function applyPlanIdMetadata');
     expect(fnStart, 'applyPlanIdMetadata must exist').toBeGreaterThan(-1);
-    const fnBody = extractFnBody(GEN_SRC, fnStart);
+    const fnBody = extractFnBody(IMP_SRC, fnStart);
 
     // The planId stamp must be guarded so self-claiming types never pre-pick.
     expect(

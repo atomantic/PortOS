@@ -13,7 +13,7 @@ export function refillDeliveredCleanupSwarm(agentId, { wake, refillPlan }) {
     if (state.paused || !isImprovementEnabled(state)) return;
     const [{ getAgentRecord, markSwarmCleanupContinuationIssued }, { getInstanceId }, contract, scheduleMod, store, generator] = await Promise.all([
       import('./cos/cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'), import('./taskSchedule.js'),
-      import('./cos/cosTaskStore.js'), import('./cos/cosTaskGenerator.js'),
+      import('./cos/cosTaskStore.js'), import('./cos/cosImprovementTasks.js'),
     ]);
     const agent = await getAgentRecord(agentId);
     const task = agent && await store.getTaskById(agent.taskId);

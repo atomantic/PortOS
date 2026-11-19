@@ -14,7 +14,7 @@ vi.mock('./cosTaskStore.js', async (original) => ({
   ...(await original()), getTaskById: vi.fn(async () => null)
 }));
 
-import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
+import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 import { getDueTasks, recordExecution } from '../taskSchedule.js';
 import { loadAppActivity } from '../appActivity.js';
 import { getActiveApps } from '../apps.js';

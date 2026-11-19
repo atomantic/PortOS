@@ -279,7 +279,7 @@ export async function admitIdleReviewTask({
   // need neither the task store nor the prompt-generation dependency graph.
   const { getCosApprovalView } = await import('./cosTaskStore.js');
   if ((await getCosApprovalView()).autoApprovedCount) return;
-  const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
+  const { generateIdleReviewTask, recordDeferredPerpetualDispatch } = await import('./cosImprovementTasks.js');
   let preflightCardId = null;
   let endPreflight = () => {};
   let handoffAttempted = false;

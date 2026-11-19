@@ -34,7 +34,7 @@ vi.mock('../prWatcher.js', () => ({
 }));
 vi.mock('../taskPromptService.js', async (actual) => ({ ...await actual(), getTaskPrompt: async () => 'Review {appName}' }));
 
-import { generateIdleReviewTask } from './cosTaskGenerator.js';
+import { generateIdleReviewTask } from './cosImprovementTasks.js';
 
 const state = { config: { improvementEnabled: true, idleReviewPriority: 'MEDIUM', requireApproval: true, confidenceAutoApproval: { enabled: false } }, stats: {} };
 describe('idle-review execution ownership (#12570)', () => {

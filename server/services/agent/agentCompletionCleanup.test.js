@@ -21,7 +21,7 @@ vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({}),
   reviveBlockedTask: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../cos/cosTaskGenerator.js', () => ({
+vi.mock('../cos/cosImprovementTasks.js', () => ({
   checkStagePrecondition: vi.fn().mockReturnValue({ passed: true }),
 }));
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
@@ -49,7 +49,7 @@ vi.mock('../taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolved
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask } from '../cos/cosTaskStore.js';
 import { getAgent } from '../cos/cosAgentLifecycle.js';
-import { checkStagePrecondition } from '../cos/cosTaskGenerator.js';
+import { checkStagePrecondition } from '../cos/cosImprovementTasks.js';
 import { emitLog } from '../cos/cosEvents.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from '../codeReview.js';

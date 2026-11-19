@@ -77,8 +77,10 @@ import {
   admitAutoApprovedSystemTasks,
   admitPendingUserTasks,
   exceedsMaxSpawns,
-  shouldParkUnchangedPerpetualWork,
   isCooldownExemptTask,
+} from './cosTaskGenerator.js';
+import {
+  shouldParkUnchangedPerpetualWork,
   emitOnDemandEmpty,
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
@@ -91,9 +93,9 @@ import {
   resolveUserActionDeliveryBlock,
   applyUserActionDeliveryMode,
   applyUserActionDetectorSection
-} from './cosTaskGenerator.js';
+} from './cosImprovementTasks.js';
 import { buildJiraTicketTask, buildClaimWorkTask, resolveAppClaimReviewers } from './cosTaskClaimWork.js';
-import * as cosTaskGenerator from './cosTaskGenerator.js';
+import * as cosImprovementTasks from './cosImprovementTasks.js';
 import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
@@ -104,17 +106,19 @@ import { createDequeueCapacity } from './cosDequeue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
+const IMP_SRC = readFileSync(join(__dirname, 'cosImprovementTasks.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 // The manual claim / JIRA / replan prompt builders (cosTaskClaimWork.js) share
 // their reviewer + claim-metadata resolution with the scheduled claim-work router
-// that stays in cosTaskGenerator.js.
+// that lives in cosImprovementTasks.js.
 const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
 // The CoS task-generation layer spans the selection engine (cosTaskGenerator.js),
-// the manual claim builders (cosTaskClaimWork.js), and the prompt pre-step module
-// they compose (cosTaskPreStepBlocks.js). A guard about WHERE a call sits reads
-// one file; a guard about the call's SHAPE reads the layer, so moving code between
-// them can neither break it nor silently disarm it.
-const LAYER_SRC = `${GEN_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
+// the improvement task builders (cosImprovementTasks.js), the manual claim builders
+// (cosTaskClaimWork.js), and the prompt pre-step module they compose
+// (cosTaskPreStepBlocks.js). A guard about WHERE a call sits reads one file; a
+// guard about the call's SHAPE reads the layer, so moving code between them can
+// neither break it nor silently disarm it.
+const LAYER_SRC = `${GEN_SRC}\n${IMP_SRC}\n${CLAIM_SRC}\n${PRESTEP_SRC}`;
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 // The ONE Priority-0 on-demand loop body both engines delegate to (#6618).
 const DRAIN_SRC = readFileSync(join(__dirname, '../onDemandDrain.js'), 'utf-8');
@@ -301,28 +305,28 @@ describe('isConfiguredApprovalRequired', () => {
   });
 
   it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
-    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
-    const appStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    expect(GEN_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
+    const selfStart = IMP_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const appStart = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    expect(IMP_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
     // Bounded by the function's own `return { task, pendingPerpetualDispatch, skip: null };`
     // rather than a character count: a magic window makes this guard fire on
     // any commit that adds a comment above the stamp, which says nothing about
     // whether the stamp is still there.
-    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, skip: null };', appStart));
+    const appBody = IMP_SRC.slice(appStart, IMP_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, skip: null };', appStart));
     expect(appBody).toContain('stampApprovalReason(metadata, approval)');
   });
 
   it('the PortOS self-improvement lane resolves and appends configured data inputs', () => {
-    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
-    const selfBody = GEN_SRC.slice(selfStart, selfStart + 9000);
+    const selfStart = IMP_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const selfBody = IMP_SRC.slice(selfStart, selfStart + 9000);
     expect(selfBody).toContain('resolveTaskDataInputs(interval.dataInputs');
     expect(selfBody).toContain('appendTaskDataInputs(description, taskDataInputs)');
   });
 
   it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {
-    const start = GEN_SRC.indexOf('async function resolveConfidenceApproval');
+    const start = IMP_SRC.indexOf('async function resolveConfidenceApproval');
     expect(start).toBeGreaterThan(-1);
-    const body = GEN_SRC.slice(start, start + 1800);
+    const body = IMP_SRC.slice(start, start + 1800);
     const configIdx = body.indexOf('isConfiguredApprovalRequired(metadata)');
     const safetyIdx = body.indexOf('safety.outwardFacing && requiresSafetyApproval');
     expect(configIdx).toBeGreaterThan(-1);
@@ -422,12 +426,12 @@ describe('isCooldownExemptTask', () => {
 // also prevents the retired Copilot fallback from reappearing.
 describe('{reviewers} interpolation honors Code Review Defaults', () => {
   it('resolves getCodeReviewDefaults and routes every claim path through the one claim reviewer resolver', () => {
-    expect(GEN_SRC).toContain("import { getCodeReviewDefaults } from '../codeReview.js'");
+    expect(IMP_SRC).toContain("import { getCodeReviewDefaults } from '../codeReview.js'");
     // One resolver per claim path: the list, the `@user` tokens, the `~opt` set
     // and the three keyed pins come out together, so a new pin kind cannot reach
     // one site and silently miss another. It also applies the claim copilot
     // guard, which is what keeps the retired Copilot fallback from reappearing.
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
+    expect(IMP_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     // Every claim path layers the app's claim-work metadata over the defaults
     // through claimReviewersFrom — no path may resolve the defaults alone with
     // a bare `{}` (that silently drops a pinned override; #6210).
@@ -476,7 +480,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // feed the cap into the shared claim resolver, which applies task-over-default
     // precedence (unit-tested in reviewerConfig.test.js).
     expect(CLAIM_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds');
-    expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
+    expect(IMP_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers)');
     expect(LAYER_SRC).not.toContain('resolveReviewerMaxRounds(');
   });
 
@@ -514,24 +518,24 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
 // selection, the PLAN gate routing, or the GitLab forge directive.
 describe('claim-work single-source routing', () => {
   it('resolves the app work tracker and maps it to a concrete claim task type', () => {
-    expect(GEN_SRC).toContain("taskType === 'claim-work'");
-    expect(GEN_SRC).toContain('resolveAppWorkTracker, trackerToClaimTaskType');
+    expect(IMP_SRC).toContain("taskType === 'claim-work'");
+    expect(IMP_SRC).toContain('resolveAppWorkTracker, trackerToClaimTaskType');
     // Pin the call shape without coupling to the local variable name.
-    expect(GEN_SRC).toMatch(/trackerToClaimTaskType\(\w+\.resolved\)/);
+    expect(IMP_SRC).toMatch(/trackerToClaimTaskType\(\w+\.resolved\)/);
   });
 
   it('selects the delegated prompt body (promptTaskType), honoring a direct claim-work customization', () => {
-    expect(GEN_SRC).toContain('promptKeyForBody');
-    expect(GEN_SRC).toContain('await getTaskPrompt(promptKeyForBody,');
+    expect(IMP_SRC).toContain('promptKeyForBody');
+    expect(IMP_SRC).toContain('await getTaskPrompt(promptKeyForBody,');
     // A claim-work customization (interval.prompt) wins; otherwise delegate.
-    expect(GEN_SRC).toMatch(/promptKeyForBody\s*=\s*\(taskType === 'claim-work' && !interval\.prompt\)\s*\?\s*promptTaskType\s*:\s*taskType/);
+    expect(IMP_SRC).toMatch(/promptKeyForBody\s*=\s*\(taskType === 'claim-work' && !interval\.prompt\)\s*\?\s*promptTaskType\s*:\s*taskType/);
   });
 
   it('gates PLAN.md on the RESOLVED type so a claim-work→plan run still skips an empty queue', () => {
-    expect(GEN_SRC).toContain('applyPlanIdMetadata(promptTaskType,');
+    expect(IMP_SRC).toContain('applyPlanIdMetadata(promptTaskType,');
     // The only other occurrence is the function definition's parameter list;
     // the CALL must route the resolved type, never the raw 'claim-work' type.
-    expect(GEN_SRC).not.toContain('await applyPlanIdMetadata(taskType,');
+    expect(IMP_SRC).not.toContain('await applyPlanIdMetadata(taskType,');
   });
 
   it('emits a GitLab (glab) author-filter directive for the claim-issue-gitlab body', () => {
@@ -550,7 +554,7 @@ describe('claim-work single-source routing', () => {
     expect(CLAIM_SRC).toContain("'useWorktree' in delegatedMeta");
     expect(CLAIM_SRC).toContain("'openPR' in delegatedMeta");
     expect(CLAIM_SRC).toContain('const taskMetadata = { ...reviewerConfigMetadata(claimReviewers), claimFlow: true }');
-    expect(GEN_SRC).toContain('metadata.claimFlow = true');
+    expect(IMP_SRC).toContain('metadata.claimFlow = true');
   });
 
   it('exposes buildClaimWorkTask so the manual /do:next button reuses the same router', () => {
@@ -819,11 +823,11 @@ describe('buildJiraTicketTask', () => {
 // from `interval.model`.
 describe('improvement-task model is never a hardcoded literal', () => {
   it('does not assign a hardcoded claude-* model literal to metadata.model', () => {
-    expect(GEN_SRC).not.toMatch(/metadata\.model\s*=\s*['"]claude-/);
+    expect(IMP_SRC).not.toMatch(/metadata\.model\s*=\s*['"]claude-/);
   });
 
   it('sets metadata.model only from config-driven fields, never a string literal', () => {
-    const assignments = GEN_SRC.match(/metadata\.model\s*=\s*[^;]+/g) || [];
+    const assignments = IMP_SRC.match(/metadata\.model\s*=\s*[^;]+/g) || [];
     expect(assignments.length).toBeGreaterThan(0);
     for (const line of assignments) {
       // Every assignment must read from schedule/stage config (interval.model,
@@ -1206,8 +1210,8 @@ describe('emitOnDemandEmpty', () => {
 
   // The streak counter itself is exercised through prepare in cosTaskGenerator.providerPin.test.js.
   it('the escalation threshold is exported and applyPerpetualWorkGate levels its skip log against it, persisting a stall once escalated', () => {
-    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
-    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    const start = IMP_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = IMP_SRC.slice(start, IMP_SRC.indexOf('\n}', start));
     expect(PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD).toBeGreaterThanOrEqual(1);
     expect(gate).toMatch(/consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD/);
     expect(gate).toMatch(/emitLog\(escalated \? 'warn' : 'debug'/);
@@ -1264,8 +1268,8 @@ describe('emitOnDemandEmpty', () => {
     // Source-pinned (the behavioral read dynamic-imports the live app store):
     // the reason surfacing is gated on the LI task type + the 'idle' outcome and
     // reads the app's recorded lastRunReason.
-    const idx = GEN_SRC.indexOf('export async function emitOnDemandEmpty');
-    const body = GEN_SRC.slice(idx, idx + 1600);
+    const idx = IMP_SRC.indexOf('export async function emitOnDemandEmpty');
+    const body = IMP_SRC.slice(idx, idx + 1600);
     expect(body).toMatch(/request\.taskType === 'layered-intelligence'/);
     expect(body).toMatch(/layeredIntelligence\?\.lastRunReason/);
   });
@@ -1390,7 +1394,7 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
   it('queueEligibleImprovementTasks derives its dedup sets from the shared helper', () => {
     // Source-pinned: the queue path must consume buildImprovementDedupSets so
     // its occupancy semantics can't silently drift from the tested helper.
-    expect(GEN_SRC).toMatch(/buildImprovementDedupSets\(existingTasks/);
+    expect(IMP_SRC).toMatch(/buildImprovementDedupSets\(existingTasks/);
   });
 
   it('queues a due release past a delivered historical task, while unfinished work keeps the slot', async () => {
@@ -1406,12 +1410,12 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     vi.spyOn(taskSchedule, 'recordExecution').mockResolvedValue();
     try {
       vi.mocked(deliveredReleaseTaskIds).mockResolvedValueOnce(new Set([previous.id]));
-      await cosTaskGenerator.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
+      await cosImprovementTasks.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
       expect(persistTask).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ analysisType: 'do-release' }) }),
         'internal', expect.objectContaining({ deliveredReleaseTaskIds: [previous.id] }));
       prepareTask.mockClear(); persistTask.mockClear();
       vi.mocked(deliveredReleaseTaskIds).mockResolvedValueOnce(new Set());
-      await cosTaskGenerator.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
+      await cosImprovementTasks.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
       expect(prepareTask).not.toHaveBeenCalled();
     } finally { vi.restoreAllMocks(); }
   });
@@ -1496,8 +1500,8 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
   });
 
   it('uses the global due list before the per-app loop', () => {
-    const start = GEN_SRC.indexOf('export async function queueEligibleImprovementTasks');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n/**', start + 1));
+    const start = IMP_SRC.indexOf('export async function queueEligibleImprovementTasks');
+    const body = IMP_SRC.slice(start, IMP_SRC.indexOf('\n/**', start + 1));
     expect(body).toContain('queueDueInstallWideImprovementTasks({');
     expect(body.indexOf('queueDueInstallWideImprovementTasks({')).toBeLessThan(body.indexOf('for (const app of apps)'));
   });
@@ -1541,8 +1545,8 @@ describe('resolveUserActionDeliveryBlock (#5595)', () => {
     // Source-pinned like the approval-stamp guard above: the empty-ledger skip
     // and the delivery posture must reach the "Run Now with no app" lane, which
     // is the only lane an install-wide type dispatches from.
-    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
-    const selfBody = GEN_SRC.slice(selfStart, selfStart + 9000);
+    const selfStart = IMP_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const selfBody = IMP_SRC.slice(selfStart, selfStart + 9000);
     // Gated to install-wide types: the per-app hooks (issue-watcher,
     // layered-intelligence) guard on `!app`, and the truthy synthetic
     // `{ id: null }` row would defeat that guard.
@@ -1624,8 +1628,8 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
     // win over a decision made a few lines earlier. `analysisType` is the sharp
     // edge: resolveTaskHookType reads it to dispatch the output hook, so a
     // collision would stop the very hook that asked for the bag from running.
-    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
+    const start = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = IMP_SRC.slice(start, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     expect(body).toContain('for (const [key, value] of Object.entries(hookMetadata || {}))');
     expect(body).toContain('if (key in metadata)');
     // A plain merge would reintroduce the clobber.
@@ -1637,9 +1641,9 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
     // test of the generator's happy path: moving the Object.assign above any
     // `return skipped(...)` would silently restore the #3179 bug — a hook side effect
     // keyed on the stamped metadata would fire for a task that is never built.
-    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const start = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     expect(start, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
-    const body = GEN_SRC.slice(start);
+    const body = IMP_SRC.slice(start);
     const stampAt = body.indexOf('Object.entries(hookMetadata || {})');
     expect(stampAt, 'the hookMetadata stamp must exist').toBeGreaterThan(-1);
     // Bound the scan to this function: `return { task, pendingPerpetualDispatch, skip: null };` ends it.
@@ -1657,12 +1661,12 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
  */
 describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   const body = () => {
-    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    return GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
+    const start = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    return IMP_SRC.slice(start, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
   };
 
   it('accepts ignoreTaskId and forwards it to the input hook and the perpetual gate', () => {
-    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(taskType, app, state, \{\s*skipPreconditions = false,\s*ignoreTaskId = null/);
+    expect(IMP_SRC).toMatch(/prepareManagedAppImprovementTask\(taskType, app, state, \{\s*skipPreconditions = false,\s*ignoreTaskId = null/);
     expect(body()).toContain('resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId })');
     expect(body()).toContain('applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId })');
   });
@@ -1670,12 +1674,12 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', () => {
     // It already forwards the same id to addTask and buildImprovementDedupSets;
     // the generator was the one path that dropped it.
-    expect(GEN_SRC).toMatch(/prepareTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
+    expect(IMP_SRC).toMatch(/prepareTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
   it('the perpetual gate hands ignoreTaskId to the work detector', () => {
-    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
-    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    const start = IMP_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = IMP_SRC.slice(start, IMP_SRC.indexOf('\n}', start));
     expect(gate).toMatch(/detectActionableWork\(promptTaskType, app, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
@@ -1702,10 +1706,10 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
  */
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
   it('the idle-review chain threads ignoreTaskId end to end', () => {
-    expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true, onPreflightStart = null \} = \{\}\)/);
-    expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart })');
-    expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null, onPreflightStart = null \} = \{\}\)/);
-    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
+    expect(IMP_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true, onPreflightStart = null \} = \{\}\)/);
+    expect(IMP_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart })');
+    expect(IMP_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null, onPreflightStart = null \} = \{\}\)/);
+    expect(IMP_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
@@ -1721,8 +1725,8 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
  */
 describe('the drain cap has exactly one implementation, at the choke point', () => {
   it('prepareManagedAppImprovementTask applies it ahead of the work gate and the reconcile scans', () => {
-    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
+    const start = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = IMP_SRC.slice(start, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule, { onDemand })');
     expect(capIdx, 'the choke point must apply the per-type drain cap').toBeGreaterThan(-1);
     expect(capIdx).toBeLessThan(body.indexOf('applyPerpetualWorkGate('));
@@ -1752,8 +1756,8 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
   // when every unchecked item is in-flight), so charging the budget inside the gate
   // would exhaust a capped drain on evaluations alone.
   it('the work gate defers its dispatch spend to the caller, which charges it only once a task is certain', () => {
-    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
-    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    const start = IMP_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = IMP_SRC.slice(start, IMP_SRC.indexOf('\n}', start));
     expect(gate).toContain('spendDispatch: true');
     expect(gate, 'the gate must not charge the budget itself').not.toContain('recordPerpetualDispatch');
 
@@ -1761,8 +1765,8 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     // it never spends the budget itself. recordDeferredPerpetualDispatch is the
     // one choke point that does, shared by the production queue, on-demand,
     // and idle callers alike (#6871).
-    const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
+    const genStart = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = IMP_SRC.slice(genStart, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
     expect(body, 'prepare must not charge the budget itself').not.toContain('recordPerpetualDispatch(');
     const pendingIdx = body.indexOf('perpetualGate.spendDispatch');
     expect(pendingIdx, 'the choke point must compute the deferred-dispatch record from the gate result').toBeGreaterThan(-1);
@@ -1770,9 +1774,9 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     // Every `return null` gate must precede it — planId is the last one.
     expect(body.indexOf('planMeta.skipReason')).toBeLessThan(pendingIdx);
 
-    const recordStart = GEN_SRC.indexOf('export async function recordDeferredPerpetualDispatch');
+    const recordStart = IMP_SRC.indexOf('export async function recordDeferredPerpetualDispatch');
     expect(recordStart, 'recordDeferredPerpetualDispatch must exist').toBeGreaterThan(-1);
-    const recordBody = GEN_SRC.slice(recordStart, GEN_SRC.indexOf('\n}', recordStart));
+    const recordBody = IMP_SRC.slice(recordStart, IMP_SRC.indexOf('\n}', recordStart));
     expect(recordBody, 'recordDeferredPerpetualDispatch is the one choke point that spends the budget').toContain('recordPerpetualDispatch(taskType, appId, signature)');
   });
 });
@@ -1809,8 +1813,8 @@ describe('recordDeferredPerpetualDispatch (#6871)', () => {
 
 describe('pr-reviewer security preflight wiring', () => {
   it('does not allow the global generator to bypass the managed-app target boundary', () => {
-    const start = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
-    const body = GEN_SRC.slice(start, start + 1800);
+    const start = IMP_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const body = IMP_SRC.slice(start, start + 1800);
     expect(body).toContain('taskSchedule.requiresManagedAppTarget(taskType)');
     expect(body).toContain('Skipping ${taskType} without a managed app target');
     expect(body).toContain('return null;');
@@ -1822,8 +1826,8 @@ describe('pr-reviewer security preflight wiring', () => {
   // composes it: the call sits before the ordinary stage gate, its skip reason
   // is recorded, and a passed preflight selects the current stage's prompt.
   it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
-    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
+    const start = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = IMP_SRC.slice(start, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {');
     const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
     const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
@@ -1837,8 +1841,8 @@ describe('pr-reviewer security preflight wiring', () => {
   });
 
   it('carries a stolen on-demand request\'s PR target through the idle-review path', () => {
-    const start = GEN_SRC.indexOf('const appRequests = onDemandRequests.filter(');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };', start));
+    const start = IMP_SRC.indexOf('const appRequests = onDemandRequests.filter(');
+    const body = IMP_SRC.slice(start, IMP_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };', start));
     // The idle tier can consume a queued on-demand request instead of Priority 0.
     // Dropping the target there re-widens a one-row click into a full sweep.
     expect(body).toContain('targetPullRequest = request.targetPullRequest ?? null');
@@ -1846,8 +1850,8 @@ describe('pr-reviewer security preflight wiring', () => {
   });
 
   it('keeps a targeted run distinguishable from the sweep in the duplicate guard', () => {
-    const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
+    const genStart = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = IMP_SRC.slice(genStart, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', genStart));
     expect(body).toContain('scopeDescriptionToPullRequest(');
   });
 });
@@ -1872,6 +1876,7 @@ describe('automated drain refills do not clear their own convergence brakes', ()
     ['onDemandDrain', () => DRAIN_SRC],
     ['cos.js', () => COS_SRC],
     ['cosTaskGenerator.js', () => GEN_SRC],
+    ['cosImprovementTasks.js', () => IMP_SRC],
   ]) {
     it(`${where} resets on-demand state only through applyOnDemandRunResets`, () => {
       for (const fn of ['resetPerpetualForManualRun', 'clearTaskTypeFailurePark']) {

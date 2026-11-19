@@ -96,7 +96,7 @@ vi.mock('./preflightTaskCard.js', async () => {
     finishPreflightDispatch: (...a) => mocks.finishPreflightDispatch(...a),
   };
 });
-vi.mock('./cos/cosTaskGenerator.js', () => ({
+vi.mock('./cos/cosImprovementTasks.js', () => ({
   prepareManagedAppImprovementTask: (...a) => mocks.prepareManagedAppImprovementTask(...a),
   generateSelfImprovementTaskForType: (...a) => mocks.generateSelfImprovementTaskForType(...a),
   recordDeferredPerpetualDispatch: (...a) => mocks.recordDeferredPerpetualDispatch(...a),
