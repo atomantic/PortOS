@@ -388,7 +388,9 @@ describe('getPullRequestState', () => {
     const child = makeChild();
     spawn.mockReturnValue(child);
     const promise = getPullRequestState(prRef);
-    drive(child);
+    // The read goes through prProbe's lazily imported helper, so gh is spawned a
+    // microtask-turn later than the call; drive the child only once it exists.
+    vi.waitFor(() => expect(spawn).toHaveBeenCalled()).then(() => drive(child));
     return promise;
   };
 

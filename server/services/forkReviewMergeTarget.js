@@ -4,7 +4,7 @@ import { detectForgeCli, parsePullRequestUrl } from '../lib/gitForge.js';
 import { forkHeadFromGithubPr, forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { execGit } from '../lib/execGit.js';
 import { readBranchUpstream } from '../lib/branchUpstreamGuard.js';
-import { safeJSONParse } from '../lib/jsonIo.js';
+import { readPullRequest } from './prProbe.js';
 
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
 const repoKey = ({ host, owner, repo }) => `${host.replace(/^ssh\.github\.com$/i, 'github.com')}/${owner}/${repo}`.toLowerCase();
@@ -24,13 +24,8 @@ async function readTarget(url, sourceWorkspace) {
   if (!pr || detectForgeCli(pr.host) !== 'gh' || typeof sourceWorkspace !== 'string' || !sourceWorkspace) return null;
   const origin = await getOriginInfo(sourceWorkspace).catch(() => null);
   if (!origin?.host || `${origin.host.replace(/^ssh\.github\.com$/i, 'github.com')}/${origin.fullName}`.toLowerCase() !== repoKey(pr)) return null;
-  const [{ execGh }, { resolveForgeExecOptions }] = await Promise.all([
-    import('./github.js'), import('./forgeExecOptions.js'),
-  ]);
-  const options = await resolveForgeExecOptions(sourceWorkspace);
-  const raw = await execGh(['pr', 'view', String(pr.number), '--repo', `${pr.host}/${pr.owner}/${pr.repo}`,
-    '--json', 'url,number,state,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,headRepositoryOwner'], 10000, options).catch(() => null);
-  const row = safeJSONParse(raw, null);
+  const row = await readPullRequest(pr.number, 'url,number,state,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,headRepositoryOwner',
+    { repoPath: sourceWorkspace, repoSpec: `${pr.host}/${pr.owner}/${pr.repo}`, timeoutMs: 10000 });
   const actual = parsePullRequestUrl(row?.url);
   const forkHead = forkHeadFromGithubPr(row);
   const fork = parseGitRemoteUrl(forkHead?.remoteUrl);
