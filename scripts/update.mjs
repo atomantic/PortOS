@@ -109,15 +109,15 @@ async function stopApps() {
 }
 
 async function syncSubmodules() {
-  return !(await git('submodule', 'sync', '--recursive')).code
-    && !(await git('submodule', 'update', '--init', '--recursive')).code;
+  return (await git('submodule', 'sync', '--recursive')).code
+    || (await git('submodule', 'update', '--init', '--recursive')).code;
 }
 
 async function repairStaleSubmodules() {
   const { stdout } = await capture('git', ['submodule', 'status', '--recursive']);
   if (!/^[+U-]/m.test(stdout)) return;
   log("🔧 Repairing submodules that are not at the parent checkout's pinned commits...");
-  if (!await syncSubmodules()) {
+  if (await syncSubmodules()) {
     step('git-pull', 'failed', 'Pinned submodule checkout could not be synchronized');
     fail();
   }
@@ -186,7 +186,7 @@ async function checkPulledNode(previous) {
     if (out.code) {
       log([out.stdout, out.stderr].filter(Boolean).join('\n'));
       if (previous && !(await git('cat-file', '-e', `${previous}^{commit}`)).code) {
-        if (!(await git('reset', '--hard', previous)).code && await syncSubmodules()) {
+        if (!(await git('reset', '--hard', previous)).code && !await syncSubmodules()) {
           log('❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was rolled back to the pre-pull revision.');
           step('runtime-preflight', 'failed', 'Unsupported Node.js runtime; checkout rolled back');
         } else {
@@ -287,7 +287,8 @@ async function restart() {
     if (!(await node('scripts/pm2-daemon-refresh.js')).code) await pm2('update');
     await pm2('delete', 'ecosystem.config.cjs', '--silent');
     await pm2('delete', 'portos-ui', '--silent');
-    await required(pm2(...pm2Start));
+    const { code } = await pm2(...pm2Start);
+    if (code) fail(windows ? code : 1);
   } catch (error) {
     rmSync(marker, { force: true });
     throw error;
@@ -320,8 +321,12 @@ async function main() {
   if (!peerId && !updateId) return (await supervisor(process.argv.slice(2))).code;
   if (peerId) await required(supervisor(['--peer-enter', peerId]));
   else {
-    await required(supervisor(['--enter', updateId, String(process.pid)]));
+    // If a signal arrives while admission is publishing our PID, first learn
+    // whether it committed. A committed admission always needs a terminal row.
+    checkSignal();
+    await required(supervisor(['--enter', updateId, String(process.pid)], { checkSignalAfter: false }));
     entered = true;
+    checkSignal();
   }
   mkdirSync(dataDir, { recursive: true });
   logFd = openSync(updateLog, 'w');
@@ -338,7 +343,8 @@ async function main() {
   }
   const previous = await pull();
   step('submodules', 'running', 'Synchronizing and updating submodules...');
-  if (!await syncSubmodules()) fail();
+  const submoduleStatus = await syncSubmodules();
+  if (submoduleStatus) fail(submoduleStatus);
   step('submodules', 'done', 'Submodules updated');
   await checkPulledNode(previous);
   await stopApps();
