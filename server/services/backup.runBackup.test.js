@@ -98,7 +98,7 @@ describe('runBackup lifecycle', () => {
 
   // Unlike restore-only checks, this catches an unusable snapshot being
   // announced and persisted as healthy even though its SQL dump succeeded.
-  it.each(['legacy metadata', 'legacy universe config', 'converted', 'file escape hatch'])(
+  it.each(['legacy metadata', 'legacy universe config', 'legacy CoS config', 'converted', 'file escape hatch'])(
     'reports restore compatibility through the backup response and durable status: %s', async (scenario) => {
       const fsp = await actualFs();
       const { getState, restoreSnapshot } = await import('./backup.js');
@@ -121,21 +121,28 @@ describe('runBackup lifecycle', () => {
       const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
       const snapshotDir = joinPath(destRoot, 'snapshots', machineHost, snapshotId);
       const legacy = scenario !== 'converted';
-      const paths = scenario === 'legacy universe config'
-        ? { 'universes/index.json': JSON.stringify({ config: { runs: [] } }) }
-        : legacy ? {
+      const scenarioPaths = {
+        'legacy universe config': { 'universes/index.json': JSON.stringify({ config: { runs: [] } }) },
+        'legacy CoS config': {
+          'cos/config.json': JSON.stringify({ userTasksFile: 'data/queues/user.md' }),
+          'queues/user.md': '# User Tasks',
+        },
+      };
+      const paths = scenarioPaths[scenario] ?? (legacy ? {
           'universes/universe-example/index.json': '{}',
           'pipeline-issues/iss-example/index.json': '{}',
           'pipeline-series/ser-example/index.json': '{}',
           'story-builder/stb-example/index.json': '{}',
           'writers-room/folders.json': '[]',
           'creative-director-projects.json': '[]',
+          'COS-TASKS.md': '# Internal Tasks',
         } : {
           'universes/index.json': '{}',
           'universes.imported/universe-example/index.json': '{}',
           'universes/universe-example/assets/sheet.png': 'synthetic asset',
           'writers-room/folders.imported.json': '[]',
-        };
+          'TASKS.md.imported': '# User Tasks',
+        });
       for (const [path, content] of Object.entries(paths)) {
         const target = joinPath(snapshotDir, 'data', path);
         await fsp.mkdir(dirname(target), { recursive: true });
@@ -156,8 +163,12 @@ describe('runBackup lifecycle', () => {
         expect(await fsp.readFile(joinPath(snapshotDir, 'data', path), 'utf8')).toBe(content);
       }
       if (expectedStatus === 'degraded') {
-        const domains = scenario === 'legacy universe config' ? ['universes']
-          : ['universes', 'pipeline-issues', 'pipeline-series', 'story-builder', 'writers-room', 'creative-director'];
+        const scenarioDomains = {
+          'legacy universe config': ['universes'],
+          'legacy CoS config': ['cos-tasks'],
+        };
+        const domains = scenarioDomains[scenario]
+          ?? ['universes', 'pipeline-issues', 'pipeline-series', 'story-builder', 'writers-room', 'creative-director', 'cos-tasks'];
         expect(result.prunedSnapshots).toBe(0);
         await expect(fsp.access(oldSnapshot)).resolves.toBeUndefined();
         expect(result.restoreWarning).toMatchObject({ code: 'BACKUP_LEGACY_DB_METADATA', domains });
