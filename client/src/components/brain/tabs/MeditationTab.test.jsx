@@ -29,7 +29,21 @@ describe('sound meditation safety', () => {
     expect(context.nodes[0].frequency.value).toBe(200);
     expect(context.nodes[1].frequency.value).toBe(40);
     expect(context.nodes[0].stop).toHaveBeenCalledWith(300);
-    expect(context.nodes[4].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.01, 1);
+    const envelope = context.nodes[4].gain;
+    expect(envelope.linearRampToValueAtTime).toHaveBeenNthCalledWith(1, 0.01, 1);
+    expect(envelope.setValueAtTime).toHaveBeenLastCalledWith(0.01, 299.96);
+    expect(envelope.linearRampToValueAtTime).toHaveBeenNthCalledWith(2, 0, 300);
+    context.currentTime = 300;
+    act(() => context.nodes[0].onended());
+    expect(context.close).toHaveBeenCalledOnce();
+    expect(screen.getByRole('status')).toHaveTextContent('Session complete');
+  });
+
+  it('releases a suspended context when the wall-clock session expires', () => {
+    render(<MeditationTab />);
+    fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
+    const context = contexts[0];
+    context.state = 'suspended';
     act(() => vi.advanceTimersByTime(300_000));
     expect(context.close).toHaveBeenCalledOnce();
     expect(screen.getByRole('status')).toHaveTextContent('Session complete');
@@ -46,6 +60,7 @@ describe('sound meditation safety', () => {
     render(<MeditationTab />);
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     fireEvent.click(screen.getByRole('button', { name: 'Stop sound' }));
+    expect(contexts[0].close).toHaveBeenCalledOnce();
     vi.stubGlobal('AudioContext', MockAudioContext);
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     await act(async () => { rejectResume(new Error('cancelled')); });
@@ -53,21 +68,30 @@ describe('sound meditation safety', () => {
     expect(contexts[1].close).not.toHaveBeenCalled();
   });
 
-  it('silences immediately on Stop, Escape, backgrounding and unmount', () => {
+  it('fades to silence on Stop, Escape, backgrounding, pagehide and unmount', () => {
     const view = render(<MeditationTab />);
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     fireEvent.click(screen.getByRole('button', { name: 'Stop sound' }));
-    expect(contexts[0].close).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(contexts[1].close).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
     fireEvent(document, new Event('visibilitychange'));
-    expect(contexts[2].close).toHaveBeenCalledOnce();
     hidden.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
+    fireEvent(window, new Event('pagehide'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start sound' }));
     view.unmount();
-    expect(contexts[3].close).toHaveBeenCalledOnce();
+    expect(contexts).toHaveLength(5);
+    for (const context of contexts) {
+      expect(context.nodes[5].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 0.04);
+      expect(context.nodes[0].stop).toHaveBeenLastCalledWith(0.04);
+      expect(context.nodes[1].stop).toHaveBeenLastCalledWith(0.04);
+      expect(context.close).not.toHaveBeenCalled();
+    }
+    act(() => contexts[0].nodes[0].onended());
+    expect(contexts[0].close).toHaveBeenCalledOnce();
+    act(() => vi.advanceTimersByTime(250));
+    for (const context of contexts) expect(context.close).toHaveBeenCalledOnce();
   });
 });

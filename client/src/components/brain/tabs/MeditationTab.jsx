@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MAX_GAIN = 0.05;
+const FADE_OUT_SECONDS = 0.04;
 
 export default function MeditationTab() {
   const [duration, setDuration] = useState(5);
@@ -14,9 +15,29 @@ export default function MeditationTab() {
     session.current = null;
     if (current) {
       clearTimeout(current.timer);
-      current.carrier.onended = null;
-      // Closing immediately silences even a context whose resume is pending.
-      current.context.close().catch(() => {});
+      const { context, carrier, modulator, stopGain, end } = current;
+      const now = context.currentTime;
+      const close = () => {
+        carrier.onended = null;
+        context.close().catch(() => {});
+      };
+      if (context.state === 'running' && now < end) {
+        // A separate gain lets an early stop fade smoothly during either scheduled ramp.
+        const stopAt = Math.min(end, now + FADE_OUT_SECONDS);
+        stopGain.gain.setValueAtTime(1, now);
+        stopGain.gain.linearRampToValueAtTime(0, stopAt);
+        // The audio clock controls the fade even when page timers are throttled.
+        const cleanup = setTimeout(close, 250);
+        carrier.onended = () => {
+          clearTimeout(cleanup);
+          close();
+        };
+        carrier.stop(stopAt);
+        modulator.stop(stopAt);
+      } else {
+        // Closing also cancels a pending resume, which could otherwise start sound later.
+        close();
+      }
     }
     if (update) setPlaying(false);
   }, []);
@@ -50,20 +71,25 @@ export default function MeditationTab() {
       const modulationDepth = context.createGain();
       const modulation = context.createGain();
       const output = context.createGain();
+      const stopGain = context.createGain();
+      const startAt = context.currentTime;
+      const end = startAt + duration * 60;
+      const level = MAX_GAIN * volume / 100;
       carrier.frequency.value = 200;
       modulator.frequency.value = 40;
       modulationDepth.gain.value = 0.5;
       modulation.gain.value = 0.5;
-      output.gain.setValueAtTime(0, context.currentTime);
-      output.gain.linearRampToValueAtTime(MAX_GAIN * volume / 100, context.currentTime + 1);
+      output.gain.setValueAtTime(0, startAt);
+      output.gain.linearRampToValueAtTime(level, startAt + 1);
+      output.gain.setValueAtTime(level, end - FADE_OUT_SECONDS);
+      output.gain.linearRampToValueAtTime(0, end);
       modulator.connect(modulationDepth).connect(modulation.gain);
-      carrier.connect(modulation).connect(output).connect(context.destination);
-      const end = context.currentTime + duration * 60;
+      carrier.connect(modulation).connect(output).connect(stopGain).connect(context.destination);
       carrier.start();
       modulator.start();
       carrier.stop(end);
       modulator.stop(end);
-      const current = { context, carrier, timer: null };
+      const current = { context, carrier, modulator, stopGain, end, timer: null };
       session.current = current;
       startedSession = current;
       carrier.onended = () => {
