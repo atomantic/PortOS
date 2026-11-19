@@ -893,19 +893,31 @@ and #14185 built and removed one).
 on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
 
 - **red**: the run summary lists the failing jobs and steps plus every pull request
-  merged since the last **green** run on `main` (the Compare API against the head of
-  that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
+  merged since the last **green** run on `main` older than the failed run
+  (the Compare API against the head of that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
   `model:medium`, `effort:medium`) is created, or updated with a comment when one
   is already open. The issue carries only job names, the commit range and the run
   URL. An unreadable range or a missing earlier green run is reported as such, never
   as "no suspects".
 - **green**: closes the open issue and adds the green run link to its body in
   the same update.
-- **cancelled** (superseded by a newer push): nothing changes.
+- **inconclusive**: a cancelled run or a red gate caused solely by a job that
+  never acquired a runner leaves the issue as it was.
 
-A failure to read or write the issue fails the `main-health` job so a stale or
-duplicate issue is visible. The reporter is a separate workflow, not a job in
-`ci.yml`, because release.yml calls `ci.yml` and a called workflow cannot hold
+Before changing the alert, the reporter checks the recent `ci.yml` push and
+scheduled runs on `main`. GitHub's original run number determines order. A
+newer run's most recent conclusive attempt supersedes older events. A pending
+or inconclusive retry preserves that run's prior verdict. The reporter also
+checks that the event agrees with the current attempt of its own run. A green
+retry can close its own run's alert, and a green event with no open alert
+needs no freshness lookup.
+
+When the run or job state needed to determine freshness is unreadable, the
+reporter leaves the issue untouched and fails the `main-health` job. Issue read
+or write failures also fail the job so a stale or duplicate issue is visible.
+
+The reporter is a separate workflow because release.yml calls `ci.yml`, and
+a called workflow cannot hold
 `issues: write` that its caller lacks. To bisect, run the failing suite at a merge in
 the middle of the list and halve it.
 

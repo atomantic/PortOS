@@ -205,10 +205,12 @@ export async function fetchJobsWithFailedSteps(fetchImpl, target) {
  * @returns {Promise<{failed: Array<{name: string, steps: string[], reason?: string}>, neverStarted: string[]}|null>}
  */
 export async function fetchRunJobOutcomes(fetchImpl, target) {
-  const { repoPath, runId, token, timeoutMs } = target || {};
+  const { repoPath, runId, runAttempt, token, timeoutMs } = target || {};
   if (typeof fetchImpl !== 'function' || !repoPath || !/^\d+$/.test(String(runId)) || !token) return null;
-  const body = await githubJson(fetchImpl, `${repoPath}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PER_PAGE}`, token, { timeoutMs });
-  if (!Array.isArray(body?.jobs)) return null;
+  if (runAttempt !== undefined && (!Number.isSafeInteger(runAttempt) || runAttempt < 1)) return null;
+  const attempt = runAttempt === undefined ? '' : `/attempts/${runAttempt}`;
+  const body = await githubJson(fetchImpl, `${repoPath}/actions/runs/${runId}${attempt}/jobs?per_page=${RUN_JOBS_PER_PAGE}`, token, { timeoutMs });
+  if (!Array.isArray(body?.jobs) || body.total_count > body.jobs.length) return null;
   const failed = [];
   const neverStarted = [];
   for (const job of body.jobs) {
