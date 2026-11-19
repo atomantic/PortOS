@@ -137,8 +137,8 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
       expect(prompt).toContain('model:light|medium|heavy');
       expect(prompt).toContain('effort:low|medium|high|xhigh|max');
       expect(prompt).not.toContain('Omit an axis rather than guessing');
-      expect(prompt).toContain('repeated `--label`');
-      expect(prompt).toContain('gh label create');
+      expect(prompt).toContain('one `--label` flag per label');
+      expect(prompt).toContain('Only if the create call rejects a label as not found');
       expect(prompt).toContain('Do not relabel an existing issue');
       expect(prompt).toContain('good first issue');
       expect(prompt).toContain('help wanted');
