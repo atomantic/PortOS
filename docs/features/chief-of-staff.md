@@ -199,6 +199,20 @@ task prepares preservation prerequisites; the coordinator makes one final retire
 attempt after that task completes. A further refusal remains held with its reason
 and recovery task, without creating a loop.
 
+### Comment-triggered review in GitHub issue claims
+
+On a GitHub repository with the CodeIQ app installed, add `@codeiq-aix` to the
+app's claim reviewer roster. Dispatch checks for the app's actual account,
+`aix-codeiq[bot]`, on the target forge. A verified 404 for a required reviewer
+blocks dispatch with the setting to repair. An authentication or transport
+failure leaves the identity unverified.
+
+The claim can use a CodeIQ review already submitted when the PR opens. It posts
+`@codeiq` after a subsequent push and checks that the bot's review matches the
+new head. A submitted `COMMENTED` review satisfies the roster entry once its
+summary and inline threads have no unresolved findings. GitHub still enforces
+its own branch rules. [GitHub review API](https://docs.github.com/en/rest/pulls/reviews)
+
 ### Pending-merge handoff (#12247)
 
 Runs default to owning delivery through CI, confirmed merge and safe cleanup.

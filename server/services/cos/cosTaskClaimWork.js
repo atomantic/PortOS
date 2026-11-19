@@ -226,7 +226,7 @@ export async function buildClaimWorkTask(app, {
     prCompletion: effectivePrCompletion
   }, providers);
   const reviewerIdentityNotice = await preflightClaimReviewers(app, claimReviewers, {
-    metadata, appOverrideMetadata, explicit: { usernames, optionalReviewers }, taskType: 'claim-work',
+    metadata, appOverrideMetadata, explicit: { usernames, optionalReviewers }, taskType: 'claim-work', promptTaskType,
   });
   const {
     reviewers: reviewersList,

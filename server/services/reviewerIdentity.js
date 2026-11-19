@@ -30,13 +30,19 @@ const LOOKUP_CONCURRENCY = 4;
 // unavailable answer is retried almost immediately.
 const TTL_MS = { verified: 10 * 60_000, missing: 2 * 60_000, unavailable: 15_000 };
 
+// A claim can use these aliases without treating a GitHub App as a requestable
+// user. Keep the command in trusted code, separate from forge review content.
+const COMMENT_BOT_REVIEWERS = new Map([
+  ['codeiq-aix', Object.freeze({ author: 'aix-codeiq[bot]', trigger: '@codeiq' })],
+]);
+
 const cache = new Map();
 export function __resetReviewerIdentityCache() { cache.clear(); }
 
 const isNotFound = (err) => err?.ghNoAccess === true || isForgeNoAccessMessage(err?.ghStderr || err?.message);
 
 async function lookup(ghApi, host, path) {
-  const args = ['api', ...(host && host !== 'github.com' ? ['--hostname', host] : []), path];
+  const args = ['api', ...(host ? ['--hostname', host] : []), path];
   try {
     await ghApi(args, LOOKUP_TIMEOUT_MS);
     return 'found';
@@ -52,10 +58,12 @@ async function resolveToken(ghApi, host, token) {
     const r = await lookup(ghApi, host, `users/${encodeURIComponent(owner)}`);
     if (r === 'found') return { status: IDENTITY_STATUS.VERIFIED };
     if (r !== 'not-found') return { status: IDENTITY_STATUS.UNAVAILABLE, reason: r.error };
+    const missing = { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist on ${host}` };
+    if (owner.endsWith('[bot]')) return missing;
     // GitHub Apps have their bot accounts at users/<owner>[bot] with type: "Bot".
     const b = await lookup(ghApi, host, `users/${encodeURIComponent(`${owner}[bot]`)}`);
     if (b === 'found') return { status: IDENTITY_STATUS.VERIFIED };
-    if (b === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist on ${host}` };
+    if (b === 'not-found') return missing;
     return { status: IDENTITY_STATUS.UNAVAILABLE, reason: b.error };
   }
   const t = await lookup(ghApi, host, `orgs/${encodeURIComponent(owner)}/teams/${encodeURIComponent(team)}`);
@@ -73,11 +81,11 @@ async function resolveToken(ghApi, host, token) {
 
 /**
  * @param {string[]} tokens    reviewer tokens with or without a leading `@`
- * @param {{ forge?: 'github'|'gitlab', host?: string, ghApi?: Function, now?: number }} [opts]
- * @returns {Promise<Array<{ token: string, kind: 'user'|'team', status: string, reason?: string }>>}
+ * @param {{ forge?: 'github'|'gitlab', host?: string, ghApi?: Function, now?: number, cacheScope?: string, commentBots?: boolean }} [opts]
+ * @returns {Promise<Array<{ token: string, kind: 'user'|'team'|'comment-bot', status: string, reason?: string, bot?: {author: string, trigger: string} }>>}
  *   in input order, one entry per distinct (case-insensitive) token
  */
-export async function verifyReviewerIdentities(tokens, { forge = 'github', host = 'github.com', ghApi = execGh, now = Date.now() } = {}) {
+export async function verifyReviewerIdentities(tokens, { forge = 'github', host = 'github.com', ghApi = execGh, now = Date.now(), cacheScope = '', commentBots = false } = {}) {
   const seen = new Set();
   const distinct = [];
   for (const raw of Array.isArray(tokens) ? tokens : []) {
@@ -97,12 +105,15 @@ export async function verifyReviewerIdentities(tokens, { forge = 'github', host 
         results[i] = { token, kind, status: IDENTITY_STATUS.SKIPPED, reason: 'Identity lookup is only available for GitHub targets' };
         continue;
       }
-      const key = `${host}\0${token.toLowerCase()}`;
+      const bot = commentBots && COMMENT_BOT_REVIEWERS.get(token.toLowerCase());
+      const identity = bot ? { token, kind: 'comment-bot', bot } : { token, kind };
+      const login = bot ? bot.author : token;
+      const key = `${host}\0${cacheScope}\0${login.toLowerCase()}`;
       const hit = cache.get(key);
-      if (hit && hit.expiresAt > now) { results[i] = { token, kind, ...hit.value }; continue; }
-      const value = await resolveToken(ghApi, host, token);
+      if (hit && hit.expiresAt > now) { results[i] = { ...identity, ...hit.value }; continue; }
+      const value = await resolveToken(ghApi, host, login);
       cache.set(key, { value, expiresAt: now + TTL_MS[value.status] });
-      results[i] = { token, kind, ...value };
+      results[i] = { ...identity, ...value };
     }
   };
   await Promise.all(Array.from({ length: Math.min(LOOKUP_CONCURRENCY, distinct.length) }, worker));
@@ -114,11 +125,11 @@ export async function verifyReviewerIdentities(tokens, { forge = 'github', host 
  * reviewers except those whose `@token` is in `optionalReviewers`.
  * @returns {Promise<{ identities: object[], requiredMissing: object[], optionalMissing: object[] }>}
  */
-export async function preflightReviewerIdentities({ usernames = [], optionalReviewers = [], forge, host, ghApi } = {}) {
+export async function preflightReviewerIdentities({ usernames = [], optionalReviewers = [], ...lookupOptions } = {}) {
   const optional = new Set(optionalReviewers.filter((r) => typeof r === 'string' && r.startsWith('@')).map((r) => r.slice(1).toLowerCase()));
   const tokens = [...usernames, ...optional];
   if (!tokens.length) return { identities: [], requiredMissing: [], optionalMissing: [] };
-  const identities = (await verifyReviewerIdentities(tokens, { forge, host, ghApi }))
+  const identities = (await verifyReviewerIdentities(tokens, lookupOptions))
     .map((entry) => ({ ...entry, required: !optional.has(entry.token.toLowerCase()) }));
   const missing = identities.filter((entry) => entry.status === IDENTITY_STATUS.MISSING);
   return {
