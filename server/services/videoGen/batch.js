@@ -1,7 +1,8 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { MAX_VIDEO_BATCH_SIZE } from '../../lib/videoGenRequestFields.js';
 
-export const MAX_VIDEO_BATCH_SIZE = 20;
+export { MAX_VIDEO_BATCH_SIZE };
 const MAX_SEED = 2 ** 32 - 1;
 
 // Only runtimes whose pipeline retains reusable weights without stage-specific

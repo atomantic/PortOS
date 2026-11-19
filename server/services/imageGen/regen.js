@@ -25,6 +25,9 @@ import { usesDiffusersRunner } from '../../lib/runners.js';
 import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../../lib/imageGenCapabilities.js';
+
+export { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX };
 
 const IS_WIN = process.platform === 'win32';
 
@@ -38,8 +41,6 @@ export const DEFAULT_REGEN_STRENGTH = 0.25;
 // value that still does a faithful pass; across 0.02–0.25 the change is a flat ~8% (the VAE round-trip's own
 // reconstruction error, the irreducible minimum). The default stays at a known-good 0.25 until a lower value is
 // confirmed to still clear a detector.
-export const REGEN_STRENGTH_MIN = 0.02;
-export const REGEN_STRENGTH_MAX = 0.6;
 
 // Lighter default for sources that DON'T carry Google's SynthID (denoise is tuned by generator). The known-good
 // 0.25 is preserved for SynthID-bearing generators (never lower that path below the confirmed value), while local

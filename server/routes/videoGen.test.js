@@ -366,7 +366,8 @@ import { resolveGalleryImage } from '../lib/fileUtils.js';
 import {
   listIcLoraWeights, listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey,
 } from '../lib/icLoraWeights.js';
-import videoGenRoutes, { isAudioMime, LOCAL_ONLY_VIDEO_PARAMS } from './videoGen.js';
+import videoGenRoutes, { isAudioMime } from './videoGen.js';
+import { LOCAL_ONLY_VIDEO_PARAMS } from '../lib/videoGenValidation.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
 // multipart mock in these route tests bypasses fileFilter entirely, so we
