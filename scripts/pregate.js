@@ -17,7 +17,9 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
+import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
+import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
+import { toRepoPath } from './lib/workspaceTests.js';
 import { isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -109,8 +111,11 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   if (suiteSelected(plan, 'macosNative')) {
     uncovered.push({ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative });
   }
-  for (const { source, count } of plan.relatedOverflow ?? []) {
-    uncovered.push({ suite: 'related tests', reason: `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
+  for (const { source, count, hop = 1 } of plan.relatedOverflow ?? []) {
+    const reason = hop === 2
+      ? `${count} suite(s) two imports away from ${source} beyond the ${RELATED_SUITE_CAP}-per-source and ${SECOND_HOP_RUN_CAP}-per-run caps`
+      : `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`;
+    uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
   }
   return uncovered;
 }
@@ -341,16 +346,59 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   };
 }
 
-/** Suites one changed source may add through a differently named import or mock. */
+/** Suites one changed source may add through a differently named import or mock, per hop. */
 export const RELATED_SUITE_CAP = 25;
 
+/** Suites the second hop may add to one run, across every changed source (#16863). */
+export const SECOND_HOP_RUN_CAP = 60;
+
+// Suites that cost tens of seconds each (nested runners, real git, the planner's own matrix):
+// the Vitest pool already runs them one at a time, and the planner selects the tooling ones
+// for a diff under their owner paths. A transitive edge is too weak a reason to pay for them here.
+const HEAVY_SUITES = new Set([...TOOLING_TESTS, ...EXCLUSIVE_TESTS.map(path => toRepoPath('server', path))]);
+
+const MODULE_FILE = /\.[cm]?[jt]sx?$/;
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const baseName = path => path.slice(path.lastIndexOf('/') + 1).replace(MODULE_FILE, '');
+
 /**
- * Local selection owns the edited tests, same-stem siblings and tests one hop
- * away: a test whose relative import, `import()` or `vi.mock` specifier
- * resolves to a changed source (a route suite mocking the service it fronts).
- * It never expands transitively; broader integration coverage and unowned
- * changes remain with hosted CI. Past RELATED_SUITE_CAP referencing suites for
- * one source the overflow stays with CI and is recorded in `relatedOverflow`.
+ * Which of `files` reference each of `targets` through a relative import,
+ * `import()` or `vi.mock` specifier that resolves to it.
+ *
+ * @returns {Map<string, string[]>} target -> sorted, de-duplicated referrers
+ */
+function referrersOf(targets, files, readText) {
+  if (!targets.length) return new Map();
+  const referrers = new Map(targets.map(target => [target, new Set()]));
+  const known = new Set(targets);
+  // Cheap prefilter: a resolved specifier always spells the target's base name.
+  const spelled = new RegExp([...new Set(targets.map(baseName))].map(escapeRegExp).join('|'));
+  for (const file of files) {
+    const text = readText(file);
+    if (text == null || !spelled.test(text)) continue;
+    for (const spec of testReferenceSpecifiers(text)) {
+      const target = resolveSpecifier(file, spec, known);
+      if (target && target !== file) referrers.get(target).add(file);
+    }
+  }
+  return new Map([...referrers].map(([target, set]) => [target, [...set].sort()]));
+}
+
+/**
+ * Local selection owns the edited tests, same-stem siblings, and tests within
+ * two import hops of a changed source (#16863). Hop one is a test whose
+ * relative import, `import()` or `vi.mock` specifier resolves to the source (a
+ * route suite mocking the service it fronts); hop two is a test that references
+ * a non-test module that does (a prompt-assembly suite reaching a prompt
+ * section through the builder that imports it). Deeper reach, text reads of
+ * non-module files and broader integration coverage remain with hosted CI,
+ * which walks the whole graph.
+ *
+ * Caps keep the local gate short: each hop adds at most RELATED_SUITE_CAP
+ * suites per changed source, and the second hop at most SECOND_HOP_RUN_CAP per
+ * run, nearest hop first (hop one is never displaced) and never a HEAVY_SUITES
+ * member. Whatever a cap leaves out is recorded in `relatedOverflow` and
+ * reported as skipped.
  */
 export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
   const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
@@ -362,9 +410,9 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
   const changedSources = [];
   for (const path of changedFiles) {
     if (unitTest(path) && tracked.has(path)) focused.add(path);
-    if (!/\.[cm]?[jt]sx?$/.test(path) || /\.test\./.test(path)) continue;
+    if (!MODULE_FILE.test(path) || /\.test\./.test(path)) continue;
     if (tracked.has(path)) changedSources.push(path);
-    const stem = path.replace(/\.[cm]?[jt]sx?$/, '');
+    const stem = path.replace(MODULE_FILE, '');
     for (const suffix of ['.test.js', '.test.jsx', '.test.ts', '.test.tsx', '.test.mjs', '.test.cjs']) {
       const test = `${stem}${suffix}`;
       if (tracked.has(test) && unitTest(test)) focused.add(test);
@@ -372,24 +420,43 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
   }
   const relatedOverflow = [];
   if (changedSources.length) {
-    const byBase = changedSources.map(source => ({ source, base: source.slice(source.lastIndexOf('/') + 1).replace(/\.[cm]?[jt]sx?$/, '') }));
-    const referencing = new Map(changedSources.map(source => [source, []]));
-    for (const test of trackedFiles.filter(path => unitTest(path) && !focused.has(path))) {
-      const text = readText(test);
-      if (text == null) continue;
-      // Cheap prefilter: a resolved specifier always spells the source's base name.
-      const candidates = byBase.filter(({ base }) => text.includes(base));
-      if (!candidates.length) continue;
-      const known = new Set(candidates.map(({ source }) => source));
-      for (const spec of testReferenceSpecifiers(text)) {
-        const target = resolveSpecifier(test, spec, known);
-        if (target) referencing.get(target).push(test);
+    const texts = new Map();
+    const memoRead = path => {
+      if (!texts.has(path)) texts.set(path, readText(path));
+      return texts.get(path);
+    };
+    const addCapped = (source, tests, hop, budget) => {
+      const fresh = tests.filter(test => !focused.has(test));
+      const take = fresh.slice(0, Math.min(RELATED_SUITE_CAP, budget));
+      take.forEach(test => { focused.add(test); });
+      if (fresh.length > take.length) relatedOverflow.push({ source, count: fresh.length - take.length, hop });
+      return take.length;
+    };
+    const candidateTests = () => trackedFiles.filter(path => unitTest(path) && !focused.has(path));
+    const hopOne = referrersOf(changedSources, candidateTests(), memoRead);
+    for (const [source, tests] of hopOne) addCapped(source, tests, 1, RELATED_SUITE_CAP);
+
+    // Hop two: tests that reference a non-test module importing a changed source.
+    const changed = new Set(changedSources);
+    const modules = trackedFiles.filter(path => MODULE_FILE.test(path) && !/\.test\./.test(path) && !changed.has(path));
+    const importersOf = referrersOf(changedSources, modules, memoRead);
+    const importerSources = new Map();
+    for (const [source, importers] of importersOf) {
+      for (const importer of importers) importerSources.set(importer, [...(importerSources.get(importer) ?? []), source]);
+    }
+    const viaImporter = referrersOf([...importerSources.keys()].sort(), candidateTests().filter(test => !HEAVY_SUITES.has(test)), memoRead);
+    // An importer's own suite (same stem) is its owner, so it outranks the rest when a cap bites.
+    const secondHop = new Map(changedSources.map(source => [source, new Map()]));
+    for (const [importer, tests] of viaImporter) {
+      const stem = `${importer.replace(MODULE_FILE, '')}.`;
+      for (const source of importerSources.get(importer)) {
+        for (const test of tests) secondHop.get(source).set(test, Math.min(secondHop.get(source).get(test) ?? 1, test.startsWith(stem) ? 0 : 1));
       }
     }
-    for (const [source, tests] of referencing) {
-      const unique = [...new Set(tests)].sort();
-      unique.slice(0, RELATED_SUITE_CAP).forEach(test => { focused.add(test); });
-      if (unique.length > RELATED_SUITE_CAP) relatedOverflow.push({ source, count: unique.length - RELATED_SUITE_CAP });
+    let budget = SECOND_HOP_RUN_CAP;
+    for (const [source, ranked] of secondHop) {
+      const ordered = [...ranked].sort(([a, rankA], [b, rankB]) => rankA - rankB || (a < b ? -1 : a > b ? 1 : 0)).map(([test]) => test);
+      budget -= addCapped(source, ordered, 2, budget);
     }
   }
   for (const scope of ['server', 'client']) {

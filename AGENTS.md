@@ -36,7 +36,7 @@ node scripts/pregate.js [--full] # same gate on Windows
 
 No `NODE_ENV` prefix is needed: `server/vitest.config.js` forces `NODE_ENV=test` (#4554). A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/TEST_MEMO.md`).
 
-**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It does not cover transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
+**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It skips imports past two hops and browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
 
 ## Test Strategy: Value Over Assertion Count
 

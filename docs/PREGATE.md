@@ -11,12 +11,19 @@ reviews stay mandatory.
 untracked diff and hands its plan to the same runners. Default `npm run pregate` runs the
 hidden-content scan, early server and client structural
 guards, lint, and focused unit tests: edited test files, sibling tests for
-changed sources, and tests whose relative `import`, `import()` or `vi.mock`
-specifier resolves directly to a changed source (one hop, at most 25 suites per
-source; the overflow is listed under `skipped` in the receipt and left to CI),
-including untracked tests, without expanding through transitive imports. Run a
-focused public-boundary regression for changed behavior that has no sibling
-test; automatic selection does not replace engineering judgment.
+changed sources, and tests within two import hops of a changed source: a
+relative `import`, `import()` or `vi.mock` specifier that resolves to it, or to
+a non-test module that does (a suite two modules away, such as a prompt
+assembly test reaching a prompt section through its builder). Each hop adds at
+most 25 suites per source, the second hop at most 60 per run, nearest hop
+first and an importer's own suite before its other referrers; the overflow is
+listed under `skipped` in the receipt and left to CI. The second hop never adds the heavy
+suites (gate tooling and the pool's exclusive tests, tens of seconds each). Untracked tests count.
+Deeper chains, and tests that read a changed non-module file as text (no
+import edge; the test memo records loaded modules, not opened files), are not
+selected. Run a focused public-boundary regression for changed behavior that
+has no sibling test; automatic selection does not replace engineering
+judgment.
 
 ## Full plan (`--full`)
 
