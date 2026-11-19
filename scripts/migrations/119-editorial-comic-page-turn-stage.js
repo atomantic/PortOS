@@ -9,9 +9,9 @@
  * `comic.page-turn-beats` editorial check would throw "Stage not found" the first
  * time it runs.
  *
- * First-shipment seed (no MD5 bookkeeping). Any FUTURE edit to this `.md` MUST add
- * an `ACCEPTED_OLD_MD5`/`NEW_SHIPPED_MD5` pair (migration 003 pattern) so
- * `setup-data.js#buildPromptDriftTables` can auto-upgrade other installs.
+ * First-shipment seed (no MD5 bookkeeping). A later edit to this `.md` needs no migration:
+ * `node scripts/regen-shipped-prompt-hashes.js` retires the old hash and the
+ * runner's reconcile step upgrades untouched installs.
  */
 
 import { makeSeedMigration } from './_seedStageHelpers.js';

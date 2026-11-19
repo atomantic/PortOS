@@ -16,9 +16,9 @@
  * First-shipment seed: copy only when the file is missing (never clobber a
  * customized install) and merge the stage-config key only when absent. No MD5
  * hashing — there is no prior shipped-via-migration baseline to upgrade from.
- * NOTE: a FUTURE edit to the `.md` must add `ACCEPTED_OLD_MD5` / `NEW_SHIPPED_MD5`
- * exports (see migration 003) so `setup-data.js`'s `buildPromptDriftTables`
- * sweep can auto-update other installs.
+ * A later edit to the `.md` needs no migration:
+ * `node scripts/regen-shipped-prompt-hashes.js` retires the old hash and the
+ * runner's reconcile step upgrades untouched installs.
  */
 
 import { makeSeedMigration } from './_seedStageHelpers.js';

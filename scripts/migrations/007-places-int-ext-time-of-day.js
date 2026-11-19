@@ -18,9 +18,8 @@ const md5 = (str) => {
   return createHash('md5').update(normalized).digest('hex');
 };
 
-// Exported under the standard drift-constant names so setup-data.js's
-// `buildPromptDriftTables` sweep picks up this file's hashes from a single
-// source of truth instead of re-mirroring them by hand.
+// Exported under the standard names so `shippedPromptHashes.guard.test.js` can
+// check that the shipped-hash table records every hash this file recognizes.
 export const ACCEPTED_OLD_MD5 = {
   'writers-room-places.md': [
     '7f1f80eb63d67a21161994cde115045e',

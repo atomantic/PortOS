@@ -26,8 +26,8 @@ const live = await readReferencePromptHashes(repoRoot);
 // the 97 whose whole up() was `makePromptReplaceMigration` swapping a body,
 // because the reconciler performs that swap; their hashes live on in the
 // table, which the base comparison below keeps from losing one. These also
-// create a missing file, retire a renamed one, seed a stage or rewrite other
-// state, or hand-roll their own recognition (007, 020). They stay (other
+// create a missing file, retire a renamed one or rewrite other state (003,
+// 005, 022), or hand-roll their own recognition (007, 020). They stay (other
 // installs may still have them pending) and are never re-pointed; a template
 // edit now needs only the regen above. Never add to this list.
 const FROZEN_PROMPT_HASH_MIGRATIONS = new Set([
@@ -36,11 +36,6 @@ const FROZEN_PROMPT_HASH_MIGRATIONS = new Set([
   '007-places-int-ext-time-of-day.js',
   '020-importer-screenplay-user-requested-count.js',
   '022-rename-bible-setting-to-place.js',
-  '043-story-builder-prompts.js',
-  '091-seed-image-prompt-stages.js',
-  '102-editorial-endings-cliffhanger-stage.js',
-  '119-editorial-comic-page-turn-stage.js',
-  '150-seed-comic-page-refine-render-stage.js',
 ]);
 
 const recordedHashes = (entry) =>
