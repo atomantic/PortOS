@@ -4,7 +4,7 @@
  * `PORTOS_SCHEMA_VERSIONS` is the per-sync-category WIRE contract, distinct from the storage-layout version on `data/{type}/index.json` (each service's `TYPE_SCHEMA_VERSION`).
  * Bump it for (a) a storage layout change (ship the matching `scripts/migrations/NNN-…js` too) or (b) an additive record-shape change a not-yet-upgraded peer would strip on round-trip.
  * The number flows through every outbound `portosMeta.schemaVersions`; receivers reject ahead-mismatches (sender too new) or behind-mismatches (sender too old for a forward-only field).
- * Absent categories default to 0; live catalog rows require equality even for unversioned peers.
+ * Absent categories default to 0; live record pushes also enforce the per-category minimums below.
  */
 
 import { join } from 'path';
@@ -77,8 +77,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
 });
 
 /**
- * Map a federated record KIND to the `PORTOS_SCHEMA_VERSIONS` categories its storage layout touches, so the per-category gate blocks a transfer ONLY when the sender is
- * ahead on a category that record writes. Kinds absent here carry no versioned layout and are never gated; a push bundling other kinds unions their categories at the call site.
+ * Map a federated record KIND to the `PORTOS_SCHEMA_VERSIONS` categories its storage layout touches. The gate only checks categories being written.
+ * Kinds absent here carry no versioned layout and are never gated; a push bundling other kinds unions their categories at the call site.
  */
 export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   universe: Object.freeze(['universes']),
@@ -103,6 +103,18 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   creativeCommission: Object.freeze(['creativeCommissions']),
   deck: Object.freeze(['decks']),
   storyboard: Object.freeze(['storyboards']),
+});
+
+/**
+ * Minimum sender wire versions for live record pushes. Tombstones carry no
+ * versioned body. Categories omitted here can backfill older live payloads.
+ */
+export const RECORD_SCHEMA_MIN_SENDER_VERSIONS = Object.freeze({
+  // Live catalog rows require equality because older peers drop newer fields.
+  catalog: PORTOS_SCHEMA_VERSIONS.catalog,
+  // v54 replaced previz.night with timeline and cast-bound vehicles. A whole
+  // project save from an older peer can overwrite these migrated fields.
+  musicVideoProjects: 54,
 });
 
 /**
