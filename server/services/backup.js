@@ -1240,6 +1240,33 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
   if (marked) console.log(`💾 Backup: marked ${marked} interrupted snapshot(s) failed`);
 }
 
+async function isRetentionEligibleSnapshot(snapshotDir, id, requiresDatabase) {
+  // Only confirmed absence is legacy. An existing manifest must pass the
+  // same structural checks as a file restore, without hashing old payloads.
+  const srcDir = join(snapshotDir, 'data');
+  const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
+  const manifest = manifestRead.value;
+  const legacy = manifest === MANIFEST_ABSENT;
+  const entries = manifestRead.ok && !legacy ? manifestDataEntries(manifest, srcDir, null) : null;
+  if (!manifestRead.ok || (!legacy && !entries)) {
+    console.warn(`⚠️ Backup retention: kept snapshot ${id} (manifest unreadable or invalid)`);
+    return false;
+  }
+  if (!requiresDatabase) return true;
+  if (!legacy && !Object.hasOwn(manifest.files, '../portos-db.sql')) return false;
+
+  // A recorded hash alone cannot establish that the dump remains available.
+  // For pre-manifest snapshots the regular, nonempty dump is the only record.
+  const dump = await lstat(join(snapshotDir, 'portos-db.sql')).catch(err => {
+    if (err?.code !== 'ENOENT') {
+      console.warn(`⚠️ Backup retention: kept snapshot ${id} (dump metadata unreadable: ${err?.code ?? 'UNKNOWN'})`);
+    }
+    return null;
+  });
+  if (!dump?.isFile() || dump.size === 0) return false;
+  return legacy || (await legacyDbMetadataDomains(srcDir, [...entries.dataPaths])).length === 0;
+}
+
 /**
  * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
  * namespace beyond `retentionCount`, plus every interrupted snapshot older
@@ -1250,10 +1277,10 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
  * with a successful or explicitly skipped database dump — a run that fails
  * earlier never reaches this call, so an in-progress snapshot is never a
  * candidate; state is re-checked here anyway via `snapshotState` in case an
- * unrelated run left one behind. Ordinary `.failed` snapshots are kept for
- * salvage. Only ever walks `snapshots/<MACHINE_HOST>/` — never another
- * machine's namespace and never the legacy pre-namespace root, both of which
- * this install has no authority to prune.
+ * unrelated run left one behind. Ordinary `.failed` snapshots and completed
+ * snapshots excluded from the database budget stay available for salvage.
+ * Only walks `snapshots/<MACHINE_HOST>/`; other machines' namespaces and the
+ * legacy pre-namespace root stay outside this install's pruning scope.
  * `retentionCount` of `null`/`undefined` means unlimited completed snapshots.
  * @param {string} destPath
  * @param {number|null} retentionCount
@@ -1261,6 +1288,7 @@ async function markInterruptedSnapshotsFailed(snapshotsRoot) {
  */
 async function pruneOldSnapshots(destPath, retentionCount) {
   const unlimited = retentionCount === null || retentionCount === undefined;
+  const requiresDatabase = !usesFileEscapeHatch();
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
   // A completed snapshot was just written here; even ENOENT is a failed
   // inventory, not proof that there is nothing to prune. Keep paths private.
@@ -1279,28 +1307,14 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     // Unlimited retention prunes only interrupted snapshots; completed ones are
     // never candidates, so their manifests need no admission check.
     if (unlimited) return { id, snapshotDir };
-    // Share restore's structural admission, without hashing old payloads.
-    // Only confirmed absence is legacy; JSON null is an invalid manifest.
-    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), MANIFEST_ABSENT, { logError: false });
-    const valid = manifestRead.ok && (manifestRead.value === MANIFEST_ABSENT
-      || manifestDataEntries(manifestRead.value, join(snapshotDir, 'data'), null) !== null);
-    return { id, snapshotDir, protectedFromPrune: !valid };
+    return await isRetentionEligibleSnapshot(snapshotDir, id, requiresDatabase) ? { id, snapshotDir } : null;
   }))).filter(Boolean);
 
   // Newest-first by snapshot id (an ISO-style timestamp that never depends on
   // reading the manifest). IDs are unique within this source namespace.
   descriptors.sort((a, b) => b.id.localeCompare(a.id));
 
-  // Keep protected snapshots in addition to the readable retention budget,
-  // even when a bad clock placed a protected snapshot ahead of healthy ones.
-  const healthy = descriptors.filter(d => {
-    if (d.interrupted) return false;
-    if (d.protectedFromPrune) {
-      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable or invalid)`);
-      return false;
-    }
-    return true;
-  });
+  const healthy = descriptors.filter(d => !d.interrupted);
   // An interrupted snapshot is only dropped once a newer healthy one exists.
   const newestHealthyId = healthy[0]?.id;
   const toDelete = [
@@ -1323,7 +1337,7 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     release();
   }
   if (pruned) {
-    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s), keeping ${retentionCount ?? 'all'} completed`);
+    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s) (limit: ${retentionCount ?? 'unlimited'})`);
   }
   return { pruned };
 }
