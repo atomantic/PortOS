@@ -6,7 +6,7 @@ const mergedTarget = vi.hoisted(() => ({
   probeChangeRequestState: vi.fn(),
 }));
 vi.mock('../../lib/gitRemote.js', () => ({ getOriginInfo: mergedTarget.getOriginInfo }));
-vi.mock('../prProbe.js', () => ({ probeChangeRequestState: mergedTarget.probeChangeRequestState }));
+vi.mock('../prProbe.js', async (importOriginal) => ({ ...(await importOriginal()), probeChangeRequestState: mergedTarget.probeChangeRequestState }));
 const claimVerifier = vi.hoisted(() => ({ verifyClaimDisposition: vi.fn() }));
 vi.mock('../claimDisposition.js', () => claimVerifier);
 vi.mock('../../lib/fileUtils.js', async importOriginal => {
