@@ -37,10 +37,16 @@ import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
-  pathExists, PATHS, sanitizeFilename, isPathInsideDir,
-  SONGBOOK_ATTACHMENT_EXTENSIONS, saveBase64Upload, serveLocalFile,
+  pathExists, PATHS, isPathInsideDir,
   unlinkGuarded,
 } from '../lib/fileUtils.js';
+import {
+  sanitizeFilename,
+  SONGBOOK_ATTACHMENT_EXTENSIONS,
+} from '../lib/mimeTypes.js';
+import {
+  saveBase64Upload, serveLocalFile,
+} from '../lib/uploads.js';
 
 const router = Router();
 

@@ -67,7 +67,7 @@ export function readFileAsBase64(file) {
 }
 
 /**
- * The image formats the upload endpoints can magic-byte verify, a mirror of `detectImageFormat` in `server/lib/fileUtils.js` (the client can't import it); `uploadLimits.test.js` guards drift.
+ * The image formats the upload endpoints can magic-byte verify, a mirror of `detectImageFormat` in `server/lib/mimeTypes.js` (the client can't import it); `uploadLimits.test.js` guards drift.
  * Anything else is refused server-side with a 400, and drag-drop/paste bypass the picker's `accept`, so the check must exist here too. Distinct from `IMAGE_ACCEPT`, which is narrower (no GIF) because
  * its consumers feed image-gen backends.
  */

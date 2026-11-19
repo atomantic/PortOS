@@ -17,7 +17,7 @@ vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   isMuscriptorRuntimeReady: vi.fn(async () => true),
   resolveMuscriptorPython: vi.fn(() => 'python3'),
 }));
-vi.mock('../lib/fileUtils.js', async importOriginal => {
+vi.mock('../lib/uploads.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, importFileToDir: vi.fn(actual.importFileToDir) };
 });
@@ -31,7 +31,7 @@ vi.mock('../lib/sidecarProcess.js', () => ({
 }));
 
 const { startMidiTranscription, attachMidiTranscriptionSseClient, getActiveMidiTranscriptionJobId } = await import('./audioMidiTranscription.js');
-const { importFileToDir } = await import('../lib/fileUtils.js');
+const { importFileToDir } = await import('../lib/uploads.js');
 const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
 const { runSidecarProcess } = await import('../lib/sidecarProcess.js');
 const { findFfmpeg, runFfmpegProcess } = await import('../lib/ffmpeg.js');

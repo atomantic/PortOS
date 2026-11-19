@@ -4,7 +4,8 @@
  * filename. The shared `PATHS.screenshots` bucket needs uniquified names (repeated `IMG_0001.jpg`).
  */
 
-import { PATHS, saveImageUpload, unlinkGuarded } from '../lib/fileUtils.js';
+import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
+import { saveImageUpload } from '../lib/uploads.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';

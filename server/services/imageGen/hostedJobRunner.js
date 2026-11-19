@@ -9,7 +9,8 @@
 import { basename, join } from 'path';
 import sharp from 'sharp';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { atomicWrite, detectImageFormat, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
+import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { createHostedJobRunner } from '../../lib/hostedJobRunner.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';

@@ -8,7 +8,7 @@ import {
   MAX_BASE64_UPLOAD_BYTES,
   MAX_SCREENSHOT_BYTES,
 } from './uploadLimits.js';
-import { ATTACHMENT_ALLOWED_EXTENSIONS, detectImageFormat } from './fileUtils.js';
+import { ATTACHMENT_ALLOWED_EXTENSIONS, detectImageFormat } from './mimeTypes.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(HERE, p), 'utf8');

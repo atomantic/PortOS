@@ -18,7 +18,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: { ...actual.PATHS, uploads: joinPath(root, 'uploads') } };
 });
 
-import { PATHS, EXTENSION_MIME_MAP } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { EXTENSION_MIME_MAP } from '../lib/mimeTypes.js';
 import uploadRoutes from './uploads.js';
 
 const buildApp = () => {

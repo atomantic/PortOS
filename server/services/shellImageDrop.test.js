@@ -7,13 +7,17 @@ vi.mock('./shell.js', () => ({
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { screenshots: '/opt/portos/data/screenshots' },
-  saveImageUpload: vi.fn(),
   unlinkGuarded: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../lib/uploads.js', () => ({
+  saveImageUpload: vi.fn(),
 }));
 
 import { buildImageDropText, dropImageIntoShellSession } from './shellImageDrop.js';
 import { getSession, pasteToSession } from './shell.js';
-import { saveImageUpload, PATHS } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { saveImageUpload } from '../lib/uploads.js';
 
 const SESSION_ID = 'session-abcdef123456';
 const STORED = 'shell-aa11bb22-photo.jpg';

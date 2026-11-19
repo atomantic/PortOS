@@ -14,7 +14,8 @@
 import sharp from 'sharp';
 import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
-import { tryReadFile, safeJSONParse, atomicWrite, detectImageFormat } from './fileUtils.js';
+import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
+import { detectImageFormat } from './mimeTypes.js';
 
 
 // There is intentionally no decoded-byte cap. The HTTP route streams raw bytes
@@ -38,7 +39,7 @@ export const CLEAN_LEVELS = ['aggressive', 'resize-squeeze'];
 
 // Magic-byte sniff so we re-encode as the source format and emit the right
 // MIME type — extension/header is supplied by the client and not trustworthy.
-// Delegates to the shared sniffer in fileUtils; cleaning only handles the three
+// Delegates to the shared sniffer in mimeTypes; cleaning only handles the three
 // formats sharp re-encodes here, so a detected GIF is treated as unsupported.
 function detectFormat(buf) {
   const format = detectImageFormat(buf)?.format ?? null;

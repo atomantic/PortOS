@@ -34,7 +34,10 @@ const h = vi.hoisted(() => {
   return { procs, spawn };
 });
 
-vi.mock('../../lib/childProcess.js', () => ({ spawn: h.spawn }));
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawn: h.spawn,
+}));
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
 vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
 vi.mock('../../lib/fileUtils.js', () => ({
