@@ -5,14 +5,20 @@
  * dipped to the shot's `musicLevel` while that sound plays.
  *
  * Pure: returns ffmpeg inputs and filter strings for the shared bed chain
- * (videoTimeline/audioBedMix.js), so the one-pass render and the shot-segment
- * stitch mix the same way. Both callers own their input numbering.
+ * (videoTimeline/audioBedMix.js), so footage and document renders mix the
+ * same way. Callers own their input numbering.
  */
 
 import { AUDIO_NORM, buildAudioBedMix, fmtSec } from '../videoTimeline/audioBedMix.js';
 
 // A short ramp on each end of a clip's sound so the cut into it never clicks.
 const EDGE_FADE_SEC = 0.03;
+
+export function clipSoundVoice({ sceneId, assetPath, offsetSec, startSec, durationSec, rate, clipSound }) {
+  const fade = Math.min(EDGE_FADE_SEC, durationSec / 4);
+  return { sceneId, assetPath, offsetSec, startSec, durationSec, ...(rate != null ? { rate } : {}),
+    volume: clipSound.volume, musicLevel: clipSound.musicLevel, fadeInSec: fade, fadeOutSec: fade };
+}
 
 /**
  * The clip sounds a cut plays, from its laid-out sections (`{ c, startSec,
@@ -27,11 +33,9 @@ export function clipSoundVoices(plan) {
     const start = startSec + (c.leadSec || 0);
     const durationSec = endSec - start;
     if (!(durationSec > 0)) return [];
-    return [{
-      sceneId: c.sceneId, assetPath: c.videoPath, offsetSec: c.inSec || 0, startSec: start, durationSec,
-      volume: c.clipSound.volume, musicLevel: c.clipSound.musicLevel,
-      fadeInSec: Math.min(EDGE_FADE_SEC, durationSec / 4), fadeOutSec: Math.min(EDGE_FADE_SEC, durationSec / 4),
-    }];
+    return [clipSoundVoice({
+      sceneId: c.sceneId, assetPath: c.videoPath, offsetSec: c.inSec || 0, startSec: start, durationSec, clipSound: c.clipSound,
+    })];
   });
 }
 
@@ -47,7 +51,7 @@ export function buildSongAudioMix({ mainLabel, soundBed = null, voices = [], fir
   const filters = [`${mainLabel}${[AUDIO_NORM, ...ducks].join(',')}[master]`];
   const beds = [
     ...(soundBed?.path ? [{ assetPath: soundBed.path, offsetSec: 0, durationSec, volume: soundBed.volume }] : []),
-    ...voices.map(({ assetPath, offsetSec, durationSec: span, startSec, volume, fadeInSec, fadeOutSec }) => ({ assetPath, offsetSec, durationSec: span, startSec, volume, fadeInSec, fadeOutSec })),
+    ...voices,
   ];
   const bed = buildAudioBedMix({ beds, firstInputIdx, mainLabel: '[master]', outLabel, limitPeak: true });
   return { inputs: bed.inputs, filters: [...filters, ...bed.filters] };

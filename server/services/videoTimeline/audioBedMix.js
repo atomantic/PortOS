@@ -21,9 +21,19 @@ export const fmtSec = (n) => String(Math.round(Number(n) * 1e6) / 1e6);
 // Every audio branch entering a mix/concat must present identical link parameters.
 export const AUDIO_NORM = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
 
+// Staying within 0.5–2 per stage avoids atempo's sample-skipping path above 2x.
+export function atempoChain(rate) {
+  const stages = [];
+  let left = rate;
+  while (left > 2) { stages.push(2); left /= 2; }
+  while (left < 0.5) { stages.push(0.5); left /= 0.5; }
+  if (Math.abs(left - 1) > 1e-6) stages.push(left);
+  return stages.map((stage) => `atempo=${fmtSec(stage)}`).join(',');
+}
+
 /**
  * @param {object} opts
- * @param {Array<{assetPath:string, offsetSec:number, durationSec:number, startSec?:number, volume?:number, fadeInSec?:number, fadeOutSec?:number}>} opts.beds
+ * @param {Array<{assetPath:string, offsetSec:number, durationSec:number, rate?:number, startSec?:number, volume?:number, fadeInSec?:number, fadeOutSec?:number}>} opts.beds
  * @param {number} opts.firstInputIdx  ffmpeg input index the first bed will take
  * @param {string} opts.mainLabel      the main audio's filter label, e.g. `[ca]`
  * @param {string} opts.outLabel       the mixed output label, e.g. `[outa]`
@@ -37,12 +47,15 @@ export function buildAudioBedMix({ beds, firstInputIdx, mainLabel, outLabel, lim
   const bedLabels = [];
   (beds || []).forEach((tr, j) => {
     inputs.push('-i', tr.assetPath);
+    const rate = tr.rate ?? 1;
     const parts = [
       'aresample=48000',
       'aformat=sample_fmts=fltp:channel_layouts=stereo',
-      `atrim=start=${fmtSec(tr.offsetSec)}:end=${fmtSec(tr.offsetSec + tr.durationSec)}`,
+      `atrim=start=${fmtSec(tr.offsetSec)}:end=${fmtSec(tr.offsetSec + tr.durationSec * rate)}`,
       'asetpts=PTS-STARTPTS',
     ];
+    const tempo = atempoChain(rate);
+    if (tempo) parts.push(tempo, `atrim=duration=${fmtSec(tr.durationSec)}`);
     const volume = tr.volume == null ? 1 : tr.volume;
     if (volume !== 1) parts.push(`volume=${fmtSec(volume)}`);
     if (tr.fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fmtSec(tr.fadeInSec)}`);

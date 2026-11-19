@@ -1110,6 +1110,59 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     }
   }, 120000));
 
+  it('mixes the retimed clip over the dipped song in a final and in a mid-shot excerpt', async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    const clip = join(PATHS.videos, 'clip-sound.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=64x36:r=24:d=1.5',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.5', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=0.5',
+      '-f', 'lavfi', '-i', 'sine=frequency=880:duration=0.5', '-filter_complex', '[1:a][2:a][3:a]concat=n=3:v=0:a=1[a]',
+      '-map', '0:v', '-map', '[a]', '-c:v', 'libx264', '-c:a', 'aac', clip]);
+    const master = join(PATHS.music, 'clip-sound-master.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.5', master]);
+    const created = await projects.createProject({ name: 'Document clip sound' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-sound', filename: 'clip-sound.mp4', numFrames: 36, fps: 24, width: 64, height: 36 }]));
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1.5, sections: [] },
+      scenes: [{ sceneId: 'spoken', startSec: 0.5, endSec: 1, videoHistoryId: 'vh-sound',
+        offsetFrames: 12, speedFps: 24, clipSound: { volume: 0.8, musicLevel: 0.55 } }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    const plan = await prepareDocumentRender(project);
+    const render = async (jobId, windowStart, windowEnd) => {
+      const outputPath = join(PATHS.videos, `${jobId}.mp4`);
+      const result = await encodeDocumentComposition({ project, plan, jobId, audioPath: master, outputPath, windowStart, windowEnd });
+      const pcm = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vn', '-ac', '1', '-ar', '48000', '-f', 'f32le', '-']);
+      return (songSec, hz) => {
+        const first = Math.round((songSec - result.startSec) * 48000);
+        const count = 2400;
+        let sine = 0, cosine = 0;
+        for (let i = 0; i < count; i++) {
+          const phase = (2 * Math.PI * hz * i) / 48000;
+          const sample = pcm.readFloatLE((first + i) * 4);
+          sine += sample * Math.sin(phase);
+          cosine += sample * Math.cos(phase);
+        }
+        return 2 * Math.hypot(sine, cosine) / count;
+      };
+    };
+    const final = await render('clip-sound-final');
+    const excerpt = await render('clip-sound-excerpt', 0.625, 1.25);
+    const songLevel = final(0.25, 220);
+    expect(songLevel).toBeGreaterThan(0.08);
+    expect(final(0.25, 660)).toBeLessThan(0.005);
+    for (const measure of [final, excerpt]) {
+      expect(measure(0.67, 660)).toBeGreaterThan(0.05);
+      expect(measure(0.67, 440)).toBeLessThan(0.005); // first half-second was skipped
+      expect(measure(0.86, 880)).toBeGreaterThan(0.05); // second tone arrives at 2x speed
+      expect(measure(0.86, 660)).toBeLessThan(0.005);
+      expect(measure(0.67, 220) / songLevel).toBeCloseTo(0.55, 1);
+      expect(measure(1.12, 220) / songLevel).toBeCloseTo(1, 1);
+      expect(measure(1.12, 880)).toBeLessThan(0.005);
+    }
+  }, 120000);
+
   // Uniquely catches the live preview bridging raw bytes without the shot's speed/offset (same samples as the render above).
   [
     { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
