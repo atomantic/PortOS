@@ -46,6 +46,8 @@ const config = defineConfig({
     env: {
       NODE_ENV: 'test',
       NODE_DISABLE_COMPILE_CACHE: '1',
+      // Throwaway data roots need no crash-durability fsyncs (#16864); see fileCore.js.
+      PORTOS_TEST_FAST_WRITES: '1',
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
