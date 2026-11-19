@@ -76,13 +76,15 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
             import { probeTestPid, readTestProcesses } from ${JSON.stringify(processesModule)};
             const mark = JSON.parse(readFileSync(${JSON.stringify(ready)}, 'utf8'));
             const [pid, startMs] = readFileSync(join(mark.root, '.owner.pid'), 'utf8').trim().split(/\\s+/).map(Number);
-            const observed = { ownerMatchesRunner: pid === mark.runner, ownerAlive: isOwnerAlive({ pid, startMs }), runnerAlive: probeTestPid(mark.runner), rootBefore: existsSync(mark.root), signals: [] };
+            const observed = { ownerMatchesRunner: pid === mark.runner, ownerAlive: isOwnerAlive({ pid, startMs }), runnerAlive: probeTestPid(mark.runner), rootBefore: existsSync(mark.root), terminationCandidates: [] };
             sweepStaleRunRoots(${JSON.stringify(host)}, {
               terminate(record, options) {
                 const current = readTestProcesses([record.pid]);
                 const target = record.pid === mark.worker ? 'worker' : record.kind;
-                observed.signals.push({ target, sameRunner: record.ppid === mark.runner, identityMatches: current?.some(item => item.pid === record.pid && item.start === record.start), valid: options.valid() });
-                return terminatePid(record, options);
+                observed.terminationCandidates.push({ target, sameRunner: record.ppid === mark.runner, identityMatches: current?.some(item => item.pid === record.pid && item.start === record.start), valid: options.valid() });
+                // Observe every target before the first signal. Killing the worker
+                // can close its runner and watchdog before the sweep revisits it.
+                queueMicrotask(() => terminatePid(record, options));
               },
             });
             observed.rootAfterSweep = existsSync(mark.root);
@@ -95,7 +97,7 @@ describe.skipIf(process.platform === 'win32')('sibling configuration sweep', () 
           expect(secondResult.status).toBe(0);
           const observed = JSON.parse(readFileSync(observations, 'utf8'));
           expect(observed).toMatchObject({ ownerMatchesRunner: true, ownerAlive: !legacyEstimate, runnerAlive: true, rootBefore: true, rootAfterSweep: true });
-          expect(observed.signals.sort((left, right) => left.target.localeCompare(right.target))).toEqual(
+          expect(observed.terminationCandidates.sort((left, right) => left.target.localeCompare(right.target))).toEqual(
             (legacyEstimate ? ['vitest-watchdog', 'worker'] : []).map(target => ({ target, sameRunner: true, identityMatches: true, valid: true })),
           );
           writeFileSync(release, 'release');
