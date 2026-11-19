@@ -111,8 +111,7 @@ describe('configured provider reviewers', () => {
     const { buildLocalReviewerInstructions } = await import('./cos/cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(config.reviewers);
     expect(instructions).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings"))');
-    expect(instructions).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
-    expect(instructions).toContain('an optional inconclusive result remains non-blocking');
+    expect(instructions).toContain('otherwise treat the invocation as unavailable under the Phase 5 Required-review publication rule');
     expect(config.optionalReviewers.includes(backend)).toBe(optional);
   });
 

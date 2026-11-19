@@ -319,6 +319,7 @@ describe('claim procedures on demand', () => {
         const claim = await buildClaimWorkTask(app, { target, prCompletion });
         const { prompt, staged } = await renderOnDemand(claim);
         const names = [
+          `claim-issue-filing-${tracker}`,
           `claim-epic-${tracker}`,
           ...(tracker === 'github' ? ['claim-handoff-github'] : []),
           `claim-linked-screen-${tracker}`,
@@ -340,6 +341,6 @@ describe('claim procedures on demand', () => {
 
   it('skips only the epic phase for a verified non-epic claim', async () => {
     const { staged } = await renderOnDemand(await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true }));
-    expect(staged.map(({ name }) => name)).toEqual(['claim-handoff-github', 'claim-linked-screen-github', 'claim-ci-recovery-github']);
+    expect(staged.map(({ name }) => name)).toEqual(['claim-issue-filing-github', 'claim-handoff-github', 'claim-linked-screen-github', 'claim-ci-recovery-github']);
   });
 });

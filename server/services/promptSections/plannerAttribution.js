@@ -44,8 +44,8 @@ export function buildIssueFilingSection({ taskBody = [], ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);
   const glab = options.forgeCli === 'glab';
   const parts = taskBody.map(collapseWhitespace);
-  if (glab && parts.some((part) => part.includes(EMBEDDED_GITLAB_CONTRACT))) return attribution;
-  const embedded = parts.some((part) => part.includes(EMBEDDED_CONTRACT));
+  if (glab && parts.some((part) => part.includes(EMBEDDED_GITLAB_CONTRACT) || part.includes('claim-issue-filing-gitlab'))) return attribution;
+  const embedded = parts.some((part) => part.includes(EMBEDDED_CONTRACT) || part.includes('claim-issue-filing-github'));
   if (embedded && !glab) return attribution;
   const contract = embedded ? GITLAB_DISPATCH_SEPARATOR_GUIDANCE : mandatoryDispatchHintGuidance({ cli: glab ? 'glab' : 'gh' });
   return `## Issue Filing Labels\n\n${contract}${attribution ? `\n\n${attribution}` : ''}`;
