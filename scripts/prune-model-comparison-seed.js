@@ -32,7 +32,7 @@ const providersPath = join(root, 'data.reference/providers.json');
  */
 export const FRONTIER_ANCHORS = [
   'gpt-6.2-astra', 'gpt-6.2-sol',
-  'claude-fable-5.2', 'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gemini-4-argon', 'gpt-6-luna', 'gpt-6-sol',
+  'claude-fable-5.2', 'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'claude-sonnet-5.5', 'claude-haiku-5.5', 'gemini-4-neon', 'gemini-4-argon', 'gpt-6-luna', 'gpt-6-sol',
   // Hydrogen launched before the shipped provider defaults; retain its exact harness aliases.
   'gemini-4-hydrogen-low', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh',
 ];

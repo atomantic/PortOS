@@ -61924,6 +61924,500 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "First-party Google standard API reference for all supported thinking levels; not gateway pricing or a subscription allowance. Current introductory tariff through 2026-12-31; thereafter input/output rates become $1.5/$7.5 per 1M tokens. Cache, batch/flex, priority, grounding and other charges are separate. Thinking is included in output billing, not an additional charge. Supported efforts: https://aistudio.google.com/docs/models/gemini-3.8-flash. Low-effort AA task cost remains unpublished; historical index evidence is retained without relabeling."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-neon-low",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "low",
+      "configuration": "Google Gemini 4 Neon; thinking_level=low; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 44.0831506204565,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 model-page chart data for the low variant on the Google API, at publisher precision."
+        }
+      },
+      "costPerTask": {
+        "value": 0.7452280945089245,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Publisher weighted USD per Intelligence Index v5.0.1 task, calculated from observed evaluation token usage at API rates for uncached input, cache reads/writes, reasoning and answer output."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Artificial Analysis evaluated the Google API. Index workload and agent scaffolds: https://artificialanalysis.ai/methodology/intelligence-benchmarking. The publisher also reports 3.7 minutes per v5.0.1 task, calculated from benchmark output tokens and endpoint speed."
+    },
+    {
+      "id": "google-gemini-4-neon-low-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "low",
+      "configuration": "Google Gemini Developer API Standard paid tier; thinking_level=low; uncached input and output",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M uncached input tokens. The published rate is shared across supported thinking levels."
+        }
+      },
+      "outputPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M output tokens, including thinking tokens."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "The Standard API bills thinking tokens at the same USD per 1M output-token rate."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Standard API reference. Supported thinking levels: https://aistudio.google.com/docs/models/gemini-4-neon. Cache hits and other service tiers have separate rates. Antigravity access is plan-based with separate usage limits: https://antigravity.google/blog/gemini-4-neon-in-google-antigravity/."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-neon-medium",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Neon; thinking_level=medium; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 54.8622945007349,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 model-page chart data for the medium variant on the Google API, at publisher precision."
+        }
+      },
+      "costPerTask": {
+        "value": 1.9045555241044152,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Publisher weighted USD per Intelligence Index v5.0.1 task, calculated from observed evaluation token usage at API rates for uncached input, cache reads/writes, reasoning and answer output."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Artificial Analysis evaluated the Google API. Index workload and agent scaffolds: https://artificialanalysis.ai/methodology/intelligence-benchmarking. The publisher also reports 8.3 minutes per v5.0.1 task, calculated from benchmark output tokens and endpoint speed."
+    },
+    {
+      "id": "google-gemini-4-neon-medium-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "medium",
+      "configuration": "Google Gemini Developer API Standard paid tier; thinking_level=medium; uncached input and output",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M uncached input tokens. The published rate is shared across supported thinking levels."
+        }
+      },
+      "outputPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M output tokens, including thinking tokens."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "The Standard API bills thinking tokens at the same USD per 1M output-token rate."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Standard API reference. Supported thinking levels: https://aistudio.google.com/docs/models/gemini-4-neon. Cache hits and other service tiers have separate rates. Antigravity access is plan-based with separate usage limits: https://antigravity.google/blog/gemini-4-neon-in-google-antigravity/."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-neon-high",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "high",
+      "configuration": "Google Gemini 4 Neon; thinking_level=high; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 59.6189441875232,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 model-page chart data for the high variant on the Google API, at publisher precision."
+        }
+      },
+      "costPerTask": {
+        "value": 3.7427499092845027,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Publisher weighted USD per Intelligence Index v5.0.1 task, calculated from observed evaluation token usage at API rates for uncached input, cache reads/writes, reasoning and answer output."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Artificial Analysis evaluated the Google API. Index workload and agent scaffolds: https://artificialanalysis.ai/methodology/intelligence-benchmarking. The publisher also reports 14.8 minutes per v5.0.1 task, calculated from benchmark output tokens and endpoint speed."
+    },
+    {
+      "id": "google-gemini-4-neon-high-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "high",
+      "configuration": "Google Gemini Developer API Standard paid tier; thinking_level=high; uncached input and output",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M uncached input tokens. The published rate is shared across supported thinking levels."
+        }
+      },
+      "outputPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M output tokens, including thinking tokens."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "The Standard API bills thinking tokens at the same USD per 1M output-token rate."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Standard API reference. Supported thinking levels: https://aistudio.google.com/docs/models/gemini-4-neon. Cache hits and other service tiers have separate rates. Antigravity access is plan-based with separate usage limits: https://antigravity.google/blog/gemini-4-neon-in-google-antigravity/."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-neon-xhigh",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Google Gemini 4 Neon; thinking_level=xhigh; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 61.3982491392674,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 model-page chart data for the xhigh variant on the Google API, at publisher precision."
+        }
+      },
+      "costPerTask": {
+        "value": 6.444838101104699,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Publisher weighted USD per Intelligence Index v5.0.1 task, calculated from observed evaluation token usage at API rates for uncached input, cache reads/writes, reasoning and answer output."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Artificial Analysis evaluated the Google API. Index workload and agent scaffolds: https://artificialanalysis.ai/methodology/intelligence-benchmarking. The publisher also reports 21.5 minutes per v5.0.1 task, calculated from benchmark output tokens and endpoint speed."
+    },
+    {
+      "id": "google-gemini-4-neon-xhigh-official-api-pricing-v1-standard",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Google Gemini Developer API Standard paid tier; thinking_level=xhigh; uncached input and output",
+      "billing": "api",
+      "benchmark": "Official API pricing v1",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M uncached input tokens. The published rate is shared across supported thinking levels."
+        }
+      },
+      "outputPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Gemini Developer API Standard paid-tier list price in USD per 1M output tokens, including thinking tokens."
+        }
+      },
+      "reasoningPerMillion": {
+        "value": 15,
+        "source": {
+          "url": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "The Standard API bills thinking tokens at the same USD per 1M output-token rate."
+        }
+      },
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "First-party Standard API reference. Supported thinking levels: https://aistudio.google.com/docs/models/gemini-4-neon. Cache hits and other service tiers have separate rates. Antigravity access is plan-based with separate usage limits: https://antigravity.google/blog/gemini-4-neon-in-google-antigravity/."
+    },
+    {
+      "id": "vals-index-v2.2-gemini-4-neon-xhigh-google",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Google API; xhigh reasoning; Vals AI public evaluation",
+      "billing": "api",
+      "benchmark": "Vals Index v2.2",
+      "quality": {
+        "value": 70.87,
+        "source": {
+          "url": "https://www.vals.ai/benchmarks/vals_index",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Vals AI v2.2 score on GDP-weighted agentic tasks in finance, coding, legal work and tax."
+        }
+      },
+      "costPerTask": {
+        "value": 7.4,
+        "source": {
+          "url": "https://www.vals.ai/benchmarks/vals_index",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Vals AI v2.2 published USD per test for its named index workload, with 15.15 million tokens per test in the same leaderboard row."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher model settings specify xhigh and a 1,048,576-token maximum output with default sampling: https://www.vals.ai/models/google_gemini-4-neon."
+    },
+    {
+      "id": "aa-terminal-bench-v4.1-gemini-4-neon-xhigh-antigravity-cli-1.5.9",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Artificial Analysis; public Antigravity CLI 1.5.9 harness; highest Gemini thinking level",
+      "billing": "api",
+      "benchmark": "Terminal-Bench 4.1",
+      "quality": {
+        "value": 65.2,
+        "source": {
+          "url": "https://storage.googleapis.com/deepmind-media/gemini/gemini_4_neon_model_evaluation.pdf",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis cheating-adjusted accuracy (%) as published by Google DeepMind, using the public Antigravity CLI 1.5.9 harness at the highest Gemini thinking level under the report’s single-attempt and safety-filter conditions."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Google DeepMind reproduces the Artificial Analysis result in its evaluation report."
+    },
+    {
+      "id": "google-agents-last-exam-v1.1-gemini-4-neon-xhigh-antigravity-cli-1.4.8",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Google Gemini API; xhigh thinking; Antigravity CLI 1.4.8 harness; five-hour window",
+      "billing": "api",
+      "benchmark": "Agents' Last Exam v1.1",
+      "quality": {
+        "value": 75.8,
+        "source": {
+          "url": "https://storage.googleapis.com/deepmind-media/gemini/gemini_4_neon_model_evaluation.pdf",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Google DeepMind reports 75.8% averaged rubric score across 122 Agents’ Last Exam v1.1 tasks with the Antigravity CLI 1.4.8 scaffold, highest thinking, a five-hour budget, and safety filters enabled."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Google DeepMind self-reported evaluation. The score is the averaged task rubric."
+    },
+    {
+      "id": "aa-performance-v3-gemini-4-neon-low-google",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "low",
+      "configuration": "Google Gemini 4 Neon; thinking_level=low; Artificial Analysis endpoint performance",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Performance v3",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 13.93,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 97,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+        }
+      },
+      "quota": null,
+      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+    },
+    {
+      "id": "aa-performance-v3-gemini-4-neon-medium-google",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Neon; thinking_level=medium; Artificial Analysis endpoint performance",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Performance v3",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 20.14,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 101,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+        }
+      },
+      "quota": null,
+      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+    },
+    {
+      "id": "aa-performance-v3-gemini-4-neon-high-google",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "high",
+      "configuration": "Google Gemini 4 Neon; thinking_level=high; Artificial Analysis endpoint performance",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Performance v3",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 40.64,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 101,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+        }
+      },
+      "quota": null,
+      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+    },
+    {
+      "id": "aa-performance-v3-gemini-4-neon-xhigh-google",
+      "provider": "Google",
+      "model": "gemini-4-neon",
+      "effort": "xhigh",
+      "configuration": "Google Gemini 4 Neon; thinking_level=xhigh; Artificial Analysis endpoint performance",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Performance v3",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 56.51,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 110,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-neon",
+          "retrievedAt": "2026-11-19T07:17:28.560Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+        }
+      },
+      "quota": null,
+      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
     }
   ]
 }
