@@ -685,6 +685,12 @@ it('shares source reads within one collection and observes edits and unreadable 
   }
 });
 
+it('resolves the bounded dynamic imports so an unrelated edit does not poison DB or browser dependencies', () => {
+  const inputs = realTree();
+  expect(inputs.dbDependencies).not.toBeNull();
+  expect(Object.entries(inputs.browserDependencies).filter(([, deps]) => deps === null)).toEqual([]);
+});
+
 it('requests DB verification for every shape of suite in the real canonical inventory without widening the matrix', () => {
   const inputs = realTree();
   const dbTests = resolveDbTestFiles(inputs.trackedFiles);

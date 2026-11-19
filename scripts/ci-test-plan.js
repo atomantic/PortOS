@@ -1552,6 +1552,29 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
+// Computed `import(expr)` sites whose target set is fixed and enumerable. The
+// directory sites contribute every tracked module under the directory as edges;
+// `external` sites load a package or untracked submodule, which no tracked-file
+// edge can represent. A file with any other computed import stays inconclusive
+// only if it is not listed here, so adding a new unbounded site to a listed
+// file means extending this table deliberately.
+// Numbered migrations only: `_helpers`, fixtures and guard tests share the
+// directories but are never loaded by the runners.
+const MIGRATION_FILE_RE = /\/\d+-[^/]*\.js$/;
+const BOUNDED_DYNAMIC_IMPORTS = {
+  'scripts/run-migrations.js': { directory: 'scripts/migrations/', pattern: MIGRATION_FILE_RE },
+  'server/scripts/run-db-migrations.js': { directory: 'server/scripts/db-migrations/', pattern: MIGRATION_FILE_RE },
+  'server/services/eidoverseControllerRegistry.js': {
+    directory: 'server/services/eidoverseControllerDefinitions/', pattern: /\.controller\.js$/,
+  },
+  'server/lib/slashdoLoader.js': { external: true },
+  'server/services/greyboxCapturePage.js': { external: true },
+};
+
+// Browser suites resolve vite and its plugins through resolveClientBundler or
+// the client's require, i.e. packages outside the tracked-file graph.
+const CLIENT_BUNDLER_IMPORT_RE = /\bresolveClientBundler\b|\brequireClient\.resolve\(/;
+
 // A collection owns its snapshot: each source is read and each prerequisite
 // edge is resolved once, even when many browser suites reach the same module.
 // Never retain this across collections: local pregate must see the next edit.
@@ -1603,12 +1626,21 @@ function createDependencySnapshot(files, cwd) {
       const { deferred, computed } = importsFor(file);
       const statics = staticDependencies(file);
       const dynamic = resolve(file, deferred);
+      const bounded = computed ? boundedComputedImports(file) : null;
       testEdges.set(file, {
-        dependencies: [...statics.dependencies, ...dynamic.dependencies],
-        inconclusive: computed || statics.inconclusive || dynamic.inconclusive,
+        dependencies: [...statics.dependencies, ...dynamic.dependencies, ...(bounded?.dependencies ?? [])],
+        inconclusive: (computed && !bounded) || statics.inconclusive || dynamic.inconclusive,
       });
     }
     return testEdges.get(file);
+  };
+  const boundedComputedImports = (file) => {
+    const site = BOUNDED_DYNAMIC_IMPORTS[file];
+    if (site?.directory) {
+      return { dependencies: files.filter((path) => path.startsWith(site.directory) && site.pattern.test(path)) };
+    }
+    if (site?.external || CLIENT_BUNDLER_IMPORT_RE.test(readText(file))) return { dependencies: [] };
+    return null;
   };
   return { readText, staticDependencies, testDependencies };
 }
