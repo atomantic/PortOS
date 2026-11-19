@@ -7,12 +7,17 @@ const { historyStore, deleteMediaAnywhere } = vi.hoisted(() => ({
   historyStore: { items: [] },
   deleteMediaAnywhere: vi.fn(async () => ({ ok: true, status: 'deleted' })),
 }));
+vi.mock('fs/promises', async (importOriginal) => ({ ...await importOriginal(), access: vi.fn(async () => {}) }));
 vi.mock('./videoGen/history.js', () => ({
   loadHistory: vi.fn(async () => historyStore.items),
   saveHistory: vi.fn(async (h) => { historyStore.items = h; }),
 }));
 vi.mock('./mediaRemoteDelete.js', () => ({ deleteMediaAnywhere }));
 vi.mock('./videoGen/events.js', () => ({ videoGenEvents: { emit: vi.fn() } }));
+
+import { access } from 'fs/promises';
+import { PATHS } from '../lib/fileUtils.js';
+import { join } from 'path';
 
 import {
   SUPPORTED_VIDEO_URL_RE,
@@ -69,6 +74,16 @@ describe('listDownloads / deleteDownload', () => {
     const list = await listDownloads();
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe('dl-1');
+    expect(list[0].filePath).toBe(join(PATHS.videos, 'downloaded-dl-1.mp4'));
+    expect(historyStore.items[1].filePath).toBeUndefined();
+  });
+
+  it('omits paths for missing or invalid local files', async () => {
+    access.mockRejectedValueOnce(new Error('missing'));
+    historyStore.items.push({ id: 'bad', source: 'download', filename: '../outside.mp4' });
+    const list = await listDownloads();
+    expect(list.every((item) => !item.filePath)).toBe(true);
+    expect(access).toHaveBeenCalledTimes(1);
   });
 
   // Uniquely catches a download delete that tombstones a peer's row here
