@@ -6,7 +6,7 @@ import LyricTimingCheck from '../LyricTimingCheck.jsx';
 import LyricSheetCheck from '../LyricSheetCheck.jsx';
 import LyricOverlaySetting from '../LyricOverlaySetting.jsx';
 import ReviseSongCard from '../ReviseSongCard.jsx';
-import { AnalyzeAction } from '../ProjectActionGroups.jsx';
+import { AnalyzeAction, MidiAction } from '../ProjectActionGroups.jsx';
 import { Check } from 'lucide-react';
 import { lyricSetupState, projectHasAudio } from '../../../lib/musicVideoStages.js';
 
@@ -66,7 +66,7 @@ function AlignWords({ disabled, aligning, status, aligned, onAlign }) {
  */
 export default function SetupStage({ board }) {
   const {
-    project, tracks, trackName, audioFilename, locked, youtube, midiBound, renderBound, tempo, busy,
+    project, tracks, trackName, audioFilename, locked, youtube, midi, midiBound, renderBound, tempo, busy,
     importingLyrics, aligningLyrics, alignStatus,
   } = board;
   const cues = project.lyricCues || [];
@@ -102,6 +102,9 @@ export default function SetupStage({ board }) {
         </SongStep>
         <SongStep id="mv-analyze" number={2} title="Analyze" done={Boolean(project.audioAnalysis)}>
           <AnalyzeAction project={project} busy={busy} onAnalyze={board.onAnalyze} />
+          {projectHasAudio(project) && (midiBound || project.midiTranscriptionError
+            ? <MidiAction project={project} midi={midi} midiBound={midiBound} />
+            : <p className="text-xs text-port-text-muted">{project.midiTranscription ? 'MIDI transcription ready' : 'MIDI transcription · Never run'}</p>)}
           <AnalysisPanel
             projectId={project.id}
             onUpdated={board.replaceProject}

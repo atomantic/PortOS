@@ -15,6 +15,7 @@ import useSseJobSlot from './useSseJobSlot.js';
 // one, so it gets its own label + a one-time toast (below).
 export const MIDI_STAGE_LABELS = Object.freeze({
   starting: 'Starting…',
+  'decode-audio': 'Decoding audio…',
   'import-runtime': 'Loading runtime…',
   'download-model': 'Downloading model…',
   'load-model': 'Loading model…',

@@ -154,7 +154,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const activePublishKitBuild = getActivePublishKitBuild(p.id);
   const presented = await presentProjectForRead(p, { catalogCheckinResolved: true });
   const activeDcpBuild = activeDcp(p.id);
-  res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}) });
+  const activeMidiJob = getActiveMidiTranscriptionJobId(p.id);
+  res.json({ ...presented, ...(activePublishKitBuild ? { activePublishKitBuild } : {}), ...(activeDcpBuild ? { activeDcpBuild } : {}), ...(activeMidiJob ? { activeMidiJob } : {}) });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -549,7 +550,11 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
 // plus one line per analyzed section, the exact text the prompts quote.
 router.get('/:id/midi-planning', asyncHandler(async (req, res) => {
   const project = await requireProject(req.params.id);
-  res.json({ facts: await projectMidiPlanningFacts(project) });
+  const facts = await projectMidiPlanningFacts(project);
+  const jobId = getActiveMidiTranscriptionJobId(project.id);
+  const error = project.midiTranscriptionError || null;
+  const status = jobId ? 'running' : error ? 'failed' : project.midiTranscription ? 'ready' : 'never-run';
+  res.json({ facts, status, jobId, error: status === 'failed' ? error : null });
 }));
 
 // Two-segment paths — distinct from the one-segment GET /:id project read.

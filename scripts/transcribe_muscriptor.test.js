@@ -33,6 +33,16 @@ class TranscriptionModel:
         'empty': 'return b"", None',
         'failure': 'raise RuntimeError("fixture transcription failed")',
     }.get(scenario, 'return bytes.fromhex("4d546864000000060000000100604d54726b0000000400ff2f00"), {"bpm": 120}')))
+    (root / 'soundfile.py').write_text('''
+class LibsndfileError(Exception): pass
+def info(path):
+    if UNSUPPORTED:
+        raise LibsndfileError("fixture unsupported audio")
+'''.replace('UNSUPPORTED', str(scenario == 'unsupported-audio')))
+    installed = '0.2.1' if scenario == 'stale-runtime' else '0.4.0'
+    metadata = root / f'muscriptor-{installed}.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text(f'Name: muscriptor\\nVersion: {installed}\\n')
     # The failure path uses the shared lazy error translator. Its HF-specific
     # behavior is covered separately; this fixture needs only the class shape.
     hub = root / 'huggingface_hub'
@@ -41,7 +51,7 @@ class TranscriptionModel:
     (hub / 'errors.py').write_text('class HfHubHTTPError(Exception): pass\\nclass RepositoryNotFoundError(HfHubHTTPError): pass\\nclass GatedRepoError(RepositoryNotFoundError): pass\\n')
     env = __import__('os').environ.copy()
     env.update(HF_HOME=str(root / 'hf-home'), HF_HUB_CACHE=str(root / 'hf-cache'), PYTHONPATH=str(root))
-    result = subprocess.run([sys.executable, script, '--audio', str(audio), '--output', str(output), '--model', 'small', '--runtime-dir', str(root)], capture_output=True, text=True, env=env)
+    result = subprocess.run([sys.executable, script, '--audio', str(audio), '--output', str(output), '--model', 'small'], capture_output=True, text=True, env=env)
     print(json.dumps({'status': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr, 'output': output.read_bytes().hex() if output.exists() else None, 'path': str(output)}))
 `, script, scenario], { encoding: 'utf8' }));
 
@@ -84,5 +94,20 @@ describe.skipIf(!python)('MuScriptor transcription CLI', () => {
     expect(result.output).toBeNull();
     expect(result.stderr).toContain('ERROR: audio file not found');
     expect(result.stderr).not.toContain('STAGE:import-runtime');
+  });
+
+  it('requests decoding before loading model weights when libsndfile cannot open audio', () => {
+    const result = run('unsupported-audio');
+    expect(result.status).toBe(1);
+    expect(result.stdout.trim()).toBe('AUDIO_DECODE_REQUIRED');
+    expect(result.stderr).not.toContain('STAGE:download-model');
+  });
+
+  it('reports both versions and a repair action before loading a stale runtime', () => {
+    const result = run('stale-runtime');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('MuScriptor version mismatch (installed 0.2.1, expected 0.4.0)');
+    expect(result.stderr).toContain('INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh');
+    expect(result.stderr).not.toContain('STAGE:download-model');
   });
 });

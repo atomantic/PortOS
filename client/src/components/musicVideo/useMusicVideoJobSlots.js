@@ -66,7 +66,7 @@ export default function useMusicVideoJobSlots({
       .finally(() => setAnalyzing(false));
   };
   const midi = useMusicVideoMidiJob({
-    onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
+    onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription, midiTranscriptionError: null }),
   });
   const renderJob = useMusicVideoRenderJob({
     project: selected,
@@ -118,6 +118,12 @@ export default function useMusicVideoJobSlots({
       .catch(() => {});
     return () => { current = false; };
   }, [selectedId]);
+
+  // Project invalidations advertise jobs started after this tab opened.
+  const activeMidiJob = selected?.activeMidiJob;
+  useEffect(() => {
+    if (activeMidiJob) reattachRef.current.midi.attach(activeMidiJob, selectedId);
+  }, [activeMidiJob, selectedId]);
 
   return { youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, prepareSong, handleAnalyze };
 }

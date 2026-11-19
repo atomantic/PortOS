@@ -82,11 +82,6 @@ async function setProjectAnalysisUnqueued(id, analysis, sourceProject) {
   return project;
 }
 
-async function setProjectMidiTranscriptionUnqueued(id, midi) {
-  const { project } = await withLockedProject(id, (current) => ({ project: logic.setMidiTranscription(current, midi) }));
-  return project;
-}
-
 async function addProjectSceneUnqueued(id, sceneInput) {
   const { result } = await withLockedProject(id, (current) => {
     const { project, scene } = logic.addScene(current, sceneInput);
@@ -173,7 +168,6 @@ export const mergeProjectsFromSync = serialized(store.mergeProjectsFromSync);
 export const pruneTombstonedProjects = serialized(store.pruneTombstonedProjects);
 export const cloneProject = serialized(cloneProjectUnqueued);
 export const setProjectAnalysis = serialized(setProjectAnalysisUnqueued);
-export const setProjectMidiTranscription = serialized(setProjectMidiTranscriptionUnqueued);
 export const addProjectScene = serialized(addProjectSceneUnqueued);
 export const addProjectScenes = serialized(addProjectScenesUnqueued);
 export const updateScene = serialized(updateSceneUnqueued);

@@ -542,6 +542,7 @@ export function applyProjectPatch(project, patch) {
     ...statusPatch,
     audioAnalysis: null,
     midiTranscription: null,
+    ...(project.midiTranscriptionError ? { midiTranscriptionError: null } : {}),
     scenes,
     // A render started against the old song must not settle this project as
     // complete (#15154): it compares the revision it started with on settle.
@@ -588,7 +589,10 @@ export function setAnalysisSections(project, sections) {
  */
 export function setMidiTranscription(project, midi) {
   const validated = musicVideoMidiTranscriptionSchema.parse(midi);
-  return touch(project, { midiTranscription: validated });
+  return touch(project, {
+    midiTranscription: validated,
+    ...(project.midiTranscriptionError ? { midiTranscriptionError: null } : {}),
+  });
 }
 
 /** Default runtime fields for a scene the director (or planner) didn't supply. */

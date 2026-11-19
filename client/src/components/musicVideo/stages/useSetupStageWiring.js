@@ -21,7 +21,7 @@ export default function useSetupStageWiring({
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   // `midiTargetsSelected` gates the track-change controls, since the .mid being
   // produced is of the CURRENT audio (mirrors renderTargetsSelected).
-  const midiTargetsSelected = !!(midi.active && selected && midi.context === selected.id);
+  const midiTargetsSelected = Boolean(selected?.activeMidiJob || (midi.active && selected && midi.context === selected.id));
 
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a

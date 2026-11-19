@@ -458,6 +458,22 @@ else
 fi
 log ""
 
+# Refresh only a previously installed Apple Silicon runtime. The runner also
+# checks the pin so failed repairs and upgrades outside update.sh stay visible.
+muscriptor_python="${HOME}/.portos/venv-muscriptor/bin/python3"
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] && [ -x "$muscriptor_python" ]; then
+  if ! run "$muscriptor_python" scripts/transcribe_muscriptor.py --check-runtime; then
+    step "muscriptor" "running" "Refreshing the MuScriptor MIDI runtime..."
+    if run "$muscriptor_python" -m pip install --disable-pip-version-check --no-input --require-hashes --no-deps \
+      -r scripts/requirements-muscriptor-mlx.lock.txt \
+      && run "$muscriptor_python" scripts/transcribe_muscriptor.py --check-runtime; then
+      step "muscriptor" "done" "MuScriptor MIDI runtime refreshed"
+    else
+      step "muscriptor" "done" "MuScriptor refresh failed (see update log for the repair command)"
+    fi
+  fi
+fi
+
 # Run data migrations
 step "migrations" "running" "Running data migrations..."
 if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
