@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoResearchSeedSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { musicVideoResearchSeedSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { startCameoResearch, startSceneResearch } from '../services/musicVideo/researchSeed.js';
 
 const router = Router();

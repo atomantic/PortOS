@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { draftRouteMapStops, routeMapProblems, routeMapStopShots, shotRangesText } from './musicVideoRouteMaps.js';
 import { musicVideoFrameModelInput, musicVideoShotModelInput } from './musicVideoShotPrompt.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
 
 const places = [
   { id: 'p-curve', kind: 'place', name: 'Curving street' },

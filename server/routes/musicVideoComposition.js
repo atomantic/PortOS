@@ -8,7 +8,7 @@ import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoCodeGenerateSchema, musicVideoDocumentDirectoryImportSchema, musicVideoDocumentFileQuerySchema, musicVideoDocumentTemplateSchema, musicVideoDocumentCandidateSchema, musicVideoMixedMediaRegenerateSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { musicVideoCodeGenerateSchema, musicVideoDocumentDirectoryImportSchema, musicVideoDocumentFileQuerySchema, musicVideoDocumentTemplateSchema, musicVideoDocumentCandidateSchema, musicVideoMixedMediaRegenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { DOCUMENT_ZIP_MAX_BYTES, detachDocument, discardGeneratedDocument, documentMimeType, documentNativePlayback, exportDocumentZip, importDocumentDirectory, importDocumentTemplate, importDocumentZip, upgradeDocumentEngine, readDocumentManifest, resolveDocumentFile } from '../services/musicVideo/compositionDocument.js';

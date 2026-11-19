@@ -8,7 +8,8 @@ import {
   previzSetGreyboxDraftInstruction,
   updatePrevizCut,
 } from './musicVideoPreviz.js';
-import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoPrevizSchema } from './musicVideoValidation.js';
+import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
 
 const subjects = [
   { id: 'c-ana', kind: 'character', name: 'Ana' },

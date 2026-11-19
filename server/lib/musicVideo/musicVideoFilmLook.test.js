@@ -5,7 +5,7 @@ import {
 } from './musicVideoFilmLook.js';
 import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
 import { applyCameraCutDefaults, sceneTransitionSections } from './musicVideoTransitions.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoProjectUpdateSchema } from './musicVideoRouteValidation.js';
 import { buildMusicVideoFfmpegArgs } from '../../services/musicVideo/render.js';
 import { applyProjectPatch, buildProjectRecord } from '../../services/musicVideo/projectsLogic.js';
 
