@@ -9,4 +9,5 @@ export const RETIRED_CONFIG_KEYS = Object.freeze([
   'autoFixThresholds',
   'goalsFile',
   'maxProcessMemoryMb',
+  'mcpServers',
 ]);

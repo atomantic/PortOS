@@ -397,11 +397,6 @@ export async function getCosApprovalView({ limit = Infinity } = {}) {
 }
 
 /**
- * Alias for backward compatibility
- */
-export const getTasks = getUserTasks;
-
-/**
  * Get a specific task by ID from any task source
  */
 /**

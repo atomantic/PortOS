@@ -102,7 +102,6 @@ import {
   getPendingTaskIds,
   getCosApprovalView,
   getTaskDiagnostics,
-  getTasks,
   getTaskById,
   addTask,
   updateTask,
@@ -976,11 +975,7 @@ describe('cosTaskStore.getTaskView (#9677)', () => {
   });
 });
 
-describe('cosTaskStore.getAllTasks / getTasks / getTaskById', () => {
-  it('getTasks aliases getUserTasks', () => {
-    expect(getTasks).toBe(getUserTasks);
-  });
-
+describe('cosTaskStore.getAllTasks / getTaskById', () => {
   it('getAllTasks merges user + internal sources', async () => {
     await addTask({ description: 'u1' }, 'user');
     await addTask({ description: 's1', approvalRequired: false }, 'internal');

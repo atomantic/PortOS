@@ -36,11 +36,6 @@ export const cosConfigSchema = z.object({
   maxConcurrentAgents: z.number().int().min(1).optional(),
   maxConcurrentAgentsPerProject: z.number().int().min(1).optional(),
   maxTotalProcesses: z.number().int().min(1).optional(),
-  mcpServers: z.array(z.object({
-    name: z.string(),
-    command: z.string(),
-    args: z.array(z.string()).optional()
-  })).optional(),
   autoStart: z.boolean().optional(),
   selfImprovementEnabled: z.boolean().optional(),
   appImprovementEnabled: z.boolean().optional(),

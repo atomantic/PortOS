@@ -31,7 +31,7 @@ import { readClaimIssueReservation, readRepoClaimIssueReservation } from './clai
 import { probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readCheckoutPresence, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
-import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
+import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
@@ -123,17 +123,6 @@ export { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, resolv
 // head is integrated can retire from any directory, subject to the same live
 // ownership, lock, completion-policy and content checks as managed checkouts.
 export const SUPERSEDED_UNMANAGED_IDLE_MS = SHIPPED_CLAIM_IDLE_MS;
-
-/**
- * A claim branch without an issue number is never a valid /claim deliverable.
- * It can be left behind when a scheduled claim run creates its worktree before
- * target selection completes; unlike a real claim, there is no issue session
- * that could resume it. Keep this narrow so ordinary human claim branches
- * retain their liveness grace period.
- */
-export function isMalformedClaimBranch(branch) {
-  return branch === 'claim/issue-';
-}
 
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;
@@ -396,21 +385,6 @@ function reconcileWorktreeRoots(repoPath) {
   return [PATHS.worktrees, repoPath && join(repoPath, '.claude', 'worktrees')]
     .filter(Boolean)
     .map((path) => ({ path, requireAgentId: false }));
-}
-
-/**
- * When `worktreeProtectionReason`'s hold on this worktree lapses by itself, as an
- * ISO instant — or null when only an outside change can clear it.
- *
- * The exact mirror of the gate above, so cleanup can report not just THAT a
- * merged branch was held back but WHEN it stops being held. Policy lives in
- * worktreeOwnership.js; this only supplies this caller's defaults.
- *
- * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
- * @returns {string|null} ISO timestamp
- */
-export function worktreeProtectionExpiresAt(input) {
-  return worktreeHoldExpiresAt(teardownGate(input));
 }
 
 /**

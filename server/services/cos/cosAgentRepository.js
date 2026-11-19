@@ -135,9 +135,6 @@ export async function loadAgentRows() { return (await backend()).loadAgents(); }
  */
 export async function applyAgentSave(plan, expectedVersion) { return (await backend()).apply(plan, expectedVersion); }
 
-/** One stored agent record, or null. Reads the store, never a cache. */
-export async function getStoredAgent(agentId) { return (await backend()).getAgent(agentId); }
-
 /** `[{ id, status }]` for every stored agent, without record bodies. */
 export async function listStoredAgentStatuses() { return (await backend()).listStatuses(); }
 

@@ -7,7 +7,6 @@ import {
   ExternalLink,
   Gauge,
   Palette,
-  Server,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
@@ -540,24 +539,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
         </div>
       </section>
 
-      <section className="space-y-3" aria-labelledby="advanced-heading">
-        <div id="advanced-heading">
-          <SectionHeading icon={Server} title="Advanced" description="Read-only runtime wiring managed by the installation and repository." />
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-lg border border-port-border bg-port-card p-4">
-            <h5 className="text-sm font-medium text-port-text">MCP servers</h5>
-            <div className="mt-3 space-y-2">
-              {config?.mcpServers?.length ? config.mcpServers.map((mcp) => (
-                <div key={mcp.name} className="rounded-md bg-port-bg px-3 py-2 text-xs">
-                  <span className="font-mono font-medium text-port-accent">{mcp.name}</span>
-                  <span className="ml-2 break-all text-port-text-muted">{mcp.command} {mcp.args?.join(' ')}</span>
-                </div>
-              )) : <span className="text-xs text-port-text-muted">No MCP servers configured</span>}
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }
