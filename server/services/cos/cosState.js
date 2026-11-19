@@ -98,10 +98,6 @@ export const DEFAULT_CONFIG = {
   maxConcurrentAgents: 3,
   maxConcurrentAgentsPerProject: 2,
   maxTotalProcesses: 50,
-  mcpServers: [
-    { name: 'filesystem', command: 'npx', args: ['-y', '@anthropic/mcp-server-filesystem'] },
-    { name: 'puppeteer', command: 'npx', args: ['-y', '@anthropic/mcp-puppeteer', '--isolated'] }
-  ],
   autoStart: false,
   selfImprovementEnabled: true,
   appImprovementEnabled: true,

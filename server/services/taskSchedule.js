@@ -258,12 +258,6 @@ export async function recordExecution(taskType, appId = null) {
   });
 }
 
-export async function getExecutionHistory(taskType) {
-  const schedule = await loadSchedule();
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
-  return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
-}
-
 /**
  * Keep the latest triage output of an audit beside its execution record so the
  * Schedule card can show it (#12085). Machine-local: the execution store never

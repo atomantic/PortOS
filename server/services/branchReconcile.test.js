@@ -136,9 +136,8 @@ import {
   isAbandonedAgentWorktree, isAbandonedClaimWorktree, resolveLiveOwnerReason, gatherDivergence,
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
-  branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
+  branchPriorityRank, prioritizeBranches, describeIdleReconcilePark,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
-  isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
   reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped
 } from './branchReconcile.js';
@@ -615,8 +614,6 @@ describe('cleanupMerged', () => {
   });
 
   it('reaps the invalid empty-issue claim when merged, clean, and completion is verified', async () => {
-    expect(isMalformedClaimBranch('claim/issue-')).toBe(true);
-    expect(isMalformedClaimBranch('claim/issue-42')).toBe(false);
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(gitFixtureResult('', 0));
 
@@ -2889,55 +2886,6 @@ describe('orphaned remote branches', () => {
       const res = await reconcile('/repo');
       expect(res.orphanRemotes).toEqual({ reaped: [], reported: [] });
     });
-  });
-});
-
-describe('worktreeProtectionExpiresAt', () => {
-  const DAY = 24 * 60 * 60 * 1000;
-  const CLAIM = '/repo/data/cos/worktrees/claim-issue-42';
-  const at = (over = {}) => worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, ...over });
-
-  it('dates a claim hold to the end of its grace window', () => {
-    const before = Date.now();
-    const ms = Date.parse(at());
-    // 7-day default window, 2 days elapsed ⇒ ~5 days out.
-    expect(ms).toBeGreaterThanOrEqual(before + 5 * DAY);
-    expect(ms).toBeLessThanOrEqual(Date.now() + 5 * DAY);
-  });
-
-  it('returns null for holds nothing can schedule', () => {
-    // A locked or agent-owned tree lifts when a human or a process decides to,
-    // not on a clock — promising a time would be a guess.
-    expect(at({ locked: true })).toBeNull();
-    expect(worktreeProtectionExpiresAt({
-      path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set(['agent-abc12345'])
-    })).toBeNull();
-    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: null, ageMs: 2 * DAY })).toBeNull();
-  });
-
-  it('returns null when the age is unknown rather than guessing one', () => {
-    // An unmeasured age must not date the window from zero — that would park a
-    // full window out on a tree that may already be reapable.
-    for (const ageMs of [null, undefined, NaN, 'old']) expect(at({ ageMs })).toBeNull();
-  });
-
-  it('returns null once the window has already lapsed', () => {
-    expect(at({ ageMs: 9 * DAY })).toBeNull();
-  });
-
-  it('gives no expiry to a claim worktree that is ALSO locked', () => {
-    // The lock outlives the grace window, and the gate reports it as such: it
-    // tests the lock BEFORE the claim, so a locked claim tree reads
-    // 'worktree-locked' and there is no window here to date.
-    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, locked: true })).toBeNull();
-  });
-
-  it('gives no expiry to a non-claim worktree that is not held at all', () => {
-    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set() })).toBeNull();
-  });
-
-  it('returns null when allowLiveClaim is true', () => {
-    expect(worktreeProtectionExpiresAt({ head: RETIRE_HEAD, path: CLAIM, ageMs: 2 * DAY, allowLiveClaim: true })).toBeNull();
   });
 });
 

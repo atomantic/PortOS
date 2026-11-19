@@ -402,13 +402,6 @@ async function migrateAgentsToDateBucketsLeased() {
   return index;
 }
 
-// Compatibility entry point for older callers. Whole-run age deletion is retired:
-// metadata, feedback and parsed output are permanent. Raw recording maintenance
-// is handled separately by cosAgentStorage, without dropping history indexes.
-export async function pruneOldAgentArchives() {
-  return { pruned: 0 };
-}
-
 // Get available agent date buckets with counts, sorted descending
 export async function getAgentDates() {
   const idx = await loadAgentIndex();

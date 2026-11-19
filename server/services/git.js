@@ -1801,9 +1801,6 @@ async function probeCombinedPatch(dir, branchTree, mergeBase, targetSha, readOpt
   }
 }
 
-// Backward-compatible name for callers using the original evidence predicate.
-export const isBranchMergedInto = hasBranchMergeEvidence;
-
 /**
  * Checkout a remote branch that doesn't exist locally.
  * Creates a local tracking branch from the remote ref.
