@@ -101,7 +101,9 @@ vi.mock('../components/cos/tabs/MindTab', () => ({
   default: () => <div data-testid="mind-tab">Mind</div>,
 }));
 
-const { default: ChiefOfStaff, SPEAKING_MS, LAZY_AVATARS, INLINE_RENDERED_AVATAR_STYLES } = await import('./ChiefOfStaff');
+const { default: ChiefOfStaff } = await import('./ChiefOfStaff');
+const { SPEAKING_MS } = await import('../components/cos/useCosPageData');
+const { LAZY_AVATARS, INLINE_RENDERED_AVATAR_STYLES } = await import('../components/cos/CosAgentPanel');
 const { AVATAR_STYLE_IDS } = await import('../../../server/lib/avatarStyles.js');
 
 const config = {

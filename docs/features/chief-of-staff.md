@@ -9,7 +9,7 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 - **CoS Service** (`server/services/cos/cos.js`): State management, health monitoring, task evaluation
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
-- **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
+- **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs; page state, reads and socket wiring live in `components/cos/useCosPageData.js`, the avatar panel in `CosAgentPanel.jsx`, the stat tiles in `CosStatsCards.jsx`
 
 ### Execution and delivery outcomes
 
