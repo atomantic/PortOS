@@ -508,7 +508,7 @@ describe('pregate hidden-content invocation', () => {
       write('.cache/guard-ms', '9000');
       const slow = runReuse();
       expect(slow.status, slow.stderr).toBe(0);
-      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (hosted CI fails a guard over 6.0s).');
+      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (the scheduled hosted run fails a guard over 6.0s; PR and push runs only warn).');
       expect(slow.stdout).toContain('✔️ server structural guards passed');
       expect(receipt().stages.find(stage => stage.guard)).toMatchObject({
         status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 }, reuseKey: expect.any(String), passedAt: expect.any(String),

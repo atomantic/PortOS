@@ -2,8 +2,9 @@
  * Per-file time budget for the always-run structural guards (#16086, #16551).
  *
  * The guards run on every push, docs-only ones included, so one slow scanner
- * taxes every change. Hosted CI enforces CI_GUARD_BUDGET_MS on its uniform Linux
- * runner (`scripts/run-ci-tests.js` under `CI_GUARD_BUDGET=enforce`). Local
+ * taxes every change. The scheduled hosted run enforces CI_GUARD_BUDGET_MS on its
+ * uniform Linux runner (`scripts/run-ci-tests.js` under `CI_GUARD_BUDGET=enforce`);
+ * PR, push and release runs report it as a warning (#16810). Local
  * pregate only reports a guard over GUARD_BUDGET_MS: wall time on a developer
  * machine running several agent gates at once measures the host, not the guard.
  *

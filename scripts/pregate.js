@@ -828,12 +828,12 @@ function stageOutcomeVerdict(result, outcome) {
 /**
  * Name the guard files of a passed stage that ran over the per-file target.
  * Report only: local wall time measures this host's contention as much as the
- * guard, so hosted CI enforces the budget on its uniform runner (#16551).
+ * guard, so the scheduled hosted run enforces the budget on its uniform runner (#16551, #16810).
  */
 function reportSlowGuards(result) {
   const over = overBudgetGuards(result.fileDurations);
   if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (hosted CI fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}).`);
+    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
   }
 }
 
