@@ -47,7 +47,7 @@ vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn(async (id, update) => Object.assign(fixture.tasks.find(t => t.id === id), update)),
   addTask: vi.fn(), reviveBlockedTask: vi.fn(),
 }));
-vi.mock('../cos/cosTaskGenerator.js', () => ({ checkStagePrecondition: vi.fn() }));
+vi.mock('../cos/cosImprovementTasks.js', () => ({ checkStagePrecondition: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(async id => {
     fixture.trace.push('cleanup');

@@ -13,7 +13,7 @@ vi.mock('../cos/cosAgentIndex.js', () => ({
 vi.mock('../cos/cos.js', () => ({}));
 vi.mock('../cos/cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(), reviveBlockedTask: vi.fn(), getTaskById: vi.fn(async () => null) }));
-vi.mock('../cos/cosTaskGenerator.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
+vi.mock('../cos/cosImprovementTasks.js', () => ({ checkStagePrecondition: () => ({ passed: true }) }));
 vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),
   getAgentRecord: async () => JSON.parse(await readFile(fixture.recordPath, 'utf8')),

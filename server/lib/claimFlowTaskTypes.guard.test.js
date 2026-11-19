@@ -33,7 +33,7 @@ describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
     // imports the set — the read side consumes the shared set transitively while
     // finalization/learning resolve the SAME shapes (#6613 writer/reader guard).
     ['services/agent/agentPromptBuilder.js', 'reads the set back via isClaimFlowDispatch()', false],
-    ['services/cos/cosTaskGenerator.js', 'stamps metadata.claimFlow from the set', true],
+    ['services/cos/cosImprovementTasks.js', 'stamps metadata.claimFlow from the set', true],
   ])('%s imports the shared set (%s)', (relPath, _desc, direct) => {
     const source = readServerSource(relPath);
     expect(LOCAL_DECLARATION.test(source)).toBe(false);

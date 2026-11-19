@@ -69,7 +69,7 @@ vi.mock('../taskSchedule.js', async (importActual) => ({
 }));
 
 const { applyOnDemandRunResets, recordExecution, getNextTaskType } = await import('../taskSchedule.js');
-const { generateIdleReviewTask, prepareManagedAppImprovementTask } = await import('./cosTaskGenerator.js');
+const { generateIdleReviewTask, prepareManagedAppImprovementTask } = await import('./cosImprovementTasks.js');
 
 const STATE = { config: { improvementEnabled: true, appReviewCooldownMs: 0 }, stats: {} };
 const request = (overrides = {}) => ({ id: 'demand-1', appId: 'example-app', taskType: 'pr-reviewer', ...overrides });
@@ -199,7 +199,7 @@ describe('idle review stealing a queued on-demand request', () => {
     const { beginPreflightActivity, isPreflightActive } = await import('../preflightActivity.js');
     const { admitIdleReviewTask } = await import('./cosDequeue.js');
     const taskStore = await import('./cosTaskStore.js');
-    const generator = await import('./cosTaskGenerator.js');
+    const generator = await import('./cosImprovementTasks.js');
     const task = { id: 'stolen-task', metadata: { app: 'example-app' } };
     const storeSpy = vi.spyOn(taskStore, 'getCosApprovalView').mockResolvedValue({ autoApprovedCount: 0 });
     const generatorSpy = vi.spyOn(generator, 'generateIdleReviewTask').mockImplementation(async (_state, { onPreflightStart }) => {

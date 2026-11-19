@@ -91,7 +91,7 @@ vi.mock('../../lib/gitRemote.js', async (importActual) => ({
   readOriginRemoteUrl: vi.fn(async () => null),
 }));
 
-import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
+import { prepareManagedAppImprovementTask } from './cosImprovementTasks.js';
 
 const SNAPSHOT = {
   head: 'a'.repeat(40),

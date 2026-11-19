@@ -127,7 +127,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     addTaskOptions = {},
   } = adapter;
 
-  // Deferred so the static import graph stays acyclic: cosTaskGenerator.js
+  // Deferred so the static import graph stays acyclic: cosImprovementTasks.js
   // imports THIS module, and these six helpers are declared there. Deferring to
   // call time is the same idiom the engines already use for taskSchedule.js.
   const {
@@ -137,7 +137,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     applyOnDemandConsent,
     drainProgrammaticOnDemandRequests,
     emitOnDemandEmpty,
-  } = await import('./cos/cosTaskGenerator.js');
+  } = await import('./cos/cosImprovementTasks.js');
 
   const taskScheduleMod = await import('./taskSchedule.js');
   await reconcileOnDemandHandoffs();

@@ -59,7 +59,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { isTruthyMeta, isFalsyMeta } from './agent/agentState.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { initSpawner } from './subAgentSpawner.js';
-import { applyAppWorktreeDefault } from './cos/cosTaskGenerator.js';
+import { applyAppWorktreeDefault } from './cos/cosImprovementTasks.js';
 
 /**
  * Pure decision helpers from the sub-agent spawn path.
