@@ -10,7 +10,7 @@ import { MemoryRouter } from 'react-router';
 
 const getGoalsTree = vi.fn();
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGoals.js', () => ({
   getGoalsTree: (...a) => getGoalsTree(...a),
 }));
 

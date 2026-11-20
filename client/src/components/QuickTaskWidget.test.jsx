@@ -5,7 +5,8 @@ import QuickTaskWidget from './QuickTaskWidget';
 
 const api = vi.hoisted(() => ({ getProviders: vi.fn(), getApps: vi.fn() }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
 vi.mock('./cos/TaskAddForm', () => ({
   default: ({ providers, apps }) => <div data-testid="task-form">{providers.length} providers, {apps.length} apps</div>,
 }));

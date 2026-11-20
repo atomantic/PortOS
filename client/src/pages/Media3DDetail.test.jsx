@@ -18,7 +18,7 @@ import Media3DDetail from './Media3DDetail';
 const getImageTo3dModel = vi.fn();
 const generateImageTo3dModel = vi.fn();
 const deleteImageTo3dModel = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageTo3d.js', () => ({
   getImageTo3dModel: (...a) => getImageTo3dModel(...a),
   generateImageTo3dModel: (...a) => generateImageTo3dModel(...a),
   deleteImageTo3dModel: (...a) => deleteImageTo3dModel(...a),

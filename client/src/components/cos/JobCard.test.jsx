@@ -4,8 +4,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
 }));
-vi.mock('../../services/api', () => ({ updateCosJob: vi.fn() }));
-const { updateCosJob } = await import('../../services/api');
+vi.mock('../../services/apiAgents.js', () => ({
+  updateCosJob: vi.fn(),
+}));
+const { updateCosJob } = await import('../../services/apiAgents.js');
 
 const JobCard = (await import('./JobCard')).default;
 

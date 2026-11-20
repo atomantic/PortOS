@@ -8,7 +8,8 @@
 import { useEffect, useState } from 'react';
 import { GitMerge, Pencil, Check, X, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
-import { updateUniverse, updatePipelineSeries } from '../../services/api';
+import { updateUniverse } from '../../services/apiUniverseBuilder.js';
+import { updatePipelineSeries } from '../../services/apiPipeline.js';
 
 export default function DuplicateGroup({ kind, label, group, onMerge, onRenamed, onKeepBoth }) {
   return (

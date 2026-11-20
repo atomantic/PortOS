@@ -36,7 +36,7 @@ describe.skipIf(!chrome)('AI assignments layout in Chromium', () => {
           name: 'ai-assignments-layout-fixture', enforce: 'pre',
           resolveId(id) {
             if (id === '/ai-assignments-layout-fixture.jsx') return '\0ai-assignments-layout-fixture.jsx';
-            if (id === '../../services/api') return '\0ai-assignments-api';
+            if (id === '../../services/apiSystem.js') return '\0ai-assignments-api';
             if (id === '../services/apiLocalLlm') return '\0ai-assignments-llm';
             if (id === '../ui/Toast') return '\0ai-assignments-toast';
           },

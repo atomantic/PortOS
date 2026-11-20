@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import * as api from '../../../services/api';
+import {
+  getBrainLatestDigest,
+  getBrainLatestReview,
+  getBrainDigests,
+  getBrainReviews,
+  runBrainDigest,
+  runBrainReview,
+} from '../../../services/apiBrain.js';
 import {Play,
   Calendar,
   ChevronDown,
@@ -30,10 +37,10 @@ export default function DigestTab({ onRefresh }) {
     readVersions.current[region] = version;
     setReads(previous => ({ ...previous, [region]: 'loading' }));
     const loaders = {
-      digest: () => api.getBrainLatestDigest({ silent: true }),
-      review: () => api.getBrainLatestReview({ silent: true }),
-      digests: () => api.getBrainDigests(10, { silent: true }),
-      reviews: () => api.getBrainReviews(10, { silent: true })
+      digest: () => getBrainLatestDigest({ silent: true }),
+      review: () => getBrainLatestReview({ silent: true }),
+      digests: () => getBrainDigests(10, { silent: true }),
+      reviews: () => getBrainReviews(10, { silent: true })
     };
     const setters = {
       digest: setLatestDigest,
@@ -64,7 +71,7 @@ export default function DigestTab({ onRefresh }) {
 
   const handleRunDigest = async () => {
     setRunningDigest(true);
-    const result = await api.runBrainDigest(undefined, undefined, { silent: true }).catch(err => {
+    const result = await runBrainDigest(undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to generate digest');
       return null;
     });
@@ -79,7 +86,7 @@ export default function DigestTab({ onRefresh }) {
 
   const handleRunReview = async () => {
     setRunningReview(true);
-    const result = await api.runBrainReview(undefined, undefined, { silent: true }).catch(err => {
+    const result = await runBrainReview(undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to generate review');
       return null;
     });

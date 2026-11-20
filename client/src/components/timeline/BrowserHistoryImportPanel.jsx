@@ -1,5 +1,5 @@
 import { Globe } from 'lucide-react';
-import * as api from '../../services/api';
+import { importBrowserHistory } from '../../services/apiTimeline.js';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
 // Bulk-backfill importer for Google Takeout Chrome browser history (#2160) →
@@ -10,7 +10,7 @@ export default function BrowserHistoryImportPanel({ onImported }) {
       icon={Globe}
       title="Import browser history"
       noun="visit"
-      importFn={api.importBrowserHistory}
+      importFn={importBrowserHistory}
       onImported={onImported}
       help={(
         <>

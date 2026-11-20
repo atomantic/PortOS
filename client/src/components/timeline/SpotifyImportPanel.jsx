@@ -1,5 +1,5 @@
 import { Music } from 'lucide-react';
-import * as api from '../../services/api';
+import { importSpotifyHistory } from '../../services/apiTimeline.js';
 import { formatDurationSec } from '../../utils/formatters';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
@@ -11,7 +11,7 @@ export default function SpotifyImportPanel({ onImported }) {
       icon={Music}
       title="Import Spotify history"
       noun="play"
-      importFn={api.importSpotifyHistory}
+      importFn={importSpotifyHistory}
       onImported={onImported}
       help={(
         <>

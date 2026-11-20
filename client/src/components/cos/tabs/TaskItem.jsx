@@ -24,7 +24,14 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
-import * as api from '../../../services/api';
+import {
+  updateCosTask,
+  deleteCosTask,
+  resolveCosTaskChallenge,
+  approveCosTask,
+  forceSpawnTask,
+  resetSpawnBudgetAndRun,
+} from '../../../services/apiAgents.js';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
 import { formatDurationMin, formatBytes, shortClaudeModelName } from '../../../utils/formatters';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -282,7 +289,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     if (newStatus === 'blocked' && blockedReasonText) {
       updates.blockedReason = blockedReasonText;
     }
-    const result = await api.updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return false;
     toast.success(successMessage);
     if (task.status === 'blocked' && newStatus === 'pending') onTaskUnblocked?.(task.id);
@@ -333,7 +340,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
       // schema preserves (absent would leave the pin untouched).
       ...(canPinInstance ? { targetInstanceId: draftInstanceId || null } : {})
     };
-    const result = await api.updateCosTask(task.id, payload, { silent: true }).catch(err => {
+    const result = await updateCosTask(task.id, payload, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -379,7 +386,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // extra full refetch is needed; on failure refetch to restore the row.
   const handleDelete = async () => {
     onTaskDeleted?.(task.id, taskSource);
-    const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) {
       onRefresh();
       return;
@@ -395,7 +402,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   const [approving, setApproving] = useState(false);
   const handleResolveChallenge = async (outcome) => {
     setResolvingChallenge(true);
-    const result = await api.resolveCosTaskChallenge(task.id, { outcome, resolvedBy: 'user' }, { silent: true })
+    const result = await resolveCosTaskChallenge(task.id, { outcome, resolvedBy: 'user' }, { silent: true })
       .catch(err => { toast.error(err.message); return null; });
     setResolvingChallenge(false);
     if (!result) return;
@@ -405,7 +412,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
 
   const handleApprove = async () => {
     setApproving(true);
-    const result = await api.approveCosTask(task.id, { silent: true }).catch(err => {
+    const result = await approveCosTask(task.id, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -843,7 +850,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                 {task.status === 'pending' && !task.approvalRequired && !task.metadata?.preflight?.requestId && (
                   <button
                     onClick={async () => {
-                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => {
+                      const result = await forceSpawnTask(task.id, { silent: true }).catch(err => {
                         if (err.code === 'SPAWN_BUDGET_EXHAUSTED') setBudgetResetAvailable(true);
                         toast.error(err.message); return null;
                       });
@@ -867,7 +874,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                       ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets
                       onCancel={() => setBudgetResetConfirm(false)} onConfirm={async () => {
                         setBudgetResetting(true);
-                        const result = await api.resetSpawnBudgetAndRun(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                        const result = await resetSpawnBudgetAndRun(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
                         setBudgetResetting(false);
                         if (result?.success) { setBudgetResetConfirm(false); setBudgetResetAvailable(false); toast.success(`Spawning ${task.id}`); }
                         if (onRefresh) onRefresh();

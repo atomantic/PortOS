@@ -22,7 +22,7 @@ import { resolveMemoDir } from './lib/testMemoStore.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards } from './lib/guardBudget.js';
-import { getAlwaysRunTests } from './ci-test-plan.js';
+import { getAlwaysRunTests } from './lib/ciPlanRules.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 

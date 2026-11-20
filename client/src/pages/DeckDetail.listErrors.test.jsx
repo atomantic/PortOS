@@ -7,7 +7,18 @@ const api = vi.hoisted(() => ({
   removeDeckSample: vi.fn(), renderDeckCard: vi.fn(), renderDeckCards: vi.fn(), updateDeck: vi.fn(),
   updateDeckCard: vi.fn(), deckPromptsProgressUrl: vi.fn(() => ''),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiDecks.js', () => ({
+  deleteDeck: api.deleteDeck,
+  generateDeckPrompts: api.generateDeckPrompts,
+  getDeck: api.getDeck,
+  removeDeckSample: api.removeDeckSample,
+  renderDeckCard: api.renderDeckCard,
+  renderDeckCards: api.renderDeckCards,
+  updateDeck: api.updateDeck,
+  updateDeckCard: api.updateDeckCard,
+  deckPromptsProgressUrl: api.deckPromptsProgressUrl,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseSummaries: api.listUniverseSummaries }));
 vi.mock('../hooks/useDeckRenderTarget', () => ({ default: () => ({}) }));
 vi.mock('../hooks/useHydratedPreviewRoute', () => ({ default: () => [null, vi.fn()] }));
 vi.mock('../hooks/useSseProgress', () => ({ useSseProgress: () => ({ frames: [] }) }));

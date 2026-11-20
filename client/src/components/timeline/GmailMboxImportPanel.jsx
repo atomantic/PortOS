@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Mail, Loader2, CheckCircle2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { importGmailMbox } from '../../services/apiTimeline.js';
 import toast from '../ui/Toast';
 import { dateRangeLabel } from './ActivityImportPanel';
 
@@ -33,7 +33,7 @@ export default function GmailMboxImportPanel({ onImported }) {
     const rid = ++reqIdRef.current;
     setBusy(true);
     if (dryRun) setResult(null);
-    api.importGmailMbox({ path: mboxPath.trim(), preview: dryRun, yourEmail: yourEmail.trim(), silent: true })
+    importGmailMbox({ path: mboxPath.trim(), preview: dryRun, yourEmail: yourEmail.trim(), silent: true })
       .then((res) => {
         if (rid !== reqIdRef.current) return;
         if (dryRun) {

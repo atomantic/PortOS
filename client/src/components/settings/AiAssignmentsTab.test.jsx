@@ -4,12 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { findEnabledByLabelText } from '../../test/enabledBarrier.js';
 
-vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn(), updateAiAssignment: vi.fn() }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getAiAssignments: vi.fn(),
+  updateAiAssignment: vi.fn(),
+}));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import AiAssignmentsTab from './AiAssignmentsTab.jsx';
-import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
 import { getVisionModels, getToolUseModels } from '../../services/apiLocalLlm';
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 

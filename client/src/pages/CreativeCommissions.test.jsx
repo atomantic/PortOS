@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', async (importOriginal) => ({
+vi.mock('../services/apiCreativeCommission.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listCommissions: vi.fn(),
   createCommission: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import CreativeCommissions from './CreativeCommissions';
-import { listCommissions } from '../services/api';
+import { listCommissions } from '../services/apiCreativeCommission.js';
 
 const renderPage = async () => {
   const result = render(

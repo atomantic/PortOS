@@ -5,7 +5,7 @@ import UniverseStyleReferences from './UniverseStyleReferences';
 const apiMocks = vi.hoisted(() => ({
   analyzeUniverseStyleReference: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   ...apiMocks,
   WORLD_STYLE_REFERENCES_MAX: 20,
 }));

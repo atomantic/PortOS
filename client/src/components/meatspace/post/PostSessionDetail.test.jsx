@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostSession: vi.fn(),
 }));
 
 import PostSessionDetail from './PostSessionDetail';
-import { getPostSession } from '../../../services/api';
+import { getPostSession } from '../../../services/apiMeatspace.js';
 
 const SESSION = {
   id: 'c', date: '2026-06-03', score: 70, durationMs: 60000, modules: ['mental-math'],

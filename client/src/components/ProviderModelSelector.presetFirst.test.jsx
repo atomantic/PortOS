@@ -5,7 +5,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 // combination…" compose flow wired to `ProviderComposePopover`, composites
 // resolved from the shared catalog, and caller-mode restrictions on compose.
 const api = vi.hoisted(() => ({ getProviderCatalog: vi.fn(), createProviderPreset: vi.fn(), getToolUseModels: vi.fn() }));
-vi.mock('../services/api', async (importOriginal) => ({ ...(await importOriginal()), ...api }));
+vi.mock('../services/apiProviders.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getProviderCatalog: api.getProviderCatalog,
+  createProviderPreset: api.createProviderPreset,
+}));
 vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => api.getToolUseModels(...a) }));
 
 import ProviderModelSelector from './ProviderModelSelector';

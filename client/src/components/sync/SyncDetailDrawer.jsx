@@ -21,7 +21,10 @@ import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { getMediaCollection, getUniverse, getPipelineSeries, syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/api';
+import { getMediaCollection } from '../../services/apiImageVideo.js';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { getPipelineSeries } from '../../services/apiPipeline.js';
+import { syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/apiPeerSync.js';
 import MediaImage from '../MediaImage';
 
 // ── Per-kind record fetcher ──────────────────────────────────────────────────

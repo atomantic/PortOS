@@ -14,7 +14,13 @@ import {
   Save,
   Trash2
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinImportSources,
+  analyzeDigitalTwinImport,
+  openDigitalTwinSpotifyBrowser,
+  importDigitalTwinSpotifyBrowser,
+  saveDigitalTwinImport,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import { formatBytes } from '../../../utils/formatters';
@@ -38,7 +44,7 @@ const SOURCE_COLORS = {
   ical: 'text-blue-400 bg-blue-500/20'
 };
 
-const fetchSources = () => api.getDigitalTwinImportSources({ silent: true }).then((data) => data?.sources ?? []);
+const fetchSources = () => getDigitalTwinImportSources({ silent: true }).then((data) => data?.sources ?? []);
 
 export default function ImportTab() {
   const { items: sources, state: sourcesState, error: sourcesError, retry: retrySources } = useListResource(fetchSources);
@@ -80,7 +86,7 @@ export default function ImportTab() {
     setAnalyzing(true);
     setAnalysisResult(null);
 
-    const result = await api.analyzeDigitalTwinImport(
+    const result = await analyzeDigitalTwinImport(
       selectedSource.id,
       fileContent,
       selectedProvider.providerId,
@@ -100,7 +106,7 @@ export default function ImportTab() {
 
   const handleOpenSpotifyBrowser = async () => {
     setOpeningSpotifyBrowser(true);
-    const result = await api.openDigitalTwinSpotifyBrowser({ silent: true })
+    const result = await openDigitalTwinSpotifyBrowser({ silent: true })
       .catch(e => ({ status: 'error', error: e.message }));
     setSpotifyBrowserState(result);
     if (result.status === 'error' || result.status === 'unavailable') {
@@ -120,7 +126,7 @@ export default function ImportTab() {
     }
 
     setImportingSpotifyBrowser(true);
-    const result = await api.importDigitalTwinSpotifyBrowser(
+    const result = await importDigitalTwinSpotifyBrowser(
       selectedProvider.providerId,
       selectedProvider.model,
       { silent: true },
@@ -142,7 +148,7 @@ export default function ImportTab() {
   const handleSaveDocument = async (suggestedDoc) => {
     setSaving(true);
 
-    const result = await api.saveDigitalTwinImport(
+    const result = await saveDigitalTwinImport(
       selectedSource.id,
       suggestedDoc,
       { silent: true }

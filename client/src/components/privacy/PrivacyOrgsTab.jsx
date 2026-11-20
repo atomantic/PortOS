@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, ExternalLink, Building2 } from 'lucide-react';
-import {
-  getPrivacyOrgs, deletePrivacyOrg, getVaultRecords, getOrgHoldings,
-} from '../../services/api';
+import { getPrivacyOrgs, deletePrivacyOrg, getVaultRecords, getOrgHoldings } from '../../services/apiPrivacy.js';
 import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';

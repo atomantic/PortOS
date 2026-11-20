@@ -18,10 +18,16 @@ const addGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeMilestoneTask = vi.fn(() => Promise.resolve({}));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMeatspace.js', () => ({
   getActivities: (...args) => getActivities(...args),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: (...args) => getSettings(...args),
+}));
+vi.mock('../../services/apiCalendar.js', () => ({
   getCalendarAccounts: (...args) => getCalendarAccounts(...args),
+}));
+vi.mock('../../services/apiGoals.js', () => ({
   scheduleGoalTimeBlocks: (...args) => scheduleGoalTimeBlocks(...args),
   removeGoalSchedule: (...args) => removeGoalSchedule(...args),
   rescheduleGoalTimeBlocks: (...args) => rescheduleGoalTimeBlocks(...args),
@@ -34,7 +40,7 @@ vi.mock('../../services/api', () => ({
   decomposeGoal: (...args) => decomposeGoal(...args),
   addGoalMilestone: (...args) => addGoalMilestone(...args),
   completeGoalMilestone: (...args) => completeGoalMilestone(...args),
-  completeMilestoneTask: (...args) => completeMilestoneTask(...args)
+  completeMilestoneTask: (...args) => completeMilestoneTask(...args),
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');

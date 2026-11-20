@@ -13,8 +13,10 @@ import Image3dRuntimes from './Image3dRuntimes';
 
 const getImageTo3dTargets = vi.fn();
 const getHfTokenStatus = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageTo3d.js', () => ({
   getImageTo3dTargets: (...a) => getImageTo3dTargets(...a),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
   getHfTokenStatus: (...a) => getHfTokenStatus(...a),
 }));
 

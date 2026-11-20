@@ -8,7 +8,17 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { shortClaudeModelName } from '../../utils/formatters';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import {
+  getOrchestrationProfiles,
+  getCosPopularTemplates,
+  applyCosTaskTemplate,
+  createCosTaskTemplate,
+  deleteCosTaskTemplate,
+  enhanceCosTaskPrompt,
+  addCosTask,
+} from '../../services/apiAgents.js';
+import { getCodeReviewDefaults } from '../../services/apiCodeReview.js';
+import { getAppWorkTracker, getAppRepositorySources } from '../../services/apiApps.js';
 import { processScreenshotUploads, processAttachmentUploads } from '../../services/apiMedia';
 import { isCompositeProviderId } from '../../utils/providerRef';
 import {
@@ -234,7 +244,7 @@ export default function useTaskAddForm({
   const showTemplatesInitialized = useRef(false);
 
   useEffect(() => {
-    api.getOrchestrationProfiles?.({ silent: true })
+    getOrchestrationProfiles?.({ silent: true })
       ?.then((res) => {
         const list = Array.isArray(res) ? res : res?.profiles || [];
         dispatch({ type: 'patch', patch: { orchestrationProfiles: list } });
@@ -278,7 +288,7 @@ export default function useTaskAddForm({
       return undefined;
     }
     let active = true;
-    api.getCosPopularTemplates(8)
+    getCosPopularTemplates(8)
       .then((data) => {
         if (active) dispatch({ type: 'patch', patch: { templates: data?.templates || [] } });
       })
@@ -298,7 +308,7 @@ export default function useTaskAddForm({
 
   useEffect(() => {
     let cancelled = false;
-    api.getCodeReviewDefaults({ silent: true })
+    getCodeReviewDefaults({ silent: true })
       .then((d) => {
         if (cancelled || !d) return;
         dispatch({
@@ -358,7 +368,7 @@ export default function useTaskAddForm({
 
     dispatch({ type: 'patch', patch: { resolvedWorkTracker: { appId, tracker: null } } });
     let cancelled = false;
-    Promise.resolve(api.getAppWorkTracker(appId, { silent: true }))
+    Promise.resolve(getAppWorkTracker(appId, { silent: true }))
       .then((info) => {
         if (!cancelled) dispatch({ type: 'patch', patch: { resolvedWorkTracker: { appId, tracker: info?.resolved || null } } });
       })
@@ -386,7 +396,7 @@ export default function useTaskAddForm({
     }
     let cancelled = false;
     dispatch({ type: 'patch', patch: { issueTargets: { appId, value: null } } });
-    Promise.resolve(api.getAppRepositorySources(appId, { silent: true }))
+    Promise.resolve(getAppRepositorySources(appId, { silent: true }))
       .then((status) => {
         if (cancelled) return;
         const value = status?.issueTargets || null;
@@ -574,7 +584,7 @@ export default function useTaskAddForm({
     }
     dispatch({ type: 'patch', patch });
     descriptionRef.current?.focus();
-    const usageRecorded = await api.applyCosTaskTemplate(template.id, { silent: true })
+    const usageRecorded = await applyCosTaskTemplate(template.id, { silent: true })
       .then(() => true)
       .catch((error) => {
         console.warn(`⚠️ Template usage not recorded for ${template.id}: ${error?.message || error}`);
@@ -598,7 +608,7 @@ export default function useTaskAddForm({
       toast.error('Template name is required');
       return;
     }
-    const result = await api.createCosTaskTemplate({
+    const result = await createCosTaskTemplate({
       name: state.templateNameInput.trim(),
       description: state.newTask.description,
       provider: state.newTask.provider,
@@ -623,7 +633,7 @@ export default function useTaskAddForm({
       toast.success('Template saved');
       setField('showTemplateSave', false);
       setField('templateNameInput', '');
-      api.getCosPopularTemplates(8)
+      getCosPopularTemplates(8)
         .then((data) => dispatch({ type: 'patch', patch: { templates: data?.templates || [] } }))
         .catch((error) => console.warn(`⚠️ Template refresh failed: ${error?.message || error}`));
     }
@@ -631,7 +641,7 @@ export default function useTaskAddForm({
 
   const deleteTemplate = async (templateId, event) => {
     event.stopPropagation();
-    const result = await api.deleteCosTaskTemplate(templateId, { silent: true }).catch((error) => {
+    const result = await deleteCosTaskTemplate(templateId, { silent: true }).catch((error) => {
       toast.error(error.message);
       return null;
     });
@@ -675,7 +685,7 @@ export default function useTaskAddForm({
     let finalDescription = state.newTask.description;
     if (state.enhancePrompt) {
       dispatch({ type: 'patch', patch: { isEnhancing: true } });
-      const enhanceResult = await api.enhanceCosTaskPrompt({ description: state.newTask.description }).catch((error) => {
+      const enhanceResult = await enhanceCosTaskPrompt({ description: state.newTask.description }).catch((error) => {
         toast('Enhancement failed, using original description', { icon: '⚠️' });
         console.warn(`⚠️ Task enhancement failed: ${error.message}`);
         return null;
@@ -689,7 +699,7 @@ export default function useTaskAddForm({
       dispatch({ type: 'patch', patch: { isEnhancing: false } });
     }
 
-    const result = await api.addCosTask({
+    const result = await addCosTask({
       description: finalDescription,
       model: selectedModelOrSole || undefined,
       provider: state.newTask.provider || undefined,

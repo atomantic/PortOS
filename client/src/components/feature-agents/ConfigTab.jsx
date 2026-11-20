@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
-import * as api from '../../services/api';
+import { createFeatureAgent, updateFeatureAgent } from '../../services/apiAgents.js';
 import useProviderModels from '../../hooks/useProviderModels';
 import AgentJobProviderFields from '../cos/AgentJobProviderFields';
 
@@ -99,14 +99,14 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     };
 
     if (isCreate) {
-      const created = await api.createFeatureAgent(payload).catch(() => null);
+      const created = await createFeatureAgent(payload).catch(() => null);
       setSaving(false);
       if (created) {
         toast.success('Feature agent created');
         onSave?.(created);
       }
     } else {
-      const updated = await api.updateFeatureAgent(agent.id, payload).catch(() => null);
+      const updated = await updateFeatureAgent(agent.id, payload).catch(() => null);
       setSaving(false);
       if (updated) {
         toast.success('Config saved');

@@ -19,7 +19,8 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router';
 import { Link2, Plus, X } from 'lucide-react';
-import { listRounds, listTracks } from '../../services/api';
+import { listRounds } from '../../services/apiRounds.js';
+import { listTracks } from '../../services/apiTracks.js';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import {

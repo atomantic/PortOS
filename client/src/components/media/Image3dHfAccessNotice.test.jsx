@@ -10,10 +10,8 @@
  * still loading", NOT "absent". Collapsing those flashes "go add a token" at a
  * user who already has one.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-
-vi.mock('../../services/api', () => ({}));
 
 import Image3dHfAccessNotice from './Image3dHfAccessNotice';
 

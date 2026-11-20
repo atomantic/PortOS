@@ -35,7 +35,11 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  updateCosConfig: api.updateCosConfig,
+  getCosBudgetUsage: api.getCosBudgetUsage,
+  getPersistentMind: api.getPersistentMind,
+}));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 // The provider/model selector hook fetches providers over the network — stub it

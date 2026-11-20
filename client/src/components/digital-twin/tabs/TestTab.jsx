@@ -13,7 +13,16 @@ import {Play,
   Minus,
   TrendingUp} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinTests,
+  getDigitalTwinTestHistory,
+  getDigitalTwinPersonas,
+  getBehavioralFeedbackStats,
+  submitBehavioralFeedback,
+  runSoulTests,
+  runSoulMultiTests,
+  generateSoulTests,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import socket from '../../../services/socket';
 import { uuidv4 } from '../../../lib/uuid';
@@ -31,9 +40,9 @@ import { timeAgo } from '../../../utils/formatters';
 const pairKey = (providerId, model) => `${providerId}:${model}`;
 
 // Silent: each read below renders its own <ListLoadError>, so a toast would double up.
-const fetchTests = () => api.getDigitalTwinTests({ silent: true });
-const fetchHistory = () => api.getDigitalTwinTestHistory(5, { silent: true });
-const fetchPersonas = () => api.getDigitalTwinPersonas({ silent: true });
+const fetchTests = () => getDigitalTwinTests({ silent: true });
+const fetchHistory = () => getDigitalTwinTestHistory(5, { silent: true });
+const fetchPersonas = () => getDigitalTwinPersonas({ silent: true });
 
 export default function TestTab({ onRefresh }) {
   // Tests and providers gate the whole tab (nothing can run without them), so
@@ -88,7 +97,7 @@ export default function TestTab({ onRefresh }) {
 
   useEffect(() => {
     let active = true;
-    api.getBehavioralFeedbackStats().catch(() => null).then(fbStats => {
+    getBehavioralFeedbackStats().catch(() => null).then(fbStats => {
       if (active && fbStats) setFeedbackStats(fbStats);
     });
     return () => { active = false; };
@@ -119,7 +128,7 @@ export default function TestTab({ onRefresh }) {
     const key = `${providerId}:${model}:${testId}`;
     setFeedbackGiven(prev => ({ ...prev, [key]: validation }));
 
-    await api.submitBehavioralFeedback({
+    await submitBehavioralFeedback({
       contentType: 'test_response',
       validation,
       contentSnippet: response?.slice(0, 2000),
@@ -132,7 +141,7 @@ export default function TestTab({ onRefresh }) {
     });
 
     // Refresh stats
-    const fbStats = await api.getBehavioralFeedbackStats().catch(() => null);
+    const fbStats = await getBehavioralFeedbackStats().catch(() => null);
     if (fbStats) setFeedbackStats(fbStats);
   };
 
@@ -178,7 +187,7 @@ export default function TestTab({ onRefresh }) {
       if (selectedProviders.length === 1) {
         // Single provider test
         const { providerId, model } = selectedProviders[0];
-        const result = await api.runSoulTests(providerId, model, testIds, personaId);
+        const result = await runSoulTests(providerId, model, testIds, personaId);
         setResults([{ providerId, model, ...result }]);
       } else {
         // Multi-provider test. The listener is always mounted, so arming the
@@ -190,7 +199,7 @@ export default function TestTab({ onRefresh }) {
         };
         activeBatchRef.current = batch;
         setBatchProgress({ completed: 0, total: batch.order.length });
-        const multiResults = await api.runSoulMultiTests(selectedProviders, testIds, personaId, batch.id);
+        const multiResults = await runSoulMultiTests(selectedProviders, testIds, personaId, batch.id);
         // Settle the batch BEFORE installing the final array: a progress frame
         // can still arrive after the HTTP response and must not overwrite it.
         // The final array is authoritative (one entry per selected pair).
@@ -238,7 +247,7 @@ export default function TestTab({ onRefresh }) {
 
     setGenerating(true);
     const { providerId, model } = selectedProviders[0];
-    const result = await api.generateSoulTests(providerId, model, { silent: true }).catch(e => ({ error: e.message }));
+    const result = await generateSoulTests(providerId, model, { silent: true }).catch(e => ({ error: e.message }));
 
     if (result.error) {
       toast.error(result.error);

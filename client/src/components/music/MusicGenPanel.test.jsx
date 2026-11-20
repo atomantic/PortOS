@@ -2,7 +2,15 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import MusicGenPanel from './MusicGenPanel';
-import * as api from '../../services/api';
+import { getMediaJob, cancelMediaJob } from '../../services/apiMediaJobs.js';
+import {
+  previewMusicPrompt,
+  listMusicEngines,
+  generateMusic,
+  installAudioModel as apiInstallAudioModel,
+} from '../../services/apiMusic.js';
+import { getActiveProcessing, getInstances } from '../../services/apiSystem.js';
+import { getTrack } from '../../services/apiTracks.js';
 import toast from '../ui/Toast';
 const socketHandlers = new Map();
 vi.mock('../../services/socket', () => ({
@@ -20,22 +28,23 @@ const emitSocket = async (event, payload = {}) => act(async () => {
 });
 
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn(),
-  getInstances: vi.fn(),
   generateMusic: vi.fn(),
   previewMusicPrompt: vi.fn(),
-  getActiveProcessing: vi.fn(),
-  getMediaJob: vi.fn(),
-  getTrack: vi.fn(),
-  cancelMediaJob: vi.fn(),
   installAudioModel: vi.fn(),
   removeAudioModel: vi.fn(),
 }));
-// useMediaJobProgress reads the job endpoint directly; keep it on the same
-// fixture as the panel's API-barrel request.
+vi.mock('../../services/apiSystem.js', () => ({
+  getInstances: vi.fn(),
+  getActiveProcessing: vi.fn(),
+}));
+vi.mock('../../services/apiTracks.js', () => ({
+  getTrack: vi.fn(),
+}));
 vi.mock('../../services/apiMediaJobs', () => ({
-  getMediaJob: (...args) => api.getMediaJob(...args),
+  getMediaJob: vi.fn(),
+  cancelMediaJob: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -88,39 +97,39 @@ const minimax = (overrides) => engine({
 describe('MusicGenPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.previewMusicPrompt.mockResolvedValue({});
-    api.getActiveProcessing.mockResolvedValue({ jobs: [] });
-    api.getInstances.mockResolvedValue({ peers: [] });
+    previewMusicPrompt.mockResolvedValue({});
+    getActiveProcessing.mockResolvedValue({ jobs: [] });
+    getInstances.mockResolvedValue({ peers: [] });
   });
 
   it('shows the server instrumental addition while submitting the authored caption unchanged', async () => {
     const prompt = '  **warm** folk\n';
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.previewMusicPrompt.mockImplementation(async (body) => body.instrumentalOnly ? {
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    previewMusicPrompt.mockImplementation(async (body) => body.instrumentalOnly ? {
       sentPrompt: `${body.prompt}\n\nNo vocals.`,
       promptAdditions: [{ id: 'instrumental-only', label: 'Instrumental only', text: 'No vocals.' }],
     } : { sentPrompt: body.prompt });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt={prompt} />);
     fireEvent.click(await screen.findByRole('checkbox', { name: /instrumental only/i }));
     fireEvent.click(await screen.findByRole('button', { name: '+ Instrumental only' }));
     expect(screen.getByText('No vocals.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
     expect(screen.getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
-    expect(api.previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true });
+    expect(previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true });
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true }));
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true }));
   });
 
   it('shows lyric additions from the server and submits the authored sheet without trimming it', async () => {
     const lyrics = '  [verse]\nKeep these spaces \n';
     const sentLyrics = `${lyrics}\n[outro]`;
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'minimax-music3', engines: [minimax({ ready: true, modelReady: true })] });
-    api.previewMusicPrompt.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'minimax-music3', engines: [minimax({ ready: true, modelReady: true })] });
+    previewMusicPrompt.mockResolvedValue({
       sentPrompt: 'folk', sentLyrics,
       lyricAdditions: [{ id: 'closing-section', label: 'Closing section', text: '[outro]' }],
     });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="folk" lyrics={lyrics} />);
     const region = await screen.findByRole('region', { name: 'Lyrics sent to the model' });
     fireEvent.click(within(region).getByRole('button', { name: '+ Closing section' }));
@@ -128,9 +137,9 @@ describe('MusicGenPanel', () => {
     fireEvent.click(within(region).getByRole('button', { name: 'Show full prompt' }));
     expect(region.querySelector('pre').textContent).toBe(sentLyrics);
     expect(within(region).getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
-    expect(api.previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ lyrics, engine: 'minimax-music3' }), { silent: true });
+    expect(previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ lyrics, engine: 'minimax-music3' }), { silent: true });
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ lyrics }), { silent: true }));
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({ lyrics }), { silent: true }));
   });
 
   // `clearAllMocks` resets calls but leaves a spy installed. A test that pins
@@ -142,7 +151,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('does not show a missing-runtime warning immediately for an empty saved track', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'acestep',
       engines: [
         engine({
@@ -169,7 +178,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('shows the missing-runtime warning when the user explicitly selects a missing engine', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'musicgen',
       engines: [
         engine({ id: 'musicgen', name: 'MusicGen (MLX)', ready: true }),
@@ -204,7 +213,7 @@ describe('MusicGenPanel', () => {
   // (#3264). Rendering the real StrictMode wrapper is the only way this
   // regression is visible — every other test here mounts the panel bare.
   it('loads the engine list under StrictMode instead of hanging on "Loading generators…"', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'musicgen',
       engines: [engine({ id: 'musicgen', name: 'MusicGen (MLX)', ready: true })],
     });
@@ -221,7 +230,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('explains CUDA gating and hides install actions on an unsupported host', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3', name: 'MiniMax Music 3 (CUDA only)', ready: false,
@@ -240,7 +249,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('explains an insufficient CUDA VRAM profile and hides install actions', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [minimax({
         ready: false,
@@ -262,7 +271,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('keeps an unknown-size CUDA profile distinct from insufficient VRAM', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [minimax({
         ready: false,
@@ -282,7 +291,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('shows the configured profile and the active render effective placement', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [minimax({
         ready: true,
@@ -308,24 +317,24 @@ describe('MusicGenPanel', () => {
   });
 
   it('generates an unsaved standalone track without requiring a title or associations', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'musicgen',
       engines: [engine({ ready: true })],
     });
-    api.generateMusic.mockResolvedValue({ track: { id: 'generated-track', title: 'Ambient sunrise' } });
+    generateMusic.mockResolvedValue({ track: { id: 'generated-track', title: 'Ambient sunrise' } });
     const onGenerated = vi.fn();
 
     render(<MusicGenPanel prompt="Ambient sunrise" lyrics="" onGenerated={onGenerated} />);
 
     fireEvent.click(await screen.findByRole('button', { name: /generate track/i }));
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'Ambient sunrise',
       title: '',
       artistId: '',
       artist: '',
       albumId: '',
     }), { silent: true }));
-    expect(api.generateMusic.mock.calls[0][0]).not.toHaveProperty('trackId');
+    expect(generateMusic.mock.calls[0][0]).not.toHaveProperty('trackId');
     expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({ id: 'generated-track' }));
   });
 
@@ -359,9 +368,9 @@ describe('MusicGenPanel', () => {
   // The peer does not advertise the `lyrics` feature. Absent must read as
   // false, or the panel offers a render the peer answers with a 400.
   it('falls back to an instrumental remote render when the peer build cannot carry lyrics', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer()] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({ peers: [lyricCapablePeer()] });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
 
@@ -369,7 +378,7 @@ describe('MusicGenPanel', () => {
     expect(screen.getByLabelText(/instrumental only/i)).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       mediaProviderPeerId: 'peer-example',
       engine: 'minimax-music3',
       modelId: 'minimax-music3',
@@ -378,7 +387,7 @@ describe('MusicGenPanel', () => {
         style: 'ambient', mood: 'calm', tempo: 'moderate', energy: 'medium', instruments: [],
       },
     }), { silent: true }));
-    const requestBody = api.generateMusic.mock.calls[0][0];
+    const requestBody = generateMusic.mock.calls[0][0];
     expect(requestBody).not.toHaveProperty('lyrics');
   });
 
@@ -386,9 +395,9 @@ describe('MusicGenPanel', () => {
   // build advertises the `lyrics` feature at the status root. A panel that did
   // not read the status-root feature would pin this peer to Instrumental only.
   it('sends lyrics to a peer that advertises the lyrics feature and no per-capability flag', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
 
@@ -396,7 +405,7 @@ describe('MusicGenPanel', () => {
     expect(screen.getByLabelText(/instrumental only/i)).not.toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       mediaProviderPeerId: 'peer-example',
       instrumentalOnly: false,
       lyrics: 'private lyrics',
@@ -404,9 +413,9 @@ describe('MusicGenPanel', () => {
   });
 
   it('still pins instrumental for an instrumental-only model on a lyrics-capable build', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ lyrics: false }, ['lyrics'])] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ lyrics: false }, ['lyrics'])] });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
 
@@ -417,9 +426,9 @@ describe('MusicGenPanel', () => {
   });
 
   it('drops lyrics from a lyric-capable remote render when instrumental-only is chosen', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
 
@@ -429,7 +438,7 @@ describe('MusicGenPanel', () => {
 
     // The field still rides along so the track record keeps the authored words;
     // `instrumentalOnly` is what the server reads to drop the conditioning.
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       instrumentalOnly: true,
     }), { silent: true }));
   });
@@ -438,7 +447,7 @@ describe('MusicGenPanel', () => {
   // here collapsing it back to `help || 'requires a ready peer'` would print
   // the not-ready sentence beside an enabled button and still ship green.
   it('reports a usable peer’s queue, and says it is ready when there is nothing to report', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
     const peer = (queue) => ({
       id: 'peer-example',
       name: 'Example GPU',
@@ -464,7 +473,7 @@ describe('MusicGenPanel', () => {
       },
     });
 
-    api.getInstances.mockResolvedValue({
+    getInstances.mockResolvedValue({
       peers: [peer({ accepting: true, running: 0, queued: 0, totalActive: 1, maxQueuedJobs: 4 })],
     });
     const { unmount } = render(<MusicGenPanel track={{ id: 'track-1' }} prompt="p" />);
@@ -473,7 +482,7 @@ describe('MusicGenPanel', () => {
     unmount();
 
     // Same peer, but a queue block with no reportable counts at all.
-    api.getInstances.mockResolvedValue({ peers: [peer({ accepting: true })] });
+    getInstances.mockResolvedValue({ peers: [peer({ accepting: true })] });
     render(<MusicGenPanel track={{ id: 'track-2' }} prompt="p" />);
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
     expect(screen.getByText('Peer is ready.')).toBeInTheDocument();
@@ -483,8 +492,8 @@ describe('MusicGenPanel', () => {
   // inside its freshness window still reads `ready`. Showing its queue there
   // suppressed the one line explaining why Generate was disabled.
   it('explains a switched-off peer instead of showing its last queue reading', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({
       peers: [{
         id: 'peer-example',
         name: 'Example GPU',
@@ -520,8 +529,8 @@ describe('MusicGenPanel', () => {
   // snapshot stays fresh, so gating the suffix on `state` would list it with no
   // suffix — reading as ready — beside a caption saying it is switched off.
   it('marks a switched-off peer in the target dropdown, not just in the caption', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({
       peers: [{
         id: 'peer-example',
         name: 'Example GPU',
@@ -545,9 +554,9 @@ describe('MusicGenPanel', () => {
   // A capacity window expires on the clock, not on a state change, so between
   // polls the button can still be enabled against a peer that has gone stale.
   it('refuses at click time when the window expired since the last render', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
     const freshUntil = new Date(Date.now() + 60_000).toISOString();
-    api.getInstances.mockResolvedValue({
+    getInstances.mockResolvedValue({
       peers: [{
         id: 'peer-example',
         name: 'Example GPU',
@@ -582,15 +591,15 @@ describe('MusicGenPanel', () => {
     fireEvent.click(generate);
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/capacity snapshot expired/i)));
-    expect(api.generateMusic).not.toHaveBeenCalled();
+    expect(generateMusic).not.toHaveBeenCalled();
   });
 
   // The stored probe keeps saying `ready` long after the server would refuse
   // the submission. Leaving Generate enabled beside a caption reading "stale"
   // just moves the rejection to the server, after the user committed to it.
   it('blocks generation on a peer whose capacity window has expired', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getInstances.mockResolvedValue({
       peers: [{
         id: 'peer-example',
         name: 'Example GPU',
@@ -620,7 +629,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('can render instrumentally without conditioning on or clearing the track lyrics', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'acestep',
       engines: [engine({
         id: 'acestep',
@@ -634,7 +643,7 @@ describe('MusicGenPanel', () => {
         ready: true,
       })],
     });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics={'[verse]\nKeep these words'} />);
 
@@ -645,8 +654,8 @@ describe('MusicGenPanel', () => {
     expect(screen.getByText(/saved lyrics will not condition this render/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalled());
-    const requestBody = api.generateMusic.mock.calls[0][0];
+    await waitFor(() => expect(generateMusic).toHaveBeenCalled());
+    const requestBody = generateMusic.mock.calls[0][0];
     expect(requestBody).toEqual(expect.objectContaining({
       trackId: 'track-1',
       instrumentalOnly: true,
@@ -655,7 +664,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('keeps lyricless vocal textures possible until instrumental mode is explicitly selected', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'acestep',
       engines: [engine({
         id: 'acestep',
@@ -667,7 +676,7 @@ describe('MusicGenPanel', () => {
         ready: true,
       })],
     });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="distant wordless choir" lyrics="" />);
 
@@ -677,15 +686,15 @@ describe('MusicGenPanel', () => {
     expect(screen.getByText(/vocals may still follow the prompt/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       instrumentalOnly: false,
       lyrics: '',
     }), { silent: true }));
   });
 
   it('offers instrumental-only conditioning for engines without a separate lyrics input', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="ambient choir textures" lyrics="" />);
 
@@ -693,19 +702,19 @@ describe('MusicGenPanel', () => {
     fireEvent.click(instrumental);
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
 
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalled());
-    const requestBody = api.generateMusic.mock.calls[0][0];
+    await waitFor(() => expect(generateMusic).toHaveBeenCalled());
+    const requestBody = generateMusic.mock.calls[0][0];
     expect(requestBody.instrumentalOnly).toBe(true);
     expect(requestBody).not.toHaveProperty('lyrics');
   });
 
   it('rehydrates a running Music Studio job when the panel remounts', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getActiveProcessing.mockResolvedValue({ jobs: [{
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getActiveProcessing.mockResolvedValue({ jobs: [{
       id: 'job-remounted', kind: 'audio', status: 'running', startedAt: new Date(Date.now() - 5000).toISOString(),
       params: { musicStudio: { trackId: 'track-1', instrumentalOnly: true } },
     }] });
-    api.getMediaJob.mockResolvedValue({ status: 'running', startedAt: new Date(Date.now() - 5000).toISOString() });
+    getMediaJob.mockResolvedValue({ status: 'running', startedAt: new Date(Date.now() - 5000).toISOString() });
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" />);
     expect(await screen.findByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/elapsed/);
@@ -714,66 +723,66 @@ describe('MusicGenPanel', () => {
   });
 
   it('discovers jobs by event, recovers missed completion on tab show, and never polls', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getMediaJob.mockResolvedValue({ status: 'running' });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getMediaJob.mockResolvedValue({ status: 'running' });
     const onGenerated = vi.fn();
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" onGenerated={onGenerated} />);
     await screen.findByRole('button', { name: /^generate$/i });
     const job = { id: 'job-live', kind: 'audio', status: 'running',
       params: { musicStudio: { trackId: 'track-1' } } };
-    api.getActiveProcessing.mockResolvedValue({ jobs: [job] });
+    getActiveProcessing.mockResolvedValue({ jobs: [job] });
     await emitSocket('media-jobs:changed');
     expect(screen.getByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
 
     vi.useFakeTimers();
-    const discoveryReads = api.getActiveProcessing.mock.calls.length;
-    const jobReads = api.getMediaJob.mock.calls.length;
+    const discoveryReads = getActiveProcessing.mock.calls.length;
+    const jobReads = getMediaJob.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
-    expect(api.getActiveProcessing).toHaveBeenCalledTimes(discoveryReads);
-    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReads);
+    expect(getActiveProcessing).toHaveBeenCalledTimes(discoveryReads);
+    expect(getMediaJob).toHaveBeenCalledTimes(jobReads);
     await emitSocket('connect');
-    expect(api.getActiveProcessing).toHaveBeenCalledTimes(discoveryReads + 1);
-    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReads + 1);
+    expect(getActiveProcessing).toHaveBeenCalledTimes(discoveryReads + 1);
+    expect(getMediaJob).toHaveBeenCalledTimes(jobReads + 1);
 
     // The active queue empties before the progress hook recovers a missed
     // completion; discovery must not detach the tracked job.
-    api.getActiveProcessing.mockResolvedValue({ jobs: [] });
+    getActiveProcessing.mockResolvedValue({ jobs: [] });
     await emitSocket('media-jobs:changed');
-    api.getMediaJob.mockResolvedValue({ status: 'completed', result: { trackId: 'track-1' } });
-    api.getTrack.mockResolvedValue({ id: 'track-1', title: 'Finished track' });
+    getMediaJob.mockResolvedValue({ status: 'completed', result: { trackId: 'track-1' } });
+    getTrack.mockResolvedValue({ id: 'track-1', title: 'Finished track' });
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
     visibility.mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    const beforeShow = api.getActiveProcessing.mock.calls.length;
-    const jobReadsBeforeShow = api.getMediaJob.mock.calls.length;
+    const beforeShow = getActiveProcessing.mock.calls.length;
+    const jobReadsBeforeShow = getMediaJob.mock.calls.length;
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(api.getActiveProcessing).toHaveBeenCalledTimes(beforeShow + 1);
-    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReadsBeforeShow + 1);
+    expect(getActiveProcessing).toHaveBeenCalledTimes(beforeShow + 1);
+    expect(getMediaJob).toHaveBeenCalledTimes(jobReadsBeforeShow + 1);
     expect(onGenerated).toHaveBeenCalledWith({ id: 'track-1', title: 'Finished track' });
     expect(screen.getByRole('button', { name: /^generate$/i })).toBeEnabled();
   });
 
   it('settles a failed render from its socket event without waiting for a poll', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getActiveProcessing.mockResolvedValue({ jobs: [{
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    getActiveProcessing.mockResolvedValue({ jobs: [{
       id: 'job-failed', kind: 'audio', status: 'running', params: { musicStudio: { trackId: 'track-1' } },
     }] });
-    api.getMediaJob.mockResolvedValue({ status: 'running' });
+    getMediaJob.mockResolvedValue({ status: 'running' });
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" />);
     await screen.findByText(/processing on the gpu|rendering audio/i);
-    api.cancelMediaJob.mockRejectedValueOnce(new Error('Cancel unavailable'));
+    cancelMediaJob.mockRejectedValueOnce(new Error('Cancel unavailable'));
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
     await act(async () => {});
     expect(screen.getByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
-    api.getMediaJob.mockResolvedValue({ status: 'failed', error: 'Render failed' });
+    getMediaJob.mockResolvedValue({ status: 'failed', error: 'Render failed' });
     await emitSocket('audio-gen:failed', { generationId: 'job-failed', error: 'Render failed' });
     expect(screen.getByRole('button', { name: /^generate$/i })).toBeEnabled();
     expect(toast.error).toHaveBeenCalledWith('Render failed');
   });
 
   it('suggests a lyric-aware MiniMax ceiling and sends Auto mode', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3',
@@ -786,7 +795,7 @@ describe('MusicGenPanel', () => {
         defaultModelId: 'minimax-music3',
       })],
     });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-auto' } });
+    generateMusic.mockResolvedValue({ track: { id: 'track-auto' } });
 
     const lyrics = `[verse]\n${'word '.repeat(150)}\n[outro]`;
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm cinematic pop" lyrics={lyrics} />);
@@ -796,14 +805,14 @@ describe('MusicGenPanel', () => {
     expect(screen.getByText(/ceiling from 150 lyric words/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(generateMusic).toHaveBeenCalledWith(expect.objectContaining({
       durationMode: 'auto',
     }), { silent: true }));
-    expect(api.generateMusic.mock.calls[0][0]).not.toHaveProperty('durationSec');
+    expect(generateMusic.mock.calls[0][0]).not.toHaveProperty('durationSec');
   });
 
   it('does not advertise Auto mode when the server omits the capability', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3',
@@ -824,7 +833,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('warns when lyric text has no structure tags for MiniMax to pace', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3',
@@ -844,7 +853,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('warns when a manual MiniMax duration is shorter than the lyric recommendation', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3',
@@ -870,7 +879,7 @@ describe('MusicGenPanel', () => {
     // MusicGen is MLX-only. Before this, a Windows/Linux user got an Install
     // button whose installer skipped and exited 0, surfaced as 'installer exited
     // 0 but MusicGen (MLX) is still not available'.
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'musicgen',
       engines: [engine({
         ready: false,
@@ -888,11 +897,11 @@ describe('MusicGenPanel', () => {
   });
 
   it('offers the fixed-model install without suggesting a runtime reinstall', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [minimax({ runtimeReady: true })],
     });
-    api.installAudioModel.mockResolvedValue({});
+    apiInstallAudioModel.mockResolvedValue({});
 
     render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
 
@@ -903,7 +912,7 @@ describe('MusicGenPanel', () => {
     expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
 
     fireEvent.click(install);
-    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiInstallAudioModel).toHaveBeenCalledWith(
       { engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' },
       expect.any(Function),
     ));
@@ -914,19 +923,19 @@ describe('MusicGenPanel', () => {
   // used to offer "Install runtime" and leave the weights to a second button
   // elsewhere in the panel.
   it('installs runtime and weights from one action when both are missing', async () => {
-    api.listMusicEngines
+    listMusicEngines
       .mockResolvedValueOnce({ defaultEngine: 'minimax-music3', engines: [minimax({ runtimeReady: false })] })
       .mockResolvedValue({ defaultEngine: 'minimax-music3', engines: [minimax({ runtimeReady: true })] });
-    api.installAudioModel.mockResolvedValue({});
+    apiInstallAudioModel.mockResolvedValue({});
 
     render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
 
     fireEvent.click(await screen.findByRole('button', { name: /install runtime \+ weights \(~29 GB\)/i }));
     expect(await screen.findByText(/Installing MiniMax Music 3/i)).toBeInTheDocument();
-    expect(api.installAudioModel).not.toHaveBeenCalled(); // weights wait for the venv
+    expect(apiInstallAudioModel).not.toHaveBeenCalled(); // weights wait for the venv
 
     fireEvent.click(screen.getByRole('button', { name: /close installer/i }));
-    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiInstallAudioModel).toHaveBeenCalledWith(
       { engine: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3' },
       expect.any(Function),
     ));
@@ -935,7 +944,7 @@ describe('MusicGenPanel', () => {
   // A cancelled or failed runtime install must not start a 29 GB download that
   // has no interpreter to load it.
   it('does not chain into the weights download when the runtime install did not land', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [minimax({ runtimeReady: false })],
     });
@@ -945,12 +954,12 @@ describe('MusicGenPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: /install runtime \+ weights/i }));
     fireEvent.click(await screen.findByRole('button', { name: /close installer/i }));
 
-    await waitFor(() => expect(api.listMusicEngines).toHaveBeenCalledTimes(2));
-    expect(api.installAudioModel).not.toHaveBeenCalled();
+    await waitFor(() => expect(listMusicEngines).toHaveBeenCalledTimes(2));
+    expect(apiInstallAudioModel).not.toHaveBeenCalled();
   });
 
   it('gates the selected MLX snapshot independently and defaults to 8-bit', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3-mlx',
       engines: [engine({
         id: 'minimax-music3-mlx', name: 'MiniMax Music 3 (MLX)', ready: true,
@@ -982,7 +991,7 @@ describe('MusicGenPanel', () => {
     expect(screen.getByRole('button', { name: /generate track/i })).toBeDisabled();
 
     fireEvent.click(install);
-    await waitFor(() => expect(api.installAudioModel).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiInstallAudioModel).toHaveBeenCalledWith(
       { engine: 'minimax-music3-mlx', repo: 'mlx-community/MiniMax-Music3-bf16' },
       expect.any(Function),
     ));
@@ -1011,7 +1020,7 @@ describe('MusicGenPanel', () => {
       models: [{ id: 'beta-1', name: 'Beta One' }, { id: 'beta-2', name: 'Beta Two' }],
       defaultModelId: 'beta-1',
     });
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'alpha', engines: [alpha, beta] });
+    listMusicEngines.mockResolvedValue({ defaultEngine: 'alpha', engines: [alpha, beta] });
 
     render(<MusicGenPanel prompt="cinematic score" lyrics="" />);
     const engineSelect = await screen.findByRole('combobox', { name: /engine/i });
@@ -1031,7 +1040,7 @@ describe('MusicGenPanel', () => {
   });
 
   it('shows honest elapsed GPU feedback while MiniMax generation is running', async () => {
-    api.listMusicEngines.mockResolvedValue({
+    listMusicEngines.mockResolvedValue({
       defaultEngine: 'minimax-music3',
       engines: [engine({
         id: 'minimax-music3', name: 'MiniMax Music 3 (CUDA only)', ready: true,
@@ -1041,7 +1050,7 @@ describe('MusicGenPanel', () => {
         defaultModelId: 'minimax-music3',
       })],
     });
-    api.generateMusic.mockReturnValue(new Promise(() => {}));
+    generateMusic.mockReturnValue(new Promise(() => {}));
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="cinematic score" lyrics="Example lyrics" />);
 
@@ -1059,14 +1068,14 @@ describe('Music installation terminal evidence', () => {
   it.each(['', 'data: {"type":"progress","progress":0.5}\n\n', 'data: {"type":"error","message":"Download failed"}\n\n'])(
     'keeps custom retry input and reports one failure for %j', async (body) => {
       vi.clearAllMocks();
-      const { installAudioModel } = await import('../../services/apiMusic.js');
-      api.installAudioModel.mockImplementation(installAudioModel);
+      const { installAudioModel } = await vi.importActual('../../services/apiMusic.js');
+      apiInstallAudioModel.mockImplementation(installAudioModel);
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start(c) {
         c.enqueue(new TextEncoder().encode(body)); c.close();
       } }) }));
-      api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine()] });
-      api.getActiveProcessing.mockResolvedValue({ jobs: [] });
-      api.getInstances.mockResolvedValue({ peers: [] });
+      listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine()] });
+      getActiveProcessing.mockResolvedValue({ jobs: [] });
+      getInstances.mockResolvedValue({ peers: [] });
       render(<MusicGenPanel prompt="ambient" lyrics="" />);
       const field = await screen.findByPlaceholderText('org/model-repo');
       fireEvent.change(field, { target: { value: 'example/model' } });
@@ -1074,7 +1083,7 @@ describe('Music installation terminal evidence', () => {
       await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
       expect(field).toHaveValue('example/model');
       expect(toast.success).not.toHaveBeenCalled();
-      expect(api.listMusicEngines).toHaveBeenCalledTimes(1);
+      expect(listMusicEngines).toHaveBeenCalledTimes(1);
     },
   );
 });

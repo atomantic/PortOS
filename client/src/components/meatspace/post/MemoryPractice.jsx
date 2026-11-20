@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { ChevronLeft, Check, X, SkipForward, RotateCcw, Target, ChevronDown, Loader, ShieldCheck } from 'lucide-react';
-import { submitMemoryPractice, getChunkMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
+import {
+  submitMemoryPractice,
+  getChunkMastery,
+  getMemoryItem,
+  attestMemoryMastery,
+} from '../../../services/apiMeatspace.js';
 import ProgressBar from '../../ui/ProgressBar';
 import PostCompletionActions from './PostCompletionActions';
 import { startRetryableSave } from './completionSave';

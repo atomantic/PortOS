@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const updatePipelineSeries = vi.fn();
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   updatePipelineSeries: (...args) => updatePipelineSeries(...args),
 }));
 

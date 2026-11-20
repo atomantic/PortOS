@@ -5,7 +5,12 @@ import { MemoryRouter } from 'react-router';
 const api = vi.hoisted(() => ({
   createDeck: vi.fn(), deleteDeck: vi.fn(), listDecks: vi.fn(), listUniverseSummaries: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiDecks.js', () => ({
+  createDeck: api.createDeck,
+  deleteDeck: api.deleteDeck,
+  listDecks: api.listDecks,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseSummaries: api.listUniverseSummaries }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import Decks from './Decks';

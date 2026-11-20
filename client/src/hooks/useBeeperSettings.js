@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { getSettings, updateSettings } from '../services/api';
+import { getSettings, updateSettings } from '../services/apiSystem.js';
 
 export const BEEPER_DEFAULT_BASE_URL = 'http://127.0.0.1:23373';
 

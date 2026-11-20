@@ -1,9 +1,11 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRecentImageGallery } from './useRecentImageGallery';
-import { listImageGalleryPage } from '../services/api';
+import { listImageGalleryPage } from '../services/apiImageVideo.js';
 
-vi.mock('../services/api', () => ({ listImageGalleryPage: vi.fn() }));
+vi.mock('../services/apiImageVideo.js', () => ({
+  listImageGalleryPage: vi.fn(),
+}));
 const images = (prefix, count, hidden = false) => Array.from({ length: count }, (_, i) => ({
   filename: `${prefix}${i}.png`, hidden,
 }));

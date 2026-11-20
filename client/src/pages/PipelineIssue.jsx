@@ -19,10 +19,17 @@ import Drawer from '../components/Drawer';
 import RecordStatusLine from '../components/ui/RecordStatusLine';
 import TabPills from '../components/ui/TabPills';
 import {
-  getPipelineConfig, getPipelineIssue, getPipelineSeries, updatePipelineIssue,
-  startPipelineAutoRunText, cancelPipelineAutoRunText, pipelineAutoRunSseUrl,
-  PIPELINE_STAGES, PIPELINE_TAB_STAGES, PIPELINE_STAGE_LABELS,
-} from '../services/api';
+  getPipelineConfig,
+  getPipelineIssue,
+  getPipelineSeries,
+  updatePipelineIssue,
+  startPipelineAutoRunText,
+  cancelPipelineAutoRunText,
+  pipelineAutoRunSseUrl,
+  PIPELINE_STAGES,
+  PIPELINE_TAB_STAGES,
+  PIPELINE_STAGE_LABELS,
+} from '../services/apiPipeline.js';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { useLockToggle } from '../hooks/useLockToggle';
 import { lazyWithReload } from '../utils/lazyWithReload';

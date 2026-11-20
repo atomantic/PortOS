@@ -28,7 +28,8 @@ import { localModelSafety } from '../lib/localModelSafety.js';
  * multimodal). See `server/lib/localLlmDisk.js` for the disk logic.
  */
 
-import { execFile } from '../lib/childProcess.js';import { promisify } from 'util'
+import { execFile } from '../lib/childProcess.js'
+import { promisify } from 'util'
 import { createWriteStream } from 'fs'
 import { rename, rm, stat } from 'fs/promises'
 import { join } from 'path'

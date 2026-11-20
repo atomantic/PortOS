@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ getUsageTips: vi.fn(), dismissUsageTip: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({
+  getUsageTips: api.getUsageTips,
+  dismissUsageTip: api.dismissUsageTip,
+}));
 
 const { default: UsageRetentionTips } = await import('./UsageRetentionTips');
 

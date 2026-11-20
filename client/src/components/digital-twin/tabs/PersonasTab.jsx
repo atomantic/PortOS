@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { Drama, Plus, Pencil, Trash2, Check, X, CheckCircle2, SlidersHorizontal } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinPersonas,
+  getActiveDigitalTwinPersona,
+  createDigitalTwinPersona,
+  updateDigitalTwinPersona,
+  deleteDigitalTwinPersona,
+  setActiveDigitalTwinPersona,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
@@ -54,11 +61,11 @@ function buildAdjustmentsPayload(adj) {
 }
 
 // Silent: a failed read renders <ListLoadError>, so a toast would double up.
-const fetchPersonas = () => api.getDigitalTwinPersonas({ silent: true });
+const fetchPersonas = () => getDigitalTwinPersonas({ silent: true });
 // The active pointer is one record or none; wrapped as a list so a failed read
 // stays distinct from "no persona is active" (toggling reads this to decide
 // between activating and deactivating).
-const fetchActivePersona = () => api.getActiveDigitalTwinPersona({ silent: true }).then(active => (active?.id ? [active] : []));
+const fetchActivePersona = () => getActiveDigitalTwinPersona({ silent: true }).then(active => (active?.id ? [active] : []));
 
 /**
  * Twin Personas (M34 P7). Named context variants whose instructions are
@@ -90,7 +97,7 @@ export default function PersonasTab({ onRefresh }) {
     }
     setBusy(true);
     const traitAdjustments = buildAdjustmentsPayload(createForm.adjustments);
-    const persona = await api.createDigitalTwinPersona({
+    const persona = await createDigitalTwinPersona({
       name: createForm.name.trim(),
       description: createForm.description.trim() || undefined,
       instructions: createForm.instructions.trim(),
@@ -123,7 +130,7 @@ export default function PersonasTab({ onRefresh }) {
     setBusy(true);
     // null clears adjustments back to an instructions-only persona; an object replaces them.
     const traitAdjustments = buildAdjustmentsPayload(editForm.adjustments);
-    const updated = await api.updateDigitalTwinPersona(id, {
+    const updated = await updateDigitalTwinPersona(id, {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       instructions: editForm.instructions.trim(),
@@ -139,7 +146,7 @@ export default function PersonasTab({ onRefresh }) {
 
   const removePersona = async (id) => {
     setBusy(true);
-    const ok = await api.deleteDigitalTwinPersona(id).then(() => true).catch(() => false);
+    const ok = await deleteDigitalTwinPersona(id).then(() => true).catch(() => false);
     setBusy(false);
     setConfirmDeleteId(null);
     if (!ok) return;
@@ -152,7 +159,7 @@ export default function PersonasTab({ onRefresh }) {
   const toggleActive = async (id) => {
     const next = activeId === id ? null : id;
     setBusy(true);
-    const ok = await api.setActiveDigitalTwinPersona(next).then(() => true).catch(() => false);
+    const ok = await setActiveDigitalTwinPersona(next).then(() => true).catch(() => false);
     setBusy(false);
     if (!ok) return;
     setActiveId(next);

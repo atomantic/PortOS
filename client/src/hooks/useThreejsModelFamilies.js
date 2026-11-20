@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { listThreejsModelFamilies } from '../services/api';
+import { listThreejsModelFamilies } from '../services/apiThreejsModels.js';
 
 /**
  * The default "no checklist" subject family; mirrors the server id so a form has a valid value before the taxonomy resolves (the option list itself is always served, never mirrored).

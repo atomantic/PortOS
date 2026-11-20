@@ -1,5 +1,19 @@
 import { MemoryRouter } from 'react-router';
-import * as api from '../services/api';
+import {
+  getInstances,
+  getTailnetInfo,
+  getNetworkExposure,
+  getSettings,
+  getTailcatForwards,
+  getTailcatServe as apiGetTailcatServe,
+  addPeer as apiAddPeer,
+  startTailcatServe as apiStartTailcatServe,
+  syncPeer as apiSyncPeer,
+  probePeer,
+  updateSettings,
+} from '../services/apiSystem.js';
+import { getBrainParityReports } from '../services/apiBrain.js';
+import { listPeerSubscriptions as apiListPeerSubscriptions } from '../services/apiPeerSync.js';
 import socket from '../services/socket';
 import { TailcatServeProvider } from '../components/instances/TailcatServeProvider';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -8,13 +22,22 @@ import TailcatServePanel from '../components/instances/TailcatServePanel';
 import Instances, { AddPeerForm, PeerCard } from './Instances.jsx';
 import { DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
-import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe, removePeer, listPeerSubscriptions, getPeerFullSyncCoverage, syncPeer } from '../services/api';
+import {
+  addPeer,
+  addTailcatPeer,
+  startTailcatServe,
+  getTailcatServe,
+  stopTailcatServe,
+  removePeer,
+  getPeerFullSyncCoverage,
+  syncPeer,
+} from '../services/apiSystem.js';
+import { listPeerSubscriptions } from '../services/apiPeerSync.js';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({}),
   updateSettings: vi.fn(),
-  getCosJob: vi.fn().mockResolvedValue(null),
   updateSelfInstance: vi.fn(),
   addPeer: vi.fn(),
   addTailcatPeer: vi.fn(),
@@ -26,9 +49,7 @@ vi.mock('../services/api', () => ({
   syncPeer: vi.fn(),
   getTailnetInfo: vi.fn(),
   getNetworkExposure: vi.fn(),
-  listPeerSubscriptions: vi.fn(),
   getPeerFullSyncCoverage: vi.fn(),
-  getBrainParityReports: vi.fn(),
   getTailcatForwards: vi.fn().mockResolvedValue({ forwards: [] }),
   retryTailcatForward: vi.fn(),
   forgetTailcatForward: vi.fn(),
@@ -39,6 +60,15 @@ vi.mock('../services/api', () => ({
   startTailcatServe: vi.fn(),
   retryTailcatServe: vi.fn(),
   stopTailcatServe: vi.fn(),
+}));
+vi.mock('../services/apiAgents.js', () => ({
+  getCosJob: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../services/apiPeerSync.js', () => ({
+  listPeerSubscriptions: vi.fn(),
+}));
+vi.mock('../services/apiBrain.js', () => ({
+  getBrainParityReports: vi.fn(),
 }));
 
 vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
@@ -515,18 +545,18 @@ describe('PeerCard snapshot progress', () => {
 describe('Instances page connection drawers', () => {
   const peer = { id: 'page-peer', name: 'Office', status: 'online', enabled: true, address: '192.0.2.10', port: 5555 };
   beforeEach(() => {
-    api.getInstances.mockResolvedValue({ self: { name: 'Home' }, peers: [peer] });
-    api.getTailnetInfo.mockResolvedValue({ suffix: 'example', self: 'home' });
-    api.getNetworkExposure.mockResolvedValue({ setup: { complete: true } });
-    api.getBrainParityReports.mockResolvedValue({ reports: {} });
-    api.getSettings.mockResolvedValue({});
-    api.getTailcatForwards.mockResolvedValue({ forwards: [] });
-    api.getTailcatServe.mockResolvedValue({ status: 'stopped', live: false });
-    api.listPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
+    getInstances.mockResolvedValue({ self: { name: 'Home' }, peers: [peer] });
+    getTailnetInfo.mockResolvedValue({ suffix: 'example', self: 'home' });
+    getNetworkExposure.mockResolvedValue({ setup: { complete: true } });
+    getBrainParityReports.mockResolvedValue({ reports: {} });
+    getSettings.mockResolvedValue({});
+    getTailcatForwards.mockResolvedValue({ forwards: [] });
+    apiGetTailcatServe.mockResolvedValue({ status: 'stopped', live: false });
+    apiListPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
   });
 
   it('recovers an unavailable snapshot through the drawer and preserves data on refresh failure', async () => {
-    api.getInstances.mockRejectedValueOnce(new Error('Unavailable'));
+    getInstances.mockRejectedValueOnce(new Error('Unavailable'));
     renderUI(<MemoryRouter><Instances /></MemoryRouter>);
     expect(await screen.findByRole('alert')).toHaveTextContent('Instance snapshot unavailable');
     expect(screen.queryByText('No peers registered yet')).not.toBeInTheDocument();
@@ -539,14 +569,14 @@ describe('Instances page connection drawers', () => {
     expect(await within(screen.getByRole('dialog')).findByRole('button', { name: 'Edit', exact: true })).toBeEnabled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
-    expect(api.getInstances).toHaveBeenLastCalledWith({ silent: true });
-    api.getInstances.mockRejectedValueOnce(new Error('Refresh failed'));
+    expect(getInstances).toHaveBeenLastCalledWith({ silent: true });
+    getInstances.mockRejectedValueOnce(new Error('Refresh failed'));
     const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
     await act(async () => connectHandler());
     expect(await screen.findByRole('alert')).toHaveTextContent('Showing last loaded data');
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Edit', exact: true })).toBeEnabled();
-    api.getInstances.mockResolvedValueOnce({ self: { name: 'Recovered' }, peers: [], syncStatus: { cursors: {} } });
+    getInstances.mockResolvedValueOnce({ self: { name: 'Recovered' }, peers: [], syncStatus: { cursors: {} } });
     fireEvent.click(screen.getByRole('button', { name: 'Retry snapshot' }));
     expect(await screen.findByText('No peers registered yet')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -581,9 +611,9 @@ describe('Instances page connection drawers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add peer' }));
     expect(screen.getByLabelText('Peer address')).toHaveFocus();
     fireEvent.change(screen.getByLabelText('Peer address'), { target: { value: '192.0.2.30' } });
-    api.addPeer.mockRejectedValueOnce(new Error('Unavailable'));
+    apiAddPeer.mockRejectedValueOnce(new Error('Unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'Add', exact: true }));
-    await waitFor(() => expect(api.addPeer).toHaveBeenCalled());
+    await waitFor(() => expect(apiAddPeer).toHaveBeenCalled());
     expect(screen.getByLabelText('Peer address')).toHaveValue('192.0.2.30');
     // The rejected addPeer call keeps the mode buttons disabled (adding=true)
     // until its catch/finally settles — wait for that before switching modes,
@@ -608,22 +638,22 @@ describe('Instances page connection drawers', () => {
     expect(screen.getByLabelText('Tailcat address')).toHaveValue('tcEXAMPLE');
     fireEvent.click(screen.getByRole('button', { name: 'Host / port' }));
     expect(screen.getByLabelText('Peer address')).toHaveValue('192.0.2.30');
-    expect(api.startTailcatServe).not.toHaveBeenCalled();
-    expect(api.syncPeer).not.toHaveBeenCalled();
-    expect(api.probePeer).not.toHaveBeenCalled();
-    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(apiStartTailcatServe).not.toHaveBeenCalled();
+    expect(apiSyncPeer).not.toHaveBeenCalled();
+    expect(probePeer).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 
   // A late reconnect snapshot must settle self/sync/error state without
   // undoing peer changes delivered after that request began.
   it('keeps newer peer events while settling the other snapshot fields', async () => {
-    api.getInstances.mockRejectedValueOnce(new Error('Unavailable'));
+    getInstances.mockRejectedValueOnce(new Error('Unavailable'));
     renderUI(<MemoryRouter><Instances /></MemoryRouter>);
     expect(await screen.findByRole('alert')).toHaveTextContent('Instance snapshot unavailable');
     const updatePeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
     const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
     const pending = Promise.withResolvers();
-    api.getInstances.mockReturnValueOnce(pending.promise);
+    getInstances.mockReturnValueOnce(pending.promise);
     act(() => reconnect());
     const livePeer = { ...peer, enabled: false, instanceId: 'remote-office', syncCategories: { brain: true } };
     act(() => updatePeers([livePeer]));
@@ -639,7 +669,7 @@ describe('Instances page connection drawers', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     const removed = Promise.withResolvers();
-    api.getInstances.mockReturnValueOnce(removed.promise);
+    getInstances.mockReturnValueOnce(removed.promise);
     act(() => reconnect());
     act(() => updatePeers([]));
     await act(async () => removed.resolve({ self: { name: 'Recovered home' }, peers: [peer] }));
@@ -654,7 +684,7 @@ describe('Instances page connection drawers', () => {
   it('keeps the latest snapshot and releases reconnect/event listeners on unmount', async () => {
     const first = Promise.withResolvers();
     const second = Promise.withResolvers();
-    api.getInstances.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    getInstances.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const view = renderUI(<MemoryRouter><Instances /></MemoryRouter>);
     expect(screen.getByRole('status', { name: 'Loading instances' })).toBeInTheDocument();
     const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
@@ -665,15 +695,15 @@ describe('Instances page connection drawers', () => {
     expect(screen.getByText('Latest home')).toBeInTheDocument();
     expect(screen.getByText('No peers registered yet')).toBeInTheDocument();
     const afterUnmount = Promise.withResolvers();
-    api.getInstances.mockReturnValueOnce(afterUnmount.promise);
+    getInstances.mockReturnValueOnce(afterUnmount.promise);
     act(() => reconnect());
     view.unmount();
     expect(socket.off).toHaveBeenCalledWith('instances:peers:updated', updatePeers);
     expect(socket.off).toHaveBeenCalledWith('connect', reconnect);
     expect(socket.emit).toHaveBeenCalledWith('instances:unsubscribe');
-    const calls = api.getInstances.mock.calls.length;
+    const calls = getInstances.mock.calls.length;
     act(() => reconnect());
-    expect(api.getInstances).toHaveBeenCalledTimes(calls);
+    expect(getInstances).toHaveBeenCalledTimes(calls);
     await act(async () => afterUnmount.resolve({ self: { name: 'Unmounted home' }, peers: [peer] }));
     expect(screen.queryByText('Unmounted home')).not.toBeInTheDocument();
   });
@@ -686,7 +716,7 @@ describe('Instances page connection drawers', () => {
     renderUI(<MemoryRouter><Instances /></MemoryRouter>);
     await screen.findByRole('button', { name: 'Sync now' });
     expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
-    const getInstancesCalls = api.getInstances.mock.calls.length;
+    const getInstancesCalls = getInstances.mock.calls.length;
 
     const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
     expect(connectHandler).toBeTypeOf('function');
@@ -694,15 +724,15 @@ describe('Instances page connection drawers', () => {
     await act(async () => connectHandler());
 
     expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
-    await waitFor(() => expect(api.getInstances.mock.calls.length).toBeGreaterThan(getInstancesCalls));
+    await waitFor(() => expect(getInstances.mock.calls.length).toBeGreaterThan(getInstancesCalls));
   });
 
   // Regression: removing the last peer must not hide orphan/serve recovery or
   // the saved route that would keep unattended rendering pointed at that peer.
   it('keeps actionable recovery and the add CTA after the last peer disappears', async () => {
-    api.getTailcatForwards.mockResolvedValue({ forwards: [{ id: 'orphan', peerId: peer.id, name: 'Saved forward', status: 'failed', remotePort: 5558 }] });
-    api.getTailcatServe.mockResolvedValue({ status: 'failed', live: false });
-    api.getSettings.mockResolvedValue({ federation: { mediaRouting: { image: { peerId: peer.id, engine: 'comfy', modelId: 'old-model' } } } });
+    getTailcatForwards.mockResolvedValue({ forwards: [{ id: 'orphan', peerId: peer.id, name: 'Saved forward', status: 'failed', remotePort: 5558 }] });
+    apiGetTailcatServe.mockResolvedValue({ status: 'failed', live: false });
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: { peerId: peer.id, engine: 'comfy', modelId: 'old-model' } } } });
     renderUI(<MemoryRouter><Instances /></MemoryRouter>);
     await screen.findByRole('button', { name: 'Sync now' });
     const updatePeers = socket.on.mock.calls.find(([event]) => event === 'instances:peers:updated')[1];
@@ -714,10 +744,10 @@ describe('Instances page connection drawers', () => {
     fireEvent.click(screen.getByRole('button', { name: /render routing needs attention/ }));
     const select = screen.getByLabelText('Image');
     expect(select).toBeEnabled();
-    api.updateSettings.mockImplementation(async (patch) => patch);
-    api.getSettings.mockResolvedValue({ federation: { mediaRouting: { image: { peerId: peer.id, engine: 'comfy', modelId: 'old-model' } } } });
+    updateSettings.mockImplementation(async (patch) => patch);
+    getSettings.mockResolvedValue({ federation: { mediaRouting: { image: { peerId: peer.id, engine: 'comfy', modelId: 'old-model' } } } });
     fireEvent.change(select, { target: { value: '' } });
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith({ federation: { mediaRouting: { image: null } } }, { silent: true }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ federation: { mediaRouting: { image: null } } }, { silent: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
     expect(screen.queryByRole('button', { name: /render routing needs attention/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add your first peer' }));
@@ -726,9 +756,9 @@ describe('Instances page connection drawers', () => {
   });
 
   it('renders sync status sections with responsive single-column mobile grid', async () => {
-    api.getTailcatForwards.mockResolvedValue({ forwards: [] });
-    api.getTailcatServe.mockResolvedValue({ status: 'idle', live: false });
-    api.getInstances.mockResolvedValue({
+    getTailcatForwards.mockResolvedValue({ forwards: [] });
+    apiGetTailcatServe.mockResolvedValue({ status: 'idle', live: false });
+    getInstances.mockResolvedValue({
       self: { name: 'Home' },
       peers: [],
       syncStatus: {

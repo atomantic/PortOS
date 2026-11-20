@@ -9,7 +9,7 @@ import {
   Sparkles,
   AlertTriangle
 } from 'lucide-react';
-import * as api from '../services/api';
+import { getCosWhileAwayActivity } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { timeAgo } from '../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -68,7 +68,7 @@ const WHILE_AWAY_EVENTS = ['cos:agent:completed'];
 // reflect the window we actually queried (not a value that drifted since).
 const fetchWhileAway = async () => {
   const since = readLastSeen();
-  return { ...(await api.getCosWhileAwayActivity(since, { silent: true })), since };
+  return { ...(await getCosWhileAwayActivity(since, { silent: true })), since };
 };
 
 export default function WhileAwayWidget() {

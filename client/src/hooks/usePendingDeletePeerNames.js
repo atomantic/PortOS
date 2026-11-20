@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getInstances } from '../services/api';
+import { getInstances } from '../services/apiSystem.js';
 
 // Registry id -> display name for "Delete pending on <peer>". Reads the peer
 // registry once when a row's `pendingDelete.peerId` names a peer not resolved

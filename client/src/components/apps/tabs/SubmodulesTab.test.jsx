@@ -6,7 +6,7 @@ vi.mock('../../ui/Toast', () => ({ default: mockToast }));
 
 const mockGetSubmodules = vi.fn();
 const mockUpdateSubmodule = vi.fn();
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiGit.js', () => ({
   getSubmodules: (...a) => mockGetSubmodules(...a),
   updateSubmodule: (...a) => mockUpdateSubmodule(...a),
 }));

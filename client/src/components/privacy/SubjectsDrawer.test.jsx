@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 
 // Household subjects drawer (#3658). Consent is captured at creation because the
 // engine refuses to scan/opt-out for a subject with no consent row.
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPrivacy.js', () => ({
   createPrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn(),
@@ -14,9 +14,12 @@ vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } })
 
 import SubjectsDrawer from './SubjectsDrawer';
 import {
-  createPrivacySubject, deletePrivacySubject, getPrivacySubjectConsents,
-  grantPrivacySubjectConsent, revokePrivacySubjectConsent,
-} from '../../services/api';
+  createPrivacySubject,
+  deletePrivacySubject,
+  getPrivacySubjectConsents,
+  grantPrivacySubjectConsent,
+  revokePrivacySubjectConsent,
+} from '../../services/apiPrivacy.js';
 import { SELF_SUBJECT_ID } from './constants';
 
 const SUBJECTS = [

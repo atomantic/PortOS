@@ -1,10 +1,10 @@
 import { Link } from 'react-router';
 import { Globe } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getBrowserUpdateStatus } from '../../../services/apiSystem.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 
 const EVENTS = ['review:queue:changed'];
-const readStatus = () => api.getBrowserUpdateStatus({ silent: true });
+const readStatus = () => getBrowserUpdateStatus({ silent: true });
 
 export default function ChromeUpdatePanel() {
   const { data: status, error } = useSocketResource(readStatus, { events: EVENTS });

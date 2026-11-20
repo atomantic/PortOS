@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiLoops.js', () => ({
   getLoops: vi.fn(() => Promise.resolve([])),
   getLoopProviders: vi.fn(() => Promise.resolve({ providers: [] })),
   createLoop: vi.fn(() => Promise.resolve({})),
@@ -22,7 +22,7 @@ vi.mock('../components/ui/Toast', () => ({
 
 import Loops from './Loops';
 import socket from '../services/socket';
-import * as api from '../services/api';
+import { getLoops, stopLoop } from '../services/apiLoops.js';
 import toast from '../components/ui/Toast';
 
 describe('Loops action feedback (#8621)', () => {
@@ -32,20 +32,20 @@ describe('Loops action feedback (#8621)', () => {
   };
 
   it('does not report success when a rendered action request fails', async () => {
-    api.getLoops.mockResolvedValueOnce([runningLoop]);
-    api.stopLoop.mockRejectedValueOnce(new Error('Request failed'));
+    getLoops.mockResolvedValueOnce([runningLoop]);
+    stopLoop.mockRejectedValueOnce(new Error('Request failed'));
     toast.success.mockClear();
     render(<Loops />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Stop' }));
 
-    await waitFor(() => expect(api.stopLoop).toHaveBeenCalledWith('loop-1'));
+    await waitFor(() => expect(stopLoop).toHaveBeenCalledWith('loop-1'));
     expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('reports success after a rendered action request resolves', async () => {
-    api.getLoops.mockResolvedValueOnce([runningLoop]);
-    api.stopLoop.mockResolvedValueOnce({});
+    getLoops.mockResolvedValueOnce([runningLoop]);
+    stopLoop.mockResolvedValueOnce({});
     toast.success.mockClear();
     render(<Loops />);
 
@@ -64,7 +64,7 @@ describe('Loops reconnect resubscribe (#8110)', () => {
     render(<Loops />);
     await screen.findByText('No loops yet');
     expect(socket.emit).toHaveBeenCalledWith('loops:subscribe');
-    const getLoopsCalls = api.getLoops.mock.calls.length;
+    const getLoopsCalls = getLoops.mock.calls.length;
 
     const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
     expect(connectHandler).toBeTypeOf('function');
@@ -72,7 +72,7 @@ describe('Loops reconnect resubscribe (#8110)', () => {
     await act(async () => connectHandler());
 
     expect(socket.emit).toHaveBeenCalledWith('loops:subscribe');
-    await waitFor(() => expect(api.getLoops.mock.calls.length).toBeGreaterThan(getLoopsCalls));
+    await waitFor(() => expect(getLoops.mock.calls.length).toBeGreaterThan(getLoopsCalls));
   });
 });
 
@@ -102,7 +102,7 @@ describe('Loops index empty state', () => {
 describe('Loops initial list loading', () => {
   it('keeps the create form hidden until the first list read succeeds', async () => {
     let resolveLoops;
-    api.getLoops.mockReturnValueOnce(new Promise(resolve => { resolveLoops = resolve; }));
+    getLoops.mockReturnValueOnce(new Promise(resolve => { resolveLoops = resolve; }));
     render(<Loops />);
 
     expect(screen.getByText('Loading loops...')).toBeInTheDocument();
@@ -114,7 +114,7 @@ describe('Loops initial list loading', () => {
   });
 
   it('shows a retryable error instead of inviting a new loop, then recovers on retry', async () => {
-    api.getLoops.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce([]);
+    getLoops.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce([]);
     toast.error.mockClear();
     render(<Loops />);
 
@@ -122,7 +122,7 @@ describe('Loops initial list loading', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.queryByText('No loops yet')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Loop prompt')).not.toBeInTheDocument();
-    expect(api.getLoops).toHaveBeenCalledWith({ silent: true });
+    expect(getLoops).toHaveBeenCalledWith({ silent: true });
     expect(toast.error).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -131,7 +131,7 @@ describe('Loops initial list loading', () => {
   });
 
   it('renders cards after a successful non-empty list load', async () => {
-    api.getLoops.mockResolvedValueOnce([{
+    getLoops.mockResolvedValueOnce([{
       id: 'loop-loaded', name: 'Loaded loop', isRunning: false, intervalMs: 60_000,
       currentIteration: 0, lastRun: null,
     }]);
@@ -145,7 +145,7 @@ describe('Loops initial list loading', () => {
 
 describe('Loops refresh errors with retained data', () => {
   it('keeps the form and previously loaded list visible while showing a refresh error', async () => {
-    api.getLoops.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error('Refresh failed'));
+    getLoops.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error('Refresh failed'));
     render(<Loops />);
 
     expect(await screen.findByText('No loops yet')).toBeInTheDocument();

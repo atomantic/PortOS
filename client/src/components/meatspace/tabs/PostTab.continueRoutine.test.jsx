@@ -25,7 +25,7 @@ const { getPostRecommendations, toastSuccess } = vi.hoisted(() => ({
 
 vi.mock('../../ui/Toast', () => ({ default: { success: toastSuccess, error: vi.fn() } }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostConfig: () => Promise.resolve({}),
   getPostRecommendations,
   getPostSessions: () => Promise.resolve([]),

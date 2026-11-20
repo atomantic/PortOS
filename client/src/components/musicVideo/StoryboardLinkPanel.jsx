@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, LayoutPanelLeft, Loader2, Unlink } from 'lucide-react';
-import { createStoryboard, getStoryboard, listStoryboards, makeStoryboardFromMusicVideo } from '../../services/api';
+import {
+  createStoryboard,
+  getStoryboard,
+  listStoryboards,
+  makeStoryboardFromMusicVideo,
+} from '../../services/apiStoryboards.js';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { selectedTake, takeSrc } from '../storyboards/storyboardArt';
 

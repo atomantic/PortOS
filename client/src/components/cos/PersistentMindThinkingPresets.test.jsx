@@ -9,7 +9,8 @@ const api = vi.hoisted(() => ({
 }));
 const localLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 vi.mock('../../services/apiLocalLlm', () => localLlm);
 
 import PersistentMindThinkingPresets from './PersistentMindThinkingPresets.jsx';

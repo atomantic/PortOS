@@ -33,15 +33,11 @@ const api = vi.hoisted(() => ({
   setBeeperConversationLowPriority: vi.fn(),
   // The LOCAL "seen in PortOS" watermark (#83) — never a Beeper write.
   markBeeperConversationSeen: vi.fn(),
-  linkBeeperParticipant: vi.fn(),
-  createTribePersonFromBeeper: vi.fn(),
-  unlinkBeeperParticipant: vi.fn(),
-  getTribePeople: vi.fn(),
-  // Reached through the settings drawer. Declared here because
-  // `BeeperSettingsPanel` imports them at module load, whether or not a test
-  // opens the drawer — a named import missing from the mock throws.
-  getSettings: vi.fn(),
-  updateSettings: vi.fn(),
+  createBeeperConversation: vi.fn(),
+  listOutboxEntries: vi.fn(),
+  createOutboxEntry: vi.fn(),
+  sendOutboxEntry: vi.fn(),
+  discardOutboxEntry: vi.fn(),
   checkBeeperConnection: vi.fn(),
   startBeeperOAuth: vi.fn(),
   saveBeeperToken: vi.fn(),
@@ -55,16 +51,15 @@ const api = vi.hoisted(() => ({
   backfillBeeperAttachments: vi.fn(),
   purgeBeeperConversation: vi.fn(),
 }));
-// The composer's send lifecycle (#36) reaches the server through
-// `apiBeeper.js` directly — a DIFFERENT module specifier than the `api.js`
-// barrel every other call in this file goes through — so `useBeeperOutbox`
-// needs its own mock rather than riding along on `api` above.
-const apiBeeper = vi.hoisted(() => ({
-  createBeeperConversation: vi.fn(),
-  listOutboxEntries: vi.fn(),
-  createOutboxEntry: vi.fn(),
-  sendOutboxEntry: vi.fn(),
-  discardOutboxEntry: vi.fn(),
+const apiTribe = vi.hoisted(() => ({
+  getTribePeople: vi.fn(),
+  linkBeeperParticipant: vi.fn(),
+  createTribePersonFromBeeper: vi.fn(),
+  unlinkBeeperParticipant: vi.fn(),
+}));
+const apiSystem = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
 const socketMock = vi.hoisted(() => {
@@ -84,8 +79,9 @@ const socketMock = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../services/api', () => api);
-vi.mock('../../services/apiBeeper', () => apiBeeper);
+vi.mock('../../services/apiBeeper', () => api);
+vi.mock('../../services/apiTribe.js', () => apiTribe);
+vi.mock('../../services/apiSystem.js', () => apiSystem);
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: socketMock.socket }));
 
@@ -164,10 +160,10 @@ beforeEach(() => {
   api.getBeeperConversation.mockResolvedValue(conversation());
   api.getBeeperMessages.mockResolvedValue({ messages: [], nextCursor: null });
   api.markBeeperConversationSeen.mockResolvedValue(conversation());
-  api.getTribePeople.mockResolvedValue([]);
-  apiBeeper.listOutboxEntries.mockResolvedValue({ entries: [] });
-  apiBeeper.discardOutboxEntry.mockResolvedValue(undefined);
-  api.getSettings.mockResolvedValue({ beeper: { enabled: false, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5 } });
+  apiTribe.getTribePeople.mockResolvedValue([]);
+  api.listOutboxEntries.mockResolvedValue({ entries: [] });
+  api.discardOutboxEntry.mockResolvedValue(undefined);
+  apiSystem.getSettings.mockResolvedValue({ beeper: { enabled: false, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5 } });
   api.getBeeperAttachmentSummary.mockResolvedValue({
     budgetBytes: 5 * 1024 * 1024 * 1024, usedBytes: 0, storedFiles: 0, pendingCount: 0, pendingBytes: 0,
     pendingUnknownCount: 0, overCapCount: 0, unavailableCount: 0, keptCount: 0, totalCount: 0, maxBytes: 32 * 1024 * 1024,
@@ -616,7 +612,7 @@ describe('the composer sends', () => {
   const OUTBOUND_TEXT = 'Placeholder outbound text';
 
   it('shows an outbox load failure and recovers the hidden failed send on retry', async () => {
-    apiBeeper.listOutboxEntries.mockRejectedValueOnce(new Error('Outbox unavailable'))
+    api.listOutboxEntries.mockRejectedValueOnce(new Error('Outbox unavailable'))
       .mockResolvedValueOnce({ entries: [{ id: 'failed-1', conversationId: CONV_A, body: 'Unsent example', state: 'failed' }] });
     api.getBeeperConversation.mockResolvedValue(conversation({ network: 'whatsapp', title: 'Example Contact' }));
     renderTab(`/messages/beeper/${CONV_A}`);
@@ -638,23 +634,23 @@ describe('the composer sends', () => {
   };
 
   it('enqueues a send through the outbox with the right payload — one row, one send call', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'awaiting-confirmation' });
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'awaiting-confirmation' });
     const composer = await openComposer();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(apiBeeper.createOutboxEntry).toHaveBeenCalledWith(CONV_A, OUTBOUND_TEXT, { silent: true }));
-    expect(apiBeeper.createOutboxEntry).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledWith('outbox-1', { confirmFirstContact: false }, { silent: true }));
-    expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.createOutboxEntry).toHaveBeenCalledWith(CONV_A, OUTBOUND_TEXT, { silent: true }));
+    expect(api.createOutboxEntry).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.sendOutboxEntry).toHaveBeenCalledWith('outbox-1', { confirmFirstContact: false }, { silent: true }));
+    expect(api.sendOutboxEntry).toHaveBeenCalledTimes(1);
     // `onSent` clears the draft buffer once the send is accepted.
     await waitFor(() => expect(composer).toHaveValue(''));
   });
 
   it('renders the pending row while the send is in flight', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockReturnValue(new Promise(() => {})); // never settles within this test
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry.mockReturnValue(new Promise(() => {})); // never settles within this test
     await openComposer();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -666,7 +662,7 @@ describe('the composer sends', () => {
   });
 
   it('shows the real mirrored message once an entry is confirmed, with no duplicate pending row', async () => {
-    apiBeeper.listOutboxEntries.mockResolvedValue({
+    api.listOutboxEntries.mockResolvedValue({
       entries: [{ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'sent', messageId: 'msg-final-1' }],
     });
     api.getBeeperMessages.mockResolvedValue({
@@ -686,8 +682,8 @@ describe('the composer sends', () => {
   });
 
   it('shows a response-less send as unconfirmed with no Retry or automatic re-send', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockResolvedValue({
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry.mockResolvedValue({
       id: 'outbox-1',
       conversationId: CONV_A,
       body: OUTBOUND_TEXT,
@@ -703,13 +699,13 @@ describe('the composer sends', () => {
     await waitFor(() => expect(row).toHaveAttribute('data-state', 'awaiting-confirmation'));
     expect(within(row).getByText('Delivery unconfirmed; check the chat before sending again.')).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull();
-    expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(1);
+    expect(api.sendOutboxEntry).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(composer).toHaveValue(''));
   });
 
   it('surfaces a first-contact refusal as an inline confirmation naming the network and recipient, then resends the SAME row', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry
       .mockRejectedValueOnce(Object.assign(
         new Error('This is the first message PortOS has ever sent to this conversation'),
         { code: 'FIRST_CONTACT_CONFIRMATION_REQUIRED' },
@@ -725,11 +721,11 @@ describe('the composer sends', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
 
-    expect(apiBeeper.createOutboxEntry).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(apiBeeper.sendOutboxEntry).toHaveBeenLastCalledWith(
+    expect(api.createOutboxEntry).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.sendOutboxEntry).toHaveBeenLastCalledWith(
       'outbox-1', { confirmFirstContact: true }, { silent: true },
     ));
-    expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(2);
+    expect(api.sendOutboxEntry).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.queryByText(/send it\?/)).toBeNull());
   });
 
@@ -740,8 +736,8 @@ describe('the composer sends', () => {
   // reappearing on every reload because GET /outbox returns approved rows, with
   // no dismiss control and no way back. Cancel must discard the row outright.
   it('discards the pending bubble on Cancel — no phantom "Sending…" row left behind', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockRejectedValueOnce(Object.assign(
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry.mockRejectedValueOnce(Object.assign(
       new Error('This is the first message PortOS has ever sent to this conversation'),
       { code: 'FIRST_CONTACT_CONFIRMATION_REQUIRED' },
     ));
@@ -753,7 +749,7 @@ describe('the composer sends', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
-    await waitFor(() => expect(apiBeeper.discardOutboxEntry).toHaveBeenCalledWith('outbox-1', { silent: true }));
+    await waitFor(() => expect(api.discardOutboxEntry).toHaveBeenCalledWith('outbox-1', { silent: true }));
     // The discard CALL landing is not the removal — the row goes when that call
     // RESOLVES. Wait on the captured NODE rather than re-querying: a
     // `queryBy… toBeNull` wait passes on its first poll, so it would report
@@ -766,13 +762,13 @@ describe('the composer sends', () => {
     expect(composer).toHaveValue(OUTBOUND_TEXT);
 
     // A GET /outbox after the cancel (e.g. a reload) no longer returns the row.
-    apiBeeper.listOutboxEntries.mockResolvedValue({ entries: [] });
-    expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(1);
+    api.listOutboxEntries.mockResolvedValue({ entries: [] });
+    expect(api.sendOutboxEntry).toHaveBeenCalledTimes(1);
   });
 
   it('submits once from ⌘/Ctrl+Enter and once from a click inside the same render — the hook latch', async () => {
-    apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'awaiting-confirmation' });
+    api.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
+    api.sendOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'awaiting-confirmation' });
     const composer = await openComposer();
     const send = screen.getByRole('button', { name: 'Send' });
 
@@ -787,9 +783,9 @@ describe('the composer sends', () => {
     // nothing about it. Both duplicates a broken latch would produce are issued
     // from the same render, so by the time the send lands they have landed too —
     // the exact counts below are what the latch is actually being held to.
-    await waitFor(() => expect(apiBeeper.sendOutboxEntry).toHaveBeenCalled());
-    expect(apiBeeper.createOutboxEntry).toHaveBeenCalledTimes(1);
-    expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.sendOutboxEntry).toHaveBeenCalled());
+    expect(api.createOutboxEntry).toHaveBeenCalledTimes(1);
+    expect(api.sendOutboxEntry).toHaveBeenCalledTimes(1);
   });
 
   it('disables Send while the runaway breaker is tripped, even with a non-empty draft, and points at Settings', async () => {
@@ -811,7 +807,7 @@ describe('the composer sends', () => {
     expect(composer).toHaveValue(OUTBOUND_TEXT);
 
     fireEvent.click(send);
-    expect(apiBeeper.createOutboxEntry).not.toHaveBeenCalled();
+    expect(api.createOutboxEntry).not.toHaveBeenCalled();
   });
 
   // The breaker is PROCESS state that can trip mid-session — a send loop, or
@@ -1250,15 +1246,15 @@ describe('a conversation write that settles after a switch', () => {
   });
 
   it('does not reload the previous conversation into the open one when a participant link settles', async () => {
-    api.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
+    apiTribe.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
     await openA();
     const link = deferred();
-    api.linkBeeperParticipant.mockReturnValue(link.promise);
+    apiTribe.linkBeeperParticipant.mockReturnValue(link.promise);
     act(() => { screen.getByRole('button', { name: 'People' }).click(); });
     const picker = await screen.findByLabelText('Link Sam Example to a Tribe person');
     act(() => { picker.focus(); });
     act(() => { fireEvent.mouseDown(screen.getByRole('option', { name: 'Alex Example' })); });
-    await waitFor(() => expect(api.linkBeeperParticipant).toHaveBeenCalled());
+    await waitFor(() => expect(apiTribe.linkBeeperParticipant).toHaveBeenCalled());
 
     await switchToB();
     const detailReads = api.getBeeperConversation.mock.calls.length;
@@ -1320,7 +1316,7 @@ describe('a conversation write that settles after a switch', () => {
 
 // The LOCAL "seen in PortOS" watermark (#83) — the fix for opening an unread
 // thread leaving its badge untouched. This NEVER reaches Beeper: no PATCH,
-// no read receipt — see `markBeeperConversationSeen` (`apiBeeper.js`) and its
+// no read receipt — see `markBeeperConversationSeen` (`api.js`) and its
 // server-side `markConversationSeen`.
 describe('the local "seen in PortOS" watermark (#83)', () => {
   it('clears the row\'s own badge on open and calls the local mark-seen endpoint, never a Beeper write', async () => {
@@ -1422,12 +1418,12 @@ describe('the local "seen in PortOS" watermark (#83)', () => {
 
 describe('the inline Tribe link action', () => {
   it('links a participant to an existing Tribe person', async () => {
-    api.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
+    apiTribe.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
     api.getBeeperConversation.mockResolvedValue(conversation({
       title: 'Example Contact',
       participants: [{ sourceUserId: 'user-1', displayName: 'Sam Example', handle: '+15550100', tribePersonId: null, tribePersonName: null, observedVia: 'participant-list' }],
     }));
-    api.linkBeeperParticipant.mockResolvedValue({ participant: {}, displacedPersonId: null });
+    apiTribe.linkBeeperParticipant.mockResolvedValue({ participant: {}, displacedPersonId: null });
 
     renderTab(`/messages/beeper/${CONV_A}`);
 
@@ -1440,7 +1436,7 @@ describe('the inline Tribe link action', () => {
     const result = await screen.findByRole('option', { name: 'Alex Example' });
     act(() => { fireEvent.mouseDown(result); });
 
-    await waitFor(() => expect(api.linkBeeperParticipant).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiTribe.linkBeeperParticipant).toHaveBeenCalledWith(
       { conversationId: CONV_A, sourceUserId: 'user-1', personId: '55555555-5555-4555-8555-555555555555' },
       { silent: true },
     ));
@@ -1450,12 +1446,12 @@ describe('the inline Tribe link action', () => {
   // instead of posting immediately — this pins the wiring from the form's
   // Create button all the way down to `createTribePersonFromBeeper`.
   it('creates a Tribe person with the edited name, ring and relationship from the confirm-and-rename form', async () => {
-    api.getTribePeople.mockResolvedValue([]);
+    apiTribe.getTribePeople.mockResolvedValue([]);
     api.getBeeperConversation.mockResolvedValue(conversation({
       title: 'Example Contact',
       participants: [{ sourceUserId: 'user-1', displayName: 'Sam Example', handle: '', tribePersonId: null, tribePersonName: null, observedVia: 'participant-list' }],
     }));
-    api.createTribePersonFromBeeper.mockResolvedValue({
+    apiTribe.createTribePersonFromBeeper.mockResolvedValue({
       person: { id: 'new-person-1', name: 'Corrected Name' },
       participant: {},
       created: true,
@@ -1477,7 +1473,7 @@ describe('the inline Tribe link action', () => {
     act(() => { fireEvent.change(screen.getByLabelText('Relationship'), { target: { value: 'Neighbor' } }); });
     act(() => { fireEvent.click(screen.getByRole('button', { name: 'Create' })); });
 
-    await waitFor(() => expect(api.createTribePersonFromBeeper).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiTribe.createTribePersonFromBeeper).toHaveBeenCalledWith(
       { conversationId: CONV_A, sourceUserId: 'user-1', name: 'Corrected Name', ring: 'core', relationship: 'Neighbor' },
       { silent: true },
     ));
@@ -1487,7 +1483,7 @@ describe('the inline Tribe link action', () => {
 // Fork issue #97 part B: Change/Unlink on an already-linked participant.
 describe('the inline Tribe unlink/change actions', () => {
   it('unlinks a linked participant', async () => {
-    api.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
+    apiTribe.getTribePeople.mockResolvedValue([{ id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' }]);
     api.getBeeperConversation.mockResolvedValue(conversation({
       title: 'Example Contact',
       participants: [{
@@ -1495,7 +1491,7 @@ describe('the inline Tribe unlink/change actions', () => {
         tribePersonId: '55555555-5555-4555-8555-555555555555', tribePersonName: 'Alex Example', observedVia: 'participant-list',
       }],
     }));
-    api.unlinkBeeperParticipant.mockResolvedValue({
+    apiTribe.unlinkBeeperParticipant.mockResolvedValue({
       participant: {}, unlinkedPersonId: '55555555-5555-4555-8555-555555555555', removedClaims: 2,
     });
 
@@ -1506,14 +1502,14 @@ describe('the inline Tribe unlink/change actions', () => {
     const unlinkButton = await screen.findByRole('button', { name: 'Unlink' });
     act(() => { unlinkButton.click(); });
 
-    await waitFor(() => expect(api.unlinkBeeperParticipant).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiTribe.unlinkBeeperParticipant).toHaveBeenCalledWith(
       { conversationId: CONV_A, sourceUserId: 'user-1' },
       { silent: true },
     ));
   });
 
   it('re-links via a single POST /tribe/beeper/link call when Change picks a different person', async () => {
-    api.getTribePeople.mockResolvedValue([
+    apiTribe.getTribePeople.mockResolvedValue([
       { id: '55555555-5555-4555-8555-555555555555', name: 'Alex Example' },
       { id: '66666666-6666-4666-8666-666666666666', name: 'Blair Sample' },
     ]);
@@ -1524,7 +1520,7 @@ describe('the inline Tribe unlink/change actions', () => {
         tribePersonId: '55555555-5555-4555-8555-555555555555', tribePersonName: 'Alex Example', observedVia: 'participant-list',
       }],
     }));
-    api.linkBeeperParticipant.mockResolvedValue({ participant: {}, displacedPersonId: null });
+    apiTribe.linkBeeperParticipant.mockResolvedValue({ participant: {}, displacedPersonId: null });
 
     renderTab(`/messages/beeper/${CONV_A}`);
 
@@ -1537,11 +1533,11 @@ describe('the inline Tribe unlink/change actions', () => {
     const result = await screen.findByRole('option', { name: 'Blair Sample' });
     act(() => { fireEvent.mouseDown(result); });
 
-    await waitFor(() => expect(api.linkBeeperParticipant).toHaveBeenCalledWith(
+    await waitFor(() => expect(apiTribe.linkBeeperParticipant).toHaveBeenCalledWith(
       { conversationId: CONV_A, sourceUserId: 'user-1', personId: '66666666-6666-4666-8666-666666666666' },
       { silent: true },
     ));
-    expect(api.unlinkBeeperParticipant).not.toHaveBeenCalled();
+    expect(apiTribe.unlinkBeeperParticipant).not.toHaveBeenCalled();
   });
 });
 
@@ -1920,7 +1916,7 @@ it('opens a new direct conversation from the surface and navigates to its mirror
   api.getBeeperStatus.mockResolvedValue({
     tokenConfigured: true, accounts: [{ accountId: 'example-account', displayName: 'Example network' }],
   });
-  apiBeeper.createBeeperConversation.mockResolvedValue({ id: CONV_A });
+  api.createBeeperConversation.mockResolvedValue({ id: CONV_A });
   api.getBeeperConversation.mockResolvedValue(conversation());
   api.getBeeperMessages.mockResolvedValue({ messages: [], nextCursor: null });
   renderTab();
@@ -1929,7 +1925,7 @@ it('opens a new direct conversation from the surface and navigates to its mirror
   fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }));
   await waitFor(() => expect(api.getBeeperConversation).toHaveBeenCalledWith(CONV_A, { silent: true }));
   expect(screen.queryByLabelText('Recipient ID')).toBeNull();
-  expect(apiBeeper.createBeeperConversation).toHaveBeenCalledWith({
+  expect(api.createBeeperConversation).toHaveBeenCalledWith({
     accountId: 'example-account', participantId: 'recipient-example',
   }, { silent: true });
 });

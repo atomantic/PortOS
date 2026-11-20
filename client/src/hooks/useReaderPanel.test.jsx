@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getReaderPanel: vi.fn(),
   getReaderPanelStatus: vi.fn(),
   runReaderPanel: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../services/api', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
 vi.mock('./usePipelineProgress', () => ({ usePipelineProgress: vi.fn() }));
 
-import { getReaderPanel, getReaderPanelStatus } from '../services/api';
+import { getReaderPanel, getReaderPanelStatus } from '../services/apiPipeline.js';
 import { usePipelineProgress } from './usePipelineProgress';
 import { useReaderPanel } from './useReaderPanel';
 

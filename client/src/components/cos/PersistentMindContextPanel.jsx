@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Brain, Database, Eye, Plus, RefreshCw, Save } from 'lucide-react';
-import * as api from '../../services/api';
+import {
+  getPersistentMindContext,
+  updateCosConfig,
+  createPersistentMindMemory,
+  updatePersistentMindMemory,
+  getPersistentMindReflection,
+} from '../../services/apiAgents.js';
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import PersistentMindMaintainerControls from './PersistentMindMaintainerControls';
@@ -41,7 +47,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    return api.getPersistentMindContext({ silent: true })
+    return getPersistentMindContext({ silent: true })
       .then((next) => {
         setData(next);
         setDraft(promptDraft(next));
@@ -63,7 +69,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
     if (savingPlaybook) return;
     setSavingPlaybook(true);
     setError(null);
-    await api.updateCosConfig({ persistentMindPlaybook: playbook }, { silent: true })
+    await updateCosConfig({ persistentMindPlaybook: playbook }, { silent: true })
       .then(() => load())
       .catch((nextError) => setError(nextError?.message || 'Could not save the playbook'))
       .finally(() => setSavingPlaybook(false));
@@ -73,7 +79,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
     if (saving) return;
     setSaving(true);
     setError(null);
-    await api.updateCosConfig({ persistentMindPrompt: draft }, { silent: true })
+    await updateCosConfig({ persistentMindPrompt: draft }, { silent: true })
       .then(() => load())
       .catch((nextError) => setError(nextError?.message || 'Could not save the prompt'))
       .finally(() => setSaving(false));
@@ -270,7 +276,7 @@ function MemoryCreator({ onCreated }) {
     if (!draft.content.trim() || saving) return;
     setSaving(true);
     setError(null);
-    await api.createPersistentMindMemory({
+    await createPersistentMindMemory({
       ...draft,
       content: draft.content.trim(),
       summary: draft.summary.trim() || undefined,
@@ -315,7 +321,7 @@ function MemoryEditor({ memory, onSaved }) {
     event.preventDefault();
     setSaving(true);
     setError(null);
-    await api.updatePersistentMindMemory(memory.id, {
+    await updatePersistentMindMemory(memory.id, {
       ...draft,
       ...(protectionOverride !== null ? { protection: protectionOverride } : {}),
       summary: draft.summary.trim(),
@@ -354,7 +360,7 @@ const REFLECTION_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memo
 
 function MemoryReflection() {
   const { data, loading, error, refetch } = useSocketResource(async ({ signal }) => {
-    return api.getPersistentMindReflection({ signal, silent: true });
+    return getPersistentMindReflection({ signal, silent: true });
   }, { namespace: 'cos', events: REFLECTION_EVENTS });
   const sources = [data?.source, data?.inspected].filter((source, index, all) => source && all.findIndex(item => item?.id === source.id) === index);
   return (

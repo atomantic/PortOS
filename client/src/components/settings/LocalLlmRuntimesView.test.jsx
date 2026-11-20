@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
-  getSystemCapabilities: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   getLocalLlmHuggingFaceSearch: vi.fn(),
   installLocalLlmModel: vi.fn(),
@@ -23,13 +22,10 @@ vi.mock('../../services/api', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
-  // The MTPLX card's checkpoint panel loads upstream's default listing on mount.
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
   removeMtplxModel: vi.fn(),
   saveRuntimeStartupList: vi.fn(),
-  installAudioModel: vi.fn(),
-  patchSettingsSlice: vi.fn(),
   getLlamaServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
   getLlamaServerUpdateStatus: vi.fn().mockResolvedValue(null),
   startLlamaServer: vi.fn(),
@@ -49,6 +45,13 @@ vi.mock('../../services/api', () => ({
   cancelSpecDecodeModelDownload: vi.fn(),
   removeSpecDecodeModel: vi.fn(),
 }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getSystemCapabilities: vi.fn(),
+  patchSettingsSlice: vi.fn(),
+}));
+vi.mock('../../services/apiMusic.js', () => ({
+  installAudioModel: vi.fn(),
+}));
 // The dedicated Qwen host is a docker container, so its status comes from the
 // providers API rather than the local-LLM status payload above.
 vi.mock('../../services/apiProviders', () => ({
@@ -65,11 +68,10 @@ vi.mock('../ui/Toast', () => ({
 import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
-  getSystemCapabilities,
   getLocalLlmCatalog,
   installLocalLlmBackend,
-  patchSettingsSlice,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
+import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
 import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
@@ -207,7 +209,7 @@ describe('LocalLlmRuntimesView information architecture', () => {
 
 describe('runtime selection workflow', () => {
   it('opens configuration from the roster and recovers an invalid deep link', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });
     await renderRuntimes('unknown-runtime');
     expect(screen.getByText(/Runtime not found/)).toBeVisible();
@@ -221,7 +223,7 @@ describe('runtime selection workflow', () => {
   });
 
   it('retains a launch draft and download cancellation across selection and history', async () => {
-    const { getLlamaServerStatus, startLlamaServer, cancelSpecDecodeModelDownload } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer, cancelSpecDecodeModelDownload } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
     cancelSpecDecodeModelDownload.mockResolvedValue({ cancelled: true });
     await renderRuntimes('llama');
@@ -326,7 +328,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   // MTPLX starts on demand — the first request routed to it brings it up — and
   // also offers an explicit start when its checkpoint is already cached.
   it('offers MTPLX Start on the unified runtime surface', async () => {
-    const { getMtplxServerStatus, startMtplxServer } = await import('../../services/api');
+    const { getMtplxServerStatus, startMtplxServer } = await import('../../services/apiLocalLlm.js');
     getMtplxServerStatus.mockResolvedValue({
       installed: true, running: false, supported: true, cachedModels: ['Example/Qwen-MTP'], endpoint: 'http://127.0.0.1:8000/v1',
     });
@@ -341,7 +343,8 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   });
 
   it('saves an idle window through the settings slice for that runtime', async () => {
-    const { getLlamaServerStatus, patchSettingsSlice } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
+    const { patchSettingsSlice } = await import('../../services/apiSystem.js');
     getLlamaServerStatus.mockResolvedValue({ installed: true, running: true, idleMinutes: 0, config: {} });
 
     await renderRuntimes();
@@ -355,7 +358,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   });
 
   it('shows an exported backend conflict without a success toast', async () => {
-    const { getLocalLlmStatus, switchLocalLlmBackend } = await import('../../services/api');
+    const { getLocalLlmStatus, switchLocalLlmBackend } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     const error = 'LLM_BACKEND is exported as ollama. Change or unset that environment override and restart PortOS before setting lmstudio as the default.';
     getLocalLlmStatus.mockResolvedValue({
@@ -385,7 +388,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     // `pullMtplxModel` RESOLVES `{success: false}` for a failed download (its
     // progress already streamed), so a formatter-only success message would fire
     // an empty success toast alongside the real reason.
-    const { getMtplxServerStatus, pullMtplxModel } = await import('../../services/api');
+    const { getMtplxServerStatus, pullMtplxModel } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     getMtplxServerStatus.mockResolvedValue({
       installed: true, running: false, supported: true, cachedModels: [], cacheError: null,
@@ -401,7 +404,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   });
 
   it('downloads MTPLX\'s own default checkpoint when the cache is empty', async () => {
-    const { getMtplxServerStatus, pullMtplxModel } = await import('../../services/api');
+    const { getMtplxServerStatus, pullMtplxModel } = await import('../../services/apiLocalLlm.js');
     getMtplxServerStatus.mockResolvedValue({
       installed: true, running: false, supported: true, cachedModels: [], cacheError: null,
     });
@@ -416,7 +419,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
   });
 
   it('saves the PM2 process list so the managed daemons survive a reboot', async () => {
-    const { saveRuntimeStartupList } = await import('../../services/api');
+    const { saveRuntimeStartupList } = await import('../../services/apiLocalLlm.js');
     saveRuntimeStartupList.mockResolvedValue({ success: true });
 
     await renderRuntimes();
@@ -561,7 +564,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // component consumes leaks it into the next test's first status read. Reset
   // the mock outright here and give it a sane standing default.
   beforeEach(async () => {
-    const { getLlamaServerStatus, getLlamaServerUpdateStatus } = await import('../../services/api');
+    const { getLlamaServerStatus, getLlamaServerUpdateStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockReset();
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     getLlamaServerUpdateStatus.mockReset();
@@ -569,7 +572,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('renders start form and launches server when llama-server is installed', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 12345 });
 
@@ -590,7 +593,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('sends --parallel 1 by default and honours an edited slot count', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 99 });
 
@@ -611,7 +614,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // number would pin a setting the user never chose and make two "default"
   // launches incomparable.
   it('omits an untouched tuning flag from the launch payload entirely', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 99 });
 
@@ -637,7 +640,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // The preset select mounts pre-selected, so the form must mount pre-filled too —
   // otherwise Start is disabled while the UI reads as fully configured.
   it('seeds the form from the mounted preset so Start is immediately usable', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 4242 });
 
@@ -663,7 +666,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('explains why Start is disabled once the model path is cleared', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
 
     await renderRuntimes();
@@ -678,7 +681,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('swaps the preset and repoints both model paths', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 7 });
 
@@ -702,7 +705,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // Coercing a number input on every keystroke snaps it back to its default the
   // moment you clear it to retype, so the default is applied at launch instead.
   it('lets an advanced number field sit empty while retyping and defaults it at launch', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 21 });
 
@@ -721,7 +724,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('keeps an explicit -ngl 0 rather than treating it as unset', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 22 });
 
@@ -738,7 +741,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('lets the user set the model id llama.cpp will answer as', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 23 });
 
@@ -754,7 +757,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('drops the preset label to Custom once a preset-supplied path is hand-edited', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
 
     await renderRuntimes();
@@ -773,7 +776,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // a 400 from Start ("The base model was not found at `models/…`") with no
   // stated way to fix it.
   it('offers a download button for a preset GGUF that is not on disk', async () => {
-    const { getLlamaServerStatus, downloadSpecDecodeModel } = await import('../../services/api');
+    const { getLlamaServerStatus, downloadSpecDecodeModel } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
     downloadSpecDecodeModel.mockResolvedValueOnce({ success: true, path: 'models/Qwen3.8-27B-Instruct-Q4_K_M.gguf' });
 
@@ -797,7 +800,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // sidecar landing on the launch payload as `projector` — so it is asserted
   // end to end rather than as three separate wiring checks.
   it('downloads a preset projector and sends it on the next start', async () => {
-    const { getLlamaServerStatus, downloadSpecDecodeModel, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, downloadSpecDecodeModel, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     // The transfer really does put the file on disk, so the status the card
     // re-reads afterwards has to say so — otherwise this asserts against a
     // state the server can never report.
@@ -837,7 +840,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // whose sidecar was never fetched must still start — text-only, with an empty
   // `projector` the server leaves off the launch line entirely.
   it('starts a multimodal preset text-only when its projector is not on disk', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets() }));
     startLlamaServer.mockResolvedValueOnce({ success: true, pid: 4243 });
 
@@ -858,7 +861,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // there is no second action to discover, and the field under Advanced is where
   // a user clears it back to a text-only launch.
   it('pre-fills the projector field from a preset whose sidecar is already downloaded', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ projectorExists: true }) }));
 
     await renderRuntimes();
@@ -873,7 +876,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // launch line that can no longer load it — that would block Start on a file the
   // user deliberately removed, with the only way to clear it under Advanced.
   it('releases the projector field when its sidecar is deleted', async () => {
-    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/apiLocalLlm.js');
     let projectorOnDisk = true;
     getLlamaServerStatus.mockImplementation(async () => (
       llamaReady({ presets: specPresets({ projectorExists: projectorOnDisk }) })
@@ -902,7 +905,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // A dropped request (reload, proxy idle timeout) does not stop the transfer —
   // reporting it as a failure sends the user hunting a problem that isn't there.
   it('reports a lost request as still-running when the server is still downloading', async () => {
-    const { getLlamaServerStatus, downloadSpecDecodeModel } = await import('../../services/api');
+    const { getLlamaServerStatus, downloadSpecDecodeModel } = await import('../../services/apiLocalLlm.js');
     const toast = (await import('../ui/Toast')).default;
     const downloading = specPresets({ baseExists: false });
     downloading[0].model.downloading = true;
@@ -930,7 +933,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('offers Cancel for a running preset download and calls the cancel endpoint', async () => {
-    const { getLlamaServerStatus, cancelSpecDecodeModelDownload } = await import('../../services/api');
+    const { getLlamaServerStatus, cancelSpecDecodeModelDownload } = await import('../../services/apiLocalLlm.js');
     const downloading = specPresets({ baseExists: false });
     downloading[0].model.downloading = true;
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: downloading }));
@@ -947,7 +950,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // The "unload this method" cleanup path: a downloaded weight offers Delete,
   // gated behind an inline confirm rather than firing on the first click.
   it('deletes a downloaded preset GGUF after an inline confirm', async () => {
-    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     removeSpecDecodeModel.mockResolvedValue({ success: true, deleted: true, path: 'models/Qwen3.8-27B-Instruct-Q4_K_M.gguf' });
 
@@ -965,7 +968,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('backs out of the delete confirm without calling the delete endpoint', async () => {
-    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
 
     await renderRuntimes();
@@ -978,7 +981,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('blocks Start while a preset GGUF is missing and names the fix', async () => {
-    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
 
     await renderRuntimes();
@@ -994,7 +997,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // A drafter with no published single-file GGUF has no Download button — the
   // row must send the user somewhere rather than offering an action that 400s.
   it('links out when a drafter has no automatic Hugging Face source', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
 
     await renderRuntimes();
@@ -1007,7 +1010,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('renders install button and triggers install when llama-server is not installed', async () => {
-    const { getLlamaServerStatus, installLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, installLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({ installed: false, running: false, managed: false, presets: specPresets() });
 
     await renderRuntimes();
@@ -1025,7 +1028,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     // The browser cannot know what OS the install runs on, so this copy has to
     // come off the status payload — a Windows user was previously told to run
     // `brew install llama.cpp`, which does not exist there.
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({
       installed: false,
       running: false,
@@ -1044,7 +1047,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('updates llama.cpp from the unified runtime row', async () => {
-    const { getLlamaServerStatus, getLlamaServerUpdateStatus, upgradeLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, getLlamaServerUpdateStatus, upgradeLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue(llamaReady());
     getLlamaServerUpdateStatus.mockResolvedValueOnce({
       version: '0.1.1-dev',
@@ -1065,7 +1068,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   });
 
   it('renders running badge and stops server when llama-server is managed', async () => {
-    const { getLlamaServerStatus, stopLlamaServer } = await import('../../services/api');
+    const { getLlamaServerStatus, stopLlamaServer } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({
       installed: true,
       running: true,
@@ -1094,7 +1097,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
   // PM2 could not be read. A truthiness test told a user whose own daemon
   // PortOS had merely failed to read that they had started it in a terminal.
   it('does not call a server external when PM2 could not be read', async () => {
-    const { getLlamaServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus } = await import('../../services/apiLocalLlm.js');
     getLlamaServerStatus.mockResolvedValue({
       installed: true,
       running: true,

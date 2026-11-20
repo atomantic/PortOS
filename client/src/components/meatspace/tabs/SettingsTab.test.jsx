@@ -5,12 +5,12 @@ vi.mock('../../../services/socket', () => ({ default: {
   on: vi.fn(),
   off: vi.fn()
 } }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiHealth.js', () => ({
   uploadAppleHealthXml: vi.fn(),
-  ingestAppleHealth: vi.fn()
+  ingestAppleHealth: vi.fn(),
 }));
 import SettingsTab from './SettingsTab';
-import * as api from '../../../services/api';
+import { uploadAppleHealthXml } from '../../../services/apiHealth.js';
 
 const PICK_LABEL = 'Choose XML or ZIP file to import';
 
@@ -27,7 +27,7 @@ afterEach(() => {
 describe('SettingsTab Apple Health XML import', () => {
   it('settles from the upload response alone, with no health:xml:complete event', async () => {
     let resolveUpload;
-    api.uploadAppleHealthXml.mockReturnValueOnce(new Promise((resolve) => { resolveUpload = resolve; }));
+    uploadAppleHealthXml.mockReturnValueOnce(new Promise((resolve) => { resolveUpload = resolve; }));
     render(<SettingsTab />);
 
     pickFile();
@@ -42,7 +42,7 @@ describe('SettingsTab Apple Health XML import', () => {
   });
 
   it('omits the clinical count when the ZIP carried no clinical records', async () => {
-    api.uploadAppleHealthXml.mockResolvedValueOnce({ days: 1, records: 10 });
+    uploadAppleHealthXml.mockResolvedValueOnce({ days: 1, records: 10 });
     render(<SettingsTab />);
 
     pickFile();
@@ -52,7 +52,7 @@ describe('SettingsTab Apple Health XML import', () => {
   });
 
   it('shows the error and clears the importing state when the upload rejects', async () => {
-    api.uploadAppleHealthXml.mockRejectedValueOnce(new Error('Import failed: bad export'));
+    uploadAppleHealthXml.mockRejectedValueOnce(new Error('Import failed: bad export'));
     render(<SettingsTab />);
 
     pickFile();
@@ -60,6 +60,6 @@ describe('SettingsTab Apple Health XML import', () => {
     expect(await screen.findByText('Import failed: bad export')).toBeInTheDocument();
     expect(screen.queryByText('Import successful')).not.toBeInTheDocument();
     expect(screen.getByLabelText(PICK_LABEL)).not.toBeDisabled();
-    await waitFor(() => expect(api.uploadAppleHealthXml).toHaveBeenCalledWith(expect.any(File), { silent: true }));
+    await waitFor(() => expect(uploadAppleHealthXml).toHaveBeenCalledWith(expect.any(File), { silent: true }));
   });
 });

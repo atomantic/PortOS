@@ -7,7 +7,7 @@ import {
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
   ensureInfluences,
-} from '../../services/api';
+} from '../../services/apiUniverseBuilder.js';
 import ProviderModelSelector from '../ProviderModelSelector';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip';

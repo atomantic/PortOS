@@ -20,7 +20,17 @@ const toast = vi.hoisted(() => Object.assign(vi.fn(), {
 }));
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMessages.js', () => ({
+  evaluateMessages: api.evaluateMessages,
+  executeMessageAction: api.executeMessageAction,
+  fetchFullContent: api.fetchFullContent,
+  generateMessageDraft: api.generateMessageDraft,
+  getMessageDetail: api.getMessageDetail,
+  getMessageInbox: api.getMessageInbox,
+  getMessageThread: api.getMessageThread,
+  syncMessageAccount: api.syncMessageAccount,
+}));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 

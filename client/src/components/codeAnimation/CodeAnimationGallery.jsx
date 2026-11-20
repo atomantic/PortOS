@@ -6,7 +6,12 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { usePagedCollection } from '../../hooks/usePagedCollection';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import socket from '../../services/socket';
-import { codeAnimationPosterUrl, deleteCodeAnimationJob, listCodeAnimationJobPage, requestCodeAnimationPoster } from '../../services/api';
+import {
+  codeAnimationPosterUrl,
+  deleteCodeAnimationJob,
+  listCodeAnimationJobPage,
+  requestCodeAnimationPoster,
+} from '../../services/apiCodeAnimation.js';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import InlineConfirmRow from '../ui/InlineConfirmRow';

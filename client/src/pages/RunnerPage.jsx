@@ -4,7 +4,10 @@ import { useLocation, useNavigate } from 'react-router';
 import { Clock, Image, X, Info, Code2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
-import * as api from '../services/api';
+import { getApps } from '../services/apiApps.js';
+import { getAllowedCommands, executeCommand, stopCommand } from '../services/apiCommands.js';
+import { getProviders } from '../services/apiProviders.js';
+import { createRun, stopRun } from '../services/apiRuns.js';
 import socket from '../services/socket';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { processScreenshotUploads } from '../services/apiMedia';
@@ -35,14 +38,14 @@ export function RunnerPage() {
   const continueWorkspaceRef = useRef(location.state?.continueFrom?.workspacePath ?? null);
 
   const fetchApps = useCallback(async () => {
-    const list = await api.getApps({ silent: true });
+    const list = await getApps({ silent: true });
     return (Array.isArray(list) ? list : []).filter(a => a.id !== 'portos-autofixer');
   }, []);
   const appsResource = useListResource(fetchApps);
   const { items: apps, state: appsState, error: appsError, retry: retryApps } = appsResource;
 
   const fetchAllowedCommands = useCallback(async () => {
-    const list = await api.getAllowedCommands({ silent: true });
+    const list = await getAllowedCommands({ silent: true });
     return Array.isArray(list) ? list : [];
   }, []);
   const allowedCommandsResource = useListResource(fetchAllowedCommands);
@@ -75,7 +78,7 @@ export function RunnerPage() {
   }, [location.state, navigate]);
 
   useEffect(() => {
-    api.getProviders({ silent: true })
+    getProviders({ silent: true })
       .then((providersRes) => {
         const allProviders = providersRes?.providers || [];
         const enabledProviders = allProviders.filter(p => p.enabled);
@@ -202,7 +205,7 @@ ${prompt.trim()}`;
     setOutput('');
     setRunning(true);
 
-    const result = await api.createRun({
+    const result = await createRun({
       providerId: selectedProvider,
       model: selectedModel || undefined,
       prompt: finalPrompt,
@@ -235,7 +238,7 @@ ${prompt.trim()}`;
     setOutput('');
     setRunning(true);
 
-    const result = await api.executeCommand(command, workspacePath || undefined)
+    const result = await executeCommand(command, workspacePath || undefined)
       .catch(err => ({ error: err.message }));
 
     if (result.error) {
@@ -249,12 +252,12 @@ ${prompt.trim()}`;
 
   const handleStop = async () => {
     if (runId) {
-      await api.stopRun(runId);
+      await stopRun(runId);
       setRunning(false);
       setRunId(null);
     }
     if (commandId) {
-      await api.stopCommand(commandId);
+      await stopCommand(commandId);
       setRunning(false);
       setCommandId(null);
     }

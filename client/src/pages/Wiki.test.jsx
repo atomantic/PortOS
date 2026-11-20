@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate, useLocation } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiNotes.js', () => ({
   getNotesVaults: vi.fn(),
   scanNotesVault: vi.fn(),
   getNote: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('../components/wiki/tabs/GraphTab', () => ({ default: () => <div>graph</
 vi.mock('../components/wiki/tabs/LogTab', () => ({ default: () => <div>log</div> }));
 
 import Wiki, { TABS } from './Wiki';
-import { getNotesVaults, scanNotesVault, getNote, updateNote, deleteNote } from '../services/api';
+import { getNotesVaults, scanNotesVault, getNote, updateNote, deleteNote } from '../services/apiNotes.js';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 describe('Wiki TABS ↔ nav manifest', () => {

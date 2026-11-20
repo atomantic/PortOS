@@ -3,10 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [] }) }));
-
-vi.mock('../../../services/api', () => ({
-  PORTOS_APP_ID: 'portos-default',
+vi.mock('../../../services/apiApps', () => ({
+  getAppQualityHistory: vi.fn().mockResolvedValue({ points: [] }),
   getAppSpriteBindings: vi.fn(() => Promise.resolve({ bindings: [] })),
   deleteApp: vi.fn(() => Promise.resolve(null)),
   archiveApp: vi.fn(() => Promise.resolve({})),
@@ -38,7 +36,7 @@ vi.mock('../../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import * as api from '../../../services/api';
+import { deleteApp, getAppSpriteBindings, openAppInXcode as apiOpenAppInXcode } from '../../../services/apiApps.js';
 import toast from '../../ui/Toast';
 import OverviewTab from './OverviewTab';
 
@@ -60,8 +58,8 @@ function renderOverview(app = APP) {
 describe('OverviewTab PortOS registration removal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.deleteApp.mockResolvedValue(null);
-    api.getAppSpriteBindings.mockResolvedValue({ bindings: [] });
+    deleteApp.mockResolvedValue(null);
+    getAppSpriteBindings.mockResolvedValue({ bindings: [] });
   });
 
   it('explains that removal keeps the repository and requires confirmation', async () => {
@@ -74,7 +72,7 @@ describe('OverviewTab PortOS registration removal', () => {
     await user.click(screen.getByRole('button', { name: 'Remove from PortOS' }));
 
     expect(screen.getByText('Remove Example App from PortOS? Its repository will stay on disk.')).toBeTruthy();
-    expect(api.deleteApp).not.toHaveBeenCalled();
+    expect(deleteApp).not.toHaveBeenCalled();
   });
 
   it('removes the association and returns to the app registry after confirmation', async () => {
@@ -84,7 +82,7 @@ describe('OverviewTab PortOS registration removal', () => {
     await user.click(screen.getByRole('button', { name: 'Remove from PortOS' }));
     await user.click(screen.getByRole('button', { name: 'Remove' }));
 
-    await waitFor(() => expect(api.deleteApp).toHaveBeenCalledWith('app-1'));
+    await waitFor(() => expect(deleteApp).toHaveBeenCalledWith('app-1'));
     expect(toast.success).toHaveBeenCalledWith('Example App removed from PortOS — files kept on disk');
   });
 
@@ -92,7 +90,7 @@ describe('OverviewTab PortOS registration removal', () => {
     renderOverview({ ...APP, id: 'portos-default', name: 'PortOS' });
 
     expect(screen.queryByRole('button', { name: 'Remove from PortOS' })).toBeNull();
-    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
+    await waitFor(() => expect(getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
   });
 });
 
@@ -100,8 +98,8 @@ describe('OverviewTab sprite bindings', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows a load error with Retry when the bindings read fails, then the assets after retry', async () => {
-    api.getAppSpriteBindings.mockRejectedValueOnce(new Error('bindings unavailable'));
-    api.getAppSpriteBindings.mockResolvedValueOnce({ bindings: [{ recordId: 'sprite-1', name: 'Example Sprite', kind: 'character' }] });
+    getAppSpriteBindings.mockRejectedValueOnce(new Error('bindings unavailable'));
+    getAppSpriteBindings.mockResolvedValueOnce({ bindings: [{ recordId: 'sprite-1', name: 'Example Sprite', kind: 'character' }] });
     const user = userEvent.setup();
     renderOverview();
 
@@ -111,15 +109,15 @@ describe('OverviewTab sprite bindings', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('link', { name: 'Example Sprite' })).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(api.getAppSpriteBindings).toHaveBeenCalledTimes(2);
+    expect(getAppSpriteBindings).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('OverviewTab native app actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getAppSpriteBindings.mockResolvedValue({ bindings: [] });
-    api.openAppInXcode.mockResolvedValue({ success: true });
+    getAppSpriteBindings.mockResolvedValue({ bindings: [] });
+    apiOpenAppInXcode.mockResolvedValue({ success: true });
   });
 
   afterEach(() => vi.unstubAllGlobals());
@@ -130,13 +128,13 @@ describe('OverviewTab native app actions', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
 
-    expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios');
+    expect(apiOpenAppInXcode).toHaveBeenCalledWith('app-ios');
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Opening Example iOS App in Xcode'));
   });
 
   it('surfaces a failed Xcode launch through the shared request error boundary', async () => {
     const { openAppInXcode } = await vi.importActual('../../../services/apiApps');
-    api.openAppInXcode.mockImplementation(openAppInXcode);
+    apiOpenAppInXcode.mockImplementation(openAppInXcode);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
@@ -158,13 +156,13 @@ describe('OverviewTab launch video card', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage?.clear();
-    api.getAppSpriteBindings.mockResolvedValue({ bindings: [] });
+    getAppSpriteBindings.mockResolvedValue({ bindings: [] });
   });
 
   it('renders the launch video card for standard apps and permits dismissal', async () => {
     const user = userEvent.setup();
     renderOverview({ ...APP, id: 'standard-app', name: 'Standard App' });
-    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
+    await waitFor(() => expect(getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
 
     expect(screen.getByRole('heading', { name: 'Launch videos' })).toBeTruthy();
     const dismissButton = screen.getByRole('button', { name: 'Dismiss launch video card' });
@@ -179,21 +177,21 @@ describe('OverviewTab launch video card', () => {
   it('does not render launch video card when previously dismissed', async () => {
     window.localStorage.setItem('portos:launch-video-card-dismissed:standard-app', 'true');
     renderOverview({ ...APP, id: 'standard-app', name: 'Standard App' });
-    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
+    await waitFor(() => expect(getAppSpriteBindings).toHaveBeenCalledWith('standard-app'));
 
     expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
   });
 
   it('does not render launch video card for PortOS baseline app', async () => {
     renderOverview({ ...APP, id: 'portos-default', name: 'PortOS' });
-    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
+    await waitFor(() => expect(getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
 
     expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
   });
 
   it('does not render launch video card for Eidoverse Worlds app', async () => {
     renderOverview({ ...APP, id: 'eidoverse-worlds', name: 'Eidoverse Worlds', pm2ProcessNames: ['eidoverse-worlds'] });
-    await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('eidoverse-worlds'));
+    await waitFor(() => expect(getAppSpriteBindings).toHaveBeenCalledWith('eidoverse-worlds'));
 
     expect(screen.queryByRole('heading', { name: 'Launch videos' })).toBeNull();
   });

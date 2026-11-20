@@ -11,7 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { updateCosConfig, getCosBudgetUsage, getPersistentMind } from '../../../services/apiAgents.js';
 import { useSocketResource } from '../../../hooks/useSocketResource.js';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
@@ -226,7 +226,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
 
     const request = configSaveQueueRef.current
       .catch(() => undefined)
-      .then(() => api.updateCosConfig(patch, { silent: true }));
+      .then(() => updateCosConfig(patch, { silent: true }));
     configSaveQueueRef.current = request.catch(() => undefined);
 
     return request.then((result) => {
@@ -321,13 +321,13 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   }, [config, domainAutonomyOverrides, domainBudgetOverrides]);
 
   const refreshBudgetUsage = useCallback(() => (
-    api.getCosBudgetUsage({ silent: true })
+    getCosBudgetUsage({ silent: true })
       .then((response) => setBudgetUsage(response?.usage || {}))
       .catch(() => {})
   ), []);
 
   const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus } = useSocketResource(
-    () => api.getPersistentMind({ limit: 1 }, { silent: true }),
+    () => getPersistentMind({ limit: 1 }, { silent: true }),
     { namespace: 'cos', events: MIND_STATUS_EVENTS },
   );
   const mindStatus = { data: mindData, loaded: !mindLoading, error: mindError ? mindError.message || 'Persistent mind status is unavailable' : null };

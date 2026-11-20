@@ -13,7 +13,7 @@ import {
   AlertTriangle,
   CheckCircle
 } from 'lucide-react';
-import * as api from '../services/api';
+import { getNetworkExposure } from '../services/apiSystem.js';
 import { isLoopbackOrigin, describeMicAvailability } from '../lib/loopbackHost.js';
 import NetworkSetupGuide from './NetworkSetupGuide.jsx';
 
@@ -59,7 +59,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
 
   useEffect(() => {
     let cancelled = false;
-    api.getNetworkExposure({ silent: true })
+    getNetworkExposure({ silent: true })
       .then((data) => {
         if (!cancelled) setStatus(data);
       })

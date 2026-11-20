@@ -24,10 +24,15 @@ import LoadFailedState from '../ui/LoadFailedState';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import {
-  getSettings, patchSettingsSlice, getImageGenStatus,
-  registerTool, updateTool, getToolsList,
-  getCredentialInventory, saveCredential,
-} from '../../services/api';
+  getSettings,
+  patchSettingsSlice,
+  getImageGenStatus,
+  registerTool,
+  updateTool,
+  getToolsList,
+  getCredentialInventory,
+  saveCredential,
+} from '../../services/apiSystem.js';
 import {
   isLocalImageConfigured, imageGenReadiness, IMAGE_GEN_MODE, falImageFamily, higgsfieldImageFamily, googleImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL,
   RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, normalizeRenderPinValue,

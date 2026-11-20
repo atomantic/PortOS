@@ -21,7 +21,9 @@
  * is the prop bag `StoragePanel` / `ModelsPanel` / `CleanupControl` expect.
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
-import * as api from '../services/api';
+import { purgeDataCategory, runSystemResourceReport } from '../services/apiSystem.js';
+import { deleteCachedModel, deleteModelStoreItem, deleteLora } from '../services/apiImageVideo.js';
+import { deleteLocalLlmModel } from '../services/apiLocalLlm.js';
 import toast from '../components/ui/Toast';
 import { useConfirmDelete } from './useConfirmDelete.js';
 
@@ -29,11 +31,11 @@ import { useConfirmDelete } from './useConfirmDelete.js';
 // Returning null for an unknown type is deliberate: a newer server may describe
 // an action this client cannot perform, and refusing beats guessing.
 const removeForAction = (action) => {
-  if (action.type === 'data-category') return api.purgeDataCategory(action.key, {}, { silent: true });
-  if (action.type === 'hf-model') return api.deleteCachedModel(action.dirName, { silent: true });
-  if (action.type === 'model-store') return api.deleteModelStoreItem(action.backend, action.key, { silent: true });
-  if (action.type === 'lora') return api.deleteLora(action.filename, { silent: true });
-  if (action.type === 'local-model') return api.deleteLocalLlmModel(action.backend, action.modelId, { silent: true });
+  if (action.type === 'data-category') return purgeDataCategory(action.key, {}, { silent: true });
+  if (action.type === 'hf-model') return deleteCachedModel(action.dirName, { silent: true });
+  if (action.type === 'model-store') return deleteModelStoreItem(action.backend, action.key, { silent: true });
+  if (action.type === 'lora') return deleteLora(action.filename, { silent: true });
+  if (action.type === 'local-model') return deleteLocalLlmModel(action.backend, action.modelId, { silent: true });
   return null;
 };
 
@@ -49,7 +51,7 @@ export function useSystemResourceReport() {
     const generation = ++generationRef.current;
     cancelDelete();
     setLoading(true);
-    const outcome = await api.runSystemResourceReport({ silent: true }).then(
+    const outcome = await runSystemResourceReport({ silent: true }).then(
       (value) => ({ value }),
       (error) => ({ error }),
     );

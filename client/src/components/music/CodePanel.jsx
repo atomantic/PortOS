@@ -30,7 +30,8 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 import { clamp, formatTimecode } from '../../utils/formatters';
 import SuperColliderStage from './SuperColliderStage';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
-import { previewMusicCode, renderTrackCode, writeMusicCode } from '../../services/api';
+import { previewMusicCode, writeMusicCode } from '../../services/apiMusic.js';
+import { renderTrackCode } from '../../services/apiTracks.js';
 import {
   CODE_FRAME_SOURCE, STRUDEL_VERSION, TONE_VERSION, buildStrudelFrameDoc, buildToneFrameDoc,
 } from './strudelFrame';

@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, Loader2, ScanSearch, ShieldCheck } from 'lucide-react';
 import toast from '../ui/Toast';
-import { getPipelineSeriesCanonReadiness } from '../../services/api';
+import { getPipelineSeriesCanonReadiness } from '../../services/apiPipeline.js';
 
 export default function CanonReadinessPanel({ seriesId }) {
   const [canon, setCanon] = useState(null);

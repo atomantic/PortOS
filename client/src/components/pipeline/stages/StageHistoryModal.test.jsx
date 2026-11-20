@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   PIPELINE_STAGE_LABELS: { idea: 'Idea', prose: 'Prose' },
   restorePipelineStageVersion: vi.fn(),
 }));
@@ -12,7 +12,7 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import StageHistoryModal from './StageHistoryModal';
-import { restorePipelineStageVersion } from '../../../services/api';
+import { restorePipelineStageVersion } from '../../../services/apiPipeline.js';
 import toast from '../../ui/Toast';
 
 const makeEntry = (runId, output, daysAgo = 1) => ({

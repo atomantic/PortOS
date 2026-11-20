@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, AlertCircle, Trash2, TestTube, Calendar, CalendarDays } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatDateTime } from '../../utils/formatters';
-import * as api from '../../services/api';
+import {
+  getCalendarTokenStatus,
+  syncCalendarAccount,
+  apiSyncGoogleCalendar,
+  mcpSyncGoogleCalendar,
+  testCalendarToken,
+  clearCalendarToken,
+} from '../../services/apiCalendar.js';
 import socket from '../../services/socket';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EmptyState from '../EmptyState';
@@ -14,7 +21,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   const [mcpProgress, setMcpProgress] = useState({});
 
   const fetchTokenStatus = useCallback(async () => {
-    const data = await api.getCalendarTokenStatus().catch(() => null);
+    const data = await getCalendarTokenStatus().catch(() => null);
     setTokenStatus(data);
     setTokenLoading(false);
   }, []);
@@ -44,17 +51,17 @@ export default function SyncTab({ accounts, onRefresh }) {
     return () => socket.off('calendar:sync:progress', onSyncProgress);
   }, []);
 
-  const handleSync = (accountId) => sync(accountId, () => api.syncCalendarAccount(accountId, { silent: true }));
+  const handleSync = (accountId) => sync(accountId, () => syncCalendarAccount(accountId, { silent: true }));
 
   const handleGoogleSync = (account) => sync(account.id, () => {
     setMcpProgress(prev => ({ ...prev, [account.id]: 'Starting Google Calendar sync...' }));
     return account.syncMethod === 'google-api'
-      ? api.apiSyncGoogleCalendar(account.id, { silent: true })
-      : api.mcpSyncGoogleCalendar(account.id, { silent: true });
+      ? apiSyncGoogleCalendar(account.id, { silent: true })
+      : mcpSyncGoogleCalendar(account.id, { silent: true });
   });
 
   const handleTestToken = async (provider) => {
-    const result = await api.testCalendarToken(provider).catch(() => null);
+    const result = await testCalendarToken(provider).catch(() => null);
     if (result?.token) {
       toast.success(`${provider} token is valid`);
     } else {
@@ -66,7 +73,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   const handleClearToken = async (provider) => {
     if (clearingTokens[provider]) return;
     setClearingTokens(prev => ({ ...prev, [provider]: true }));
-    const cleared = await api.clearCalendarToken(provider).then(() => true).catch(() => false);
+    const cleared = await clearCalendarToken(provider).then(() => true).catch(() => false);
     setClearingTokens(prev => ({ ...prev, [provider]: false }));
     if (!cleared) return;
     toast.success(`${provider} token cleared`);

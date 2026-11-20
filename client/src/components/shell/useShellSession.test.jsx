@@ -31,7 +31,9 @@ const { readFileAsBase64, sendShellImage, toastMock } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn() },
 }));
 vi.mock('../../utils/fileUpload', () => ({ readFileAsBase64 }));
-vi.mock('../../services/api', () => ({ sendShellImage }));
+vi.mock('../../services/apiShell.js', () => ({
+  sendShellImage,
+}));
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import { useShellSession, } from './useShellSession.js';

@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Zap, Play, Brain, Dumbbell, Timer, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
-import { getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getPostBenchmarkProtocol, getMemoryItems, updatePostConfig, getPostCognitiveProgress } from '../../../services/api';
+import {
+  getPostReviewReps,
+  getPostRecommendations,
+  getMorseProgress,
+  getPostProgress,
+  getPostBenchmarkProtocol,
+  getMemoryItems,
+  updatePostConfig,
+  getPostCognitiveProgress,
+} from '../../../services/apiMeatspace.js';
 import { FormField } from '../../ui/FormField';
 import Pill from '../../ui/Pill';
 import ListLoadError from '../../ui/ListLoadError';

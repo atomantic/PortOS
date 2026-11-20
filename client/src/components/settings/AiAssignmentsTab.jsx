@@ -7,7 +7,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import TabPills from '../ui/TabPills.jsx';
-import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
 import useMediaQuery from '../../hooks/useMediaQuery.js';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';

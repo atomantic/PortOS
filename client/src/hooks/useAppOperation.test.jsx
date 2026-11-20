@@ -17,7 +17,9 @@ const mockToast = vi.hoisted(() => Object.assign(vi.fn(), {
 }));
 vi.mock('../components/ui/Toast', () => ({ default: mockToast }));
 const mockCheckHealth = vi.fn();
-vi.mock('../services/api', () => ({ checkHealth: (...a) => mockCheckHealth(...a) }));
+vi.mock('../services/apiSystem.js', () => ({
+  checkHealth: (...a) => mockCheckHealth(...a),
+}));
 
 import { useAppOperation } from './useAppOperation';
 import { PORTOS_APP_ID } from '../lib/appIdentity';

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { createPipelineSeason } from '../../../services/api';
+import { createPipelineSeason } from '../../../services/apiPipeline.js';
 
 export default function AddSeasonRow({ series, onSeriesUpdate }) {
   const [adding, setAdding] = useState(false);

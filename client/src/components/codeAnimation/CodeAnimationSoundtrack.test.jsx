@@ -3,13 +3,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const progress = vi.hoisted(() => ({ current: { status: 'unknown', progress: 0 } }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMusic.js', () => ({
   listMusicEngines: vi.fn(),
   previewMusicPrompt: vi.fn(async ({ prompt }) => ({ sentPrompt: prompt, promptAdditions: [] })),
-  generateCodeAnimationSoundtrack: vi.fn(),
   writeMusicCode: vi.fn(),
   previewMusicCode: vi.fn(async () => ({ sentPrompt: 'Example prompt', promptAdditions: [] })),
+}));
+vi.mock('../../services/apiCodeAnimation.js', () => ({
+  generateCodeAnimationSoundtrack: vi.fn(),
   ensureCodeAnimationSoundtrackTrack: vi.fn(),
+}));
+vi.mock('../../services/apiTracks.js', () => ({
   renderTrackCode: vi.fn(),
 }));
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: vi.fn(() => progress.current) }));
@@ -28,7 +32,8 @@ vi.mock('../music/strudelFrame', () => ({
 }));
 
 import CodeAnimationSoundtrack, { SOUNDTRACK_CHOICE_KEY } from './CodeAnimationSoundtrack';
-import { generateCodeAnimationSoundtrack, listMusicEngines, writeMusicCode } from '../../services/api';
+import { generateCodeAnimationSoundtrack } from '../../services/apiCodeAnimation.js';
+import { listMusicEngines, writeMusicCode } from '../../services/apiMusic.js';
 
 const ENGINES = [
   { id: 'musicgen', name: 'MusicGen', ready: true, maxDurationSec: 30, models: [{ id: 'mg', name: 'MG' }], defaultModelId: 'mg' },

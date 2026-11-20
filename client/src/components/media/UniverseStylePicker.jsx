@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Globe, X } from 'lucide-react';
-import { listUniverseStyles } from '../../services/api';
+import { listUniverseStyles } from '../../services/apiUniverseBuilder.js';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 
 // Universe style is intentionally a separate picker from StylePresetPicker:

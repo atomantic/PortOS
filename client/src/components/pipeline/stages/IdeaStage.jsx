@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Loader2, Wand2 } from 'lucide-react';
 import TextStagePanel from './TextStagePanel';
 import toast from '../../ui/Toast';
-import { generatePipelineStage } from '../../../services/api';
+import { generatePipelineStage } from '../../../services/apiPipeline.js';
 
 // Pulls the bullets out of a `## Open questions` markdown section. Returns
 // [] when the section is absent or empty — which is the desired steady state.

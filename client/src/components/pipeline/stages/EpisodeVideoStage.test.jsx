@@ -2,7 +2,7 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import EpisodeVideoStage from './EpisodeVideoStage';
-import { listVideoModels } from '../../../services/api';
+import { listVideoModels } from '../../../services/apiImageVideo.js';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 
 const handlers = vi.hoisted(() => new Map());
@@ -11,7 +11,12 @@ vi.mock('../../../services/socket', () => ({ default: {
   off: (event, fn) => handlers.get(event)?.delete(fn),
   emit: vi.fn(),
 } }));
-vi.mock('../../../services/api', () => ({ listVideoModels: vi.fn(async () => []), generatePipelineVisualImage: vi.fn() }));
+vi.mock('../../../services/apiImageVideo.js', () => ({
+  listVideoModels: vi.fn(async () => []),
+}));
+vi.mock('../../../services/apiPipeline.js', () => ({
+  generatePipelineVisualImage: vi.fn(),
+}));
 vi.mock('../../../services/apiCreativeDirector', () => ({ getCreativeDirectorProject: vi.fn() }));
 vi.mock('../../../hooks/useVideoFileSrc', () => ({ useVideoFileSrc: () => ({ src: null }) }));
 vi.mock('../../creative-director/ScenePreview', () => ({ default: () => null }));

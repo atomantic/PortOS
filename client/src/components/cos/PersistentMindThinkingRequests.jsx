@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import * as api from '../../services/api';
+import { updateCosConfig, cancelPersistentMindThinkingRequest } from '../../services/apiAgents.js';
 import { formatMindRoute } from '../../lib/mindThinkingPresets.js';
 
 export default function PersistentMindThinkingRequests({ catalog, capabilities, onSaved, onCancelled }) {
@@ -35,14 +35,14 @@ export default function PersistentMindThinkingRequests({ catalog, capabilities, 
       {!catalog?.presets?.length && <p className="text-sm text-port-text-muted">No eligible presets. Save a preset using a configured local API runtime first. Account-backed and unknown routes are unavailable.</p>}
     </fieldset>
     <button type="button" disabled={saving || !catalog} className="min-h-10 rounded bg-port-accent px-3 text-white disabled:opacity-50" onClick={() => act(async () => {
-      const result = await api.updateCosConfig({ persistentMindCapabilities: { chooseThinkingPreset: enabled, thinkingPresetAllowlist: ids } }, { silent: true });
+      const result = await updateCosConfig({ persistentMindCapabilities: { chooseThinkingPreset: enabled, thinkingPresetAllowlist: ids } }, { silent: true });
       onSaved(result.persistentMindCapabilities);
       if (!enabled) onCancelled();
     })}>{saving ? 'Saving…' : 'Save local thinking access'}</button>
     {catalog?.pending && <div className="text-sm text-port-text">
       <p>Pending: {catalog.pending.label} — {catalog.pending.reason}</p>
       <button type="button" disabled={saving} className="min-h-10 rounded border border-port-border px-3" onClick={() => act(async () => {
-        await api.cancelPersistentMindThinkingRequest({ silent: true });
+        await cancelPersistentMindThinkingRequest({ silent: true });
         onCancelled();
       })}>Cancel pending request</button>
     </div>}

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGithub.js', () => ({
   actOnGitHubNotificationPullRequest: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),

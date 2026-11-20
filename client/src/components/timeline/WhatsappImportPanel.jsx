@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { MessagesSquare } from 'lucide-react';
-import * as api from '../../services/api';
+import { importWhatsappHistory } from '../../services/apiTimeline.js';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
 // Bulk-backfill importer for a WhatsApp "Export chat" transcript (#2160), built on
@@ -34,7 +34,7 @@ export default function WhatsappImportPanel({ onImported }) {
       icon={MessagesSquare}
       title="Import WhatsApp chat"
       noun="message"
-      importFn={(file, opts) => api.importWhatsappHistory(
+      importFn={(file, opts) => importWhatsappHistory(
         file,
         opts.preview ? opts : { ...opts, dateOrder: orderChoice?.order },
       )}

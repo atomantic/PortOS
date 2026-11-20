@@ -9,7 +9,7 @@ import { pluralize } from '../lib/textUtils';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import FilePickerButton from '../components/ui/FilePickerButton';
-import * as api from '../services/api';
+import { listUploads, uploadFile, deleteUpload, deleteAllUploads, getUploadUrl } from '../services/apiMedia.js';
 
 // File type icons based on MIME type
 function getFileIcon(mimeType) {
@@ -38,7 +38,7 @@ export default function Uploads() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchUploads = useCallback(async () => {
-    const data = await api.listUploads({ silent: true }).catch(err => {
+    const data = await listUploads({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -68,7 +68,7 @@ export default function Uploads() {
     const added = [];
 
     for (const file of fileArray) {
-      const result = await api.uploadFile(file, file.name, { silent: true }).catch(err => {
+      const result = await uploadFile(file, file.name, { silent: true }).catch(err => {
         toast.error(`Failed to upload "${file.name}": ${err.message}`);
         return null;
       });
@@ -88,7 +88,7 @@ export default function Uploads() {
   };
 
   const handleDelete = async (filename) => {
-    const result = await api.deleteUpload(filename, { silent: true }).catch(err => {
+    const result = await deleteUpload(filename, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -105,7 +105,7 @@ export default function Uploads() {
       return;
     }
 
-    const result = await api.deleteAllUploads({ silent: true }).catch(err => {
+    const result = await deleteAllUploads({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -257,7 +257,7 @@ export default function Uploads() {
                 <div className="w-12 h-12 flex items-center justify-center bg-port-bg rounded-lg shrink-0">
                   {isPreviewableImage(file.mimeType) ? (
                     <img
-                      src={api.getUploadUrl(file.filename)}
+                      src={getUploadUrl(file.filename)}
                       alt={file.filename}
                       className="w-12 h-12 object-cover rounded-lg"
                     />
@@ -282,7 +282,7 @@ export default function Uploads() {
                 {/* Actions */}
                 <div className="flex items-center gap-2 opacity-100 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                   <a
-                    href={api.getUploadUrl(file.filename)}
+                    href={getUploadUrl(file.filename)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-2 text-gray-500 hover:text-port-accent transition-colors"

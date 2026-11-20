@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ getGsdProjects: vi.fn() }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiGSD.js', () => ({ getGsdProjects: api.getGsdProjects }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), toast) }));
 vi.mock('./GsdProjectCard', () => ({ default: ({ project }) => <div>{project.appId}</div> }));
 

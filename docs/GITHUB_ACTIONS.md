@@ -62,7 +62,8 @@ A release therefore pays for one full run (on its PR), not three.
 
 ## CI Workflow (`ci.yml`)
 
-PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
+PRs into `main` use `scripts/ci-test-plan.js` (its path rules, manifest verdicts,
+repository inputs and output in `scripts/lib/ciPlan*.js`) to classify the changed files
 before installing dependencies. Directory-scoped features add their server and
 client feature tests, and every behavioral source (nested or flat) uses the
 runner's import-graph-aware `related` mode, fed the changed behavioral source
@@ -626,8 +627,8 @@ The selected work is split across parallel jobs:
   server Vitest harness (so the spawn, kill and child-environment helpers it
   depends on select it), `docker/supercollider/`, a `package.json` or
   `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
-  `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
-  `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
+  `SUPERCOLLIDER_LIVE_PATH_RE` in `scripts/lib/ciPlanRules.js`,
+  `collectSuperColliderLiveInputs()` in `scripts/lib/ciPlanInputs.js`). The closure is recomputed from the head tree on
   every run, so a new import is covered without a list edit. Non-push full runs
   and pull requests into `release` always run it, a push gates it; `workflow_dispatch`
   of `CI` is the manual evidence run. Pregate reports it as CI-only.
@@ -683,6 +684,9 @@ suites, and a Windows run (#11871). A server `related` plan also fans out
 when its measured import reach (`serverReach.selected`, the suites the related
 walk will select) exceeds the same cap, even with few explicit selectors: one
 runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+The reach, the DB, browser and client consumer closures and the gated-job
+closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
+the same extractor and resolver pregate's local selection uses.
 The summary names that reach-based fan-out. Every other scoped plan stays on one
 runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
 each selected suite runs. The runner slices the selection itself and never hands Vitest
@@ -740,7 +744,7 @@ speculative cross-browser matrix.
 
 ### Windows native contract coverage
 
-The canonical registry is `scripts/ci-test-plan.js` (25 files):
+The canonical registry is `WINDOWS_CONTRACT_TESTS` in `scripts/lib/ciPlanRules.js` (25 files):
 
 | Boundary | Retained suites |
 | --- | --- |
@@ -770,7 +774,7 @@ macOS is the primary interactive target, and release agents there run under
 the launchd-coalition supervisor (`server/lib/darwinAgentSupervisor.py`). Its
 real-process boundary suite, `server/lib/windowsAgentProcess.darwin.test.js`,
 skips on every other platform. The `macos-native` job (`macos-latest`) runs that
-file (`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so native supervision
+file (`MACOS_NATIVE_TESTS` in `scripts/lib/ciPlanRules.js`), so native supervision
 remains a required check. Release pre-flight uses platform-neutral Git/GitHub
 checks and also runs in the Windows contract set.
 

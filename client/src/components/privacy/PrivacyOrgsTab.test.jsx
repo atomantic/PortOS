@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPrivacy.js', () => ({
   getPrivacyOrgs: vi.fn(),
   deletePrivacyOrg: vi.fn(),
   getVaultRecords: vi.fn(),
@@ -9,10 +9,12 @@ vi.mock('../../services/api', () => ({
   createPrivacyOrg: vi.fn(),
   updatePrivacyOrg: vi.fn(),
   setOrgHoldings: vi.fn(),
+}));
+vi.mock('../../services/apiDigitalTwin.js', () => ({
   getSocialAccounts: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+import { getPrivacyOrgs, getVaultRecords, getOrgHoldings } from '../../services/apiPrivacy.js';
 import PrivacyOrgsTab from './PrivacyOrgsTab';
 
 afterEach(() => {
@@ -22,10 +24,10 @@ afterEach(() => {
 
 describe('PrivacyOrgsTab', () => {
   it('shows a failed organization read as a retryable error, not "No organizations yet"', async () => {
-    api.getPrivacyOrgs.mockRejectedValueOnce(new Error('boom'));
-    api.getPrivacyOrgs.mockResolvedValue([{ id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active' }]);
-    api.getVaultRecords.mockResolvedValue([]);
-    api.getOrgHoldings.mockResolvedValue([]);
+    getPrivacyOrgs.mockRejectedValueOnce(new Error('boom'));
+    getPrivacyOrgs.mockResolvedValue([{ id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active' }]);
+    getVaultRecords.mockResolvedValue([]);
+    getOrgHoldings.mockResolvedValue([]);
     render(<PrivacyOrgsTab subjectId="self" />);
 
     expect(await screen.findByText(/Could not load organizations/)).toBeInTheDocument();
@@ -36,10 +38,10 @@ describe('PrivacyOrgsTab', () => {
   });
 
   it('shows a holdings error instead of "No holdings recorded" when a badge read fails, and Retry restores it', async () => {
-    api.getPrivacyOrgs.mockResolvedValue([{ id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active' }]);
-    api.getVaultRecords.mockResolvedValue([]);
-    api.getOrgHoldings.mockRejectedValueOnce(new Error('holdings down'));
-    api.getOrgHoldings.mockResolvedValue([{ vaultRecordId: 'v1', status: 'current' }]);
+    getPrivacyOrgs.mockResolvedValue([{ id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active' }]);
+    getVaultRecords.mockResolvedValue([]);
+    getOrgHoldings.mockRejectedValueOnce(new Error('holdings down'));
+    getOrgHoldings.mockResolvedValue([{ vaultRecordId: 'v1', status: 'current' }]);
     render(<PrivacyOrgsTab subjectId="self" />);
 
     expect(await screen.findByText(/Could not load holdings/)).toBeInTheDocument();

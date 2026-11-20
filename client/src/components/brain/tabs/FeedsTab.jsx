@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import * as api from '../../../services/api';
+import {
+  getFeeds,
+  getFeedItems,
+  addFeed,
+  removeFeed,
+  refreshAllFeeds,
+  refreshFeed,
+  markFeedItemRead,
+  markAllFeedItemsRead,
+} from '../../../services/apiMessages.js';
 import {
   Rss,
   Send,
@@ -34,7 +43,7 @@ export default function FeedsTab({ onRefresh }) {
 
   const fetchFeeds = useCallback(async () => {
     try {
-      const data = await api.getFeeds();
+      const data = await getFeeds();
       setFeedsFailed(false);
       setFeeds(data || []);
       return true;
@@ -47,7 +56,7 @@ export default function FeedsTab({ onRefresh }) {
   const fetchItems = useCallback(async () => {
     const isCurrent = beginItemsLoad();
     try {
-      const data = await api.getFeedItems({ feedId: selectedFeedId, unreadOnly });
+      const data = await getFeedItems({ feedId: selectedFeedId, unreadOnly });
       if (!isCurrent()) return;
       setItems(data || []);
       setItemsError(null);
@@ -69,7 +78,7 @@ export default function FeedsTab({ onRefresh }) {
     const url = normalizeUrl(inputUrl, { allowGit: false });
 
     setAdding(true);
-    const result = await api.addFeed(url).catch(() => null);
+    const result = await addFeed(url).catch(() => null);
     setAdding(false);
 
     if (result) {
@@ -82,7 +91,7 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleRemoveFeed = async (id) => {
-    await api.removeFeed(id).catch(() => null);
+    await removeFeed(id).catch(() => null);
     toast.success('Feed removed');
     setConfirmingDeleteId(null);
     setFeeds(prev => prev.filter(f => f.id !== id));
@@ -93,7 +102,7 @@ export default function FeedsTab({ onRefresh }) {
 
   const handleRefreshAll = async () => {
     setRefreshing(true);
-    const result = await api.refreshAllFeeds().catch(() => null);
+    const result = await refreshAllFeeds().catch(() => null);
     setRefreshing(false);
     if (result) {
       toast.success(`Refreshed ${result.refreshed} feeds (+${result.newItems} new)`);
@@ -103,7 +112,7 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleRefreshFeed = async (id) => {
-    const result = await api.refreshFeed(id).catch(() => null);
+    const result = await refreshFeed(id).catch(() => null);
     if (result) {
       toast.success(`+${result.newCount} new items`);
       fetchFeeds();
@@ -112,7 +121,7 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkRead = async (itemId) => {
-    await api.markFeedItemRead(itemId).catch(() => null);
+    await markFeedItemRead(itemId).catch(() => null);
     // Track which feed to update before modifying items state
     setItems(prev => {
       const item = prev.find(i => i.id === itemId);
@@ -126,7 +135,7 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkAllRead = async () => {
-    await api.markAllFeedItemsRead(selectedFeedId).catch(() => null);
+    await markAllFeedItemsRead(selectedFeedId).catch(() => null);
     setItems(prev => prev.map(i => {
       if (!selectedFeedId || i.feedId === selectedFeedId) return { ...i, read: true };
       return i;

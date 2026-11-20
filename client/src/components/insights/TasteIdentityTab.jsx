@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import { getInsightThemes, refreshInsightThemes } from '../../services/api';
+import { getInsightThemes, refreshInsightThemes } from '../../services/apiSystem.js';
 import InsightCard from './InsightCard';
 import ConfidenceBadge from './ConfidenceBadge';
 import EmptyState from '../EmptyState';

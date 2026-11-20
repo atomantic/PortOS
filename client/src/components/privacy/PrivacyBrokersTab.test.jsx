@@ -33,7 +33,7 @@ const api = vi.hoisted(() => ({
   runScanDeferred: null,
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPrivacy.js', () => ({
   getPrivacyScanStatus: vi.fn(async () => api.scanStatus),
   getPrivacyBrokerCases: vi.fn(async () => api.cases),
   getPrivacyBrokers: vi.fn(async () => api.brokers),
@@ -53,14 +53,22 @@ vi.mock('../../services/api', () => ({
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 import PrivacyBrokersTab from './PrivacyBrokersTab.jsx';
-import * as apiMod from '../../services/api';
+import {
+  runPrivacyOptOut,
+  refreshPrivacyBrokers,
+  getPrivacyCaseEvidence,
+  erasePrivacyCaseEvidence,
+  transitionPrivacyCase,
+  updatePrivacyOptOutSchedule,
+  setPrivacyBrokerEnabled,
+} from '../../services/apiPrivacy.js';
 
 const renderTab = (props = {}) => render(<MemoryRouter initialEntries={['/privacy/brokers']}><PrivacyBrokersTab {...props} /></MemoryRouter>);
 
 describe('PrivacyBrokersTab', () => {
   it('shows the missing send account next action after an opt-out pass', async () => {
     const toast = (await import('../ui/Toast')).default;
-    apiMod.runPrivacyOptOut.mockResolvedValueOnce({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail or Outlook account to send opt-out emails'] });
+    runPrivacyOptOut.mockResolvedValueOnce({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail or Outlook account to send opt-out emails'] });
     renderTab();
     await screen.findByText('Spokeo');
     fireEvent.click(screen.getByRole('button', { name: /Run opt-out pass/i }));
@@ -74,7 +82,7 @@ describe('PrivacyBrokersTab', () => {
 
   it('warns naming the failed source when only one download failed', async () => {
     const toast = (await import('../ui/Toast')).default;
-    apiMod.refreshPrivacyBrokers.mockResolvedValueOnce({ added: 1, fetched: 1, sources: { badbool: { ok: false, count: 0, error: 'HTTP 503' }, caRegistry: { ok: true, count: 1, error: null } } });
+    refreshPrivacyBrokers.mockResolvedValueOnce({ added: 1, fetched: 1, sources: { badbool: { ok: false, count: 0, error: 'HTTP 503' }, caRegistry: { ok: true, count: 1, error: null } } });
     renderTab();
     await screen.findByText('Spokeo');
     fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
@@ -84,7 +92,7 @@ describe('PrivacyBrokersTab', () => {
 
   it('shows the error and no success toast when the refresh is refused (both sources down)', async () => {
     const toast = (await import('../ui/Toast')).default;
-    apiMod.refreshPrivacyBrokers.mockRejectedValueOnce(new Error('Broker list refresh failed: both sources were unreachable'));
+    refreshPrivacyBrokers.mockRejectedValueOnce(new Error('Broker list refresh failed: both sources were unreachable'));
     renderTab();
     await screen.findByText('Spokeo');
     fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
@@ -94,7 +102,7 @@ describe('PrivacyBrokersTab', () => {
 
   it('confirms a clean refresh with a success toast', async () => {
     const toast = (await import('../ui/Toast')).default;
-    apiMod.refreshPrivacyBrokers.mockResolvedValueOnce({ added: 2, fetched: 3, sources: { badbool: { ok: true, count: 2, error: null }, caRegistry: { ok: true, count: 1, error: null } } });
+    refreshPrivacyBrokers.mockResolvedValueOnce({ added: 2, fetched: 3, sources: { badbool: { ok: true, count: 2, error: null }, caRegistry: { ok: true, count: 1, error: null } } });
     renderTab();
     await screen.findByText('Spokeo');
     fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
@@ -120,10 +128,10 @@ describe('PrivacyBrokersTab', () => {
     // decrypts the links for the one open case.
     const link = await screen.findByRole('link', { name: /spokeo\.example\/p\/example/ });
     expect(link.getAttribute('href')).toBe('https://spokeo.example/p/example');
-    expect(apiMod.getPrivacyCaseEvidence).toHaveBeenCalledWith('c1');
+    expect(getPrivacyCaseEvidence).toHaveBeenCalledWith('c1');
     fireEvent.click(screen.getByRole('button', { name: /erase identity evidence/i }));
     fireEvent.click(screen.getByRole('button', { name: /^erase$/i }));
-    await waitFor(() => expect(apiMod.erasePrivacyCaseEvidence).toHaveBeenCalledWith('c1', expect.anything()));
+    await waitFor(() => expect(erasePrivacyCaseEvidence).toHaveBeenCalledWith('c1', expect.anything()));
     await waitFor(() => expect(screen.queryByRole('link', { name: /spokeo\.example\/p\/example/ })).toBeNull());
   });
 
@@ -131,7 +139,7 @@ describe('PrivacyBrokersTab', () => {
     renderTab();
     await screen.findByText('BeenVerified');
     fireEvent.click(screen.getByLabelText('Mark done'));
-    await waitFor(() => expect(apiMod.transitionPrivacyCase).toHaveBeenCalledWith('h1', 'submitted', undefined, expect.anything()));
+    await waitFor(() => expect(transitionPrivacyCase).toHaveBeenCalledWith('h1', 'submitted', undefined, expect.anything()));
   });
 
   it('a blocked digest item offers a manual-check link and transitions to found (not submitted)', async () => {
@@ -142,7 +150,7 @@ describe('PrivacyBrokersTab', () => {
     expect(manualLink.getAttribute('href')).toBe('https://rad/p/Jane/Doe/');
     // blocked → submitted is not a legal transition; the positive action is found.
     fireEvent.click(screen.getByLabelText("I'm listed"));
-    await waitFor(() => expect(apiMod.transitionPrivacyCase).toHaveBeenCalledWith('b1', 'found', undefined, expect.anything()));
+    await waitFor(() => expect(transitionPrivacyCase).toHaveBeenCalledWith('b1', 'found', undefined, expect.anything()));
   });
 
   it('disables both run buttons while a pass is in flight', async () => {
@@ -163,7 +171,7 @@ describe('PrivacyBrokersTab', () => {
     const checkbox = await screen.findByLabelText(/Automatic recheck schedule/i);
     expect(checkbox.checked).toBe(false);
     fireEvent.click(checkbox);
-    await waitFor(() => expect(apiMod.updatePrivacyOptOutSchedule).toHaveBeenCalledWith({ enabled: true }, expect.anything()));
+    await waitFor(() => expect(updatePrivacyOptOutSchedule).toHaveBeenCalledWith({ enabled: true }, expect.anything()));
   });
 
   it('toggles a broker enabled flag from the database list', async () => {
@@ -172,7 +180,7 @@ describe('PrivacyBrokersTab', () => {
     fireEvent.click(await screen.findByText(/Broker database/i));
     const brokerToggle = await screen.findByLabelText('Enable Spokeo');
     fireEvent.click(brokerToggle);
-    await waitFor(() => expect(apiMod.setPrivacyBrokerEnabled).toHaveBeenCalledWith('spokeo', false, expect.anything()));
+    await waitFor(() => expect(setPrivacyBrokerEnabled).toHaveBeenCalledWith('spokeo', false, expect.anything()));
   });
 
   // ── Purpose-scoped broker consent (#8332) ──
@@ -193,7 +201,7 @@ describe('PrivacyBrokersTab', () => {
 
   it('restates a refused opt-out pass as the missing purpose grant', async () => {
     const toast = (await import('../ui/Toast')).default;
-    apiMod.runPrivacyOptOut.mockRejectedValueOnce(Object.assign(new Error('raw 403'), { code: 'SUBJECT_CONSENT_REQUIRED', status: 403 }));
+    runPrivacyOptOut.mockRejectedValueOnce(Object.assign(new Error('raw 403'), { code: 'SUBJECT_CONSENT_REQUIRED', status: 403 }));
     renderTab();
     await screen.findByText('Spokeo');
     fireEvent.click(screen.getByRole('button', { name: /Run opt-out pass/ }));

@@ -3,12 +3,14 @@ import { expect, it, vi } from 'vitest';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from './useCodeReviewDefaults';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerModels';
 import ReviewerPicker from '../components/cos/ReviewerPicker';
-import * as api from '../services/api';
+import { getCodeReviewDefaults } from '../services/apiCodeReview.js';
 
-vi.mock('../services/api', () => ({ getCodeReviewDefaults: vi.fn() }));
+vi.mock('../services/apiCodeReview.js', () => ({
+  getCodeReviewDefaults: vi.fn(),
+}));
 
 it('renders inherited provider pins and emits only the edited field, including an explicit clear', async () => {
-  api.getCodeReviewDefaults.mockResolvedValue({
+  getCodeReviewDefaults.mockResolvedValue({
     reviewers: ['provider:example-api'], providerModels: { 'provider:example-api': 'custom-coder' },
     providerEfforts: { 'provider:example-api': 'high' },
     providerReviewUnsupported: { 'provider:example-api': 'REVIEWER_UNSUPPORTED' },

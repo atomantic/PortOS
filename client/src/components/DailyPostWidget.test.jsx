@@ -11,7 +11,11 @@ const mock = vi.hoisted(() => ({
   getPostRecommendations: vi.fn(),
 }));
 
-vi.mock('../services/api', () => mock);
+vi.mock('../services/apiMeatspace.js', () => ({
+  getPostStats: mock.getPostStats,
+  getPostConfig: mock.getPostConfig,
+  getPostRecommendations: mock.getPostRecommendations,
+}));
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),

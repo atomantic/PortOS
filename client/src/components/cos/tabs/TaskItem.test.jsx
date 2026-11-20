@@ -13,7 +13,15 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  updateCosTask: api.updateCosTask,
+  deleteCosTask: api.deleteCosTask,
+  approveCosTask: api.approveCosTask,
+  forceSpawnTask: api.forceSpawnTask,
+  resetSpawnBudgetAndRun: api.resetSpawnBudgetAndRun,
+  recheckCosAgentCleanup: api.recheckCosAgentCleanup,
+  resolveCosTaskChallenge: api.resolveCosTaskChallenge,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const TaskItem = (await import('./TaskItem')).default;

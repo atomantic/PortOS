@@ -181,10 +181,13 @@ export const videoGenStatus = (models, overrides = {}) => ({
   ...overrides,
 });
 
-vi.mock('../services/api', () => ({
-  // The page offers a federated render target (#4348); with no peer opted in as
-  // a media provider the picker renders nothing and every local path is unchanged.
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: state.peers })),
+  patchSettingsSlice: vi.fn(async () => ({})),
+  getSettings: vi.fn(async () => state.settings ?? ({ imageGen: { grok: { enabled: false } } })),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
   getVideoGenStatus: (...args) => state.getVideoGenStatus(...args),
   getVideoGenModelContext: (...args) => state.getVideoGenModelContext(...args),
   generateVideo: (...args) => state.generateVideo(...args),
@@ -197,17 +200,17 @@ vi.mock('../services/api', () => ({
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),
   upscaleVideo: vi.fn(async () => ({})),
-  patchSettingsSlice: vi.fn(async () => ({})),
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
-  getSettings: vi.fn(async () => state.settings ?? ({ imageGen: { grok: { enabled: false } } })),
   getVideoGenRuntimeStatus: vi.fn(async () => state.runtimeStatus),
   listLorasFull: (...args) => state.listLorasFull(...args),
-  // The prompt-enhancement controls mount useProviderModels, which fetches the
-  // provider list from a mount effect. Unmocked it throws out of a passive
-  // effect — the tests still pass, but the unhandled rejection fails the run.
+}));
+vi.mock('../services/apiProviders.js', () => ({
   getProviders: vi.fn(async () => ({ providers: [] })),
+}));
+vi.mock('../services/apiLocalLlm.js', () => ({
   getVisionModels: vi.fn(async () => ({ models: [] })),
-  // The Episode Composer's FableLoom import (`?episode=1&loomId=…`).
+}));
+vi.mock('../services/apiFableLoom.js', () => ({
   getLoom: (...args) => state.getLoom(...args),
 }));
 

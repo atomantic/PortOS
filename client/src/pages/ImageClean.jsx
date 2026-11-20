@@ -6,7 +6,8 @@ import FilePickerButton from '../components/ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../utils/fileUpload';
 import BrailleSpinner from '../components/BrailleSpinner';
 import IgnoreZonePainter from '../components/media/IgnoreZonePainter';
-import * as api from '../services/api';
+import { getRegenAvailability } from '../services/apiImageVideo.js';
+import { fetchCleanResult, cleanImage, saveCleanResult } from '../services/apiMedia.js';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { formatBytes } from '../utils/formatters';
 
@@ -73,7 +74,7 @@ export default function ImageClean() {
   // seeds the strength slider bounds/default so it matches server validation.
   useEffect(() => {
     let alive = true;
-    api.getRegenAvailability().then((info) => {
+    getRegenAvailability().then((info) => {
       if (!alive || !info) return;
       setRegen(info);
       setStrength(typeof info.strengthDefault === 'number' ? info.strengthDefault : 0.25);
@@ -103,7 +104,7 @@ export default function ImageClean() {
     // stranding the spinner. The server writes the PNG before emitting the
     // event, so in practice the first attempt succeeds.
     const attempt = (tries) => {
-      api.fetchCleanResult(myJob).then((res) => {
+      fetchCleanResult(myJob).then((res) => {
         if (!alive || myJob !== gpuJobId) return;
         if (res.pending) {
           if (tries > 0) setTimeout(() => { if (alive && myJob === gpuJobId) attempt(tries - 1); }, 600);
@@ -189,7 +190,7 @@ export default function ImageClean() {
         payload.feather = feather;
       }
     }
-    const cleaned = await api.cleanImage(file, payload).catch((err) => {
+    const cleaned = await cleanImage(file, payload).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
     });
@@ -326,7 +327,7 @@ export default function ImageClean() {
   const saveToGallery = async () => {
     if (!gpuJobId || saving) return;
     setSaving(true);
-    const saved = await api.saveCleanResult(gpuJobId, { silent: true }).catch((err) => {
+    const saved = await saveCleanResult(gpuJobId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to save to gallery');
       return null;
     });

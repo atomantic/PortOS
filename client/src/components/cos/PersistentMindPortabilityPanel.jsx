@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Brain, Database, Download, Lock, ShieldCheck, Sparkles } from 'lucide-react';
 import { downloadBlob } from '../../lib/downloadBlob.js';
 import { MIND_BUNDLE_FILE_EXTENSION, MIND_BUNDLE_PASSPHRASE_MIN_CHARS } from '../../lib/mindBundle.js';
-import * as api from '../../services/api';
+import { exportPersistentMindBundle } from '../../services/apiAgents.js';
 import Banner from '../ui/Banner';
 import PersistentMindImportPanel from './PersistentMindImportPanel.jsx';
 
@@ -87,7 +87,7 @@ export default function PersistentMindPortabilityPanel() {
     setError(null);
     setExported(null);
     const scopes = EXPORT_SCOPES.map(({ scope }) => scope).filter((scope) => selected.has(scope));
-    await api.exportPersistentMindBundle({ scopes, passphrase })
+    await exportPersistentMindBundle({ scopes, passphrase })
       .then((bundle) => {
         const filename = mindBundleFilename();
         downloadBlob(bundle, filename);

@@ -7,8 +7,10 @@ import QuickImagePrompt from './QuickImagePrompt';
 // subscribes to sockets (irrelevant here) so stub it to a marker.
 const generateImage = vi.fn();
 const listUniverseStyles = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   generateImage: (...args) => generateImage(...args),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseStyles: (...args) => listUniverseStyles(...args),
 }));
 vi.mock('./pipeline/MediaJobThumb', () => ({ default: () => <div data-testid="job-thumb" /> }));

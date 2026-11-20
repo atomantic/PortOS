@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModels from './ThreejsModels';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiThreejsModels.js', () => ({
   createThreejsModel: vi.fn(),
   listThreejsModelFamilies: vi.fn(),
   listThreejsModels: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock('../components/imageGen/GalleryImagePicker', () => ({
   ) : null,
 }));
 
-import { createThreejsModel, listThreejsModelFamilies, listThreejsModels } from '../services/api';
+import { createThreejsModel, listThreejsModelFamilies, listThreejsModels } from '../services/apiThreejsModels.js';
 
 function LocationProbe() {
   return <output aria-label="Current query">{useLocation().search}</output>;

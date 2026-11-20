@@ -36,11 +36,9 @@ vi.mock('../../services/apiImageVideo.js', () => ({
   getTopazJobStatus: (...a) => getTopazJobStatus(...a),
   cancelTopazRemoteJob: (...a) => cancelTopazRemoteJob(...a),
   recoverTopazJob: vi.fn(),
-}));
-const listLorasFull = vi.fn();
-vi.mock('../../services/api', () => ({
   listLorasFull: (...a) => listLorasFull(...a),
 }));
+const listLorasFull = vi.fn();
 
 const listLoraTrainingCheckpoints = vi.fn();
 vi.mock('../../services/apiLoraTraining.js', () => ({

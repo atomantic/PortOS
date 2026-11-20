@@ -9,7 +9,7 @@ vi.mock('../../hooks/useInstanceFeatures', () => ({
 }));
 
 const scoreAppScopeAdherence = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiApps.js', () => ({
   scoreAppScopeAdherence: (...args) => scoreAppScopeAdherence(...args),
 }));
 

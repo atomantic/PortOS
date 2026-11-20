@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import * as api from '../../services/api';
+import { getChronotypeEnergySchedule } from '../../services/apiGoals.js';
 import { chipColors } from '../../lib/chipContrast';
 import { useThemeContext } from '../ThemeContext';
 
@@ -23,7 +23,7 @@ export default function ChronotypeOverlay({ startHour, pxPerHour }) {
   const { theme } = useThemeContext();
 
   useEffect(() => {
-    api.getChronotypeEnergySchedule().then(setSchedule).catch(() => null);
+    getChronotypeEnergySchedule().then(setSchedule).catch(() => null);
   }, []);
 
   if (!schedule?.zones?.length) return null;

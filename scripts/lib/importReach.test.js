@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildImportGraph, formatReachSummary, importReachReport } from './importReach.js';
+import { formatReachSummary, importEdges, importReachReport, measureRepoImportReach } from './importReach.js';
+import { createModuleGraph } from './moduleGraph.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 
 const SOURCES = new Map([
@@ -30,7 +31,7 @@ const SOURCES = new Map([
   ['svc/core.test.js', "import { core } from './core';\n"],
 ]);
 const isTest = (rel) => rel.endsWith('.test.js');
-const graph = buildImportGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null);
+const { edges: graph } = importEdges(createModuleGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null));
 
 describe('importReachReport', () => {
   it('counts a dynamic edge for selection while the static view stops at it', () => {
@@ -44,6 +45,23 @@ describe('importReachReport', () => {
       { source: 'svc/ghost.js', staticReach: 0, dynamicReach: 0 },
     ]);
     expect(selected).toBe(2);
+  });
+});
+
+describe('measureRepoImportReach', () => {
+  it('assumes the widest selection when a module cannot be inspected, so the plan fans out', () => {
+    const sources = new Map([
+      ['server/services/core.js', 'export const core = 1;\n'],
+      ['server/services/broken.js', "import './core.js';\nconst view = <Unknown>\n"],
+      ...Array.from({ length: 130 }, (_, index) => [`server/services/s${index}.test.js`, 'export {};\n']),
+    ]);
+    const graph = createModuleGraph([...sources.keys()], (rel) => sources.get(rel) ?? null);
+    const report = measureRepoImportReach({ graph, sources: ['server/services/core.js'], isTest });
+    expect(report.uninspected).toEqual(['server/services/broken.js']);
+    expect(report.selected).toBe(130);
+    expect(formatReachSummary(report)).toMatch(/; reach unknown: server\/services\/broken\.js could not be read$/);
+    const plan = buildCiTestPlan(['server/services/core.js'], { trackedFiles: [...sources.keys()], serverReach: report });
+    expect(plan.shards.server.length).toBeGreaterThan(1);
   });
 });
 

@@ -10,7 +10,16 @@ const api = vi.hoisted(() => ({
   getBrainProjects: vi.fn(), updateBrainProject: vi.fn(),
   getMemoryBackendStatus: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainMemories: api.getBrainMemories,
+  getBrainMemory: api.getBrainMemory,
+  updateBrainMemory: api.updateBrainMemory,
+  getBrainPeople: api.getBrainPeople,
+  updateBrainPerson: api.updateBrainPerson,
+  getBrainProjects: api.getBrainProjects,
+  updateBrainProject: api.updateBrainProject,
+}));
+vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: api.getMemoryBackendStatus }));
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

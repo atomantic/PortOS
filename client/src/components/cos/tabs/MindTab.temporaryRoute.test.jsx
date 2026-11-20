@@ -45,7 +45,30 @@ const localLlm = vi.hoisted(() => ({
   getToolUseModels: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getPersistentMind: api.getPersistentMind,
+  sendPersistentMindMessage: api.sendPersistentMindMessage,
+  uploadPersistentMindAttachment: api.uploadPersistentMindAttachment,
+  deletePersistentMindAttachment: api.deletePersistentMindAttachment,
+  addPersistentMindAnnotation: api.addPersistentMindAnnotation,
+  startPersistentMind: api.startPersistentMind,
+  pausePersistentMind: api.pausePersistentMind,
+  resumePersistentMind: api.resumePersistentMind,
+  stopPersistentMind: api.stopPersistentMind,
+  acknowledgePersistentMindEvent: api.acknowledgePersistentMindEvent,
+  promotePersistentMindEvent: api.promotePersistentMindEvent,
+  updateCosConfig: api.updateCosConfig,
+  getPersistentMindContext: api.getPersistentMindContext,
+  getPersistentMindMaintainer: api.getPersistentMindMaintainer,
+  getPersistentMindTools: api.getPersistentMindTools,
+  getMindRecipes: api.getMindRecipes,
+  getPersistentMindRuntime: api.getPersistentMindRuntime,
+  getPersistentMindVisibility: api.getPersistentMindVisibility,
+  createPersistentMindMemory: api.createPersistentMindMemory,
+  updatePersistentMindMemory: api.updatePersistentMindMemory,
+  cleanupPersistentMind: api.cleanupPersistentMind,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../../hooks/useSocket', () => ({ useSocket: () => socket }));
 

@@ -30,13 +30,14 @@ import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import Field from '../components/ui/FormField';
 import {
-  getPipelineSeries, updatePipelineSeries,
+  getPipelineSeries,
+  updatePipelineSeries,
   listPipelineIssues,
-  listUniverses,
   generateSeriesTitleLogo,
   discoverSeriesVoice,
   SERIES_TITLE_LOGO_MAX,
-} from '../services/api';
+} from '../services/apiPipeline.js';
+import { listUniverses } from '../services/apiUniverseBuilder.js';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
 import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../components/VoiceExemplarEditor';
 import { buildImporterLink } from '../lib/importerDeepLink';

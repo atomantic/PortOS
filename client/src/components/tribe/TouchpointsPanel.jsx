@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Calendar, MessageCircle, UserRound, Users } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTribeTouchpoints } from '../../services/apiTribe.js';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 
@@ -27,7 +27,7 @@ function TouchpointSource({ source }) {
 
 export default function TouchpointsPanel({ personId }) {
   const fetchTouchpoints = useCallback(
-    () => api.getTribeTouchpoints(personId, 8, { silent: true }).then((result) => result?.touchpoints || []),
+    () => getTribeTouchpoints(personId, 8, { silent: true }).then((result) => result?.touchpoints || []),
     [personId],
   );
   const { items: touchpoints, state, error, retry } = useListResource(fetchTouchpoints, { enabled: !!personId });

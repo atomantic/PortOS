@@ -5,7 +5,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 
 vi.mock('./MaintenancePanel.jsx', () => ({ default: () => null }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
@@ -19,7 +19,7 @@ vi.mock('../ThemePickerPanel', () => ({
   default: () => <div>Theme picker</div>,
 }));
 
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import { GeneralTab } from './GeneralTab';
 
 const SETTINGS = {

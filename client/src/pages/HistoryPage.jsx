@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import PageHeader from '../components/PageHeader';
 import { History, Trash2 } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  getHistoryActions,
+  getHistory,
+  getHistoryStats,
+  clearHistory,
+  deleteHistoryEntry,
+} from '../services/apiHistory.js';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
@@ -22,7 +28,7 @@ export function HistoryPage() {
   const beginLoad = useLatestRequest();
 
   const fetchActions = useCallback(async () => {
-    const list = await api.getHistoryActions({ silent: true });
+    const list = await getHistoryActions({ silent: true });
     return Array.isArray(list) ? list : [];
   }, []);
   const actionsResource = useListResource(fetchActions);
@@ -32,12 +38,12 @@ export function HistoryPage() {
     const isCurrent = beginLoad();
     setLoading(true);
     const [historyData, statsData] = await Promise.all([
-      api.getHistory({
+      getHistory({
         limit: 100,
         action: filter.action || undefined,
         success: filter.success !== '' ? filter.success === 'true' : undefined
       }).catch(() => null),
-      api.getHistoryStats().catch(() => null),
+      getHistoryStats().catch(() => null),
     ]);
     if (!isCurrent()) return;
     setHistoryFailed(historyData === null);
@@ -51,7 +57,7 @@ export function HistoryPage() {
   }, [loadData]);
 
   const handleClear = async () => {
-    const result = await api.clearHistory().catch(() => null);
+    const result = await clearHistory().catch(() => null);
     if (result === null) return;
     setConfirmingClear(false);
     loadData();
@@ -59,7 +65,7 @@ export function HistoryPage() {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    const result = await api.deleteHistoryEntry(id).catch(() => null);
+    const result = await deleteHistoryEntry(id).catch(() => null);
     if (result === null) return;
     setHistory(prev => prev.filter(entry => entry.id !== id));
     if (expandedId === id) setExpandedId(null);

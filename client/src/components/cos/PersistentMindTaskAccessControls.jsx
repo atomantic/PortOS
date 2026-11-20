@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { Link } from 'react-router';
-import * as api from '../../services/api';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
@@ -83,7 +83,7 @@ export default function PersistentMindTaskAccessControls({
     setSaving(true);
     onSavingChange?.(true);
     try {
-      await api.updateCosConfig({ persistentMindCapabilities: payload }, { silent: true });
+      await updateCosConfig({ persistentMindCapabilities: payload }, { silent: true });
       onSaved?.({ ...capabilities, ...next });
       const option = OPTIONS.find((candidate) => candidate.key === key);
       toast.success(`${option?.label || 'Capability'} ${enabled ? 'enabled' : 'disabled'}`);
@@ -109,7 +109,7 @@ export default function PersistentMindTaskAccessControls({
     setSaving(true);
     onSavingChange?.(true);
     try {
-      await api.updateCosConfig({ persistentMindCapabilities: nextCapabilities }, { silent: true });
+      await updateCosConfig({ persistentMindCapabilities: nextCapabilities }, { silent: true });
       onSaved?.(nextCapabilities);
       toast.success(`${apps.find((app) => app.id === appId)?.name || 'Managed app'} access ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {

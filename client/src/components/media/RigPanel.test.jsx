@@ -8,7 +8,12 @@ const mock = vi.hoisted(() => ({
   listRiggingClips: vi.fn(),
   retargetImageTo3dModel: vi.fn(),
 }));
-vi.mock('../../services/api', () => mock);
+vi.mock('../../services/apiRigging.js', () => ({
+  getRiggingReadiness: mock.getRiggingReadiness,
+  rigImageTo3dModel: mock.rigImageTo3dModel,
+  listRiggingClips: mock.listRiggingClips,
+  retargetImageTo3dModel: mock.retargetImageTo3dModel,
+}));
 
 const features = vi.hoisted(() => ({ enabled: true }));
 vi.mock('../../hooks/useInstanceFeatures', () => ({

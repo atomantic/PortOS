@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';

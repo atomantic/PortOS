@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import useProviderModels from './useProviderModels.js';
-import * as api from '../services/api.js';
+import { getApps } from '../services/apiApps.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 /**
@@ -51,9 +51,9 @@ export function useRepoStudyConfig({ enabled = true, resetKey = null, initialStu
   }, [resetKey]);
 
   useEffect(() => {
-    if (!enabled || typeof api.getApps !== 'function') return undefined;
+    if (!enabled || typeof getApps !== 'function') return undefined;
     let active = true;
-    api.getApps({ silent: true }).then((apps) => {
+    getApps({ silent: true }).then((apps) => {
       if (!active) return;
       const eligible = (Array.isArray(apps) ? apps : [])
         .filter(app => app?.id && app.repoPath && !app.archived)

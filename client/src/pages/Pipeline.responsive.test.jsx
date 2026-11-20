@@ -9,19 +9,25 @@ const getUniverse = vi.fn();
 const listLooms = vi.fn();
 const listAuthors = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   listPipelineSeriesSummaries: (...a) => listPipelineSeriesSummaries(...a),
   createPipelineSeries: vi.fn(),
   deletePipelineSeries: vi.fn(),
   generateSeriesTitleLogo: vi.fn(),
   generateSeriesConcepts: vi.fn(),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: (...a) => listUniverseNames(...a),
   getUniverse: (...a) => getUniverse(...a),
-  listLooms: (...a) => listLooms(...a),
-  listAuthors: (...a) => listAuthors(...a),
   WORLD_LOGLINE_MAX: 400,
   WORLD_PREMISE_MAX: 2000,
   WORLD_STYLE_NOTES_MAX: 2000,
+}));
+vi.mock('../services/apiFableLoom.js', () => ({
+  listLooms: (...a) => listLooms(...a),
+}));
+vi.mock('../services/apiAuthors.js', () => ({
+  listAuthors: (...a) => listAuthors(...a),
 }));
 
 vi.mock('../hooks/useSyncIntegrity', () => ({

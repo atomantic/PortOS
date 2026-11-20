@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import { Wrench } from 'lucide-react';
 import FeatureProviderPicker from '../FeatureProviderPicker';
 

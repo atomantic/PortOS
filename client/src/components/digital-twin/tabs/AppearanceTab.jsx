@@ -8,7 +8,7 @@ import {
   X,
   AlertCircle
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { analyzeIdentityImage, saveIdentityImageDocument } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -84,7 +84,7 @@ export default function AppearanceTab({ onRefresh }) {
     setDocDraft('');
     setSaved(false);
 
-    const res = await api.analyzeIdentityImage(
+    const res = await analyzeIdentityImage(
       { imageDataUrl, providerId: selectedProviderId, model: selectedModel },
       { silent: true }
     ).catch((err) => ({ error: err.message }));
@@ -107,7 +107,7 @@ export default function AppearanceTab({ onRefresh }) {
     if (!content) return;
 
     setSaving(true);
-    const res = await api.saveIdentityImageDocument(
+    const res = await saveIdentityImageDocument(
       { content, title: result?.suggestedDocument?.title },
       { silent: true }
     ).catch((err) => ({ error: err.message }));

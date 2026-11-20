@@ -5,7 +5,10 @@ const api = {
   updateCosJob: vi.fn(),
   updateCosTaskInterval: vi.fn(),
 };
-vi.mock('../../../../services/api', () => api);
+vi.mock('../../../../services/apiAgents.js', () => ({
+  updateCosJob: api.updateCosJob,
+  updateCosTaskInterval: api.updateCosTaskInterval,
+}));
 
 const ScheduleEditor = (await import('./ScheduleEditor')).default;
 

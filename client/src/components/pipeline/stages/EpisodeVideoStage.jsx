@@ -4,7 +4,8 @@ import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import ProgressBar from '../../ui/ProgressBar';
-import { generatePipelineVisualImage, listVideoModels } from '../../../services/api';
+import { generatePipelineVisualImage } from '../../../services/apiPipeline.js';
+import { listVideoModels } from '../../../services/apiImageVideo.js';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
 import ScenePreview from '../../creative-director/ScenePreview';

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
-vi.mock('../../services/api', async (importOriginal) => ({
+vi.mock('../../services/apiProviders.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getProviders: vi.fn(),
 }));
@@ -20,7 +20,7 @@ vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() }
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import AutopilotPanel from './AutopilotPanel.jsx';
-import * as api from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
 
 const PROVIDERS = [
   { id: 'claude-tui', name: 'Claude TUI', type: 'tui', enabled: true, command: 'claude', models: ['opus', 'sonnet'], defaultModel: 'opus' },
@@ -52,7 +52,7 @@ const providerSelect = async () => (await picker()).findByLabelText('Direction &
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getProviders.mockResolvedValue({ activeProvider: 'cloud-api', providers: PROVIDERS });
+  getProviders.mockResolvedValue({ activeProvider: 'cloud-api', providers: PROVIDERS });
 });
 
 describe('AutopilotPanel direction LLM (#9545)', () => {

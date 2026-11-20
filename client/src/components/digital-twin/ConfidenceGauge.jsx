@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Gauge, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
-import * as api from '../../services/api';
+import { calculateDigitalTwinConfidence } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
 import { formatDateTime } from '../../utils/formatters';
 
@@ -48,7 +48,7 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
 
   const handleRecalculate = async () => {
     setCalculating(true);
-    const result = await api.calculateDigitalTwinConfidence(undefined, undefined, { silent: true }).catch(e => ({ error: e.message }));
+    const result = await calculateDigitalTwinConfidence(undefined, undefined, { silent: true }).catch(e => ({ error: e.message }));
     if (result.error) {
       toast.error(result.error);
     } else {

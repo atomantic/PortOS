@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import * as api from '../../../services/api';
+import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
 import { ACTION_TYPES } from '../constants';
@@ -30,7 +30,7 @@ export default function ActivityTab({ agentId }) {
   const fetchData = useCallback(async () => {
     const generation = ++listGenerationRef.current;
     setLoadError(false);
-    const activitiesData = await api.getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
+    const activitiesData = await getAgentActivityTimeline(PAGE_SIZE, [agentId], null, actionFilter || null, { silent: true })
       .catch(() => null);
     if (generation !== listGenerationRef.current) return;
     if (activitiesData) {
@@ -61,7 +61,7 @@ export default function ActivityTab({ agentId }) {
 
     const lastTimestamp = activities[activities.length - 1].timestamp;
     // The API helper toasts a failure; the loaded rows stay and Load More stays available.
-    const moreData = await api.getAgentActivityTimeline(
+    const moreData = await getAgentActivityTimeline(
       PAGE_SIZE, [agentId], lastTimestamp, actionFilter || null
     ).catch(() => null);
     if (loadingMoreGenerationRef.current === generation) loadingMoreGenerationRef.current = null;

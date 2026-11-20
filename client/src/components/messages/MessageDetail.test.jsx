@@ -13,7 +13,15 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMessages.js', () => ({
+  createMessageDraft: api.createMessageDraft,
+  executeMessageAction: api.executeMessageAction,
+  generateMessageDraft: api.generateMessageDraft,
+  getMessageThread: api.getMessageThread,
+  refreshMessage: api.refreshMessage,
+  updateMessageDraft: api.updateMessageDraft,
+}));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const MessageDetail = (await import('./MessageDetail')).default;

@@ -11,7 +11,7 @@ const getContinuityBibleStatus = vi.fn();
 const generateContinuityBible = vi.fn();
 const cancelContinuityBible = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...a) => getPipelineSeries(...a),
   getContinuityBible: (...a) => getContinuityBible(...a),
   generateContinuityBible: (...a) => generateContinuityBible(...a),

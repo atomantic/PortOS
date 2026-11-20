@@ -19,8 +19,10 @@ vi.mock('../components/shell/useItermSession', () => ({
 vi.mock('../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ features: [], isFeatureEnabled: (id) => id !== 'iterm' || mocks.itermEnabled }),
 }));
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiApps.js', () => ({
   getApps: vi.fn(async () => []),
+}));
+vi.mock('../services/apiShell.js', () => ({
   getItermStatus: vi.fn(() => new Promise(() => {})),
 }));
 

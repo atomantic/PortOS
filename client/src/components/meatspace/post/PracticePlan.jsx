@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Save, ChevronRight, ChevronDown, ListChecks, Loader } from 'lucide-react';
 import BrowseCatalogLink from './BrowseCatalogLink';
-import { updatePostConfig, getMemoryItems } from '../../../services/api';
+import { updatePostConfig, getMemoryItems } from '../../../services/apiMeatspace.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';

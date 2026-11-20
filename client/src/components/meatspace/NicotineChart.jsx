@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
-import * as api from '../../services/api';
+import { getDailyNicotine } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
@@ -44,7 +44,7 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
     const fromStr = localDateKey(from);
     const toStr = localDateKey();
 
-    const entries = await api.getDailyNicotine(fromStr, toStr, { silent: true }).catch(() => null);
+    const entries = await getDailyNicotine(fromStr, toStr, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
     setFailed(entries === null);
     if (entries === null) {

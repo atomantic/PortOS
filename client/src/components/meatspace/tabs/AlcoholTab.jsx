@@ -1,7 +1,18 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getCustomDrinks,
+  getAlcoholSummary,
+  getDailyAlcohol,
+  logAlcoholDrink,
+  removeAlcoholDrink,
+  updateAlcoholDrink,
+  addCustomDrink,
+  updateCustomDrink,
+  removeCustomDrink,
+} from '../../../services/apiMeatspace.js';
+import { getAppleHealthCorrelation } from '../../../services/apiHealth.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -78,7 +89,7 @@ export default function AlcoholTab() {
   // older read must not land after a newer one.
   const fetchDrinkButtons = useCallback(async () => {
     const seq = ++buttonsReadSeq.current;
-    const buttons = await api.getCustomDrinks({ silent: true }).catch(() => null);
+    const buttons = await getCustomDrinks({ silent: true }).catch(() => null);
     if (seq !== buttonsReadSeq.current) return;
     const ok = Array.isArray(buttons);
     setDrinkButtons(ok ? buttons : null);
@@ -93,8 +104,8 @@ export default function AlcoholTab() {
 
   const fetchData = useCallback(async () => {
     const [summaryResult, entriesResult] = await Promise.allSettled([
-      api.getAlcoholSummary({ silent: true }),
-      api.getDailyAlcohol(undefined, undefined, { silent: true })
+      getAlcoholSummary({ silent: true }),
+      getDailyAlcohol(undefined, undefined, { silent: true })
     ]);
     // A rejected read keeps what is already shown and raises the notice, so a
     // transient failure never renders as an empty history.
@@ -122,7 +133,7 @@ export default function AlcoholTab() {
 
   useEffect(() => {
     let active = true;
-    api.getAppleHealthCorrelation(correlationFrom, correlationTo)
+    getAppleHealthCorrelation(correlationFrom, correlationTo)
       .then(data => { if (active) setCorrelationData(data); })
       .catch(() => { if (active) setCorrelationData(null); });
     return () => { active = false; };
@@ -130,7 +141,7 @@ export default function AlcoholTab() {
 
   const handleQuickAdd = async (drink) => {
     setLogging(true);
-    await api.logAlcoholDrink({
+    await logAlcoholDrink({
       name: drink.name,
       oz: drink.oz,
       abv: drink.abv,
@@ -145,7 +156,7 @@ export default function AlcoholTab() {
     e.preventDefault();
     if (!oz || !abv) return;
     setLogging(true);
-    await api.logAlcoholDrink({
+    await logAlcoholDrink({
       name: name || '',
       oz: Math.round(toOz(parseFloat(oz), volumeUnit) * 100) / 100,
       abv: parseFloat(abv),
@@ -161,7 +172,7 @@ export default function AlcoholTab() {
   };
 
   const handleRemove = async (entryDate, index, id) => {
-    await api.removeAlcoholDrink(entryDate, index, id).catch(() => null);
+    await removeAlcoholDrink(entryDate, index, id).catch(() => null);
     setRefreshKey(k => k + 1);
   };
 
@@ -186,7 +197,7 @@ export default function AlcoholTab() {
     if (!editingKey) return;
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
-    await api.updateAlcoholDrink(entryDate, index, {
+    await updateAlcoholDrink(entryDate, index, {
       id: editForm.id,
       name: editForm.name,
       oz: Math.round(toOz(parseFloat(editForm.oz), editVolumeUnit) * 100) / 100,
@@ -216,7 +227,7 @@ export default function AlcoholTab() {
     if (error) { toast.error(error); return; }
     const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
     const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
+    const result = await addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to add drink button'); return; }
     setButtonForm({ name: '', oz: '', abv: '' });
     setButtonVolumeUnit('oz');
@@ -240,7 +251,7 @@ export default function AlcoholTab() {
     if (error) { toast.error(error); return; }
     const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
     const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
+    const result = await updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to update drink button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', oz: '', abv: '' });
@@ -257,7 +268,7 @@ export default function AlcoholTab() {
   };
 
   const handleRemoveButton = async (idx) => {
-    const removed = await api.removeCustomDrink(idx).catch(() => null);
+    const removed = await removeCustomDrink(idx).catch(() => null);
     if (!removed) return;
     buttonsReadSeq.current += 1;
     setDrinkButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));

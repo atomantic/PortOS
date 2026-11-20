@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
-import * as api from '../services/api';
+import { getNotesVaults, scanNotesVault } from '../services/apiNotes.js';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import LoadFailedState from '../components/ui/LoadFailedState';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -46,7 +46,7 @@ export default function Wiki() {
   const scanSequence = useRef(0);
 
   const loadVaults = useCallback(async () => {
-    const data = await api.getNotesVaults({ silent: true }).catch(() => null);
+    const data = await getNotesVaults({ silent: true }).catch(() => null);
     setVaultsFailed(data === null);
     if (data) setVaults(data);
     setLoading(false);
@@ -87,7 +87,7 @@ export default function Wiki() {
   const loadNotes = useCallback(async () => {
     if (!vaultScope.id || !mountedRef.current || vaultScopeRef.current !== vaultScope) return;
     const sequence = ++scanSequence.current;
-    const data = await api.scanNotesVault(vaultScope.id, { limit: 1000 }).catch(() => null);
+    const data = await scanNotesVault(vaultScope.id, { limit: 1000 }).catch(() => null);
     if (data && mountedRef.current && vaultScopeRef.current === vaultScope && scanSequence.current === sequence) {
       setNoteSnapshot({ scope: vaultScope, notes: data.notes });
     }

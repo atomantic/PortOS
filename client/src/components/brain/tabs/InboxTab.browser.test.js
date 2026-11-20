@@ -41,7 +41,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
           resolveId(id, importer) {
             if (id === '/inbox-fixture.jsx') return '\0inbox-fixture.jsx';
             if (importer?.endsWith('/InboxTab.jsx')) {
-              if (id === '../../../services/api') return '\0inbox-api';
+              if (id === '../../../services/apiBrain.js') return '\0inbox-api';
               if (id === '../../../services/socket') return '\0inbox-socket';
               if (id === '../../../hooks') return '\0inbox-hooks';
             }
@@ -58,6 +58,12 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
                 return { inboxLog: { id: 'example-thought', status: 'filed', capturedText: args[0] } };
               }
               const entry = id => window.inboxEntries.find(item => item.id === id);
+              export async function getBrainInboxEntry(id) { return { inboxLog: entry(id) }; }
+              export async function updateBrainInboxEntry(id, patch) { return { inboxLog: { ...entry(id), ...patch } }; }
+              export async function deleteBrainInboxEntry(id) {
+                window.inboxEntries = window.inboxEntries.filter(item => item.id !== id);
+                return { success: true };
+              }
               const record = (action, id, destination) => {
                 window.inboxActions = [...(window.inboxActions || []), { action, id, destination }];
                 const inboxLog = { ...entry(id), status: action === 'done' ? 'done' : action === 'retry' ? 'classifying' : 'corrected' };

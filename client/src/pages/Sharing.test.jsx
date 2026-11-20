@@ -6,7 +6,7 @@ import { RouterProvider } from 'react-router/dom';
 // Sharing.jsx pulls in socket.io-client at module scope (auto-connects).
 // Stub it so the test runner doesn't try to open a network socket.
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSharing.js', () => ({
   listShareBuckets: vi.fn(),
   createShareBucket: vi.fn(),
   updateShareBucket: vi.fn(),
@@ -15,8 +15,12 @@ vi.mock('../services/api', () => ({
   promoteShareInboxItem: vi.fn(),
   dismissShareInboxItem: vi.fn(),
   listShareActivity: vi.fn(),
+}));
+vi.mock('../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
+}));
+vi.mock('../services/apiSyncReview.js', () => ({
   listUniverseDuplicates: vi.fn(),
   listSeriesDuplicates: vi.fn(),
   listConflicts: vi.fn(),
@@ -25,7 +29,9 @@ vi.mock('../services/api', () => ({
 import Sharing, { SECTIONS, isLiveSubscription } from './Sharing';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 import { expectNoDanglingAriaRefs } from '../test/ariaRefAssertions.js';
-import * as api from '../services/api';
+import { listShareBuckets, listShareInbox, listShareActivity } from '../services/apiSharing.js';
+import { getSettings } from '../services/apiSystem.js';
+import { listUniverseDuplicates, listSeriesDuplicates, listConflicts } from '../services/apiSyncReview.js';
 
 const NOW = Date.parse('2026-05-18T12:00:00Z');
 
@@ -70,13 +76,13 @@ describe('isLiveSubscription', () => {
 describe('Sharing bucket detail tab (URL-derived)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.listShareBuckets.mockResolvedValue({
+    listShareBuckets.mockResolvedValue({
       buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }],
       localSchemaVersion: 1,
     });
-    api.getSettings.mockResolvedValue({});
-    api.listShareInbox.mockResolvedValue({ items: [] });
-    api.listShareActivity.mockResolvedValue({ manifests: [] });
+    getSettings.mockResolvedValue({});
+    listShareInbox.mockResolvedValue({ items: [] });
+    listShareActivity.mockResolvedValue({ manifests: [] });
   });
 
   // Routes mirror App.jsx so `useParams()` resolves section + bucketId.
@@ -135,26 +141,26 @@ describe('Sharing list and settings reads', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getSettings.mockResolvedValue({ sharingDisplayName: 'Alice', sharingBio: '' });
-    api.listShareInbox.mockResolvedValue({ items: [] });
-    api.listShareActivity.mockResolvedValue({ manifests: [] });
+    getSettings.mockResolvedValue({ sharingDisplayName: 'Alice', sharingBio: '' });
+    listShareInbox.mockResolvedValue({ items: [] });
+    listShareActivity.mockResolvedValue({ manifests: [] });
   });
 
   it('shows an error row with Retry when the bucket read fails, not "No buckets yet"', async () => {
-    api.listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
+    listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
     renderAt('/sharing');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load buckets — buckets 500');
     expect(screen.queryByText(/No buckets yet/)).not.toBeInTheDocument();
 
-    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect((await screen.findAllByText('Bucket One')).length).toBeGreaterThan(0);
   });
 
   it('shows an error row with Retry when the inbox read fails, not "No pending imports."', async () => {
-    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
-    api.listShareInbox.mockRejectedValueOnce(new Error('inbox 500'));
+    listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    listShareInbox.mockRejectedValueOnce(new Error('inbox 500'));
     renderAt('/sharing/buckets/b1?tab=inbox');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the inbox — inbox 500');
@@ -165,8 +171,8 @@ describe('Sharing list and settings reads', () => {
   });
 
   it('shows an error row with Retry when the activity read fails, not "No share activity yet."', async () => {
-    api.listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
-    api.listShareActivity.mockRejectedValueOnce(new Error('activity 500'));
+    listShareBuckets.mockResolvedValue({ buckets: [{ id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox' }] });
+    listShareActivity.mockRejectedValueOnce(new Error('activity 500'));
     renderAt('/sharing/buckets/b1?tab=activity');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load share activity — activity 500');
@@ -177,8 +183,8 @@ describe('Sharing list and settings reads', () => {
   });
 
   it('locks the display-name editor when the settings read fails so a save cannot replace stored values', async () => {
-    api.listShareBuckets.mockResolvedValue({ buckets: [] });
-    api.getSettings.mockRejectedValueOnce(new Error('settings 500'));
+    listShareBuckets.mockResolvedValue({ buckets: [] });
+    getSettings.mockRejectedValueOnce(new Error('settings 500'));
     renderAt('/sharing');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your display name — settings 500');
@@ -212,13 +218,13 @@ describe('Sharing SECTIONS ↔ nav manifest', () => {
 describe('Sharing — no dangling aria-controls/aria-labelledby', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.listShareBuckets.mockResolvedValue({ buckets: [], localSchemaVersion: 1 });
-    api.getSettings.mockResolvedValue({});
-    api.listShareInbox.mockResolvedValue({ items: [] });
-    api.listShareActivity.mockResolvedValue({ manifests: [] });
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
-    api.listSeriesDuplicates.mockResolvedValue({ groups: [] });
-    api.listConflicts.mockResolvedValue({ conflicts: [] });
+    listShareBuckets.mockResolvedValue({ buckets: [], localSchemaVersion: 1 });
+    getSettings.mockResolvedValue({});
+    listShareInbox.mockResolvedValue({ items: [] });
+    listShareActivity.mockResolvedValue({ manifests: [] });
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listSeriesDuplicates.mockResolvedValue({ groups: [] });
+    listConflicts.mockResolvedValue({ conflicts: [] });
   });
 
   const routes = [{ path: '/sharing/:section', element: <Sharing /> }];

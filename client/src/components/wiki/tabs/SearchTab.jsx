@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import * as api from '../../../services/api';
+import { searchNotes } from '../../../services/apiNotes.js';
 import { Search, FileText, X, RefreshCw, Tag } from 'lucide-react';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
@@ -18,7 +18,7 @@ export default function SearchTab({ vaultId }) {
     if (!query.trim() || !vaultId) return;
     const isCurrent = beginSearch();
     setSearching(true);
-    const data = await api.searchNotes(vaultId, query.trim(), 50).catch(() => null);
+    const data = await searchNotes(vaultId, query.trim(), 50).catch(() => null);
     if (!isCurrent()) return;
     setSearching(false);
     if (data) setResults(data);

@@ -8,7 +8,7 @@
 
 import { RefreshCw, Square, Play, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import Pill from '../ui/Pill';
-import { startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
+import { startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/apiSystem.js';
 import { useTailcatServe } from './TailcatServeProvider';
 import TailcatAddress from './TailcatAddress';
 import TailcatDevicesPanel from './TailcatDevicesPanel';

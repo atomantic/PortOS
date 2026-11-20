@@ -3,20 +3,29 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   cancelLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
   getLoomEditorialAutopilotStatus: vi.fn(),
-  getProviders: vi.fn(),
   remediateLoomEditorial: vi.fn(),
   reviewLoomPlaythroughs: vi.fn(),
   startLoomEditorialAutopilot: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-import * as api from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import {
+  getLoomEditorialAutopilotStatus,
+  remediateLoomEditorial,
+  reviewLoomPlaythroughs,
+  startLoomEditorialAutopilot,
+  getLoom,
+} from '../../services/apiFableLoom.js';
 import socket from '../../services/socket';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 
@@ -47,9 +56,9 @@ const renderPanel = (props = {}) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers });
-  api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: null });
-  api.remediateLoomEditorial.mockResolvedValue({
+  getProviders.mockResolvedValue({ activeProvider: 'codex', providers });
+  getLoomEditorialAutopilotStatus.mockResolvedValue({ run: null });
+  remediateLoomEditorial.mockResolvedValue({
     loom,
     changed: true,
     changes: ['Added the missing beat outline.'],
@@ -62,7 +71,7 @@ beforeEach(() => {
       },
     },
   });
-  api.reviewLoomPlaythroughs.mockResolvedValue({
+  reviewLoomPlaythroughs.mockResolvedValue({
     passed: true,
     deterministic: { stats: { variationCount: 2, visitedTransitionCount: 4, transitionCount: 4 } },
     review: { qualityScore: 8.7, summary: 'Every path pays off.', strengths: [], findings: [] },
@@ -81,7 +90,7 @@ describe('LoomEditorialAutomation', () => {
     expect(screen.getByText('Runs will use Codex (gpt-5) at high effort.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Evaluate & remediate series' }));
 
-    await waitFor(() => expect(api.remediateLoomEditorial).toHaveBeenCalledWith(
+    await waitFor(() => expect(remediateLoomEditorial).toHaveBeenCalledWith(
       'loom-1',
       expect.objectContaining({
         providerId: 'codex', model: 'gpt-5', effort: 'high', operationId: expect.any(String),
@@ -100,7 +109,7 @@ describe('LoomEditorialAutomation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Run playthrough test' }));
 
-    await waitFor(() => expect(api.reviewLoomPlaythroughs).toHaveBeenCalledWith(
+    await waitFor(() => expect(reviewLoomPlaythroughs).toHaveBeenCalledWith(
       'loom-1',
       expect.objectContaining({ aiReview: true, operationId: expect.any(String) }),
       { silent: true },
@@ -111,7 +120,7 @@ describe('LoomEditorialAutomation', () => {
 
   it('starts the bounded editor/reviewer loop and exposes cooperative stop', async () => {
     const user = userEvent.setup();
-    api.startLoomEditorialAutopilot.mockResolvedValue({
+    startLoomEditorialAutopilot.mockResolvedValue({
       id: 'editorial-run-1', loomId: 'loom-1', status: 'running', round: 1, maxRounds: 3,
       stepIndex: 1, stepCount: 6,
       message: 'Step 1 of up to 6 · round 1: evaluating and remediating the complete series…', rounds: [],
@@ -121,7 +130,7 @@ describe('LoomEditorialAutomation', () => {
 
     await user.click(screen.getByRole('button', { name: 'Start editor autopilot' }));
 
-    await waitFor(() => expect(api.startLoomEditorialAutopilot).toHaveBeenCalledWith(
+    await waitFor(() => expect(startLoomEditorialAutopilot).toHaveBeenCalledWith(
       'loom-1', { maxRounds: 3 }, { silent: true },
     ));
     expect(screen.getByRole('button', { name: 'Stop editor autopilot' })).toBeInTheDocument();
@@ -130,8 +139,8 @@ describe('LoomEditorialAutomation', () => {
   });
 
   it('explains a failed automation as a retryable system outcome', async () => {
-    api.getLoom.mockResolvedValue(loom);
-    api.getLoomEditorialAutopilotStatus.mockResolvedValue({
+    getLoom.mockResolvedValue(loom);
+    getLoomEditorialAutopilotStatus.mockResolvedValue({
       run: {
         id: 'editorial-run-1', loomId: 'loom-1', status: 'failed', round: 1, maxRounds: 3,
         stepIndex: 1, stepCount: 6, responseCorrections: 2, invalidResponses: 3,
@@ -147,7 +156,7 @@ describe('LoomEditorialAutomation', () => {
   });
 
   it('restores the active run configuration when reopening the editor', async () => {
-    api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: {
+    getLoomEditorialAutopilotStatus.mockResolvedValue({ run: {
       id: 'active-planning-run', loomId: 'loom-1', status: 'running', mode: 'planning', maxRounds: 2, round: 1,
       route: { providerId: 'codex', model: 'gpt-5', effort: 'low' }, selfImproveEnabled: false,
     } });
@@ -162,15 +171,15 @@ describe('LoomEditorialAutomation', () => {
   it('starts an unexpanded series in planning mode without claiming production approval', async () => {
     const user = userEvent.setup();
     const planned = { ...loom, episodes: [{ ...loom.episodes[0], nodes: [] }] };
-    api.getLoom.mockResolvedValue(planned);
-    api.startLoomEditorialAutopilot.mockResolvedValue({
+    getLoom.mockResolvedValue(planned);
+    startLoomEditorialAutopilot.mockResolvedValue({
       id: 'planning-run', loomId: loom.id, mode: 'planning', status: 'completed', round: 1, maxRounds: 3,
       message: 'Outlines are ready.', rounds: [], residualFindings: [],
     });
     renderPanel({ loom: planned });
     expect(await screen.findByLabelText('Autopilot stage')).toHaveValue('planning');
     await user.click(screen.getByRole('button', { name: 'Start editor autopilot' }));
-    await waitFor(() => expect(api.startLoomEditorialAutopilot).toHaveBeenCalledWith(
+    await waitFor(() => expect(startLoomEditorialAutopilot).toHaveBeenCalledWith(
       loom.id, { maxRounds: 3, mode: 'planning' }, { silent: true },
     ));
     expect(await screen.findByText('Series planning is ready for scene expansion')).toBeInTheDocument();
@@ -179,7 +188,7 @@ describe('LoomEditorialAutomation', () => {
 
   it('opts a run into approval-gated FableLoom workflow diagnosis', async () => {
     const user = userEvent.setup();
-    api.startLoomEditorialAutopilot.mockResolvedValue({
+    startLoomEditorialAutopilot.mockResolvedValue({
       id: 'editorial-run-1', loomId: 'loom-1', status: 'running', round: 0, maxRounds: 3,
       message: 'Starting FableLoom editorial autopilot…', rounds: [], residualFindings: [],
     });
@@ -191,14 +200,14 @@ describe('LoomEditorialAutomation', () => {
     expect(screen.getByText(/queues a deduplicated worktree \+ PR CoS task in the approval queue/i)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Start editor autopilot' }));
 
-    await waitFor(() => expect(api.startLoomEditorialAutopilot).toHaveBeenCalledWith(
+    await waitFor(() => expect(startLoomEditorialAutopilot).toHaveBeenCalledWith(
       'loom-1', { maxRounds: 3, selfImprove: true }, { silent: true },
     ));
   });
 
   it('links a filed workflow diagnosis to its CoS approval task', async () => {
-    api.getLoom.mockResolvedValue(loom);
-    api.getLoomEditorialAutopilotStatus.mockResolvedValue({
+    getLoom.mockResolvedValue(loom);
+    getLoomEditorialAutopilotStatus.mockResolvedValue({
       run: {
         id: 'editorial-run-1', loomId: 'loom-1', status: 'paused', round: 2, maxRounds: 3,
         pauseReason: 'plateau', message: 'Editorial autopilot paused.', rounds: [],
@@ -219,7 +228,7 @@ describe('LoomEditorialAutomation', () => {
   });
 
   it('keeps the decided pause explanation visible when cancellation lands during diagnosis', async () => {
-    api.getLoomEditorialAutopilotStatus.mockResolvedValue({
+    getLoomEditorialAutopilotStatus.mockResolvedValue({
       run: {
         id: 'editorial-run-1', loomId: 'loom-1', status: 'canceled', round: 1, maxRounds: 1,
         pauseReason: 'round-limit',
@@ -237,7 +246,7 @@ describe('LoomEditorialAutomation', () => {
   it('blocks every mutating AI action while the series plan has unsaved edits', async () => {
     renderPanel({ dirty: true });
 
-    await waitFor(() => expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalled());
+    await waitFor(() => expect(getLoomEditorialAutopilotStatus).toHaveBeenCalled());
 
     expect(screen.getByRole('button', { name: 'Evaluate & remediate series' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run playthrough test' })).toBeDisabled();
@@ -256,24 +265,24 @@ const editorialRun = (patch = {}) => ({
 
 it('renders snapshots without timer reads and reconciles reconnect/reshow once', async () => {
   const onLoomUpdate = vi.fn();
-  api.getLoom.mockResolvedValue(loom);
-  api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: editorialRun() });
+  getLoom.mockResolvedValue(loom);
+  getLoomEditorialAutopilotStatus.mockResolvedValue({ run: editorialRun() });
   renderPanel({ onLoomUpdate });
   await screen.findAllByText('Editor running');
   vi.useFakeTimers();
   await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
   vi.useRealTimers();
-  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
+  expect(getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
   await act(async () => editorialEvent(editorialRun({ revision: 2, message: 'Reviewer running' })));
   expect(screen.getAllByText('Reviewer running')[0]).toBeInTheDocument();
   await act(async () => editorialEvent(editorialRun({ loomId: 'other', revision: 3, message: 'Wrong loom' })));
   expect(screen.queryByText('Wrong loom')).not.toBeInTheDocument();
   const completed = editorialRun({ status: 'completed', revision: 3, message: 'Review finished' });
-  api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: completed });
+  getLoomEditorialAutopilotStatus.mockResolvedValue({ run: completed });
   await act(async () => { editorialEvent(completed); editorialEvent({ ...completed, revision: 4 }); });
   expect(onLoomUpdate).toHaveBeenCalledTimes(1);
   await act(async () => reconnect());
-  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(2);
+  expect(getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(2);
   const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
   act(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -284,15 +293,15 @@ it('renders snapshots without timer reads and reconciles reconnect/reshow once',
   });
   if (original) Object.defineProperty(document, 'visibilityState', original);
   else delete document.visibilityState;
-  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(3);
+  expect(getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(3);
   expect(onLoomUpdate).toHaveBeenCalledTimes(1);
 });
 
 it('drops late initial reads, retired-run events and old-loom terminal refreshes', async () => {
   let resolveRead;
   let resolveLoom;
-  api.getLoomEditorialAutopilotStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
-  api.getLoom.mockReturnValueOnce(new Promise(resolve => { resolveLoom = resolve; }));
+  getLoomEditorialAutopilotStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+  getLoom.mockReturnValueOnce(new Promise(resolve => { resolveLoom = resolve; }));
   const onLoomUpdate = vi.fn();
   const panel = renderPanel({ onLoomUpdate });
   await waitFor(() => expect(resolveRead).toBeTypeOf('function'));

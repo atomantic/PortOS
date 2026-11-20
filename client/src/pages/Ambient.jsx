@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowLeft, Maximize, Minimize } from 'lucide-react';
-import * as api from '../services/api';
+import { getDeathClock } from '../services/apiMeatspace.js';
+import { getCosQuickSummary, getCosGoalProgressSummary } from '../services/apiAgents.js';
+import { getCalendarEvents } from '../services/apiCalendar.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useSocket } from '../hooks/useSocket';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
@@ -43,17 +45,17 @@ export default function Ambient() {
   const reconciledDays = useRef({ deathClock: day, summary: day, calendar: day });
   const { data: deathData, refetch: refreshDeathClock } = useSocketResource(() => {
     reconciledDays.current.deathClock = new Date().toDateString();
-    return api.getDeathClock();
+    return getDeathClock();
   }, {
     events: DEATH_CLOCK_EVENTS
   });
   const { data: cosSummary, refetch: refreshSummary } = useSocketResource(() => {
     reconciledDays.current.summary = new Date().toDateString();
-    return api.getCosQuickSummary({ silent: true });
+    return getCosQuickSummary({ silent: true });
   }, {
     namespace: 'cos', events: SUMMARY_EVENTS
   });
-  const { data: goals } = useSocketResource(() => api.getCosGoalProgressSummary({ silent: true }), {
+  const { data: goals } = useSocketResource(() => getCosGoalProgressSummary({ silent: true }), {
     namespace: 'cos', events: GOAL_EVENTS
   });
   const { data: calendarEvents, error: calendarError, refetch: refreshCalendar } = useSocketResource(async () => {
@@ -72,7 +74,7 @@ export default function Ambient() {
     const events = [];
     let page;
     do {
-      page = await api.getCalendarEvents({ ...params, offset: events.length }, { silent: true });
+      page = await getCalendarEvents({ ...params, offset: events.length }, { silent: true });
       events.push(...page.events);
     } while (page.events.length && events.length < page.total);
     return events;

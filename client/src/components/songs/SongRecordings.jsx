@@ -18,7 +18,7 @@ import { Mic, Square, Play, Trash2, Volume2, VolumeX, Loader2, Target } from 'lu
 import toast from '../ui/Toast';
 import useMemoRecorder from '../../hooks/useMemoRecorder';
 import { createLayeredPlayer } from '../../lib/songPlayback';
-import { uploadFile, getUploadUrl } from '../../services/api';
+import { uploadFile, getUploadUrl } from '../../services/apiMedia.js';
 import { formatDurationMs } from '../../utils/formatters';
 import { parseScore, scoreHasMusic } from '../../lib/scoreNotation';
 import { buildColorMatchTimeline, gradesFromPerNote } from '../../lib/colorMatch';

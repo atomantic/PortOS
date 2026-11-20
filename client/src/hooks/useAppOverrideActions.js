@@ -8,7 +8,7 @@
 
 import { useCallback } from 'react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { updateAppTaskTypeOverride, bulkUpdateAppTaskTypeOverride } from '../services/apiApps.js';
 
 /**
  * Per-app scheduled-task override mutations, shared by the Schedule tab and the
@@ -26,7 +26,7 @@ export function useAppOverrideActions(apps, refetch) {
   // dropped every field it hadn't been taught about (intervalMs, providerId,
   // model) — the route then 400s on the resulting empty body.
   const handleUpdateOverride = useCallback(async (appId, taskType, patch) => {
-    const result = await api.updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
+    const result = await updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -38,7 +38,7 @@ export function useAppOverrideActions(apps, refetch) {
   }, [apps, refetch]);
 
   const handleBulkToggleOverride = useCallback(async (taskType, enabled) => {
-    const result = await api.bulkUpdateAppTaskTypeOverride(taskType, { enabled }, { silent: true }).catch(err => {
+    const result = await bulkUpdateAppTaskTypeOverride(taskType, { enabled }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

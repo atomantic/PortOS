@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getInstances } from '../services/api';
+import { getInstances } from '../services/apiSystem.js';
 import {
   federatedMediaModelKey,
   federatedMediaModelsForPeer,

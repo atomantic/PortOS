@@ -2,13 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CodeReviewersTab from './CodeReviewersTab';
-import * as api from '../../services/api';
+import { getReviewerIdentities, getCodeReviewDefaults } from '../../services/apiCodeReview.js';
+import { updateSettings } from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCodeReview.js', () => ({
   getCodeReviewDefaults: vi.fn(),
-  updateSettings: vi.fn(),
   getReviewerIdentities: vi.fn(),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
+  updateSettings: vi.fn(),
 }));
 
 const pickerData = vi.hoisted(() => ({ current: { ctxById: {} } }));
@@ -33,7 +36,7 @@ describe('CodeReviewersTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pickerData.current = { ctxById: {} };
-    api.getReviewerIdentities.mockResolvedValue({ identities: [] });
+    getReviewerIdentities.mockResolvedValue({ identities: [] });
   });
 
   afterEach(() => {
@@ -50,8 +53,8 @@ describe('CodeReviewersTab', () => {
       optionsByReviewer: { 'provider:example-gpu': ['coder-a', 'coder-b'] },
       freeText: { 'provider:example-gpu': true },
     };
-    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], codexModel: 'legacy-model', claudeEffort: 'medium' });
-    api.updateSettings.mockResolvedValue({});
+    getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], codexModel: 'legacy-model', claudeEffort: 'medium' });
+    updateSettings.mockResolvedValue({});
     const view = renderTab(<CodeReviewersTab />);
     const provider = await screen.findByLabelText('Add AI provider');
     expect(screen.queryByRole('option', { name: 'Disabled API' })).not.toBeInTheDocument();
@@ -59,8 +62,8 @@ describe('CodeReviewersTab', () => {
     fireEvent.change(screen.getByLabelText('Model for Example GPU'), { target: { value: 'coder-b' } });
     fireEvent.change(screen.getByLabelText('Reasoning effort for Example GPU'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
-    const saved = api.updateSettings.mock.calls[0][0].codeReview;
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    const saved = updateSettings.mock.calls[0][0].codeReview;
     expect(saved).toMatchObject({
       reviewers: ['provider:example-gpu', 'copilot'],
       providerModels: { 'provider:example-gpu': 'coder-b' },
@@ -68,22 +71,22 @@ describe('CodeReviewersTab', () => {
       codexModel: 'legacy-model', claudeEffort: 'medium',
     });
     view.unmount();
-    api.getCodeReviewDefaults.mockResolvedValue(saved);
+    getCodeReviewDefaults.mockResolvedValue(saved);
     renderTab(<CodeReviewersTab />);
     expect(await screen.findByLabelText('Model for Example GPU')).toHaveValue('coder-b');
     expect(screen.getByLabelText('Reasoning effort for Example GPU')).toHaveValue('high');
     fireEvent.change(screen.getByLabelText('Reasoning effort for Example GPU'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
-    expect(api.updateSettings.mock.calls[1][0].codeReview).toMatchObject({
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(updateSettings.mock.calls[1][0].codeReview).toMatchObject({
       providerModels: { 'provider:example-gpu': 'coder-b' }, providerEfforts: {},
       codexModel: 'legacy-model', claudeEffort: 'medium',
     });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save defaults' })).not.toBeDisabled());
     fireEvent.click(screen.getByLabelText('Remove Example GPU'));
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(3));
-    expect(api.updateSettings.mock.calls[2][0].codeReview).toMatchObject({ reviewers: ['copilot'], providerModels: {}, providerEfforts: {} });
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(3));
+    expect(updateSettings.mock.calls[2][0].codeReview).toMatchObject({ reviewers: ['copilot'], providerModels: {}, providerEfforts: {} });
   });
 
   it('edits persisted tier priority, shares pins across memberships, and saves only nonempty tiers', async () => {
@@ -92,18 +95,18 @@ describe('CodeReviewersTab', () => {
       loaded: true, providers: [{ id: 'example-gpu', name: 'Example GPU', enabled: true, command: 'codex', models: ['custom-coder'] }],
       optionsByReviewer: { [token]: ['custom-coder'] },
     };
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       // The active runtime tier is intentionally not the configured Primary.
       reviewers: ['codex'], reviewerFallbackGroups: [[token, 'ollama'], ['codex']],
       providerModels: { [token]: 'custom-coder' }, providerEfforts: { [token]: 'high' },
       optionalReviewers: [token, '@example-bot'], reviewerMaxRounds: { [token]: 1, '@example-bot': 2 },
       usernames: ['example-bot'], stopMode: 'consensus', reviewerApplies: true,
     });
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
     const view = renderTab(<CodeReviewersTab />);
     const primary = await screen.findByRole('region', { name: 'Primary' });
     expect(within(primary).getByLabelText('Model for Example GPU')).toHaveValue('custom-coder');
-    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Fallback reviewer groups')).not.toBeInTheDocument();
     const fallback = screen.getByRole('region', { name: 'Fallback 1' });
     fireEvent.change(within(fallback).getByLabelText('Add AI provider'), { target: { value: 'example-gpu' } });
@@ -118,7 +121,7 @@ describe('CodeReviewersTab', () => {
     fireEvent.click(screen.getByText('Add tier'));
     fireEvent.click(screen.getByText('Save defaults'));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
-    const saved = api.updateSettings.mock.lastCall[0].codeReview;
+    const saved = updateSettings.mock.lastCall[0].codeReview;
     expect(saved).toMatchObject({
       reviewers: [token], reviewerFallbackGroups: [[token], ['ollama', 'codex']],
       providerModels: { [token]: 'custom-coder' }, providerEfforts: { [token]: 'low' },
@@ -127,52 +130,52 @@ describe('CodeReviewersTab', () => {
     });
     expect(screen.queryByRole('region', { name: 'Fallback 2' })).not.toBeInTheDocument();
     view.unmount();
-    api.getCodeReviewDefaults.mockResolvedValue(saved);
+    getCodeReviewDefaults.mockResolvedValue(saved);
     renderTab(<CodeReviewersTab />);
     fireEvent.click(await screen.findByText('Save defaults'));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
-    expect(api.updateSettings.mock.lastCall[0].codeReview).toEqual(saved);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(updateSettings.mock.lastCall[0].codeReview).toEqual(saved);
     await waitFor(() => expect(screen.getByText('Save defaults')).not.toBeDisabled());
     fireEvent.click(screen.getByLabelText('Remove Primary'));
     expect(screen.queryByLabelText('Model for Example GPU')).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Remove Primary'));
     fireEvent.click(screen.getByText('Save defaults'));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(3));
-    expect(api.updateSettings.mock.lastCall[0].codeReview).toMatchObject({
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(3));
+    expect(updateSettings.mock.lastCall[0].codeReview).toMatchObject({
       reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'], providerModels: {}, providerEfforts: {},
       optionalReviewers: ['@example-bot'], reviewerMaxRounds: { '@example-bot': 2 },
     });
   });
 
   it('respects explicit empty groups despite a legacy roster and gates failed or in-flight saves', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [], usernames: ['example-bot'] });
     let rejectSave;
-    api.updateSettings.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+    updateSettings.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
     renderTab(<CodeReviewersTab />);
     fireEvent.click(await screen.findByText('Save defaults'));
     expect(screen.getByText('Saving…')).toBeDisabled();
     expect(screen.getByText('Add tier')).toBeDisabled();
     expect(screen.getByLabelText('Remove @example-bot')).toBeDisabled();
-    expect(api.updateSettings.mock.lastCall[0].codeReview).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    expect(updateSettings.mock.lastCall[0].codeReview).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
     rejectSave(new Error('example failure'));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('example failure')));
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Remove @example-bot')).not.toBeDisabled();
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
     fireEvent.click(screen.getByText('Save defaults'));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
   });
 
   it('does not enable save after a malformed defaults response', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [['codex'], null] });
+    getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [['codex'], null] });
     renderTab(<CodeReviewersTab />);
     expect(await screen.findByText('Failed to load code review defaults.')).toBeInTheDocument();
     expect(screen.getByText('Save defaults')).toBeDisabled();
-    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 
   it('renders loading state initially and populates panel when fetch succeeds', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['codex'],
       usernames: [],
       optionalReviewers: [],
@@ -188,11 +191,11 @@ describe('CodeReviewersTab', () => {
     expect(await screen.findByText('Save defaults')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load code review defaults.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save defaults' })).not.toBeDisabled();
-    expect(api.getCodeReviewDefaults).toHaveBeenCalledWith({ silent: true });
+    expect(getCodeReviewDefaults).toHaveBeenCalledWith({ silent: true });
   });
 
   it('shows the last failed review attempt with the settings fix', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       reviewerConfigFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
     });
@@ -205,7 +208,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('identifies a provider access refusal and its configuration remedy', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['opencode', 'codex'],
       optionalReviewers: ['opencode'],
       reviewerConfigFaults: { opencode: { code: 'REVIEWER_ACCESS_DENIED', lastFailureAt: 123 } },
@@ -216,7 +219,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('names a headless command refusal and recommends a compatible reviewer without granting permissions', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['provider:example-cli'], optionalReviewers: ['provider:example-cli'],
       reviewerConfigFaults: { 'provider:example-cli': { code: 'REVIEWER_COMMAND_PERMISSION_DENIED', lastFailureAt: 123 } },
     });
@@ -226,7 +229,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {
-    api.getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
+    getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
 
     renderTab(<CodeReviewersTab />);
 
@@ -239,7 +242,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('re-fetches defaults when Retry button is clicked and enables Save button on success', async () => {
-    api.getCodeReviewDefaults
+    getCodeReviewDefaults
       .mockRejectedValueOnce(new Error('Network error'))
       .mockResolvedValueOnce({
         reviewers: ['codex'],
@@ -263,13 +266,13 @@ describe('CodeReviewersTab', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Save defaults' })).not.toBeDisabled();
-    expect(api.getCodeReviewDefaults).toHaveBeenCalledTimes(2);
+    expect(getCodeReviewDefaults).toHaveBeenCalledTimes(2);
   });
 
   // The goal-fidelity gate (#5994) — the second review, which asks whether a
   // finished run delivered the objective rather than whether the code is good.
   it('round-trips the goal-fidelity gate, and defaults an absent block to on', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       usernames: [],
       optionalReviewers: [],
@@ -277,7 +280,7 @@ describe('CodeReviewersTab', () => {
       stopMode: 'all',
       reviewerApplies: false,
     });
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
 
     renderTab(<CodeReviewersTab />);
     await openFollowUp();
@@ -289,8 +292,8 @@ describe('CodeReviewersTab', () => {
     fireEvent.change(screen.getByLabelText('Local model runtime'), { target: { value: 'lmstudio' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
-    const [payload] = api.updateSettings.mock.calls[0];
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    const [payload] = updateSettings.mock.calls[0];
     // The scalars are dropped when unset (absent = inherit), and so is the
     // trigger while neither action is armed — pinning it would freeze an
     // install on today's default forever. The follow-up BOOLEANS always ride:
@@ -302,7 +305,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('sends an explicit off switch, and drops the unset pins rather than persisting empty ones', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       usernames: [],
       optionalReviewers: [],
@@ -311,22 +314,22 @@ describe('CodeReviewersTab', () => {
       reviewerApplies: false,
       goalFidelity: { enabled: true, backend: null, model: null, effort: null },
     });
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
 
     renderTab(<CodeReviewersTab />);
     await openFollowUp();
     fireEvent.click(await screen.findByLabelText(/Check finished runs against the task objective/));
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
-    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({
       enabled: false, fileIssue: false, queueTask: false,
     });
   });
 
   // The follow-up half (#7690): what happens once the gate HAS a finding.
   it('round-trips the follow-up actions and their trigger', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       usernames: [],
       optionalReviewers: [],
@@ -335,7 +338,7 @@ describe('CodeReviewersTab', () => {
       reviewerApplies: false,
       goalFidelity: { enabled: true, fileIssue: true, queueTask: false, followUpOn: 'any-finding' },
     });
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
 
     renderTab(<CodeReviewersTab />);
     await openFollowUp();
@@ -346,8 +349,8 @@ describe('CodeReviewersTab', () => {
     fireEvent.click(screen.getByLabelText(/Queue an agent to reconcile it/));
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
-    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toMatchObject({
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].codeReview.goalFidelity).toMatchObject({
       fileIssue: true, queueTask: true, followUpOn: 'any-finding',
     });
   });
@@ -355,7 +358,7 @@ describe('CodeReviewersTab', () => {
   // Filing on someone's tracker and spawning an unattended run are each opt-in,
   // so an absent block must read as off — the mirror image of `enabled` above.
   it('defaults both follow-up actions to off when the stored block omits them', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       usernames: [],
       optionalReviewers: [],
@@ -376,7 +379,7 @@ describe('CodeReviewersTab', () => {
   // Turning the gate off leaves no verdict for a follow-up to act on, so the
   // actions have to go inert with it rather than reading as still armed.
   it('disables the follow-up actions when the gate itself is off', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       usernames: [],
       optionalReviewers: [],
@@ -393,7 +396,7 @@ describe('CodeReviewersTab', () => {
   });
 
   it('keeps tier instructions in one drawer and splits follow-up onto its own view', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({
+    getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['codex'],
       reviewerFallbackGroups: [['codex'], ['ollama']],
     });
@@ -420,26 +423,26 @@ describe('CodeReviewersTab', () => {
   });
 
   it('sends an unknown task slug back to the review chain', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
+    getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
     renderTab(<CodeReviewersTab />, '/models/code-reviewers/not-a-view');
     expect(await screen.findByRole('region', { name: 'Primary' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Review chain' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('names a saved reviewer the forge does not know, without touching the roster', async () => {
-    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], usernames: ['ghost-user', 'flaky-user'] });
-    api.getReviewerIdentities.mockResolvedValue({ identities: [
+    getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], usernames: ['ghost-user', 'flaky-user'] });
+    getReviewerIdentities.mockResolvedValue({ identities: [
       { token: 'ghost-user', kind: 'user', status: 'missing', required: true, reason: 'GitHub user "ghost-user" does not exist' },
       { token: 'flaky-user', kind: 'user', status: 'unavailable', required: true, reason: 'gh command timed out' },
     ] });
-    api.updateSettings.mockResolvedValue({});
+    updateSettings.mockResolvedValue({});
     renderTab(<CodeReviewersTab />);
     expect(await screen.findByText(/@ghost-user: GitHub user "ghost-user" does not exist/)).toBeInTheDocument();
     expect(screen.getByText(/required reviewer/)).toBeInTheDocument();
     // An inconclusive lookup is not a fault to show.
     expect(screen.queryByText(/flaky-user:/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
-    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
-    expect(api.updateSettings.mock.calls[0][0].codeReview.usernames).toEqual(['ghost-user', 'flaky-user']);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(updateSettings.mock.calls[0][0].codeReview.usernames).toEqual(['ghost-user', 'flaky-user']);
   });
 });

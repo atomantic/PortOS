@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getProviders, updatePipelineSeries } from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { updatePipelineSeries } from '../../services/apiPipeline.js';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 

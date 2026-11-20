@@ -24,16 +24,15 @@ import {
   reconcileAfterReset,
   shouldReplaceDraft,
 } from '../lib/eidoverseDraftReconcile';
+import { getApp, startApp } from '../services/apiApps.js';
 import {
-  getApp,
   getEidoverseWorldProjectionStatus,
   getEidoverseWorldStatus,
   getInstanceFeatures,
   projectEidoverseWorld,
-  startApp,
   startEidoverseHost,
   updateEidoverseWorldConfig,
-} from '../services/api';
+} from '../services/apiSystem.js';
 
 const silent = { silent: true };
 const PROJECTION_EVENTS = ['eidoverse:projection'];

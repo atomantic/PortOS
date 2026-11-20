@@ -43,8 +43,23 @@ const toast = vi.hoisted(() => {
   return toastFn;
 });
 vi.mock('../../services/apiSystem', () => apiSystem);
-vi.mock('../../services/api', () => api);
-vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
+vi.mock('../../services/apiAgents.js', () => ({
+  getCosPopularTemplates: api.getCosPopularTemplates,
+  applyCosTaskTemplate: api.applyCosTaskTemplate,
+  addCosTask: api.addCosTask,
+  getOrchestrationProfiles: api.getOrchestrationProfiles,
+}));
+vi.mock('../../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: api.getProviders,
+  getCodexModels: api.getCodexModels,
+  getProviderCatalog: api.getProviderCatalog,
+}));
+vi.mock('../../services/apiApps.js', () => ({
+  getAppWorkTracker: api.getAppWorkTracker,
+  getAppRepositorySources: api.getAppRepositorySources,
+}));
+vi.mock('../../services/apiLocalLlm', () => ({ ...apiLocalLlm, getLocalLlmStatus: api.getLocalLlmStatus }));
 vi.mock('../../hooks/useInstanceFeatures', () => ({
   useInstanceFeatures: () => ({
     isFeatureEnabled: (featureId) => featureId === 'cos-task-templates' ? featureGate.quickTemplatesEnabled : true,

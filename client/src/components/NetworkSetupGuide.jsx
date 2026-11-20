@@ -11,12 +11,9 @@ import {
 } from 'lucide-react';
 import toast from './ui/Toast';
 import { PORTS } from '../lib/ports.js';
-import {
-  handleSelfRestart,
-  PORTOS_APP_ID,
-  provisionTailnetCert,
-  restartApp,
-} from '../services/api';
+import { handleSelfRestart, restartApp } from '../services/apiApps.js';
+import { PORTOS_APP_ID } from '../services/apiCore.js';
+import { provisionTailnetCert } from '../services/apiSystem.js';
 import { copyToClipboard } from '../lib/clipboard.js';
 
 const STATUS = {

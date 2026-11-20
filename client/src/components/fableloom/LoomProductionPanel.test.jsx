@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import LoomProductionPanel from './LoomProductionPanel';
-import * as api from '../../services/api';
+import {
+  getLoomEpisodeProductionBatchStatus,
+  planLoomEpisodeProduction,
+  startLoomEpisodeProductionBatch,
+  updateLoom,
+} from '../../services/apiFableLoom.js';
+import { listImageModels } from '../../services/apiImageVideo.js';
 import socket from '../../services/socket';
 
-vi.mock('../../services/api');
+vi.mock('../../services/apiFableLoom.js');
+vi.mock('../../services/apiImageVideo.js');
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 describe('LoomProductionPanel', () => {
@@ -36,14 +43,14 @@ describe('LoomProductionPanel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run: null });
-    api.planLoomEpisodeProduction.mockResolvedValue(samplePlan);
-    api.startLoomEpisodeProductionBatch.mockResolvedValue({
+    getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run: null });
+    planLoomEpisodeProduction.mockResolvedValue(samplePlan);
+    startLoomEpisodeProductionBatch.mockResolvedValue({
       id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1',
       status: 'in_progress',
       summary: { total: 6, completed: 2 },
     });
-    api.updateLoom.mockResolvedValue({
+    updateLoom.mockResolvedValue({
       ...sampleLoom,
       renderSettings: { formatId: 'portrait-9-16' },
     });
@@ -66,7 +73,7 @@ describe('LoomProductionPanel', () => {
     fireEvent.change(screen.getByLabelText('Output'), { target: { value: 'portrait-9-16' } });
 
     await waitFor(() => {
-      expect(api.updateLoom).toHaveBeenCalledWith(
+      expect(updateLoom).toHaveBeenCalledWith(
         'loom-1',
         { renderSettings: { formatId: 'portrait-9-16' } },
         { silent: true },
@@ -78,12 +85,12 @@ describe('LoomProductionPanel', () => {
   });
 
   it('shows a model-catalog error with Retry when the image model read fails, instead of an empty model picker', async () => {
-    api.listImageModels.mockRejectedValueOnce(new Error('Models unavailable'));
+    listImageModels.mockRejectedValueOnce(new Error('Models unavailable'));
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load image models — Models unavailable');
 
-    api.listImageModels.mockResolvedValueOnce([{ id: 'image-model-a', name: 'Image Model A' }]);
+    listImageModels.mockResolvedValueOnce([{ id: 'image-model-a', name: 'Image Model A' }]);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('option', { name: 'Image Model A' })).toBeInTheDocument();
@@ -103,7 +110,7 @@ describe('LoomProductionPanel', () => {
     fireEvent.change(modeSelect, { target: { value: 'exact_inputs' } });
 
     await waitFor(() => {
-      expect(api.planLoomEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'exact_inputs' }, { silent: true });
+      expect(planLoomEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'exact_inputs' }, { silent: true });
     });
   });
 
@@ -117,7 +124,7 @@ describe('LoomProductionPanel', () => {
     fireEvent.click(screen.getByText('Generate Storyboard Images'));
 
     await waitFor(() => {
-      expect(api.startLoomEpisodeProductionBatch).toHaveBeenCalledWith(
+      expect(startLoomEpisodeProductionBatch).toHaveBeenCalledWith(
         'loom-1', 'ep-1', { mode: 'current_canon', assetTypes: ['image'] }, { silent: true },
       );
       expect(screen.getByText('Cancel Production Batch')).toBeInTheDocument();
@@ -136,11 +143,11 @@ describe('LoomProductionPanel', () => {
     const generate = await screen.findByText('Generate Storyboard Images');
     expect(generate).toBeDisabled();
     expect(screen.getByText(/ordered beat arc/i)).toBeInTheDocument();
-    expect(api.startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
+    expect(startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
   });
 
   it('shows and enforces the ordered storyboard sequence gate', async () => {
-    api.planLoomEpisodeProduction.mockResolvedValueOnce({
+    planLoomEpisodeProduction.mockResolvedValueOnce({
       ...samplePlan,
       episodeOrderReadiness: {
         ready: false,
@@ -157,11 +164,11 @@ describe('LoomProductionPanel', () => {
     expect(screen.getByText('Ordered storyboard sequence')).toBeInTheDocument();
     expect(screen.getByText(/1 prior scene image\(s\) still need to be rendered/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Finish storyboard images for Episode 1 before generating Episode 2/i)).toHaveLength(2);
-    expect(api.startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
+    expect(startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
   });
 
   it('explains which portrait assets will be regenerated in the selected format', async () => {
-    api.planLoomEpisodeProduction.mockResolvedValueOnce({
+    planLoomEpisodeProduction.mockResolvedValueOnce({
       ...samplePlan,
       formatMismatches: [{
         assetId: 'node-1:image',
@@ -186,13 +193,13 @@ describe('LoomProductionPanel', () => {
   it('ignores a stale plan response after the producer changes episodes', async () => {
     let resolveFirst;
     let resolveSecond;
-    api.planLoomEpisodeProduction
+    planLoomEpisodeProduction
       .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
       .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
     const { rerender } = render(
       <LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />,
     );
-    await waitFor(() => expect(api.planLoomEpisodeProduction).toHaveBeenCalledWith(
+    await waitFor(() => expect(planLoomEpisodeProduction).toHaveBeenCalledWith(
       'loom-1', 'ep-1', { mode: 'current_canon' }, { silent: true },
     ));
 
@@ -203,7 +210,7 @@ describe('LoomProductionPanel', () => {
         onSelectNode={vi.fn()}
       />,
     );
-    await waitFor(() => expect(api.planLoomEpisodeProduction).toHaveBeenCalledWith(
+    await waitFor(() => expect(planLoomEpisodeProduction).toHaveBeenCalledWith(
       'loom-1', 'ep-2', { mode: 'current_canon' }, { silent: true },
     ));
     await act(async () => resolveSecond({
@@ -228,33 +235,33 @@ describe('LoomProductionPanel', () => {
 
   it('reattaches and applies scoped batch events, refreshing once per terminal attempt without polling', async () => {
     const run = { id: 'batch-live', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress', revision: 1, attempt: 1, summary: { total: 6, completed: 1 } };
-    api.getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run });
+    getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run });
     const panel = render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} />);
-    await waitFor(() => expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1));
     const emit = payload => socket.on.mock.calls.filter(([name]) => name === 'fableloom:production:run').at(-1)[1](payload);
     await act(async () => {});
     vi.useFakeTimers();
     await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     vi.useRealTimers();
-    expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1);
-    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
+    expect(getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1);
+    expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
     await act(async () => emit({ ...run, episodeId: 'other', status: 'completed', revision: 2 }));
-    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
+    expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
     await act(async () => emit({ ...run, status: 'failed', error: 'Example render failed', revision: 2 }));
     expect(screen.getByText(/Example render failed/)).toBeInTheDocument();
-    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
+    expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
     await act(async () => emit({ ...run, status: 'failed', revision: 3 }));
-    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
+    expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
     await act(async () => emit({ ...run, attempt: 2, revision: 4 }));
     await act(async () => emit({ ...run, attempt: 2, revision: 5, status: 'completed' }));
-    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(3);
+    expect(planLoomEpisodeProduction).toHaveBeenCalledTimes(3);
     let resolveRead;
-    api.getLoomEpisodeProductionBatchStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    getLoomEpisodeProductionBatchStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
     await act(async () => { socket.on.mock.calls.filter(([name]) => name === 'connect').at(-1)[1](); });
     panel.rerender(<LoomProductionPanel loom={sampleLoom} episode={{ id: 'ep-2' }} />);
     await act(async () => resolveRead({ run }));
     expect(screen.queryByText(/Example render failed/)).not.toBeInTheDocument();
-    expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenLastCalledWith('loom-1', 'ep-2', { silent: true });
+    expect(getLoomEpisodeProductionBatchStatus).toHaveBeenLastCalledWith('loom-1', 'ep-2', { silent: true });
   });
 
 });

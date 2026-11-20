@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon, Plus, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/api';
+import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
 import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
 import { moodBoardItemPrompt } from '../../lib/moodBoardAnalysis';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';

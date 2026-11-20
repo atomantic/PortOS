@@ -4,12 +4,7 @@ import { isValidKey } from '../../../../server/lib/mediaItemKey.js';
 import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
 import { tokenizeQuery, matchHaystack } from '../../lib/mediaSearch.js';
-import {
-  listMoodBoards,
-  createMoodBoard,
-  addMoodBoardItem,
-  removeMoodBoardItem,
-} from '../../services/api';
+import { listMoodBoards, createMoodBoard, addMoodBoardItem, removeMoodBoardItem } from '../../services/apiMoodBoard.js';
 
 // Self-contained "Pin to mood board" popover button, the mood-board sibling of
 // AddToCollectionMenu (issue #1455, follow-up to #911). It reuses the shared

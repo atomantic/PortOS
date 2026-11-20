@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AddToThreadButton from './AddToThreadButton';
-import * as api from '../../services/api';
+import { listThreads, attachToThread } from '../../services/apiBrainThreads.js';
 import toast from '../ui/Toast';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiBrainThreads.js', () => ({
   listThreads: vi.fn(),
   attachToThread: vi.fn(),
 }));
@@ -30,8 +30,8 @@ describe('AddToThreadButton', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.listThreads.mockResolvedValue({ threads: sampleThreads });
-    api.attachToThread.mockResolvedValue({ thread: { id: 't1', title: 'Sprint planning' }, created: false });
+    listThreads.mockResolvedValue({ threads: sampleThreads });
+    attachToThread.mockResolvedValue({ thread: { id: 't1', title: 'Sprint planning' }, created: false });
   });
 
   it('renders a button with accessible label and title', () => {
@@ -59,7 +59,7 @@ describe('AddToThreadButton', () => {
     fireEvent.click(btn);
 
     await waitFor(() => {
-      expect(api.listThreads).toHaveBeenCalledWith(
+      expect(listThreads).toHaveBeenCalledWith(
         { status: 'open,waiting,someday' },
         { silent: true }
       );
@@ -117,7 +117,7 @@ describe('AddToThreadButton', () => {
     fireEvent.click(screen.getByText('Sprint planning'));
 
     await waitFor(() => {
-      expect(api.attachToThread).toHaveBeenCalledWith({
+      expect(attachToThread).toHaveBeenCalledWith({
         threadId: 't1',
         ref: {
           kind: 'github.issue',
@@ -131,7 +131,7 @@ describe('AddToThreadButton', () => {
   });
 
   it('creates a new thread and attaches when committing a typed name', async () => {
-    api.attachToThread.mockResolvedValue({ thread: { id: 't3', title: 'New Open Loop' }, created: true });
+    attachToThread.mockResolvedValue({ thread: { id: 't3', title: 'New Open Loop' }, created: true });
     render(<AddToThreadButton threadRef={sampleRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'Add to Brain thread' }));
 
@@ -150,7 +150,7 @@ describe('AddToThreadButton', () => {
     fireEvent.click(screen.getByText(/New thread “New Open Loop”/i));
 
     await waitFor(() => {
-      expect(api.attachToThread).toHaveBeenCalledWith({
+      expect(attachToThread).toHaveBeenCalledWith({
         title: 'New Open Loop',
         ref: {
           kind: 'github.issue',
@@ -186,7 +186,7 @@ describe('AddToThreadButton', () => {
     fireEvent.click(screen.getByText('Sprint planning'));
 
     await waitFor(() => {
-      expect(api.attachToThread).toHaveBeenCalledWith({
+      expect(attachToThread).toHaveBeenCalledWith({
         threadId: 't1',
         ref: {
           kind: 'message',
@@ -198,7 +198,7 @@ describe('AddToThreadButton', () => {
   });
 
   it('handles attach failure with error toast', async () => {
-    api.attachToThread.mockRejectedValue(new Error('Network error'));
+    attachToThread.mockRejectedValue(new Error('Network error'));
     render(<AddToThreadButton threadRef={sampleRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'Add to Brain thread' }));
 
@@ -221,7 +221,7 @@ describe('AddToThreadButton', () => {
   });
 
   it('shows a retryable error instead of the "No open threads yet" create hint when the list read fails', async () => {
-    api.listThreads.mockRejectedValueOnce(new Error('brain down'));
+    listThreads.mockRejectedValueOnce(new Error('brain down'));
     render(<AddToThreadButton threadRef={sampleRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'Add to Brain thread' }));
 

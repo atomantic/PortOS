@@ -33,11 +33,10 @@ const api = vi.hoisted(() => ({
   createBrainMemory: vi.fn(),
   updateBrainMemory: vi.fn(),
   deleteBrainMemory: vi.fn(),
-  getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
   getChatgptArchive: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }) }));
 vi.mock('../../../services/apiBrain', () => api);
 vi.mock('../../../services/socket', () => ({ default: mockSocket }));
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { getModelPinWarnings, clearModelPin } from '../../services/apiProviders.js';
 import Banner from '../ui/Banner';
 import { modeLabel, RENDER_TARGET_OPTIONS } from '../../lib/imageGenModes';
 import { pluralize } from '../../lib/textUtils';
@@ -58,7 +58,7 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
     // `silent` — a provider service that isn't up yet is not something to toast
     // about on a page the user opened to look at providers. The panel simply
     // stays hidden, which is indistinguishable from "no stale pins".
-    const data = await api.getModelPinWarnings({ silent: true }).catch(() => null);
+    const data = await getModelPinWarnings({ silent: true }).catch(() => null);
     setPins(Array.isArray(data?.pins) ? data.pins : []);
     setProviders(data?.providers && typeof data.providers === 'object' ? data.providers : {});
   }, []);
@@ -67,7 +67,7 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
 
   const handleClear = async (pin) => {
     setClearing(pin.id);
-    const result = await api.clearModelPin(pin.id).catch(() => null);
+    const result = await clearModelPin(pin.id).catch(() => null);
     setClearing(null);
     if (!result) return;
     // Drop the row locally rather than waiting on a reload: the write already

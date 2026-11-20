@@ -23,7 +23,7 @@ import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
-import { deriveRoundParts } from '../../services/api';
+import { deriveRoundParts } from '../../services/apiRounds.js';
 import { HARMONY_PARTS, harmonyPartLabel, harmonyPartOrder } from '../../lib/songCraft';
 import { scoreHasMusic } from '../../lib/scoreNotation';
 

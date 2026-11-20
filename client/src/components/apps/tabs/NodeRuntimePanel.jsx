@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Copy, Cpu, Loader2, ShieldAlert } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getNodeRuntimeStatus,
+  repairNodeStartup,
+  updateNodeRuntime,
+  updatePm2Runtime,
+} from '../../../services/apiSystem.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { formatDateNumeric } from '../../../utils/formatters';
@@ -17,7 +22,7 @@ const SOURCE_LABELS = { nvm: 'nvm', homebrew: 'Homebrew', other: 'system' };
  */
 export default function NodeRuntimePanel({ onLaunch, busy = false }) {
   const { data: status, loading, refetch } = useSocketResource(
-    () => api.getNodeRuntimeStatus({ silent: true }), { events: STATUS_EVENTS }
+    () => getNodeRuntimeStatus({ silent: true }), { events: STATUS_EVENTS }
   );
   const offers = status?.releases?.offers || [];
   const [selected, setSelected] = useState(null);
@@ -51,7 +56,7 @@ export default function NodeRuntimePanel({ onLaunch, busy = false }) {
   // No restart, so it does not go through the Update tab's launch.
   const fixStartup = async () => {
     setPending('startup');
-    const result = await api.repairNodeStartup().catch(() => null);
+    const result = await repairNodeStartup().catch(() => null);
     setPending(null);
     if (result?.fixed) refetch();
   };
@@ -115,7 +120,7 @@ export default function NodeRuntimePanel({ onLaunch, busy = false }) {
           {status.canUpdate ? (
             <button
               type="button"
-              onClick={() => launch('node', () => api.updateNodeRuntime(selected))}
+              onClick={() => launch('node', () => updateNodeRuntime(selected))}
               disabled={disabled || !selected}
               className="w-full sm:w-auto px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center justify-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
             >
@@ -156,7 +161,7 @@ export default function NodeRuntimePanel({ onLaunch, busy = false }) {
         {pm2Behind && (
           <button
             type="button"
-            onClick={() => launch('pm2', () => api.updatePm2Runtime())}
+            onClick={() => launch('pm2', () => updatePm2Runtime())}
             disabled={disabled}
             className="mt-3 w-full sm:w-auto px-4 py-2 bg-port-border text-white rounded-lg text-sm flex items-center justify-center gap-2 hover:bg-port-border/80 disabled:opacity-50"
           >

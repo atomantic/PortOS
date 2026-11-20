@@ -21,10 +21,8 @@ import {
   proseExportManuscriptUrl,
   proseExportEpubUrl,
   proseExportPdfUrl,
-  listMediaCollections,
-  getGalleryImages,
-  listVideoHistory,
-} from '../services/api';
+} from '../services/apiPipeline.js';
+import { listMediaCollections, getGalleryImages, listVideoHistory } from '../services/apiImageVideo.js';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import AttributionList from '../components/media/AttributionList';

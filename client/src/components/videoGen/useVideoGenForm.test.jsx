@@ -3,7 +3,9 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
 
 const extractLastFrame = vi.fn();
-vi.mock('../../services/api', () => ({ extractLastFrame: (...a) => extractLastFrame(...a) }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  extractLastFrame: (...a) => extractLastFrame(...a),
+}));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));

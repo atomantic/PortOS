@@ -8,8 +8,8 @@ import {
   saveGoalScorecardRules,
   getGoalScorecardSettings,
   updateGoalScorecardSettings,
-  getProviders,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import ProviderModelSelector from '../ProviderModelSelector';
 

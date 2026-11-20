@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
+import { listMediaAnnotations, setMediaAnnotation } from '../services/apiImageVideo.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { sameJsonShape } from '../lib/sameJsonShape';

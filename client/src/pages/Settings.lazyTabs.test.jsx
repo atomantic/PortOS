@@ -3,8 +3,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { TABS } from '../components/settings/SettingsTabsHeader';
 
-vi.mock('../services/api', () => new Proxy({}, {
-  get: (_target, key) => (key === 'then' || key === '__esModule' ? undefined : vi.fn().mockResolvedValue({})),
+vi.mock('../services/apiCore.js', () => ({
+  request: vi.fn().mockResolvedValue({}),
+  default: new Proxy({}, { get: (_target, key) => (key === 'then' || key === '__esModule' ? undefined : vi.fn().mockResolvedValue({})) }),
 }));
 vi.mock('../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ features: [], isFeatureEnabled: () => true }),

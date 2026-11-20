@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import * as api from '../../services/api';
+import {
+  getMindRecipe,
+  updateMindRecipe,
+  createMindRecipe,
+  validateMindRecipe,
+  archiveMindRecipe,
+  restoreMindRecipe,
+  getMindRecipes,
+} from '../../services/apiAgents.js';
 import Banner from '../ui/Banner';
 import { formatDateShort } from '../../utils/formatters';
 
@@ -37,7 +45,7 @@ function RecipeEditor({ id, onChanged, onSelect }) {
       setLoading(true);
       setError(null);
       setValidation(null);
-      api.getMindRecipe(id, { silent: true }).then((response) => {
+      getMindRecipe(id, { silent: true }).then((response) => {
         if (cancelled) return;
         setDetail(response);
         setText(JSON.stringify(response.recipe.definition, null, 2));
@@ -76,12 +84,12 @@ function RecipeEditor({ id, onChanged, onSelect }) {
   const save = () => run(async () => {
     const definition = JSON.parse(text);
     const saved = recipe
-      ? await api.updateMindRecipe(id, { expectedRevision: recipe.activeRevision, definition }, { silent: true })
-      : await api.createMindRecipe(definition, { silent: true });
+      ? await updateMindRecipe(id, { expectedRevision: recipe.activeRevision, definition }, { silent: true })
+      : await createMindRecipe(definition, { silent: true });
     apply(saved);
   });
   const validate = () => run(async () => {
-    const result = await api.validateMindRecipe(JSON.parse(text), { silent: true });
+    const result = await validateMindRecipe(JSON.parse(text), { silent: true });
     if (active.current) setValidation(result);
   });
 
@@ -103,7 +111,7 @@ function RecipeEditor({ id, onChanged, onSelect }) {
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={validate} disabled={busy} className={buttonClass}>Validate definition</button>
           <button type="button" onClick={save} disabled={busy || recipe?.archived} className={buttonClass}>{id === 'new' ? 'Save recipe' : 'Save new revision'}</button>
-          {recipe && !recipe.archived && <button type="button" disabled={busy || dirty} className={buttonClass} onClick={() => run(async () => apply(await api.archiveMindRecipe(id, recipe.activeRevision, { silent: true })))}>Archive recipe</button>}
+          {recipe && !recipe.archived && <button type="button" disabled={busy || dirty} className={buttonClass} onClick={() => run(async () => apply(await archiveMindRecipe(id, recipe.activeRevision, { silent: true })))}>Archive recipe</button>}
         </div>
         {busy && <p role="status" className="text-xs text-port-text-muted">Working…</p>}
         {validation && <div role="status" className="space-y-1 text-sm text-port-success">
@@ -118,7 +126,7 @@ function RecipeEditor({ id, onChanged, onSelect }) {
               <summary className="cursor-pointer text-sm text-port-text">Revision {version.revision} · {version.author}{version.createdAt ? ` · ${formatDateShort(version.createdAt)}` : ''}</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-port-text-muted">{JSON.stringify(version.definition, null, 2)}</pre>
             </details>
-            <button type="button" disabled={busy || dirty || (!recipe.archived && version.revision === recipe.activeRevision)} className={`${buttonClass} mt-2`} onClick={() => run(async () => apply(await api.restoreMindRecipe(id, { expectedRevision: recipe.activeRevision, revision: version.revision }, { silent: true })))}>Restore revision {version.revision}</button>
+            <button type="button" disabled={busy || dirty || (!recipe.archived && version.revision === recipe.activeRevision)} className={`${buttonClass} mt-2`} onClick={() => run(async () => apply(await restoreMindRecipe(id, { expectedRevision: recipe.activeRevision, revision: version.revision }, { silent: true })))}>Restore revision {version.revision}</button>
           </div>)}
         </section>}
       </>}
@@ -138,7 +146,7 @@ export default function PersistentMindRecipeLibrary() {
     if (!mounted.current) return;
     const request = ++version.current;
     setLoading(true);
-    api.getMindRecipes({ silent: true }).then((result) => {
+    getMindRecipes({ silent: true }).then((result) => {
       if (request !== version.current) return;
       setRecipes((current) => {
         const merged = new Map((result.recipes || []).map((recipe) => [recipe.id, recipe]));

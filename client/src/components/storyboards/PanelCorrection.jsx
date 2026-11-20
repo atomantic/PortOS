@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Eraser, Loader2, Pencil, RefreshCw, Trash2, Undo2 } from 'lucide-react';
 import AnnotationCanvas from '../media/AnnotationCanvas';
-import { getMediaSketch, saveMediaSketch } from '../../services/api';
+import { getMediaSketch, saveMediaSketch } from '../../services/apiImageVideo.js';
 import { undoStrokes, DEFAULT_SIZE } from '../../lib/sketchCanvas';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 

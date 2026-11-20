@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { importSpecifiersFromSource } from './lib/importReach.js';
+import { moduleSpecifiers } from './lib/moduleGraph.js';
 import { trackedFiles } from './lib/trackedFiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,7 +30,7 @@ function inspectClientImports(clientFiles, readSource) {
   const seen = new Set();
   const queue = [];
   for (const file of clientFiles) {
-    const { static: imports, dynamic } = importSpecifiersFromSource(readSource(file));
+    const { statics: imports, deferred: dynamic } = moduleSpecifiers(readSource(file), file);
     for (const specifier of [...imports, ...dynamic]) {
       const target = resolveRelative(file, specifier);
       if (!target || !isWithin('server', target)) continue;
@@ -52,7 +52,7 @@ function inspectClientImports(clientFiles, readSource) {
       violations.push(`${trace} (module does not exist)`);
       continue;
     }
-    const { static: imports, dynamic } = importSpecifiersFromSource(source);
+    const { statics: imports, deferred: dynamic } = moduleSpecifiers(source, file);
     for (const specifier of [...imports, ...dynamic]) {
       const target = resolveRelative(file, specifier);
       if (!target) {
@@ -96,7 +96,8 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
   it('follows shared leaves and diagnoses impure edges with the import chain', () => {
     const file = 'client/src/lib/example.js';
     const modules = new Map([
-      [file, String.raw`export { result } from '..\..\..\server\lib\leaf.js';`],
+      // A real backslash specifier (`\\` in source): Node's file-URL resolution reads `\` as `/`.
+      [file, String.raw`export { result } from '..\\..\\..\\server\\lib\\leaf.js';`],
       ['server/lib/leaf.js', "import './nested.js';"],
       ['server/lib/nested.js', 'export const result = 1;'],
     ]);

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const getCharacterLoras = vi.fn();
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLoraTraining.js', () => ({
   getCharacterLoras: (...args) => getCharacterLoras(...args),
 }));
 

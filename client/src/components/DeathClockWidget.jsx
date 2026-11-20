@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Skull } from 'lucide-react';
-import * as api from '../services/api';
+import { getDeathClock } from '../services/apiMeatspace.js';
 import DeathClockCountdown from './DeathClockCountdown';
 
 export default function DeathClockWidget() {
@@ -9,7 +9,7 @@ export default function DeathClockWidget() {
   const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const data = await api.getDeathClock().catch(() => null);
+    const data = await getDeathClock().catch(() => null);
     setDeathData(data);
     setLoaded(true);
   }, []);

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { ClipboardList, Save } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getMeatspaceConfig, updateMeatspaceConfig } from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 
@@ -41,7 +41,7 @@ export default function LifestyleTab() {
 
   const fetchData = useCallback(async () => {
     const seq = ++loadSeq.current;
-    const data = await api.getMeatspaceConfig({ silent: true }).catch(() => null);
+    const data = await getMeatspaceConfig({ silent: true }).catch(() => null);
     if (seq !== loadSeq.current) return;
     // Save sends sex and every lifestyle field, so a form seeded with defaults
     // after a failed read would overwrite the stored profile (and MortalLoom's).
@@ -78,7 +78,7 @@ export default function LifestyleTab() {
       sexSource: sex ? 'questionnaire' : null,
       lifestyle
     };
-    const result = await api.updateMeatspaceConfig(payload).catch(() => null);
+    const result = await updateMeatspaceConfig(payload).catch(() => null);
     setSaving(false);
     if (result) {
       setConfig(result);

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getSeriesEditorial: vi.fn(),
   getSeriesEditorialStatus: vi.fn(),
   analyzeSeriesEditorial: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../services/api', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
 vi.mock('./usePipelineProgress', () => ({ usePipelineProgress: vi.fn() }));
 
-import { getSeriesEditorial, getSeriesEditorialStatus } from '../services/api';
+import { getSeriesEditorial, getSeriesEditorialStatus } from '../services/apiPipeline.js';
 import { usePipelineProgress } from './usePipelineProgress';
 import { useSeriesEditorial } from './useSeriesEditorial';
 

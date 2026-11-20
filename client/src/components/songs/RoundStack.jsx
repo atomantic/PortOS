@@ -19,7 +19,7 @@ import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet';
 import { scoreHasMusic } from '../../lib/scoreNotation';
 import { createLayeredPlayer } from '../../lib/songPlayback';
-import { getUploadUrl } from '../../services/api';
+import { getUploadUrl } from '../../services/apiMedia.js';
 import { rhythmShapeLabel } from '../../lib/songCraft';
 import { isNonBlankStr } from '../../lib/textUtils';
 

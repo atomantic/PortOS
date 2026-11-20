@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
-import * as api from '../services/api';
+import { getPersistentMindTools } from '../services/apiAgents.js';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 import PersistentMindRecipeLibrary from '../components/cos/PersistentMindRecipeLibrary';
@@ -19,7 +19,7 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
   const load = useCallback(() => {
     const version = ++requestVersion.current;
     setLoading(true);
-    api.getPersistentMindTools({ silent: true })
+    getPersistentMindTools({ silent: true })
       .then((response) => {
         if (version !== requestVersion.current) return;
         setData(response);

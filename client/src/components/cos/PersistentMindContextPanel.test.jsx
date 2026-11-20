@@ -2,9 +2,12 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PersistentMindContextPanel from './PersistentMindContextPanel';
-import * as api from '../../services/api';
+import { getPersistentMindContext, getPersistentMindReflection } from '../../services/apiAgents.js';
 
-vi.mock('../../services/api', () => ({ getPersistentMindContext: vi.fn(), getPersistentMindReflection: vi.fn() }));
+vi.mock('../../services/apiAgents.js', () => ({
+  getPersistentMindContext: vi.fn(),
+  getPersistentMindReflection: vi.fn(),
+}));
 vi.mock('./PersistentMindMaintainerControls', () => ({ default: () => null }));
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../services/socket', () => ({ default: socket }));
@@ -19,8 +22,8 @@ beforeEach(() => {
     handlers.get(event).add(handler);
   });
   socket.off.mockImplementation((event, handler) => handlers.get(event)?.delete(handler));
-  api.getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: {} });
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'pending', source, inspected: null });
+  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: {} });
+  getPersistentMindReflection.mockResolvedValue({ state: 'pending', source, inspected: null });
 });
 
 it('shows inspect-only pending prose, then its real provenance and lesson after a memory event without polling', async () => {
@@ -33,29 +36,29 @@ it('shows inspect-only pending prose, then its real provenance and lesson after 
     expectedVersion: 3, verdict: 'learn', lessonId: 'example-lesson', lesson: 'The mind wrote this lesson.',
     providerId: 'example-provider', model: 'example-model', reviewedAt: '2026-01-01T12:00:00.000Z'
   } } } };
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null, inspected: reviewed });
+  getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null, inspected: reviewed });
   await act(async () => { for (const handler of handlers.get('cos:memory:updated') || []) handler({ id: source.id }); });
   expect(await screen.findByText('Settled · learn', { exact: false })).toBeInTheDocument();
   expect(screen.getByText(/example-provider \/ example-model/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Linked lesson' })).toHaveAttribute('href', '/cos/memory/example-lesson');
-  expect(api.getPersistentMindReflection).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+  expect(getPersistentMindReflection).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
   unmount();
   expect(handlers.get('cos:memory:updated').size).toBe(0);
 });
 
 it('distinguishes a store failure from an honest empty reflection', async () => {
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'unavailable', source: null });
+  getPersistentMindReflection.mockResolvedValue({ state: 'unavailable', source: null });
   render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
   expect(await screen.findByText('Reflection unavailable')).toBeInTheDocument();
   expect(screen.queryByText('No eligible memory awaiting reflection.')).not.toBeInTheDocument();
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
   await act(async () => { for (const handler of handlers.get('cos:memory:updated') || []) handler({ id: source.id }); });
   await waitFor(() => expect(screen.getByText('No eligible memory awaiting reflection.')).toBeInTheDocument());
 });
 
 it('shows the mind-authored continuation note read-only with factual provenance', async () => {
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  api.getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+  getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
     state: 'omitted-budget', memoryId: 'note-1', version: 2, content: 'Next: read the reply.', updatedAt: '2026-01-02T00:00:00.000Z',
     provenance: { turnId: 'turn-7', providerId: 'provider-b', model: 'model-b', at: '2026-01-02T00:00:00.000Z' },
   } } });
@@ -69,8 +72,8 @@ it('shows the mind-authored continuation note read-only with factual provenance'
 });
 
 it('does not attribute an unattested note to the mind', async () => {
-  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
-  api.getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+  getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
     state: 'included', memoryId: 'note-1', version: 1, content: 'Legacy text', updatedAt: null, provenance: null,
   } } });
   render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);

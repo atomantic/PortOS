@@ -41,7 +41,7 @@ import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { TOOLING_TESTS, getAlwaysRunTests } from '../ci-test-plan.js';
+import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';

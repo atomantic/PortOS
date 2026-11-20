@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle, Clock, RefreshCw, Zap, Server } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getProviderStatuses, getProviders, recoverProvider } from '../../../services/apiProviders.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatClockTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -11,8 +11,8 @@ const STATUS_EVENTS = ['provider:status:changed'];
 // read of either one fails the whole card into its Retry state.
 const fetchProviderStatus = async () => {
   const [statuses, providerData] = await Promise.all([
-    api.getProviderStatuses(),
-    api.getProviders({ silent: true })
+    getProviderStatuses(),
+    getProviders({ silent: true })
   ]);
   return { statuses, providers: providerData?.providers || [] };
 };
@@ -25,7 +25,7 @@ export default function ProviderStatusCard() {
 
   const handleRecover = async (providerId) => {
     setRecovering(providerId);
-    await api.recoverProvider(providerId).catch(() => null);
+    await recoverProvider(providerId).catch(() => null);
     await loadData();
     setRecovering(null);
   };

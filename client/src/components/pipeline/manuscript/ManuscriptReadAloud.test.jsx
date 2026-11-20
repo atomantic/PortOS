@@ -6,7 +6,11 @@ const api = vi.hoisted(() => ({
   rerenderNarrationSegment: vi.fn(),
   acceptNarrationSegmentSpeech: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiPipeline.js', () => ({
+  narratePipelineProse: api.narratePipelineProse,
+  rerenderNarrationSegment: api.rerenderNarrationSegment,
+  acceptNarrationSegmentSpeech: api.acceptNarrationSegmentSpeech,
+}));
 vi.mock('../../voice/VoicePicker', () => ({ default: () => null }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
 

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import PageHeader from '../components/PageHeader';
 import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } from 'lucide-react';
-import api from '../services/api';
+import api from '../services/apiCore.js';
 import Banner from '../components/ui/Banner';
 import { FormField } from '../components/ui/FormField';
 import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage';

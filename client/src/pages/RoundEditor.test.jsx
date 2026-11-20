@@ -12,7 +12,13 @@ const api = vi.hoisted(() => ({
   getUploadUrl: (f) => `/api/uploads/${f}`,
   resolveB: null,
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiRounds.js', () => ({
+  getRound: api.getRound,
+  listRounds: api.listRounds,
+  updateRound: api.updateRound,
+  refreshRoundTemplate: api.refreshRoundTemplate,
+}));
+vi.mock('../services/apiMedia.js', () => ({ getUploadUrl: api.getUploadUrl }));
 // Stub the heavy child panels — this suite is about the load/navigation window.
 vi.mock('../components/songs/SongAiPanel', () => ({ default: () => null }));
 vi.mock('../components/songs/SongRecordings', () => ({ default: () => null }));

@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import toast from '../components/ui/Toast';
-import { listWorldRuns, renderWorld } from '../services/api';
+import { listWorldRuns, renderWorld } from '../services/apiUniverseBuilder.js';
 import { useLocalStoragePersisted } from './useLocalStorageBool';
 import { useRenderJobQueue } from './useRenderJobQueue';
 import { renderPromptCount, scopedPromptCount } from '../lib/universeBuilderCounts';

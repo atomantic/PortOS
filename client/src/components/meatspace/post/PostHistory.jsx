@@ -4,7 +4,7 @@ import { ArrowLeft, ChevronRight, Flame, Trophy } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
-import { getPostSessions, getPostStats } from '../../../services/api';
+import { getPostSessions, getPostStats } from '../../../services/apiMeatspace.js';
 import useChartColors from '../../../hooks/useChartColors.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone, shiftDayKey } from '../../../utils/timezone.js';

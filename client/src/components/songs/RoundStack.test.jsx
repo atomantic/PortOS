@@ -24,7 +24,9 @@ vi.mock('../../lib/songPlayback', () => ({
   },
 }));
 // getUploadUrl is the only thing RoundStack needs from the api barrel.
-vi.mock('../../services/api', () => ({ getUploadUrl: (f) => `/api/uploads/${f}` }));
+vi.mock('../../services/apiMedia.js', () => ({
+  getUploadUrl: (f) => `/api/uploads/${f}`,
+}));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import RoundStack from './RoundStack.jsx';

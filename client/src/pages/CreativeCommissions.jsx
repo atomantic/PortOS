@@ -32,8 +32,12 @@ import {
   COMMISSION_STOP_COPY,
 } from '../components/creative-commission/commissionForm.js';
 import {
-  listCommissions, createCommission, updateCommission, deleteCommission, runCommissionNow,
-} from '../services/api';
+  listCommissions,
+  createCommission,
+  updateCommission,
+  deleteCommission,
+  runCommissionNow,
+} from '../services/apiCreativeCommission.js';
 
 export default function CreativeCommissions() {
   const navigate = useNavigate();

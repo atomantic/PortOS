@@ -1,6 +1,11 @@
 import { useState, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
-import * as api from '../../services/api';
+import {
+  getCalendarEvents,
+  syncCalendarAccount,
+  apiSyncGoogleCalendar,
+  mcpSyncGoogleCalendar,
+} from '../../services/apiCalendar.js';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EventDetail from './EventDetail';
@@ -70,7 +75,7 @@ export default function AgendaTab({ accounts }) {
     if (accountFilter) params.accountId = accountFilter;
     if (search) params.search = search;
     // The API owns the error toast; retain loaded pages and offer a retry.
-    return api.getCalendarEvents(params);
+    return getCalendarEvents(params);
   };
 
   // A first read loads one page; reconciliation (events, reconnect, retry)
@@ -123,10 +128,10 @@ export default function AgendaTab({ accounts }) {
     batchPending.current = true;
     setSyncing(true);
     await Promise.allSettled(enabledAccounts.map(account => sync(account.id, () => {
-      if (account.type !== 'google-calendar') return api.syncCalendarAccount(account.id, { silent: true });
+      if (account.type !== 'google-calendar') return syncCalendarAccount(account.id, { silent: true });
       return account.syncMethod === 'google-api'
-        ? api.apiSyncGoogleCalendar(account.id, { silent: true })
-        : api.mcpSyncGoogleCalendar(account.id, { silent: true });
+        ? apiSyncGoogleCalendar(account.id, { silent: true })
+        : mcpSyncGoogleCalendar(account.id, { silent: true });
     })));
     batchPending.current = false;
     setSyncing(false);

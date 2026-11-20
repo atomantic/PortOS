@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
-import { setMusicVideoShotSync, syncMusicVideoShots } from '../../services/api';
+import { setMusicVideoShotSync, syncMusicVideoShots } from '../../services/apiStoryboards.js';
 import { formatCount } from '../../utils/formatters';
 import { storyboardFitSong } from '../../../../server/lib/storyboardFit.js';
 import { storyboardShotSyncPlan } from '../../../../server/lib/storyboardShotSync.js';

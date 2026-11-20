@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from './useStoryStepRuns.jsx';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiStoryBuilder.js', () => ({
   storyStepProgressSseUrl: (sessionId, stepId) => `/api/story-builder/${sessionId}/steps/${stepId}/progress`,
 }));
 

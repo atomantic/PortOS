@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { getUniverse, listMoodBoardNames } from '../../services/api';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import MoodBoardStyleSynthesis from '../universeBuilder/MoodBoardStyleSynthesis';

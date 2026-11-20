@@ -6,7 +6,24 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSocket } from '../../hooks/useSocket';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
-import * as api from '../../services/api';
+import {
+  updateCosConfig,
+  getCosAgents,
+  getCosStatus,
+  getCosTasks,
+  getCosHealth,
+  getCosLearningSummary,
+  getCosActionableInsights,
+  getCosTask,
+  startCos,
+  stopCos,
+  pauseCos,
+  resumeCos,
+  forceCosEvaluate,
+  forceHealthCheck,
+} from '../../services/apiAgents.js';
+import { getProviders } from '../../services/apiProviders.js';
+import { getApps } from '../../services/apiApps.js';
 import { coalesce } from '../../utils/coalesce';
 import { sameJsonShape } from '../../lib/sameJsonShape';
 import { isAgentHandoff } from '../../lib/agentOutcome';
@@ -165,7 +182,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
   // Update avatar style via server config
   const setAvatarStyle = async (style) => {
-    await api.updateCosConfig({ avatarStyle: style });
+    await updateCosConfig({ avatarStyle: style });
     fetchData();
   };
 
@@ -247,7 +264,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     if (!needsAgents) return null;
     const request = { updates: new Map() };
     agentReadRef.current = request;
-    const data = await api.getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null);
+    const data = await getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null);
     if (controller.signal.aborted || queryRef.current !== queryKey || agentReadRef.current !== request) return null;
     agentReadRef.current = null;
     if (Array.isArray(data)) {
@@ -277,12 +294,12 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const queueSeq = queueSeqRef.current;
       // Paint the visible queue before ancillary summaries and references settle.
       const coreRead = Promise.all([
-        api.getCosStatus().catch(() => null),
-        needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
+        getCosStatus().catch(() => null),
+        needsTasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
         readAgents(controller),
       ]);
       const healthObservation = healthObservationRef.current;
-      const healthRead = api.getCosHealth({ signal: controller.signal, silent: true }).catch(() => null).then((data) => {
+      const healthRead = getCosHealth({ signal: controller.signal, silent: true }).catch(() => null).then((data) => {
         if (controller.signal.aborted || queryRef.current !== queryKey) return null;
         if (!Array.isArray(data?.issues)) {
           markHealthUnavailable(healthObservation);
@@ -295,14 +312,14 @@ export default function useCosPageData({ activeTab, selectedTask }) {
         return data;
       });
       // The API shares its provider snapshot across all pages and pickers.
-      const providersRead = needsProviders ? api.getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
+      const providersRead = needsProviders ? getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
       // Same rationale as providersRead above: apps commits on its own settle
       // instead of waiting on the slower siblings in secondaryRead.
-      const appsRead = needsApps ? readReference(appsReadRef, api.getApps, applyApps) : Promise.resolve();
+      const appsRead = needsApps ? readReference(appsReadRef, getApps, applyApps) : Promise.resolve();
       const secondaryRead = Promise.all([
-        api.getCosLearningSummary().catch(() => null),
+        getCosLearningSummary().catch(() => null),
         // Preserve the last good insights on a transient refresh failure.
-        needsTasks ? api.getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null) : Promise.resolve(null)
+        needsTasks ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null) : Promise.resolve(null)
       ]);
 
       const [statusData, tasksData, agentResult] = await coreRead;
@@ -377,11 +394,11 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     queuePending.current = request;
     const queueSeq = ++queueSeqRef.current;
     const insightsRead = needsTasks
-      ? api.getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)
+      ? getCosActionableInsights({ cachedHealth: true, silent: true }).catch(() => null)
       : Promise.resolve(null);
     request.promise = Promise.all([
-      api.getCosStatus().catch(() => null),
-      needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
+      getCosStatus().catch(() => null),
+      needsTasks ? getCosTasks({ view: 'queue', selected: selectedTaskRef.current, signal: controller.signal, silent: true }).catch(() => null) : null,
       readAgents(controller),
     ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queryRef.current !== queryKey || queueSeqRef.current !== queueSeq) return;
@@ -417,7 +434,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     const loaded = [...(user?.tasks || []), ...(cos?.tasks || [])];
     if (loaded.some(task => task.id === selectedTask)) return undefined;
     let active = true;
-    api.getCosTask(selectedTask, { silent: true }).then((found) => {
+    getCosTask(selectedTask, { silent: true }).then((found) => {
       if (!active || !found?.task) return;
       const key = found.source === 'internal' ? 'cos' : 'user';
       setTasks(prev => {
@@ -594,10 +611,10 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // Stable reference data has its own invalidation path, independent of the queue.
     const handleAppsChanged = coalesce(() => {
       appsReadRef.current = null;
-      if (needsApps) readReference(appsReadRef, api.getApps, applyApps);
+      if (needsApps) readReference(appsReadRef, getApps, applyApps);
     }, 400);
     const handleProvidersChanged = coalesce(() => {
-      if (needsProviders) api.getProviders().then(applyProviders).catch(() => {});
+      if (needsProviders) getProviders().then(applyProviders).catch(() => {});
     }, 400);
     const handleConfigChanged = () => fetchData();
     socket.on('providers:changed', handleProvidersChanged);
@@ -629,7 +646,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
-    const result = await api.startCos({ silent: true }).catch(err => {
+    const result = await startCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -643,7 +660,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   };
 
   const handleStop = async () => {
-    const result = await api.stopCos({ silent: true }).catch(err => {
+    const result = await stopCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -657,7 +674,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
 
   const handlePause = async () => {
     const reason = 'Paused from Chief of Staff controls';
-    const result = await api.pauseCos(reason, { silent: true }).catch(err => {
+    const result = await pauseCos(reason, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -671,7 +688,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   };
 
   const handleResume = async () => {
-    const result = await api.resumeCos({ silent: true }).catch(err => {
+    const result = await resumeCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -688,7 +705,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // Only announce success / drive the "thinking" state after the request
     // actually resolves — a failed evaluate must not flash a success toast.
     try {
-      await api.forceCosEvaluate({ silent: true });
+      await forceCosEvaluate({ silent: true });
       toast.success('Evaluation triggered');
       setAgentState('thinking');
       setStatusMessage("Evaluating tasks...");
@@ -833,7 +850,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     setStatusMessage("Running system health check...");
     const speakingGeneration = setSpeakingFor();
     const healthObservation = healthObservationRef.current;
-    const result = await api.forceHealthCheck({ silent: true }).catch(err => {
+    const result = await forceHealthCheck({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

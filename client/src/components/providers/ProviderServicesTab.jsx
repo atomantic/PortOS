@@ -10,7 +10,12 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import ToggleSwitch from '../ToggleSwitch';
 import { INPUT_CLASS } from '../apps/constants';
-import * as api from '../../services/api';
+import {
+  getProviderServices,
+  updateProviderService,
+  refreshProviderServiceCatalog,
+  deleteProviderService,
+} from '../../services/apiProviders.js';
 import { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
 import {
   SERVICE_CATEGORIES, catalogSummary, classifyServiceCategory, draftFromTransports, serviceCategoryById,
@@ -286,7 +291,7 @@ export default function ProviderServicesTab({
   const [sort, setSort] = useState('name');
 
   const load = useCallback(async () => {
-    const data = await api.getProviderServices({ silent: true }).catch((err) => ({ err }));
+    const data = await getProviderServices({ silent: true }).catch((err) => ({ err }));
     if (data?.err) {
       setLoadError(data.err.message || 'Could not load the services.');
       return;
@@ -353,14 +358,14 @@ export default function ProviderServicesTab({
   };
 
   const handleToggle = async (service, enabled) => {
-    const result = await write(service, enabled ? 'Enabling' : 'Disabling', () => api.updateProviderService(
+    const result = await write(service, enabled ? 'Enabling' : 'Disabling', () => updateProviderService(
       serviceRef(service), { expectedRevision: service.revision, enabled }, { silent: true },
     ));
     if (result) toast.success(`${serviceName(service)} ${enabled ? 'enabled' : 'disabled'}`);
   };
 
   const handleRefresh = async (service) => {
-    const result = await write(service, 'Refreshing the catalog', () => api.refreshProviderServiceCatalog(serviceRef(service), { silent: true }), { reloadPresets: true });
+    const result = await write(service, 'Refreshing the catalog', () => refreshProviderServiceCatalog(serviceRef(service), { silent: true }), { reloadPresets: true });
     if (!result?.service) return;
     const { catalog } = result.service;
     if (catalog.state === 'failed') toast.error(catalog.error || 'The catalog refresh failed — the previous catalog was kept.');
@@ -369,7 +374,7 @@ export default function ProviderServicesTab({
 
   const handleSave = async (service, draft) => {
     const transports = transportsFromDraft(draft.transports);
-    const result = await write(service, 'Saving the service', () => api.updateProviderService(serviceRef(service), {
+    const result = await write(service, 'Saving the service', () => updateProviderService(serviceRef(service), {
       expectedRevision: service.revision,
       label: draft.label,
       ...(Object.keys(transports).length > 0 ? { transports } : {}),
@@ -379,14 +384,14 @@ export default function ProviderServicesTab({
   };
 
   const handleClearKey = async (service) => {
-    const result = await write(service, 'Clearing the key', () => api.updateProviderService(
+    const result = await write(service, 'Clearing the key', () => updateProviderService(
       serviceRef(service), { expectedRevision: service.revision, credentials: { apiKey: null } }, { silent: true },
     ), { reloadPresets: true });
     if (result) toast.success('Key cleared on this service and every preset derived from it.');
   };
 
   const handleDelete = async (service) => {
-    const result = await write(service, 'Deleting the service', () => api.deleteProviderService(serviceRef(service), { silent: true }));
+    const result = await write(service, 'Deleting the service', () => deleteProviderService(serviceRef(service), { silent: true }));
     if (!result) return;
     setServices((current) => (current || []).filter((row) => row.id !== service.id));
     toast.success(`${serviceName(service)} deleted`);

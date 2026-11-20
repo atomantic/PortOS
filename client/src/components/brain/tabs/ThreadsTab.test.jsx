@@ -8,19 +8,10 @@ import { MemoryRouter, useLocation } from 'react-router';
 // ThreadSourceClosedAction imports apiBrainThreads.js directly, not the barrel (#16813),
 // so both mocks share one updateThread fn.
 const threadApi = vi.hoisted(() => ({ updateThread: vi.fn() }));
-vi.mock('../../../services/api', () => ({
-  listThreads: vi.fn(),
-  getThread: vi.fn(),
-  createThread: vi.fn(),
-  updateThread: threadApi.updateThread,
-  deleteThread: vi.fn(),
-  addThreadRef: vi.fn(),
-  removeThreadRef: vi.fn(),
-}));
-vi.mock('../../../services/apiBrainThreads.js', () => ({ updateThread: threadApi.updateThread }));
+vi.mock('../../../services/apiBrainThreads.js', () => ({ updateThread: threadApi.updateThread , listThreads: vi.fn(), getThread: vi.fn(), createThread: vi.fn(), deleteThread: vi.fn(), addThreadRef: vi.fn(), removeThreadRef: vi.fn() }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
-import * as api from '../../../services/api';
+import { listThreads, getThread, updateThread, createThread, addThreadRef } from '../../../services/apiBrainThreads.js';
 import ThreadsTab from './ThreadsTab';
 
 const FAR_FUTURE = '2999-01-01T00:00:00.000Z';
@@ -53,8 +44,8 @@ const renderTab = (entry = '/brain/threads') =>
 describe('ThreadsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.listThreads.mockResolvedValue({ threads: ROWS, total: ROWS.length });
-    api.getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), notes: 'body', resolvedRefs: RESOLVED }));
+    listThreads.mockResolvedValue({ threads: ROWS, total: ROWS.length });
+    getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), notes: 'body', resolvedRefs: RESOLVED }));
   });
 
   it('asks the server for the working set and groups it pinned / overdue / open / waiting', async () => {
@@ -64,21 +55,21 @@ describe('ThreadsTab', () => {
     expect(groupTitles).toEqual(['Pinned 1', 'Overdue 1', 'Open 1', 'Waiting 1']);
     expect(screen.getByText('Waiting on Acme Corp')).toBeTruthy();
     // One request for exactly the non-terminal statuses — never the archive filtered here.
-    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '', status: 'open,waiting,someday' }, { silent: true });
+    expect(listThreads).toHaveBeenCalledWith({ q: '', tag: '', status: 'open,waiting,someday' }, { silent: true });
   });
 
   it('reads the status, tag and search filters from the URL and sends them to the server', async () => {
-    api.listThreads.mockResolvedValue({ threads: [DONE_ROW], total: 1 });
+    listThreads.mockResolvedValue({ threads: [DONE_ROW], total: 1 });
     renderTab('/brain/threads?status=done&tag=ops&q=fin');
     await screen.findByText('Finished loop');
-    expect(api.listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' }, { silent: true });
+    expect(listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' }, { silent: true });
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent.trim())).toEqual(['Done 1']);
   });
 
   it('opens the drawer for the thread named in the URL on load', async () => {
     renderTab('/brain/threads?thread=late&threadTab=links');
     await screen.findByRole('dialog');
-    expect(api.getThread).toHaveBeenCalledWith('late', { silent: true });
+    expect(getThread).toHaveBeenCalledWith('late', { silent: true });
     // The Links tab renders the hydrated ref with its click-through.
     const chip = await screen.findByText('example');
     expect(chip.closest('a')).toHaveAttribute('href', 'https://example.com');
@@ -94,44 +85,44 @@ describe('ThreadsTab', () => {
   });
 
   it('checks a thread off in place without refetching the list', async () => {
-    api.updateThread.mockResolvedValue({ ...ROWS[2], status: 'done', closedAt: FAR_FUTURE });
+    updateThread.mockResolvedValue({ ...ROWS[2], status: 'done', closedAt: FAR_FUTURE });
     renderTab();
     await screen.findByText('Plain loop');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mark "Plain loop" done' })); });
-    expect(api.updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
+    expect(updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
     await waitFor(() => expect(screen.queryByText('Plain loop')).toBeNull());
-    expect(api.listThreads).toHaveBeenCalledTimes(1);
+    expect(listThreads).toHaveBeenCalledTimes(1);
   });
 
   it('completes a source-closed thread explicitly from its drawer and preserves hydrated links', async () => {
     const thread = { ...ROWS[2], externalState: 'closed', notes: 'body', resolvedRefs: RESOLVED };
-    api.getThread.mockResolvedValue(thread);
+    getThread.mockResolvedValue(thread);
     let finish;
-    api.updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     renderTab('/brain/threads?thread=op');
     const dialog = within(await screen.findByRole('dialog'));
     const complete = await dialog.findByRole('button', { name: 'Mark "Plain loop" done' });
-    expect(api.updateThread).not.toHaveBeenCalled();
+    expect(updateThread).not.toHaveBeenCalled();
     fireEvent.change(dialog.getByLabelText('Title'), { target: { value: 'My title' } });
     expect(complete).toBeDisabled();
     fireEvent.change(dialog.getByLabelText('Title'), { target: { value: thread.title } });
     fireEvent.click(complete);
     expect(complete).toBeDisabled();
     expect(dialog.getByLabelText('Title')).toBeDisabled();
-    expect(api.updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
+    expect(updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
     await act(async () => { finish({ ...ROWS[2], notes: 'body', externalState: 'closed', status: 'done' }); });
     expect(dialog.getByLabelText('Status')).toHaveValue('done');
     expect(dialog.queryByText('Source closed — mark done?')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Mark "Plain loop" done' })).toBeNull();
     fireEvent.click(dialog.getByRole('tab', { name: 'Links' }));
     expect(await dialog.findByText('example')).toBeTruthy();
-    expect(api.listThreads).toHaveBeenCalledTimes(1);
+    expect(listThreads).toHaveBeenCalledTimes(1);
   });
 
   it('does not replace a different drawer when completion finishes after navigation', async () => {
-    api.getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), externalState: 'closed', notes: 'body', resolvedRefs: RESOLVED }));
+    getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), externalState: 'closed', notes: 'body', resolvedRefs: RESOLVED }));
     let finish;
-    api.updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     renderTab('/brain/threads?thread=op');
     const dialog = within(await screen.findByRole('dialog'));
     fireEvent.click(await dialog.findByRole('button', { name: 'Mark "Plain loop" done' }));
@@ -144,12 +135,12 @@ describe('ThreadsTab', () => {
   });
 
   it('creates a thread from the capture box and opens it', async () => {
-    api.createThread.mockResolvedValue({ id: 'new', title: 'Chase invoice', status: 'open', refs: [], tags: [] });
+    createThread.mockResolvedValue({ id: 'new', title: 'Chase invoice', status: 'open', refs: [], tags: [] });
     renderTab();
     await screen.findByText('Pinned loop');
     fireEvent.change(screen.getByLabelText('New thread'), { target: { value: 'Chase invoice' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
-    expect(api.createThread).toHaveBeenCalledWith({ title: 'Chase invoice' }, { silent: true });
+    expect(createThread).toHaveBeenCalledWith({ title: 'Chase invoice' }, { silent: true });
     expect(screen.getByTestId('location').textContent).toBe('?thread=new');
   });
 
@@ -160,24 +151,24 @@ describe('ThreadsTab', () => {
       await act(async () => { await Promise.resolve(); });
       fireEvent.change(screen.getByLabelText('Search threads'), { target: { value: 'r' } });
       fireEvent.change(screen.getByLabelText('Search threads'), { target: { value: 're' } });
-      expect(api.listThreads).toHaveBeenCalledTimes(1);
+      expect(listThreads).toHaveBeenCalledTimes(1);
       await act(async () => { vi.advanceTimersByTime(300); });
       expect(screen.getByTestId('location').textContent).toBe('?q=re');
-      expect(api.listThreads).toHaveBeenCalledTimes(2);
-      expect(api.listThreads).toHaveBeenLastCalledWith({ q: 're', tag: '', status: 'open,waiting,someday' }, { silent: true });
+      expect(listThreads).toHaveBeenCalledTimes(2);
+      expect(listThreads).toHaveBeenLastCalledWith({ q: 're', tag: '', status: 'open,waiting,someday' }, { silent: true });
     } finally {
       vi.useRealTimers();
     }
   });
 
   it('distinguishes an unavailable list from a successful empty list and retries the failed read', async () => {
-    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    listThreads.mockRejectedValueOnce(new Error('temporary outage'));
     renderTab();
 
     expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
     expect(screen.queryByText('Nothing tracked yet — add the first open loop above.')).toBeNull();
 
-    api.listThreads.mockResolvedValueOnce({ threads: ROWS, total: ROWS.length });
+    listThreads.mockResolvedValueOnce({ threads: ROWS, total: ROWS.length });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
 
     expect(await screen.findByText('Pinned loop')).toBeInTheDocument();
@@ -188,7 +179,7 @@ describe('ThreadsTab', () => {
     renderTab();
     await screen.findByText('Plain loop');
 
-    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    listThreads.mockRejectedValueOnce(new Error('temporary outage'));
     await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Done' })); });
 
     expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
@@ -199,12 +190,12 @@ describe('ThreadsTab', () => {
     renderTab();
     await screen.findByText('Plain loop');
 
-    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    listThreads.mockRejectedValueOnce(new Error('temporary outage'));
     await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Done' })); });
     expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
 
     const retry = deferred();
-    api.listThreads.mockReturnValueOnce(retry.promise).mockResolvedValueOnce({ threads: [DONE_ROW], total: 1 });
+    listThreads.mockReturnValueOnce(retry.promise).mockResolvedValueOnce({ threads: [DONE_ROW], total: 1 });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Archived' })); });
     expect(await screen.findByText('Finished loop')).toBeInTheDocument();
@@ -215,28 +206,28 @@ describe('ThreadsTab', () => {
   });
 
   it('keeps a selected thread deep link open when the record read fails and retries it in place', async () => {
-    api.getThread.mockRejectedValueOnce(new Error('temporary outage'));
+    getThread.mockRejectedValueOnce(new Error('temporary outage'));
     renderTab('/brain/threads?thread=op');
 
     expect(await screen.findByText('Thread unavailable')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close thread' })).toBeInTheDocument();
 
-    api.getThread.mockResolvedValueOnce({ ...ROWS[2], notes: 'body', resolvedRefs: RESOLVED });
+    getThread.mockResolvedValueOnce({ ...ROWS[2], notes: 'body', resolvedRefs: RESOLVED });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
 
     expect(await screen.findByLabelText('Title')).toHaveValue('Plain loop');
   });
 
   it('swaps the hydrated record a ref write returns into the drawer without a second read', async () => {
-    api.addThreadRef.mockResolvedValue({ ...ROWS[2], notes: 'body', refs: [{ kind: 'url', id: 'https://example.com/x' }], resolvedRefs: [{ kind: 'url', id: 'https://example.com/x', label: 'added', url: 'https://example.com/x', resolved: true }] });
+    addThreadRef.mockResolvedValue({ ...ROWS[2], notes: 'body', refs: [{ kind: 'url', id: 'https://example.com/x' }], resolvedRefs: [{ kind: 'url', id: 'https://example.com/x', label: 'added', url: 'https://example.com/x', resolved: true }] });
     renderTab('/brain/threads?thread=op&threadTab=links');
     await screen.findByRole('dialog');
     await screen.findByText('example');
     fireEvent.change(screen.getByLabelText('Id or URL'), { target: { value: 'https://example.com/x' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add link' })); });
-    expect(api.addThreadRef).toHaveBeenCalledWith('op', { kind: 'url', id: 'https://example.com/x' }, { silent: true });
+    expect(addThreadRef).toHaveBeenCalledWith('op', { kind: 'url', id: 'https://example.com/x' }, { silent: true });
     expect(await screen.findByText('added')).toBeTruthy();
-    expect(api.getThread).toHaveBeenCalledTimes(1);
+    expect(getThread).toHaveBeenCalledTimes(1);
   });
 
   it('shows a scheduled step with copyable text and keeps its due time when another field is saved', async () => {
@@ -245,8 +236,8 @@ describe('ThreadsTab', () => {
       id: 'act', title: 'Post the clip', status: 'open', tags: ['human-action', 'plan:promo-example'], refs: [], dueAt: DUE,
       notes: 'Part of **Promote "Example Song"**.\n\n1. Open X.\n2. Attach the clip.\n\n## Ready to paste\n\n**X post**\n````text\nNot a person. ```\n````',
     };
-    api.getThread.mockResolvedValue({ ...step, resolvedRefs: [] });
-    api.updateThread.mockImplementation(async (_id, patch) => ({ ...step, ...patch, resolvedRefs: [] }));
+    getThread.mockResolvedValue({ ...step, resolvedRefs: [] });
+    updateThread.mockImplementation(async (_id, patch) => ({ ...step, ...patch, resolvedRefs: [] }));
     renderTab('/brain/threads?thread=act');
     const card = await screen.findByRole('region', { name: 'Ready to paste' });
     expect(within(card).getByText('Attach the clip.')).toBeTruthy();
@@ -256,7 +247,7 @@ describe('ThreadsTab', () => {
 
     fireEvent.change(screen.getByDisplayValue('Post the clip'), { target: { value: 'Post the opening clip' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
-    expect(api.updateThread).toHaveBeenCalledWith('act', expect.objectContaining({ title: 'Post the opening clip', dueAt: DUE }), { silent: true });
+    expect(updateThread).toHaveBeenCalledWith('act', expect.objectContaining({ title: 'Post the opening clip', dueAt: DUE }), { silent: true });
   });
 
   it('is the component the Brain page renders for its threads tab', () => {

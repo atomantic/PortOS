@@ -14,7 +14,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 
 const state = vi.hoisted(() => ({ peers: [] }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: state.peers })),
 }));
 

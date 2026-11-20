@@ -14,7 +14,9 @@ vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ label, jobId, onStatus
   <button type="button" onClick={() => onStatus('failed')}>blank {jobId}</button></div> }));
 vi.mock('../IngredientPicker', () => ({ default: ({ open, onSelect }) => (open
   ? <button type="button" onClick={() => onSelect({ id: 'other-cast', name: 'Example understudy' })}>cast pick</button> : null) }));
-vi.mock('../../services/api', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'board-1', name: 'Example board' }]) }));
+vi.mock('../../services/apiMoodBoard.js', () => ({
+  listMoodBoardNames: vi.fn(async () => [{ id: 'board-1', name: 'Example board' }]),
+}));
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: ({ open, allowUpload, onSelect }) => (open
   ? <button type="button" onClick={() => onSelect({ filename: 'gallery-face.png' })}>gallery pick{allowUpload ? ' with upload' : ''}</button> : null) }));
 vi.mock('../storyboards/MoodBoardPinPicker', () => ({ default: ({ open, moodBoardId, onSelect, onClose }) => (open

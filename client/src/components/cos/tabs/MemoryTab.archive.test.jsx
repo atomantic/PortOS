@@ -3,8 +3,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAgents.js', () => ({
   getCosConfig: vi.fn(),
+}));
+vi.mock('../../../services/apiMemory.js', () => ({
   getMemories: vi.fn(),
   getMemoryStats: vi.fn(),
   getEmbeddingStatus: vi.fn(),
@@ -32,7 +34,14 @@ vi.mock('../../ui/InlineConfirmRow', () => ({
   ),
 }));
 
-import * as api from '../../../services/api';
+import { getCosConfig } from '../../../services/apiAgents.js';
+import {
+  getMemories,
+  getMemoryStats,
+  getEmbeddingStatus,
+  getMemoryBackendStatus,
+  deleteMemory,
+} from '../../../services/apiMemory.js';
 import MemoryTab from './MemoryTab';
 
 const memory = {
@@ -53,12 +62,12 @@ function renderTab() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getCosConfig.mockResolvedValue({});
-  api.getMemories.mockResolvedValue({ memories: [memory] });
-  api.getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 0 });
-  api.getEmbeddingStatus.mockResolvedValue({ available: false });
-  api.getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
-  api.deleteMemory.mockResolvedValue({ success: true });
+  getCosConfig.mockResolvedValue({});
+  getMemories.mockResolvedValue({ memories: [memory] });
+  getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 0 });
+  getEmbeddingStatus.mockResolvedValue({ available: false });
+  getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
+  deleteMemory.mockResolvedValue({ success: true });
 });
 
 describe('MemoryTab archive confirmation', () => {
@@ -72,11 +81,11 @@ describe('MemoryTab archive confirmation', () => {
     expect(screen.getByText('Archive this memory? It will be hidden from active memory and search. Its contents remain stored.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(api.deleteMemory).not.toHaveBeenCalled();
+    expect(deleteMemory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Archive memory' }));
     await user.click(screen.getByRole('button', { name: 'Archive' }));
     // The wrapper's default hard=false keeps this existing archive request soft.
-    await waitFor(() => expect(api.deleteMemory).toHaveBeenCalledWith(memory.id));
+    await waitFor(() => expect(deleteMemory).toHaveBeenCalledWith(memory.id));
   });
 });

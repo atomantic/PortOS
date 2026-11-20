@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, ListChecks, RefreshCw, Undo2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getPersistentMindJournal, correctPersistentMindJournalEvent } from '../../services/apiAgents.js';
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import { formatCount, timeAgo } from '../../utils/formatters';
@@ -35,7 +35,7 @@ export default function PersistentMindJournalPanel({ refreshKey = 0 }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    return api.getPersistentMindJournal({ silent: true })
+    return getPersistentMindJournal({ silent: true })
       .then(setData)
       .catch((nextError) => setError(nextError?.message || 'Could not load the decision journal'))
       .finally(() => setLoading(false));
@@ -54,7 +54,7 @@ export default function PersistentMindJournalPanel({ refreshKey = 0 }) {
   const correct = async (event, action) => {
     setPendingId(event.id);
     setError(null);
-    await api.correctPersistentMindJournalEvent(event.id, { action }, { silent: true })
+    await correctPersistentMindJournalEvent(event.id, { action }, { silent: true })
       .then((result) => setData((current) => (current ? {
         ...current,
         events: current.events.map((candidate) => (candidate.id === result.event.id ? result.event : candidate)),

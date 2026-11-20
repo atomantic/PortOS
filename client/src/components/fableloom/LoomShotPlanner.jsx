@@ -4,7 +4,13 @@ import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { applyLoomEpisodeShots, startLoomEpisodeShotRun, getLoomEpisodeShotRun, cancelLoomEpisodeShotRun, getLoom } from '../../services/api';
+import {
+  applyLoomEpisodeShots,
+  startLoomEpisodeShotRun,
+  getLoomEpisodeShotRun,
+  cancelLoomEpisodeShotRun,
+  getLoom,
+} from '../../services/apiFableLoom.js';
 import { analyzeEpisodeShots } from '../../../../server/lib/fableLoomShots.js';
 
 export default function LoomShotPlanner({ loom, episode, route, guidance, disabled, onLoomUpdate, onRunningChange }) {

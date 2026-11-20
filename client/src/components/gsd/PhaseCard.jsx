@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight, Play, CheckCircle, Circle, Clock, FileText, Search, ShieldCheck } from 'lucide-react';
 import toast from '../ui/Toast';
 import MarkdownOutput from '../cos/MarkdownOutput';
-import * as api from '../../services/api';
+import { triggerGsdPhaseAction } from '../../services/apiGSD.js';
 
 const STATUS_CONFIG = {
   completed: { color: 'bg-port-success', icon: CheckCircle, label: 'Completed' },
@@ -46,7 +46,7 @@ export default function PhaseCard({ phase, pendingAction, appId, expanded, onTog
   const handleTriggerAction = async () => {
     if (!pendingAction) return;
     setTriggeringAction(true);
-    const result = await api.triggerGsdPhaseAction(appId, phase.id, pendingAction.nextAction).catch(() => null);
+    const result = await triggerGsdPhaseAction(appId, phase.id, pendingAction.nextAction).catch(() => null);
     setTriggeringAction(false);
     if (result) {
       toast.success(`${pendingAction.nextAction} task created for phase ${num}`);

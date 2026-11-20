@@ -30,25 +30,37 @@ vi.mock('../services/socket', () => ({ default: {
   off: vi.fn((event, handler) => socketHarness.handlers.get(event)?.delete(handler)),
 } }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiCodeAnimation.js', () => ({
   buildCodeAnimationPrompt: vi.fn(),
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
   generateCodeAnimationSoundtrack: vi.fn(),
-  listMusicEngines: vi.fn().mockResolvedValue({ engines: [] }),
-  previewMusicPrompt: vi.fn(),
   getFilmStyle: vi.fn(),
   listFilmStyles: vi.fn(),
   listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
   codeAnimationPosterUrl: (id, version) => `/posters/${id}.jpg?v=${version}`,
   requestCodeAnimationPoster: vi.fn(),
+  startCodeAnimationGeneration: vi.fn(),
+}));
+vi.mock('../services/apiMusic.js', () => ({
+  listMusicEngines: vi.fn().mockResolvedValue({ engines: [] }),
+  previewMusicPrompt: vi.fn(),
+}));
+vi.mock('../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(),
+}));
+vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: vi.fn(),
   listUniverseStyles: vi.fn(),
-  startCodeAnimationGeneration: vi.fn(),
+}));
+vi.mock('../services/apiMedia.js', () => ({
   uploadFile: vi.fn(),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
   uploadGalleryVideo: vi.fn(),
 }));
 vi.mock('../components/videoGen/GalleryVideoPicker', () => ({
@@ -78,12 +90,11 @@ import {
   getCodeAnimationOptions,
   getFilmStyle,
   listFilmStyles,
-  listMoodBoardNames,
-  listTracks,
-  listUniverseNames,
-  listUniverseStyles,
   startCodeAnimationGeneration,
-} from '../services/api';
+} from '../services/apiCodeAnimation.js';
+import { listMoodBoardNames } from '../services/apiMoodBoard.js';
+import { listTracks } from '../services/apiTracks.js';
+import { listUniverseNames, listUniverseStyles } from '../services/apiUniverseBuilder.js';
 
 const OPTIONS = {
   aspectRatios: ['16:9', '9:16'],

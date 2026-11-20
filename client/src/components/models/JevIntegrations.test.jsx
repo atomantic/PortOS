@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import JevIntegrations from './JevIntegrations';
-import { getJevPolicy, updateJevPolicy, updateInstanceFeature } from '../../services/api';
+import { getJevPolicy, updateJevPolicy } from '../../services/apiLocalLlm.js';
+import { updateInstanceFeature } from '../../services/apiSystem.js';
 import { publishInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
-vi.mock('../../services/api', () => ({ getJevPolicy: vi.fn(), updateJevPolicy: vi.fn(), updateInstanceFeature: vi.fn() }));
+vi.mock('../../services/apiLocalLlm.js', () => ({
+  getJevPolicy: vi.fn(),
+  updateJevPolicy: vi.fn(),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
+  updateInstanceFeature: vi.fn(),
+}));
 vi.mock('../../hooks/useInstanceFeatures', () => ({
   useInstanceFeatures: () => ({ features: [{ id: 'jev', enabled: false }], error: null }),
   publishInstanceFeatures: vi.fn(),

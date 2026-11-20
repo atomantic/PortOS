@@ -5,7 +5,9 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
-import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+import { getAuthStatus } from '../../services/apiAuth.js';
+import { getMediaShareCandidates, getSettings, updateSettings } from '../../services/apiSystem.js';
+import { listMusicEngines } from '../../services/apiMusic.js';
 
 // Engine health probes may spawn local Python checks on a cold cache, so this
 // loads independently of the sharing controls.

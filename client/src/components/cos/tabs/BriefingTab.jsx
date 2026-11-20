@@ -13,7 +13,7 @@ import {
   Activity,
   GitBranch
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { triggerCosJob, getCosBriefings, getCosBriefing, getCosLatestBriefing } from '../../../services/apiAgents.js';
 import { RapidReaderTrigger } from '../../RapidReader';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
@@ -170,7 +170,7 @@ export default function BriefingTab() {
     if (generationPending || generationInFlightRef.current) return;
     generationInFlightRef.current = true;
     try {
-      const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
+      const result = await triggerCosJob('job-daily-briefing', { silent: true });
       if (!result || result.success === false || (result.status === 'skipped' && !result.duplicate)) {
         throw new Error(result?.reason || 'The briefing could not be generated');
       }
@@ -188,8 +188,8 @@ export default function BriefingTab() {
 
   const { data, loading, error, refetch } = useSocketResource(async () => {
     const [listResult, briefing] = await Promise.all([
-      api.getCosBriefings({ silent: true }),
-      selectedDate ? api.getCosBriefing(selectedDate, { silent: true }) : api.getCosLatestBriefing({ silent: true }),
+      getCosBriefings({ silent: true }),
+      selectedDate ? getCosBriefing(selectedDate, { silent: true }) : getCosLatestBriefing({ silent: true }),
     ]);
     return { briefings: listResult.briefings || [], briefing };
   }, {

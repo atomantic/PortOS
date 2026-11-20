@@ -3,7 +3,7 @@ import { Check, Circle, Loader2, LockKeyhole, MoveRight } from 'lucide-react';
 import { fableLoomProductionWorkflow } from '../../lib/fableLoomReadiness';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useFableLoomRun } from '../../hooks/useFableLoomRun';
-import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/api';
+import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/apiFableLoom.js';
 
 const ACTIVE_STATUSES = new Set(['running', 'canceling']);
 

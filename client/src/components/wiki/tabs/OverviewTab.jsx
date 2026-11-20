@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import * as api from '../../../services/api';
+import { getCosJobs } from '../../../services/apiAgents.js';
+import { getNote } from '../../../services/apiNotes.js';
 import { FolderOpen, RefreshCw, AlertTriangle } from 'lucide-react';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { WIKI_CATEGORIES, PageTypeIcon } from '../constants.jsx';
@@ -17,7 +18,7 @@ function WikiMaintenanceStatus() {
 
   useEffect(() => {
     let cancelled = false;
-    api.getCosJobs({ silent: true })
+    getCosJobs({ silent: true })
       .then(data => {
         if (cancelled) return;
         const job = (data?.jobs || []).find(j => j.id === WIKI_JOB_ID) || null;
@@ -83,7 +84,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
     setLoadingLint(true);
     setLintError(false);
     setLintReport(null);
-    api.getNote(vaultId, LINT_REPORT_PATH, { silent: true })
+    getNote(vaultId, LINT_REPORT_PATH, { silent: true })
       .then(data => {
         if (!isCurrent()) return;
         if (data?.error) throw new Error(data.error);

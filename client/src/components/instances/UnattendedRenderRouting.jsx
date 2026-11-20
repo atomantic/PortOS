@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
 import toast from '../ui/Toast';
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import {
   federatedMediaModelsForPeer,
   peerMediaProviderConfig,

@@ -6,16 +6,18 @@ import { MemoryRouter } from 'react-router';
 import { awaitEnabled, findEnabledByRole } from '../test/enabledBarrier.js';
 import { mockFrameWindows } from '../test/mockFrameWindows.js';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiApps.js', () => ({
   getApp: vi.fn(),
   getAppRepositorySources: vi.fn(),
+  startApp: vi.fn(),
+}));
+vi.mock('../services/apiSystem.js', () => ({
   getEidoverseWorldProjectionStatus: vi.fn(),
   getEidoverseWorldStatus: vi.fn(),
   getEidoverseDestinations: vi.fn(async () => ({ destinations: [] })),
   departEidoverse: vi.fn(),
   getInstanceFeatures: vi.fn(),
   projectEidoverseWorld: vi.fn(),
-  startApp: vi.fn(),
   startEidoverseHost: vi.fn(),
   updateEidoverseWorldConfig: vi.fn(),
 }));
@@ -31,7 +33,15 @@ vi.mock('../components/BrailleSpinner', () => ({
   default: ({ text }) => <span>{text}</span>,
 }));
 
-import * as api from '../services/api';
+import {
+  getInstanceFeatures,
+  startEidoverseHost,
+  getEidoverseWorldStatus,
+  getEidoverseWorldProjectionStatus,
+  projectEidoverseWorld,
+  updateEidoverseWorldConfig,
+} from '../services/apiSystem.js';
+import { getApp, getAppRepositorySources, startApp } from '../services/apiApps.js';
 import Eidoverse, { hostUrlFor } from './Eidoverse';
 
 const setup = { installed: true, appId: 'app-eidoverse', uiPort: 8940, runtimeStatus: 'online' };
@@ -130,13 +140,13 @@ describe('Eidoverse hosted page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFrameWindows();
-    api.getInstanceFeatures.mockResolvedValue(featureResponse());
-    api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
-    api.getAppRepositorySources.mockResolvedValue({ updateAvailable: false, sources: [] });
-    api.startApp.mockResolvedValue({ success: true, results: {} });
-    api.startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
-    api.getEidoverseWorldStatus.mockResolvedValue(worldResponse);
-    api.getEidoverseWorldProjectionStatus.mockResolvedValue({
+    getInstanceFeatures.mockResolvedValue(featureResponse());
+    getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
+    getAppRepositorySources.mockResolvedValue({ updateAvailable: false, sources: [] });
+    startApp.mockResolvedValue({ success: true, results: {} });
+    startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
+    getEidoverseWorldStatus.mockResolvedValue(worldResponse);
+    getEidoverseWorldProjectionStatus.mockResolvedValue({
       design: {
         lastAppliedVersion: design.lastAppliedVersion,
         pendingVersion: design.pendingVersion,
@@ -144,14 +154,14 @@ describe('Eidoverse hosted page', () => {
       },
       projection: worldResponse.projection,
     });
-    api.projectEidoverseWorld.mockResolvedValue({
+    projectEidoverseWorld.mockResolvedValue({
       success: true,
       projection: { lastSuccessAt: '2026-01-01T00:00:00.000Z', lastSummary: worldResponse.projection.lastSummary },
       presence: { connected: true, role: 'owner' },
       design: { ...design, lastAppliedVersion: 2, pendingVersion: null, reconciliation: { status: 'complete', checkpoint: 'projection-committed' } },
       recipe,
     });
-    api.updateEidoverseWorldConfig.mockResolvedValue({ ...worldResponse, human: worldResponse.identity });
+    updateEidoverseWorldConfig.mockResolvedValue({ ...worldResponse, human: worldResponse.identity });
   });
 
   it('loads the installed managed app without covering Eidoverse controls', async () => {
@@ -174,7 +184,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
       .toHaveAttribute('href', '/eidoverse/solo');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
     await user.click(screen.getByRole('button', { name: 'World controls' }));
@@ -195,17 +205,17 @@ describe('Eidoverse hosted page', () => {
       asset: { slot: 'app', path: 'eidoverse/assets/models/orb.glb', reason: 'catalog-fallback' },
     };
     const summary = { ...worldResponse.projection.lastSummary, objects: [object] };
-    api.projectEidoverseWorld.mockResolvedValue({
+    projectEidoverseWorld.mockResolvedValue({
       success: true, recipe, design, projection: { lastSummary: summary },
     });
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole('button', { name: 'World controls' }));
-    api.projectEidoverseWorld.mockClear();
+    projectEidoverseWorld.mockClear();
     await user.selectOptions(screen.getByLabelText('Floating labels'), 'off');
-    expect(api.updateEidoverseWorldConfig).not.toHaveBeenCalled();
-    expect(api.projectEidoverseWorld).not.toHaveBeenCalled();
+    expect(updateEidoverseWorldConfig).not.toHaveBeenCalled();
+    expect(projectEidoverseWorld).not.toHaveBeenCalled();
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
     const legend = screen.getByRole('region', { name: 'Projected object labels' });
     expect(within(legend).getByText('Managed app 012345')).toBeInTheDocument();
@@ -213,17 +223,17 @@ describe('Eidoverse hosted page', () => {
     const alias = screen.getByLabelText('Display alias for app 0123456789ab');
     expect(alias).toHaveValue('');
     await user.type(alias, 'Example tower');
-    api.updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example save failure'));
+    updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example save failure'));
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
     expect(await screen.findByText('Example save failure')).toBeInTheDocument();
     expect(alias).toHaveValue('Example tower');
-    expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+    expect(updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ labelAliases: { [key]: 'Example tower' } }), { silent: true },
     );
-    expect(api.projectEidoverseWorld).not.toHaveBeenCalled();
+    expect(projectEidoverseWorld).not.toHaveBeenCalled();
     await user.clear(alias);
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ labelAliases: {} }), { silent: true },
     ));
   });
@@ -238,8 +248,8 @@ describe('Eidoverse hosted page', () => {
       name: 'Example tower', description: 'An app this install manages.', visibility: 'nearby',
     }));
     const saved = { ...worldResponse, design: { ...design, labelAliases }, projection: { lastSummary: { objects } } };
-    api.getEidoverseWorldStatus.mockResolvedValueOnce(saved);
-    api.projectEidoverseWorld.mockResolvedValueOnce({ success: true, ...saved });
+    getEidoverseWorldStatus.mockResolvedValueOnce(saved);
+    projectEidoverseWorld.mockResolvedValueOnce({ success: true, ...saved });
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
@@ -255,8 +265,8 @@ describe('Eidoverse hosted page', () => {
     expect(absentAlias).toHaveValue('Example renamed beacon');
     await user.clear(absentAlias);
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalled());
-    const patch = api.updateEidoverseWorldConfig.mock.calls.at(-1)[0];
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalled());
+    const patch = updateEidoverseWorldConfig.mock.calls.at(-1)[0];
     expect(patch.labelAliases).toEqual({ [keys[0]]: 'Example tower', [keys[1]]: 'Example tower' });
     expect(patch).not.toHaveProperty('reset');
   });
@@ -264,17 +274,17 @@ describe('Eidoverse hosted page', () => {
   it('preserves saved aliases when the initial projection fails and another setting is saved', async () => {
     const user = userEvent.setup();
     const labelAliases = { 'app-0123456789ab': 'Example saved tower' };
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+    getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse, design: { ...design, labelAliases },
     });
-    api.projectEidoverseWorld.mockRejectedValueOnce(new Error('Example initial projection failure'));
+    projectEidoverseWorld.mockRejectedValueOnce(new Error('Example initial projection failure'));
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     expect(await screen.findByText('Example initial projection failure')).toBeInTheDocument();
     await user.type(screen.getByLabelText('My Eidoverse name'), '-edited');
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         labelAliases,
         humanName: 'example-portos-user-edited',
@@ -284,9 +294,9 @@ describe('Eidoverse hosted page', () => {
 
   it('saves a username during projection without a recipe and displays the automatic mind name', async () => {
     const user = userEvent.setup();
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({ ...worldResponse, recipe: null, cos: { id: 'Helm' } });
+    getEidoverseWorldStatus.mockResolvedValueOnce({ ...worldResponse, recipe: null, cos: { id: 'Helm' } });
     let finishProjection;
-    api.projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { finishProjection = resolve; }));
+    projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { finishProjection = resolve; }));
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
@@ -297,11 +307,11 @@ describe('Eidoverse hosted page', () => {
     const save = screen.getByRole('button', { name: 'Save and project' });
     expect(save).toBeEnabled();
     await user.click(save);
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledWith(
       expect.objectContaining({ humanName: 'Example User' }), { silent: true },
     ));
-    expect(api.updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('cosId');
-    expect(api.updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('recipe');
+    expect(updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('cosId');
+    expect(updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('recipe');
     await act(async () => finishProjection({ success: true }));
   });
 
@@ -309,7 +319,7 @@ describe('Eidoverse hosted page', () => {
     const user = userEvent.setup();
     const oldDesign = { ...design, reconciliation: { ...design.reconciliation,
       runtimeVersion: { sha: 'example-old-build', capabilities: { objectLabels: null } } } };
-    api.projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design: oldDesign });
+    projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design: oldDesign });
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
@@ -320,11 +330,11 @@ describe('Eidoverse hosted page', () => {
 
   it('keeps an unknown indicator count distinct from a projected empty world', async () => {
     const user = userEvent.setup();
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+    getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
       projection: { lastSummary: null },
     });
-    api.projectEidoverseWorld.mockResolvedValueOnce({
+    projectEidoverseWorld.mockResolvedValueOnce({
       success: true,
       projection: { lastSummary: null },
       presence: { connected: true, role: 'owner' },
@@ -340,16 +350,16 @@ describe('Eidoverse hosted page', () => {
   });
 
   it('starts a stopped managed app before connecting', async () => {
-    api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'stopped' });
+    getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'stopped' });
     renderPage();
 
     await screen.findByTitle('Eidoverse Worlds');
-    expect(api.startApp).toHaveBeenCalledWith('app-eidoverse', { silent: true });
-    expect(api.startEidoverseHost).toHaveBeenCalledAfter(api.startApp);
+    expect(startApp).toHaveBeenCalledWith('app-eidoverse', { silent: true });
+    expect(startEidoverseHost).toHaveBeenCalledAfter(startApp);
   });
 
   it('raises the out-of-date advisory here, where a user living in the world will see it', async () => {
-    api.getAppRepositorySources.mockResolvedValue({
+    getAppRepositorySources.mockResolvedValue({
       updateAvailable: true,
       sources: [{
         id: 'primary',
@@ -358,7 +368,7 @@ describe('Eidoverse hosted page', () => {
         localVsOrigin: { ahead: 0, behind: 2, state: 'behind' },
       }],
     });
-    api.getInstanceFeatures.mockImplementation(async () => {
+    getInstanceFeatures.mockImplementation(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       return featureResponse();
     });
@@ -366,31 +376,31 @@ describe('Eidoverse hosted page', () => {
 
     await screen.findByTitle('Eidoverse Worlds');
     await waitFor(() =>
-      expect(api.getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true })
+      expect(getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true })
     );
     expect(await screen.findByText(/Eidoverse Worlds is 2 commits behind its origin/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Update Eidoverse/ })).toBeInTheDocument();
   });
 
   it('never checks freshness for an install that has no Eidoverse yet', async () => {
-    api.getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: 'app-eidoverse' }));
+    getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: 'app-eidoverse' }));
     renderPage();
 
     await screen.findByRole('link', { name: 'Open Features' });
-    expect(api.getAppRepositorySources).not.toHaveBeenCalled();
+    expect(getAppRepositorySources).not.toHaveBeenCalled();
   });
 
   it('sends an uninstalled user to Features', async () => {
-    api.getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: null }));
+    getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: null }));
     renderPage();
 
     expect(await screen.findByRole('link', { name: 'Open Features' })).toHaveAttribute('href', '/settings/features');
-    expect(api.getApp).not.toHaveBeenCalled();
+    expect(getApp).not.toHaveBeenCalled();
   });
 
   it('surfaces a managed-app start failure and retries', async () => {
-    api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'stopped' });
-    api.startApp
+    getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'stopped' });
+    startApp
       .mockResolvedValueOnce({ success: true, results: { eidoverse: { success: false, error: 'Example startup failure' } } })
       .mockResolvedValueOnce({ success: true, results: { eidoverse: { success: true } } });
     const user = userEvent.setup();
@@ -399,7 +409,7 @@ describe('Eidoverse hosted page', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Example startup failure');
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByTitle('Eidoverse Worlds');
-    expect(api.startApp).toHaveBeenCalledTimes(2);
+    expect(startApp).toHaveBeenCalledTimes(2);
   });
 
   it('uses the same-origin /eidoverse-host path for an HTTPS MagicDNS page', () => {
@@ -473,8 +483,8 @@ describe('Eidoverse hosted page', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(1));
-    api.projectEidoverseWorld.mockRejectedValueOnce(new Error('Example projection failure'));
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledTimes(1));
+    projectEidoverseWorld.mockRejectedValueOnce(new Error('Example projection failure'));
 
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
@@ -515,18 +525,18 @@ describe('Eidoverse hosted page', () => {
     expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
     expect(screen.getByText(/Save and project leaves the current session and re-enters/)).toBeInTheDocument();
 
-    api.updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example identity save failure'));
+    updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example identity save failure'));
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
     expect(await screen.findByText('Example identity save failure')).toBeInTheDocument();
     expect(nameInput).toHaveValue('Example Visitor');
     expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
-    expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+    expect(updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({ world: 'portos-draft', humanName: 'Example Visitor' }),
       { silent: true },
     );
     expect(frame).toHaveAttribute('src', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
 
-    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
+    updateEidoverseWorldConfig.mockResolvedValueOnce({
       ...worldResponse,
       world: 'portos-draft',
       identity: { name: 'Example Visitor' },
@@ -541,7 +551,7 @@ describe('Eidoverse hosted page', () => {
 
   it('keeps newer edits intact while an earlier save is in flight', async () => {
     let resolveSave;
-    api.updateEidoverseWorldConfig.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    updateEidoverseWorldConfig.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
     const user = userEvent.setup();
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
@@ -563,7 +573,7 @@ describe('Eidoverse hosted page', () => {
     const renamed = { ...worldResponse, world: 'portos-two', human: worldResponse.identity };
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
-    api.updateEidoverseWorldConfig.mockResolvedValueOnce(renamed);
+    updateEidoverseWorldConfig.mockResolvedValueOnce(renamed);
 
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     const worldInput = screen.getByLabelText('World name');
@@ -612,11 +622,11 @@ describe('Eidoverse hosted page', () => {
       truncated: true,
       droppedBySource: { apps: 2, agents: 1 },
     };
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+    getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
       projection: { lastSummary: truncatedSummary },
     });
-    api.projectEidoverseWorld.mockResolvedValueOnce({
+    projectEidoverseWorld.mockResolvedValueOnce({
       success: true,
       projection: { lastSummary: truncatedSummary },
       presence: { connected: true, role: 'owner' },
@@ -635,7 +645,7 @@ describe('Eidoverse hosted page', () => {
   it('shows exact staged reconciliation progress while a projection is running', async () => {
     const user = userEvent.setup();
     let resolveProjection;
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+    getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
       design: {
         ...design,
@@ -644,7 +654,7 @@ describe('Eidoverse hosted page', () => {
         },
       },
     });
-    api.projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { resolveProjection = resolve; }));
+    projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { resolveProjection = resolve; }));
     renderPage();
 
     const refresh = await screen.findByRole('button', { name: 'Refresh world' });
@@ -664,7 +674,7 @@ describe('Eidoverse hosted page', () => {
 
   it('pushes projection progress without polling and reconciles once on reconnect and tab show', async () => {
     let resolveProjection;
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+    getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
       design: {
         ...design,
@@ -672,18 +682,18 @@ describe('Eidoverse hosted page', () => {
         reconciliation: { status: 'applying', checkpoint: 'asset-preflight-complete' },
       },
     });
-    api.projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { resolveProjection = resolve; }));
+    projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { resolveProjection = resolve; }));
     renderPage();
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledOnce());
     fireEvent.load(frame);
 
     expect(screen.getByText(/Preparing the PortOS systems garden/)).toBeInTheDocument();
     vi.useFakeTimers();
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(api.getEidoverseWorldProjectionStatus).not.toHaveBeenCalled();
-    api.getEidoverseWorldProjectionStatus.mockResolvedValue({
+    expect(getEidoverseWorldProjectionStatus).not.toHaveBeenCalled();
+    getEidoverseWorldProjectionStatus.mockResolvedValue({
       projection: worldResponse.projection,
       design: {
         lastAppliedVersion: null,
@@ -692,21 +702,21 @@ describe('Eidoverse hosted page', () => {
     });
     await act(async () => { socket.emit('eidoverse:projection', {}); });
     expect(screen.queryByText(/Preparing the PortOS systems garden/)).not.toBeInTheDocument();
-    expect(api.getEidoverseWorldStatus).toHaveBeenCalledOnce();
-    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(1);
+    expect(getEidoverseWorldStatus).toHaveBeenCalledOnce();
+    expect(getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(1);
     await act(async () => { socket.emit('connect'); });
-    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
+    expect(getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue('hidden');
     fireEvent(document, new Event('visibilitychange'));
     await act(async () => { socket.emit('eidoverse:projection', {}); });
-    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
+    expect(getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue('visible');
     await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(3);
+    expect(getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(3);
 
     // A read already in flight cannot overwrite the completed mutation response.
     let finishOldRead;
-    api.getEidoverseWorldProjectionStatus.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }));
+    getEidoverseWorldProjectionStatus.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }));
     await act(async () => { socket.emit('eidoverse:projection', {}); });
 
     await act(async () => {
@@ -739,7 +749,7 @@ describe('Eidoverse hosted page', () => {
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
     await user.click(screen.getByRole('button', { name: 'Reset App Terraces' }));
 
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledWith(
       { reset: { scope: 'district', districtId: 'apps' } },
       { silent: true },
     ));
@@ -747,7 +757,7 @@ describe('Eidoverse hosted page', () => {
 
   it('keeps newer edits intact while a scoped reset is in flight', async () => {
     let resolveReset;
-    api.updateEidoverseWorldConfig.mockReturnValueOnce(new Promise((resolve) => { resolveReset = resolve; }));
+    updateEidoverseWorldConfig.mockReturnValueOnce(new Promise((resolve) => { resolveReset = resolve; }));
     const user = userEvent.setup();
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
@@ -760,7 +770,7 @@ describe('Eidoverse hosted page', () => {
     await user.type(nameInput, '-edited');
     resolveReset({ ...worldResponse, human: worldResponse.identity });
 
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledTimes(2));
     expect(nameInput).toHaveValue('example-portos-user-edited');
   });
 
@@ -771,11 +781,11 @@ describe('Eidoverse hosted page', () => {
       districtId: `${kind}s`, name: `Example ${kind} signal`, visibility: 'nearby',
       description: 'An example aggregate signal.', asset: { path: 'store/example', reason: 'user-override' },
     }));
-    api.projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design,
+    projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design,
       projection: { lastSummary: { ...worldResponse.projection.lastSummary, objects } } });
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledOnce());
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
 
@@ -791,7 +801,7 @@ describe('Eidoverse hosted page', () => {
     await user.type(appsLimit, '5');
     await user.click(within(appsSection).getByRole('button', { name: 'Reset App Terraces' }));
 
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledWith(
       { reset: { scope: 'district', districtId: 'apps' } },
       { silent: true },
     ));
@@ -806,8 +816,8 @@ describe('Eidoverse hosted page', () => {
       .map((element) => ({ id: element.id, value: element.value, validationMessage: element.validationMessage })))
       .toEqual([]);
     await user.click(save);
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledTimes(2));
-    const saved = api.updateEidoverseWorldConfig.mock.calls.at(-1)[0];
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledTimes(2));
+    const saved = updateEidoverseWorldConfig.mock.calls.at(-1)[0];
     expect(saved.labelAliases).toEqual({ 'agent-0123456789ab': 'Keep agent alias' });
     expect(saved.recipe.environment.sky.hours).toBe(8.4);
     expect(saved.recipe.limits.apps).toBe(8);
@@ -817,7 +827,7 @@ describe('Eidoverse hosted page', () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledOnce());
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
 
@@ -837,12 +847,12 @@ describe('Eidoverse hosted page', () => {
     expect(screen.getByText(/Save your world changes before applying an update/)).toBeInTheDocument();
     await user.click(apply);
     await user.click(refresh);
-    expect(api.updateEidoverseWorldConfig).not.toHaveBeenCalled();
-    expect(api.projectEidoverseWorld).toHaveBeenCalledOnce();
+    expect(updateEidoverseWorldConfig).not.toHaveBeenCalled();
+    expect(projectEidoverseWorld).toHaveBeenCalledOnce();
 
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
-    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    await waitFor(() => expect(projectEidoverseWorld).toHaveBeenCalledTimes(2));
     await awaitEnabled(apply);
     expect(refresh).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Refresh world' })).toBeEnabled();
@@ -861,8 +871,8 @@ describe('Eidoverse hosted page', () => {
     await awaitEnabled(save);
     fireEvent.submit(save.closest('form'));
 
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
-    const saved = api.updateEidoverseWorldConfig.mock.calls[0][0];
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    const saved = updateEidoverseWorldConfig.mock.calls[0][0];
     expect(saved.recipe.environment.sky.exposure).toBe(1.08);
     expect(saved.recipe.environment.grass.density).toBe(0.45);
   });
@@ -881,8 +891,8 @@ describe('Eidoverse hosted page', () => {
     const save = screen.getByRole('button', { name: 'Save and project' });
     fireEvent.submit(save.closest('form'));
 
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
-    expect(api.updateEidoverseWorldConfig.mock.calls[0][0].recipe.limits.apps).toBe(8);
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    expect(updateEidoverseWorldConfig.mock.calls[0][0].recipe.limits.apps).toBe(8);
   });
 
   it('surfaces a preserved legacy asset override and lets the user clear it', async () => {
@@ -891,8 +901,8 @@ describe('Eidoverse hosted page', () => {
       ...design,
       userOverrides: { assets: { feature: legacyPath } },
     };
-    api.getEidoverseWorldStatus.mockResolvedValue({ ...worldResponse, design: legacyDesign });
-    api.projectEidoverseWorld.mockResolvedValue({
+    getEidoverseWorldStatus.mockResolvedValue({ ...worldResponse, design: legacyDesign });
+    projectEidoverseWorld.mockResolvedValue({
       success: true,
       projection: worldResponse.projection,
       presence: { connected: true },
@@ -914,7 +924,7 @@ describe('Eidoverse hosted page', () => {
     const save = screen.getByRole('button', { name: 'Save and project' });
     expect(save).toBeEnabled();
     fireEvent.submit(save.closest('form'));
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
-    expect(api.updateEidoverseWorldConfig.mock.calls[0][0].assetOverrides).toEqual({});
+    await waitFor(() => expect(updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    expect(updateEidoverseWorldConfig.mock.calls[0][0].assetOverrides).toEqual({});
   });
 });

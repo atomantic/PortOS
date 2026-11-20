@@ -3,10 +3,18 @@ import { useNavigate, useParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import PersonaMasterDetail from '../components/persona/PersonaMasterDetail';
 import {
-  listAuthors, createAuthor, updateAuthor, deleteAuthor, generateImage,
-  AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
-  AUTHOR_PHYSICAL_DESCRIPTION_MAX, AUTHOR_HEADSHOT_STYLE_MAX, AUTHOR_HEADSHOT_IMAGE_URL_MAX,
-} from '../services/api';
+  listAuthors,
+  createAuthor,
+  updateAuthor,
+  deleteAuthor,
+  AUTHOR_NAME_MAX,
+  AUTHOR_WRITING_STYLE_MAX,
+  AUTHOR_BIO_MAX,
+  AUTHOR_PHYSICAL_DESCRIPTION_MAX,
+  AUTHOR_HEADSHOT_STYLE_MAX,
+  AUTHOR_HEADSHOT_IMAGE_URL_MAX,
+} from '../services/apiAuthors.js';
+import { generateImage } from '../services/apiSystem.js';
 
 const FIELDS = [
   { key: 'name', label: 'Name', placeholder: 'Jane Doe', maxLength: AUTHOR_NAME_MAX },

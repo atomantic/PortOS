@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCommands.js', () => ({
   getProcessesList: vi.fn(),
+}));
+vi.mock('../../services/apiLogs.js', () => ({
   getProcessLogs: vi.fn(),
 }));
 
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
-import { getProcessesList, getProcessLogs } from '../../services/api';
+import { getProcessesList } from '../../services/apiCommands.js';
+import { getProcessLogs } from '../../services/apiLogs.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import ProcessLogModal from './ProcessLogModal';
 

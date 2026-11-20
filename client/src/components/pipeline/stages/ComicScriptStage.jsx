@@ -24,7 +24,7 @@ import {
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';

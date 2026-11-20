@@ -19,7 +19,10 @@ const { handlers, socket, getSystemHealth, getCapabilities } = vi.hoisted(() => 
   };
 });
 vi.mock('../services/socket', () => ({ default: socket }));
-vi.mock('../services/api', () => ({ getSystemHealth, getCapabilities }));
+vi.mock('../services/apiSystem.js', () => ({
+  getSystemHealth,
+  getCapabilities,
+}));
 vi.mock('../hooks/useSystemResourceReport.js', () => ({
   useSystemResourceReport: () => ({ report: null, cleanup: {} }),
 }));

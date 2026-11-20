@@ -4,26 +4,21 @@ API wrappers, Socket.IO client, and browser-facing clients (voice, DOM, UI dispa
 **Before adding a new HTTP call inline, search the catalog first** — almost every backend
 domain already has a service file.
 
-`api.js` is a barrel that re-exports everything from the `apiX.js` files; callers can
-either `import * as api from '.../services/api'` or `import { specificFn } from '.../services/apiX'`.
+Import directly from the domain module (`import { specificFn } from '.../services/apiX.js'`).
+The former `api.js` all-domain barrel was retired (#17007) so lazy routes only download the API
+wrappers they actually use; `client/src/services/index.test.js` forbids re-introducing a
+multi-domain `services/api.js` barrel.
 
-**App-shell code never imports the barrel.** Anything statically reachable from `main.jsx`
-(`App.jsx`, `Layout`, the sidebar and ⌘K, their hooks) imports the specific `apiX.js` module,
-because one barrel import puts every API wrapper on every cold load. The same holds for the
-large page modules `apiMusicVideo.js` and `apiPipeline.js`; the sidebar reads their name lists
-from `apiNavNames.js`. `client/src/entryClosure.test.js` fails on a regression and prints the
-import chain. Lazy pages may keep using the barrel.
-
-**The landing Dashboard closure follows the same rule.** `pages/Dashboard.jsx` and every
-`components/dashboard/` widget load on the first paint, so the same ban applies to them: each
-is a root in `entryClosure.test.js` and must not reach `api.js` statically (#16813).
+**App-shell and Dashboard code stay clear of large page modules.** Anything statically reachable
+from `main.jsx` (`App.jsx`, `Layout`, the sidebar and ⌘K, their hooks) or `pages/Dashboard.jsx` /
+`components/dashboard/` never imports `apiMusicVideo.js` or `apiPipeline.js`; the sidebar reads
+their name lists from `apiNavNames.js`. `client/src/entryClosure.test.js` fails on a regression
+and prints the import chain.
 
 **App-shell code never imports the voice stack either.** Voice is off by default, so
 `voiceClient.js`, `voiceFastPath.js`, `domIndex.js` and the audio helpers load with the voice
 widget, on demand. The shell's only voice import is `components/voice/VoiceWidgetGate.jsx`,
 which owns the voice config and exposes `useVoiceEnabled()`; the same test guards it.
-
-When you add a new `apiX.js`, re-export it from `api.js`; `index.test.js` fails if it is missing.
 
 ## Discovery rule
 

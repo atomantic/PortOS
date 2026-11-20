@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { Trash2 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getAvailableHealthMetrics, getAppleHealthCorrelation } from '../../../services/apiHealth.js';
+import { getWorkouts, removeWorkout } from '../../../services/apiMeatspace.js';
 import { METRIC_CATEGORIES } from '../healthMetrics';
 import HealthCategorySection from '../HealthCategorySection';
 import ActivityBloodCorrelation from '../ActivityBloodCorrelation';
@@ -40,7 +41,7 @@ export default function HealthTab() {
 
   // Fetch which metrics have data (once on mount)
   useEffect(() => {
-    api.getAvailableHealthMetrics()
+    getAvailableHealthMetrics()
       .then(metrics => {
         setAvailableMetrics(new Set(metrics.map(m => m.name)));
         // Set initial expanded sections after we know what's available
@@ -74,14 +75,14 @@ export default function HealthTab() {
 
   useEffect(() => {
     let active = true;
-    api.getAppleHealthCorrelation(from, to)
+    getAppleHealthCorrelation(from, to)
       .then(data => { if (active) setCorrelationData(data); })
       .catch(() => { if (active) setCorrelationData(null); });
     return () => { active = false; };
   }, [from, to]);
 
   const fetchWorkouts = useCallback(() => {
-    api.getWorkouts({ silent: true })
+    getWorkouts({ silent: true })
       .then((data) => { setWorkoutsFailed(false); setWorkouts(data?.workouts || []); })
       .catch(() => setWorkoutsFailed(true));
   }, []);
@@ -172,7 +173,7 @@ export default function HealthTab() {
                           confirmIcon={Trash2}
                           ariaLabel={`Confirm delete workout ${workout.date}`}
                           onConfirm={() => confirmDelete(async () => {
-                            const removed = await api.removeWorkout(workout.id).catch(() => null);
+                            const removed = await removeWorkout(workout.id).catch(() => null);
                             if (removed) setRemovingWorkoutId(workout.id);
                           })}
                           onCancel={cancelDelete}

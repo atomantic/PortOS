@@ -20,7 +20,17 @@ const api = vi.hoisted(() => ({
   getHarnesses: vi.fn(),
   refreshHarnessModels: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviderCatalog: api.getProviderCatalog,
+  createProviderPreset: api.createProviderPreset,
+  setProviderHarnessEnabled: api.setProviderHarnessEnabled,
+  getProviderBootstraps: api.getProviderBootstraps,
+  saveProviderBootstraps: api.saveProviderBootstraps,
+}));
+vi.mock('../../services/apiHarnesses.js', () => ({
+  getHarnesses: api.getHarnesses,
+  refreshHarnessModels: api.refreshHarnessModels,
+}));
 
 vi.mock('../install/RuntimeInstallModal', () => ({
   default: ({ open, runtime, params, title, onComplete }) => (open ? (

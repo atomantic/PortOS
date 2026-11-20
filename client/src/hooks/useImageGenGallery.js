@@ -21,7 +21,7 @@ import {
   cleanGalleryImage,
   deleteImage,
   removeImageWatermark,
-} from '../services/api';
+} from '../services/apiImageVideo.js';
 
 export function useImageGenGallery({ previewParam }) {
   const [showHidden, setShowHidden] = useState(false);

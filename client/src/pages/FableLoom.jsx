@@ -27,9 +27,9 @@ import { timeAgo } from '../utils/formatters';
 import { effectiveModelFor, effortAwareModelOptions } from '../utils/providers';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import { LOOM_FORMATS, isTeleplayFormat, loomFormatLabel } from '../components/fableloom/loomFormats';
-import {
-  createLoom, deleteLoom, generateLoomSeriesPlan, listLooms, listPipelineSeriesNames, listUniverseNames,
-} from '../services/api';
+import { createLoom, deleteLoom, generateLoomSeriesPlan, listLooms } from '../services/apiFableLoom.js';
+import { listPipelineSeriesNames } from '../services/apiNavNames.js';
+import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { FABLELOOM_PARTICIPATION_MODES } from '../../../server/lib/fableLoomParticipation.js';
 
 const emptyForm = () => ({

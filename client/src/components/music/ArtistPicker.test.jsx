@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import ArtistPicker from './ArtistPicker';
 
 const listArtists = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiArtists.js', () => ({
   listArtists: (...args) => listArtists(...args),
 }));
 

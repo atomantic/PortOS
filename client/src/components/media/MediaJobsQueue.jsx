@@ -21,8 +21,14 @@ import { useSocketResource } from '../../hooks/useSocketResource';
 import socket from '../../services/socket';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatCount, formatTimeOfDaySeconds } from '../../utils/formatters';
-import { getVideoGenStatus, getVideoHistoryItem, getTopazJobStatus, cancelTopazRemoteJob, recoverTopazJob } from '../../services/apiImageVideo.js';
-import { listLorasFull } from '../../services/api';
+import {
+  getVideoGenStatus,
+  getVideoHistoryItem,
+  getTopazJobStatus,
+  cancelTopazRemoteJob,
+  recoverTopazJob,
+  listLorasFull,
+} from '../../services/apiImageVideo.js';
 import ModelSelect from '../ModelSelect';
 import ResolutionField from './ResolutionField';
 import AdvancedParamsPanel from '../videoGen/AdvancedParamsPanel';

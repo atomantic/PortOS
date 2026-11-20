@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ updateMusicVideoProject: vi.fn() }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
-vi.mock('../../services/api', async (original) => ({
+vi.mock('../../services/apiProviders.js', async (original) => ({
   ...(await original()),
   getProviders: vi.fn(async () => ({ activeProvider: '', providers: [
     { id: 'example-api', name: 'Example API', type: 'api', enabled: true, imageReview: true, models: ['vision-a', 'vision-b'], defaultModel: 'vision-a' },

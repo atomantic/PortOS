@@ -9,7 +9,7 @@ const { getFeatureAgentOutput, mockSocketOn, mockSocketOff } = vi.hoisted(() => 
   };
 });
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   getFeatureAgentOutput: (...args) => getFeatureAgentOutput(...args),
 }));
 

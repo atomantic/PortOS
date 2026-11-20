@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGSD.js', () => ({
   triggerGsdPhaseAction: vi.fn().mockResolvedValue({ ok: true }),
 }));
 

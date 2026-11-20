@@ -6,9 +6,11 @@ import Banner from '../components/ui/Banner';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
-  listMediaCollections, createMediaCollection, deleteMediaCollection,
+  listMediaCollections,
+  createMediaCollection,
+  deleteMediaCollection,
   listGalleryCollectionSummaries,
-} from '../services/api';
+} from '../services/apiImageVideo.js';
 import { buildUnsortedCollection } from '../lib/unsorted';
 import {
   applyCollectionView, splitCollectionName, collectionItemCount,

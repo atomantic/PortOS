@@ -24,11 +24,15 @@ vi.mock('../components/digital-twin/tabs/OverviewTab', () => ({
   default: () => { throw new Promise(() => {}); },
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiBrain.js', () => ({
   getBrainSummary: vi.fn(() => Promise.resolve({ counts: {}, needsReview: 0 })),
   getBrainSettings: vi.fn(() => Promise.resolve({})),
+}));
+vi.mock('../services/apiDigitalTwin.js', () => ({
   getDigitalTwinStatus: vi.fn(() => Promise.resolve({ healthScore: 50, documentCount: 0, enabledDocuments: 0 })),
   getDigitalTwinSettings: vi.fn(() => Promise.resolve({})),
+}));
+vi.mock('../services/apiGoals.js', () => ({
   getGoalsTree: vi.fn(() => Promise.resolve({ flat: [], tree: [] })),
 }));
 // useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above

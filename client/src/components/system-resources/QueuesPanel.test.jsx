@@ -24,7 +24,7 @@ const api = vi.hoisted(() => ({
   forceSpawnTask: vi.fn(),
 }));
 
-vi.mock('../../services/api.js', () => api);
+vi.mock('../../services/apiAgents.js', () => ({ getCosTasks: api.getCosTasks, forceSpawnTask: api.forceSpawnTask }));
 vi.mock('../media/MediaJobsQueue.jsx', () => ({
   default: () => <div>Media queue</div>,
 }));

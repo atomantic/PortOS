@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   PIPELINE_STAGE_LABELS: { audio: 'Audio' },
   PIPELINE_STAGE_STATUS_LABEL: { empty: 'Empty', ready: 'Ready' },
   PIPELINE_STAGE_STATUS_COLOR: {},
@@ -36,7 +36,7 @@ import {
   generatePipelineAudioCues,
   renderPipelineAudioCue,
   listPipelineMusicGenerators,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
 const READY_ENGINE = {
   engines: [

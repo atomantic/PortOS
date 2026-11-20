@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getInstances: vi.fn(),
+}));
+vi.mock('../../services/apiPeerSync.js', () => ({
   listPeerSubscriptions: vi.fn(),
   subscribeToPeer: vi.fn(),
   unsubscribeFromPeer: vi.fn(),
@@ -12,12 +14,13 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import * as api from '../../services/api';
+import { getInstances } from '../../services/apiSystem.js';
+import { listPeerSubscriptions, subscribeToPeer, unsubscribeFromPeer } from '../../services/apiPeerSync.js';
 import SyncToPeerButton from './SyncToPeerButton';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getInstances.mockResolvedValue({
+  getInstances.mockResolvedValue({
     peers: [
       // syncCategories needs to include the record-kind-matching category
       // (universe for these tests) so the dropdown's peerHasMatchingCategory
@@ -28,7 +31,7 @@ beforeEach(() => {
       { instanceId: '', name: 'No-id peer', enabled: true },
     ],
   });
-  api.listPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
+  listPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
 });
 
 describe('SyncToPeerButton', () => {
@@ -45,7 +48,7 @@ describe('SyncToPeerButton', () => {
     const user = userEvent.setup();
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
-    await waitFor(() => expect(api.getInstances).toHaveBeenCalled());
+    await waitFor(() => expect(getInstances).toHaveBeenCalled());
     expect(await screen.findByText('Peer A')).toBeTruthy();
     expect(screen.getByText('Peer B')).toBeTruthy();
     // disabled peer + no-id peer hidden.
@@ -56,26 +59,26 @@ describe('SyncToPeerButton', () => {
   it('a full-sync peer is subscribable even with no per-category map', async () => {
     // peerCanReceiveOutbound must honor fullSync — a mirror-everything peer can
     // always receive, regardless of its syncCategories.
-    api.getInstances.mockResolvedValue({
+    getInstances.mockResolvedValue({
       peers: [
         { instanceId: 'peer-full', name: 'Peer Full', enabled: true, status: 'online', host: 'host-f.tail.net', fullSync: true, syncCategories: {} },
       ],
     });
-    api.subscribeToPeer.mockResolvedValue({ subscription: { id: 'peer-universe-u1-peer-full' } });
+    subscribeToPeer.mockResolvedValue({ subscription: { id: 'peer-universe-u1-peer-full' } });
     const user = userEvent.setup();
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
     const row = await screen.findByRole('button', { name: /Peer Full/i });
     expect(row).not.toBeDisabled();
     await user.click(row);
-    await waitFor(() => expect(api.subscribeToPeer).toHaveBeenCalledWith(
+    await waitFor(() => expect(subscribeToPeer).toHaveBeenCalledWith(
       { peerId: 'peer-full', recordKind: 'universe', recordId: 'u1' },
       expect.anything(),
     ));
   });
 
   it('uses the FableLoom category when sharing a loom', async () => {
-    api.getInstances.mockResolvedValue({
+    getInstances.mockResolvedValue({
       peers: [{
         instanceId: 'peer-fable',
         name: 'Peer Fable',
@@ -84,7 +87,7 @@ describe('SyncToPeerButton', () => {
         syncCategories: { fableLoom: true },
       }],
     });
-    api.subscribeToPeer.mockResolvedValue({
+    subscribeToPeer.mockResolvedValue({
       subscription: { id: 'peer-fableLoom-loom-1-peer-fable' },
     });
     const user = userEvent.setup();
@@ -93,14 +96,14 @@ describe('SyncToPeerButton', () => {
     const row = await screen.findByRole('button', { name: /Peer Fable/i });
     expect(row).not.toBeDisabled();
     await user.click(row);
-    await waitFor(() => expect(api.subscribeToPeer).toHaveBeenCalledWith(
+    await waitFor(() => expect(subscribeToPeer).toHaveBeenCalledWith(
       { peerId: 'peer-fable', recordKind: 'fableLoom', recordId: 'loom-1' },
       { silent: true },
     ));
   });
 
   it('shows a filled check when already subscribed to that peer', async () => {
-    api.listPeerSubscriptions.mockResolvedValue({
+    listPeerSubscriptions.mockResolvedValue({
       subscriptions: [{
         id: 'peer-universe-u1-peer-a',
         peerId: 'peer-a',
@@ -111,14 +114,14 @@ describe('SyncToPeerButton', () => {
     const user = userEvent.setup();
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
-    await waitFor(() => expect(api.listPeerSubscriptions).toHaveBeenCalled());
+    await waitFor(() => expect(listPeerSubscriptions).toHaveBeenCalled());
     // We can't easily assert on the icon shape; assert via the row count + that
     // the peer's name renders alongside an enabled-looking button.
     expect(await screen.findByText('Peer A')).toBeTruthy();
   });
 
   it('subscribes when an unchecked peer row is clicked', async () => {
-    api.subscribeToPeer.mockResolvedValue({
+    subscribeToPeer.mockResolvedValue({
       subscription: {
         id: 'peer-universe-u1-peer-a',
         peerId: 'peer-a',
@@ -131,14 +134,14 @@ describe('SyncToPeerButton', () => {
     await user.click(screen.getByRole('button', { name: /Sync/i }));
     await screen.findByText('Peer A');
     await user.click(screen.getByText('Peer A'));
-    expect(api.subscribeToPeer).toHaveBeenCalledWith(
+    expect(subscribeToPeer).toHaveBeenCalledWith(
       { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
       { silent: true },
     );
   });
 
   it('unsubscribes when a checked peer row is clicked', async () => {
-    api.listPeerSubscriptions.mockResolvedValue({
+    listPeerSubscriptions.mockResolvedValue({
       subscriptions: [{
         id: 'peer-universe-u1-peer-a',
         peerId: 'peer-a',
@@ -146,13 +149,13 @@ describe('SyncToPeerButton', () => {
         recordId: 'u1',
       }],
     });
-    api.unsubscribeFromPeer.mockResolvedValue({ id: 'peer-universe-u1-peer-a', removed: true });
+    unsubscribeFromPeer.mockResolvedValue({ id: 'peer-universe-u1-peer-a', removed: true });
     const user = userEvent.setup();
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
     await screen.findByText('Peer A');
     await user.click(screen.getByText('Peer A'));
-    expect(api.unsubscribeFromPeer).toHaveBeenCalledWith('peer-universe-u1-peer-a', { silent: true });
+    expect(unsubscribeFromPeer).toHaveBeenCalledWith('peer-universe-u1-peer-a', { silent: true });
   });
 
   it('flips the peer menu above the trigger when there is no room below', async () => {
@@ -201,7 +204,7 @@ describe('SyncToPeerButton', () => {
 
   it('shows an error row with Retry when the peer read fails, not "No peers configured"', async () => {
     const user = userEvent.setup();
-    api.getInstances.mockRejectedValueOnce(new Error('instances 500'));
+    getInstances.mockRejectedValueOnce(new Error('instances 500'));
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
 
@@ -214,7 +217,7 @@ describe('SyncToPeerButton', () => {
 
   it('does not render unchecked rows when the subscription read fails', async () => {
     const user = userEvent.setup();
-    api.listPeerSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
+    listPeerSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     await user.click(screen.getByRole('button', { name: /Sync/i }));
 

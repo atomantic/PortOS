@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { Maximize2, Sparkles, Download, Trash2, CheckCircle2, Music2, Upload, Film } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
-import { trackAudioUrl } from '../../services/api';
+import { trackAudioUrl } from '../../services/apiTracks.js';
 import { renderSourceLabel, sunoRenderHref } from '../../lib/trackProvenance';
 
 export default function TrackRenderCard({

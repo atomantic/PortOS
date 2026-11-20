@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
-  getLifeCalendar: vi.fn(), removeActivity: vi.fn(), addActivity: vi.fn(),
-  addLifeEvent: vi.fn(), updateLifeEvent: vi.fn(), removeLifeEvent: vi.fn(),
+vi.mock('../../../services/apiMeatspace.js', () => ({
+  getLifeCalendar: vi.fn(),
+  removeActivity: vi.fn(),
+  addActivity: vi.fn(),
+  addLifeEvent: vi.fn(),
+  updateLifeEvent: vi.fn(),
+  removeLifeEvent: vi.fn(),
 }));
 // Chart-like panels need layout and are not part of the delete path.
 vi.mock('./calendar/LifeGrid', () => ({ default: () => null }));
@@ -12,7 +16,7 @@ vi.mock('./calendar/TimeStats', () => ({ default: () => null }));
 vi.mock('./calendar/LifeEventsPanel', () => ({ default: () => null }));
 vi.mock('./calendar/AddActivityForm', () => ({ default: () => null }));
 
-import * as api from '../../../services/api';
+import { getLifeCalendar, removeActivity } from '../../../services/apiMeatspace.js';
 import CalendarTab from './CalendarTab';
 
 const renderTab = () => render(<MemoryRouter><CalendarTab /></MemoryRouter>);
@@ -38,7 +42,7 @@ const CALENDAR = {
 const removeButtons = () => screen.getAllByRole('button', { name: 'Remove activity' });
 
 beforeEach(() => {
-  api.getLifeCalendar.mockResolvedValue(structuredClone(CALENDAR));
+  getLifeCalendar.mockResolvedValue(structuredClone(CALENDAR));
 });
 
 afterEach(() => {
@@ -49,7 +53,7 @@ afterEach(() => {
 describe('CalendarTab activity removal', () => {
   it('sends the row id, ignores a second click while in flight, and drops only that row locally', async () => {
     let resolveRemoval;
-    api.removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
+    removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
     await act(async () => { renderTab(); });
     await screen.findByText('Showers');
 
@@ -57,8 +61,8 @@ describe('CalendarTab activity removal', () => {
     const trash = removeButtons()[1];
     fireEvent.click(trash);
     fireEvent.click(trash);
-    expect(api.removeActivity).toHaveBeenCalledTimes(1);
-    expect(api.removeActivity).toHaveBeenCalledWith(1, { id: 'a-showers' }, { silent: true });
+    expect(removeActivity).toHaveBeenCalledTimes(1);
+    expect(removeActivity).toHaveBeenCalledWith(1, { id: 'a-showers' }, { silent: true });
     expect(removeButtons()[1].disabled).toBe(true);
     expect(removeButtons()[0].disabled).toBe(false);
 
@@ -68,12 +72,12 @@ describe('CalendarTab activity removal', () => {
     expect(screen.queryByText('Showers')).toBeNull();
     expect(screen.getByText('Coffees')).toBeInTheDocument();
     expect(screen.getByText('Books')).toBeInTheDocument();
-    expect(api.getLifeCalendar).toHaveBeenCalledTimes(1);
+    expect(getLifeCalendar).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the in-flight row disabled after an earlier row is removed above it', async () => {
     let resolveShowers;
-    api.removeActivity
+    removeActivity
       .mockReturnValueOnce(new Promise(resolve => { resolveShowers = resolve; }))
       .mockResolvedValueOnce([{ name: 'Showers' }, { name: 'Books' }]);
     await act(async () => { renderTab(); });
@@ -88,24 +92,24 @@ describe('CalendarTab activity removal', () => {
   });
 
   it('refetches the list when the server reports the row moved, instead of deleting the wrong activity', async () => {
-    api.removeActivity.mockRejectedValue(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }));
+    removeActivity.mockRejectedValue(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }));
     await act(async () => { renderTab(); });
     await screen.findByText('Books');
 
     await act(async () => { fireEvent.click(removeButtons()[2]); });
     await screen.findByText('Books');
-    expect(api.getLifeCalendar).toHaveBeenCalledTimes(2);
+    expect(getLifeCalendar).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Coffees')).toBeInTheDocument();
   });
 
   it('does not resurrect a row when a refetch started before a later delete resolves with the older list', async () => {
     let resolveStaleRead;
     let resolveFreshRead;
-    api.getLifeCalendar
+    getLifeCalendar
       .mockResolvedValueOnce(structuredClone(CALENDAR))
       .mockReturnValueOnce(new Promise(resolve => { resolveStaleRead = resolve; }))
       .mockReturnValueOnce(new Promise(resolve => { resolveFreshRead = resolve; }));
-    api.removeActivity
+    removeActivity
       .mockRejectedValueOnce(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }))
       .mockResolvedValueOnce([{ name: 'Coffees' }, { name: 'Books' }]);
     await act(async () => { renderTab(); });
@@ -121,7 +125,7 @@ describe('CalendarTab activity removal', () => {
     expect(screen.getByText('Books')).toBeInTheDocument();
 
     // The delete landed while that read was pending, so a fresh read follows and is what the list ends on.
-    expect(api.getLifeCalendar).toHaveBeenCalledTimes(3);
+    expect(getLifeCalendar).toHaveBeenCalledTimes(3);
     await act(async () => { resolveFreshRead({ ...structuredClone(CALENDAR), budgets: [CALENDAR.budgets[0], CALENDAR.budgets[2]] }); });
     expect(screen.queryByText('Showers')).toBeNull();
     expect(screen.getByText('Coffees')).toBeInTheDocument();
@@ -129,19 +133,19 @@ describe('CalendarTab activity removal', () => {
 
   it('removes only the clicked one of two same-named activities, and disables only it', async () => {
     let resolveRemoval;
-    api.getLifeCalendar.mockResolvedValue({
+    getLifeCalendar.mockResolvedValue({
       ...structuredClone(CALENDAR),
       budgets: [
         { id: 'w1', name: 'Walks', cadence: 'day', frequency: 1, icon: 'circle', remaining: 100 },
         { id: 'w2', name: 'Walks', cadence: 'week', frequency: 3, icon: 'circle', remaining: 50 },
       ],
     });
-    api.removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
+    removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
     await act(async () => { renderTab(); });
     await screen.findAllByText('Walks');
 
     await act(async () => { fireEvent.click(removeButtons()[1]); });
-    expect(api.removeActivity).toHaveBeenCalledWith(1, { id: 'w2' }, { silent: true });
+    expect(removeActivity).toHaveBeenCalledWith(1, { id: 'w2' }, { silent: true });
     expect(removeButtons().map(b => b.disabled)).toEqual([false, true]);
 
     await act(async () => { resolveRemoval([{ id: 'w1', name: 'Walks' }]); });
@@ -150,16 +154,16 @@ describe('CalendarTab activity removal', () => {
   });
 
   it('falls back to the row name for a row stored before activity ids', async () => {
-    api.getLifeCalendar.mockResolvedValue({
+    getLifeCalendar.mockResolvedValue({
       ...structuredClone(CALENDAR),
       budgets: CALENDAR.budgets.map(({ id: _id, ...rest }) => rest),
     });
-    api.removeActivity.mockResolvedValue([{ name: 'Coffees' }, { name: 'Books' }]);
+    removeActivity.mockResolvedValue([{ name: 'Coffees' }, { name: 'Books' }]);
     await act(async () => { renderTab(); });
     await screen.findByText('Showers');
 
     await act(async () => { fireEvent.click(removeButtons()[1]); });
-    expect(api.removeActivity).toHaveBeenCalledWith(1, { name: 'Showers' }, { silent: true });
+    expect(removeActivity).toHaveBeenCalledWith(1, { name: 'Showers' }, { silent: true });
     expect(screen.queryByText('Showers')).toBeNull();
   });
 });

@@ -4,7 +4,12 @@ import { MemoryRouter } from 'react-router';
 import StoryboardLinkPanel from './StoryboardLinkPanel';
 
 const api = vi.hoisted(() => ({ createStoryboard: vi.fn(), getStoryboard: vi.fn(), listStoryboards: vi.fn(), makeStoryboardFromMusicVideo: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiStoryboards.js', () => ({
+  createStoryboard: api.createStoryboard,
+  getStoryboard: api.getStoryboard,
+  listStoryboards: api.listStoryboards,
+  makeStoryboardFromMusicVideo: api.makeStoryboardFromMusicVideo,
+}));
 
 const board = {
   id: 'sb-1', name: 'Example Story',

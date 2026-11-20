@@ -12,7 +12,8 @@ uncommitted and untracked diff. Default `npm run pregate` runs the hidden-conten
 scan, early server and client structural
 guards, lint, and focused unit tests: edited test files, sibling tests for
 changed sources, and tests within two import hops of a changed source: a
-relative `import`, `import()` or `vi.mock` specifier that resolves to it, or to
+relative `import`, `import()` or `vi.mock` specifier that resolves to it (read
+through the planner's module graph, `scripts/lib/moduleGraph.js`), or to
 a non-test module that does (a suite two modules away, such as a prompt
 assembly test reaching a prompt section through its builder). Each hop adds at
 most 25 suites per source, the second hop at most 60 per run, nearest hop

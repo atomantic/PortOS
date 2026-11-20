@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinGaps: vi.fn(),
   getDigitalTwinEnrichProgress: vi.fn(),
   analyzeAssessment: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock('../../../hooks/useProviderModels', () => ({
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import * as api from '../../../services/api';
+import { getDigitalTwinEnrichProgress, getDigitalTwinGaps } from '../../../services/apiDigitalTwin.js';
 import InterviewTab from './InterviewTab';
 
 const renderTab = () => render(<MemoryRouter><InterviewTab /></MemoryRouter>);
@@ -23,11 +23,11 @@ const renderTab = () => render(<MemoryRouter><InterviewTab /></MemoryRouter>);
 describe('InterviewTab gaps load', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinEnrichProgress.mockResolvedValue({ categories: {} });
+    getDigitalTwinEnrichProgress.mockResolvedValue({ categories: {} });
   });
 
   it('shows an error with Retry, not "No gap data available", when the gaps read fails', async () => {
-    api.getDigitalTwinGaps
+    getDigitalTwinGaps
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ gaps: [{ dimension: 'openness', confidence: 0.2, suggestedCategory: null }] });
     renderTab();
@@ -41,7 +41,7 @@ describe('InterviewTab gaps load', () => {
   });
 
   it('keeps the empty copy for a genuinely empty gap list', async () => {
-    api.getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
     renderTab();
     expect(await screen.findByText(/No gap data available/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
@@ -51,11 +51,11 @@ describe('InterviewTab gaps load', () => {
 describe('InterviewTab enrichment progress load', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
   });
 
   it('shows an error with Retry instead of every category at 0% when the progress read fails', async () => {
-    api.getDigitalTwinEnrichProgress
+    getDigitalTwinEnrichProgress
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce({ categories: { core_memories: { percentage: 40 } } });
     renderTab();

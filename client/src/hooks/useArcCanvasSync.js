@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { updatePipelineSeries } from '../services/api';
+import { updatePipelineSeries } from '../services/apiPipeline.js';
 
 // Host-side wiring for the embedded <ArcCanvas>. The canvas edits `series.arc`
 // + the issue roadmap in place and expects three callbacks from its host:

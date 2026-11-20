@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, CalendarDays} from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { getDailyReview, confirmDailyReviewEvent } from '../../services/apiCalendar.js';
 import { formatCount, formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
@@ -22,7 +22,7 @@ export default function ReviewTab({ accounts = [] }) {
   // page, so each page's response replaces `meta` while rows accumulate.
   const fetchPage = useCallback(async ({ cursor, signal }) => {
     const offset = cursor ?? 0;
-    const data = await api.getDailyReview(date, { limit: PAGE_SIZE, offset }, { signal, silent: true });
+    const data = await getDailyReview(date, { limit: PAGE_SIZE, offset }, { signal, silent: true });
     const nextOffset = data?.nextOffset ?? null;
     if (!Array.isArray(data?.events) || !Number.isSafeInteger(data.total) || data.total < 0
       || data.events.length > PAGE_SIZE || !data.summary
@@ -84,7 +84,7 @@ export default function ReviewTab({ accounts = [] }) {
       data.note = editForm.note || undefined;
     }
 
-    const result = await api.confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
+    const result = await confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
     setConfirming(null);
     setEditingEvent(null);
 
@@ -109,7 +109,7 @@ export default function ReviewTab({ accounts = [] }) {
       note: editForm.note || undefined
     };
 
-    const result = await api.confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
+    const result = await confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
     setConfirming(null);
     setEditingEvent(null);
 

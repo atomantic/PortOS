@@ -6,7 +6,12 @@ const api = vi.hoisted(() => ({
   checkSignalSetup: vi.fn(), syncSignal: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
+vi.mock('../../services/apiSignal.js', () => ({
+  getSignalStatus: api.getSignalStatus,
+  checkSignalSetup: api.checkSignalSetup,
+  syncSignal: api.syncSignal,
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 import { SignalTab } from './SignalTab';
 

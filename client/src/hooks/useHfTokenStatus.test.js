@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
 const getHfTokenStatus = vi.fn();
-vi.mock('../services/api', () => ({ getHfTokenStatus: (...a) => getHfTokenStatus(...a) }));
+vi.mock('../services/apiImageVideo.js', () => ({
+  getHfTokenStatus: (...a) => getHfTokenStatus(...a),
+}));
 
 import { useHfTokenStatus } from './useHfTokenStatus';
 

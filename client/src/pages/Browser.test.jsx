@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import BrowserPage from './Browser';
-import * as api from '../services/api';
+import * as systemApi from '../services/apiSystem.js';
+import * as scaffoldApi from '../services/apiScaffold.js';
+const api = { ...systemApi, ...scaffoldApi };
 import toast from '../components/ui/Toast';
 
 const handlers = vi.hoisted(() => new Map());
@@ -15,11 +17,21 @@ vi.mock('../services/socket', () => ({ default: {
   off: vi.fn((event, handler) => handlers.get(event)?.delete(handler)),
 } }));
 import socket from '../services/socket';
-vi.mock('../services/api', () => ({
-  getBrowserStatus: vi.fn(), getBrowserConfig: vi.fn(), updateBrowserConfig: vi.fn(), getBrowserUpdatePreflight: vi.fn(),
-  launchBrowser: vi.fn(), stopBrowser: vi.fn(), restartBrowser: vi.fn(),
-  getBrowserLogs: vi.fn(), navigateBrowser: vi.fn(),
-  getDirectories: vi.fn(), browserDownloadUrl: vi.fn(), deleteBrowserDownload: vi.fn()
+vi.mock('../services/apiSystem.js', () => ({
+  getBrowserStatus: vi.fn(),
+  getBrowserConfig: vi.fn(),
+  updateBrowserConfig: vi.fn(),
+  getBrowserUpdatePreflight: vi.fn(),
+  launchBrowser: vi.fn(),
+  stopBrowser: vi.fn(),
+  restartBrowser: vi.fn(),
+  getBrowserLogs: vi.fn(),
+  navigateBrowser: vi.fn(),
+  browserDownloadUrl: vi.fn(),
+  deleteBrowserDownload: vi.fn(),
+}));
+vi.mock('../services/apiScaffold.js', () => ({
+  getDirectories: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

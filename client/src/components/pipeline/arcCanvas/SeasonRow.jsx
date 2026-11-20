@@ -3,12 +3,15 @@ import { Trash2, Loader2, ChevronRight, ChevronDown, Lock, Unlock } from 'lucide
 import toast from '../../ui/Toast';
 import { useLockToggle } from '../../../hooks/useLockToggle';
 import {
-  updatePipelineSeason, deletePipelineSeason,
-  generatePipelineSeasonEpisodes, verifyPipelineVolume,
+  updatePipelineSeason,
+  deletePipelineSeason,
+  generatePipelineSeasonEpisodes,
+  verifyPipelineVolume,
   listPipelineIssues,
-  startPipelineVolumeBeats, cancelPipelineVolumeBeats,
+  startPipelineVolumeBeats,
+  cancelPipelineVolumeBeats,
   pipelineVolumeBeatsSseUrl,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import { usePipelineProgress } from '../../../hooks/usePipelineProgress';
 import CoverArt from './CoverArt.jsx';
 import VerifyResults from './VerifyResults.jsx';

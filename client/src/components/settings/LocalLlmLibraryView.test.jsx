@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
-  getSystemCapabilities: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   getLocalLlmHuggingFaceSearch: vi.fn(),
   installLocalLlmModel: vi.fn(),
@@ -23,13 +22,10 @@ vi.mock('../../services/api', () => ({
   startSlotstreamServer: vi.fn(),
   stopSlotstreamServer: vi.fn(),
   installSlotstream: vi.fn(),
-  // The MTPLX card's checkpoint panel loads upstream's default listing on mount.
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
   removeMtplxModel: vi.fn(),
   saveRuntimeStartupList: vi.fn(),
-  installAudioModel: vi.fn(),
-  patchSettingsSlice: vi.fn(),
   getLlamaServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
   getLlamaServerUpdateStatus: vi.fn().mockResolvedValue(null),
   startLlamaServer: vi.fn(),
@@ -48,6 +44,13 @@ vi.mock('../../services/api', () => ({
   })),
   cancelSpecDecodeModelDownload: vi.fn(),
 }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getSystemCapabilities: vi.fn(),
+  patchSettingsSlice: vi.fn(),
+}));
+vi.mock('../../services/apiMusic.js', () => ({
+  installAudioModel: vi.fn(),
+}));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
@@ -58,13 +61,12 @@ vi.mock('../ui/Toast', () => ({
 import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
-  getSystemCapabilities,
   getLocalLlmCatalog,
   installLocalLlmBackend,
-  patchSettingsSlice,
   installLocalLlmModel,
   upgradeLocalLlmBackend,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
+import { getSystemCapabilities, patchSettingsSlice } from '../../services/apiSystem.js';
 import socket from '../../services/socket';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
@@ -126,7 +128,7 @@ beforeEach(() => {
 
 describe('LocalLlmLibraryView information architecture', () => {
   it('gives model installation its own panel without mounting runtime management', async () => {
-    const { getLlamaServerStatus, getMtplxServerStatus, getSlotstreamServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus, getMtplxServerStatus, getSlotstreamServerStatus } = await import('../../services/apiLocalLlm.js');
 
     await renderLibrary();
 
@@ -544,8 +546,8 @@ describe('audio library installation terminal evidence', () => {
     ['data: {"type":"error","message":"Download failed"}\n\n', false],
     ['data: {"type":"complete"}\n\n', true],
   ])('reports installation result only from terminal evidence %j', async (body, succeeds) => {
-    const api = await import('../../services/api');
-    const { installAudioModel } = await import('../../services/apiMusic.js');
+    const api = await import('../../services/apiMusic.js');
+    const { installAudioModel } = await vi.importActual('../../services/apiMusic.js');
     const { default: toast } = await import('../ui/Toast');
     api.installAudioModel.mockImplementation(installAudioModel);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, body: new ReadableStream({ start(c) {

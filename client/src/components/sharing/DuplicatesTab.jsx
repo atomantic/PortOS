@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
-import { listUniverseDuplicates, listSeriesDuplicates } from '../../services/api';
+import { listUniverseDuplicates, listSeriesDuplicates } from '../../services/apiSyncReview.js';
 import { useRecordMerge } from '../../hooks/useRecordMerge';
 import LoadFailedState from '../ui/LoadFailedState';
 import DuplicateGroup from './DuplicateGroup';

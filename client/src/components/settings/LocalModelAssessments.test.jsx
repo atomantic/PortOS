@@ -3,18 +3,14 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmAssessments: vi.fn(),
   runLocalLlmAssessment: vi.fn(),
   runOpenCodeAgentBenchmark: vi.fn(),
   deleteLocalLlmAssessment: vi.fn(),
-  // The sweep panel is a child of this one and polls the queue on mount. Its own
-  // behavior has a dedicated suite; here it just has to be idle and quiet.
   getLocalLlmAssessmentSweep: vi.fn(async () => ({ status: 'idle', total: 0, completed: 0, results: [] })),
   startLocalLlmAssessmentSweep: vi.fn(),
   cancelLocalLlmAssessmentSweep: vi.fn(),
-  // The capability suite panel is a child of this one and loads its report on
-  // mount. Its own behavior has a dedicated suite; here it just has to be quiet.
   getModelCapabilityTests: vi.fn(async () => ({
     tests: [], testIds: [], prompts: {}, models: [], runtimes: [],
     counts: { models: 0, applicable: 0, passed: 0, failed: 0 }, listErrors: [], readError: null,
@@ -38,9 +34,14 @@ vi.mock('../../services/apiModelPerformance', () => ({
 }));
 
 import {
-  getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
-  getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
-} from '../../services/api';
+  getLocalLlmAssessments,
+  runLocalLlmAssessment,
+  runOpenCodeAgentBenchmark,
+  deleteLocalLlmAssessment,
+  getLocalLlmAssessmentSweep,
+  startLocalLlmAssessmentSweep,
+  cancelLocalLlmAssessmentSweep,
+} from '../../services/apiLocalLlm.js';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import {

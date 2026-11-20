@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import * as api from '../services/api';
+import { getProcessesList } from '../services/apiCommands.js';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
@@ -36,7 +36,7 @@ export function useProcessSnapshot(appId, { enabled = true } = {}) {
       if (pending) { trailing = true; return; }
       pending = true;
       const started = revision;
-      await api.getProcessesList({ appId, silent: true }).then(data => {
+      await getProcessesList({ appId, silent: true }).then(data => {
         if (active && revision === started) setState({ appId, data, loading: false, error: null });
       }).catch(error => {
         if (active && revision === started) setState(prev => ({ ...prev, loading: false, error }));

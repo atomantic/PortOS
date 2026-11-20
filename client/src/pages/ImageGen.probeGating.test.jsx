@@ -167,7 +167,7 @@ describe('ImageGen backend-probe gating', () => {
   // A federated render runs on the peer, so THIS machine's probe — hung against
   // an unconfigured SD API URL — must not hold the submit hostage.
   it('still submits to a ready peer while the local probe hangs', async () => {
-    const { getInstances } = await import('../services/api');
+    const { getInstances } = await import('../services/apiSystem.js');
     getInstances.mockResolvedValueOnce({ peers: [imageGenPeer()] });
     await mount();
 

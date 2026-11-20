@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useAgyModels } from './useAgyModels';
-import { listAgyImageModels } from '../services/api';
+import { listAgyImageModels } from '../services/apiImageVideo.js';
 
-vi.mock('../services/api', () => ({ listAgyImageModels: vi.fn() }));
+vi.mock('../services/apiImageVideo.js', () => ({
+  listAgyImageModels: vi.fn(),
+}));
 
 describe('useAgyModels', () => {
   beforeEach(() => vi.clearAllMocks());

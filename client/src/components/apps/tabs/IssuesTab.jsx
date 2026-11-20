@@ -19,7 +19,9 @@ import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import ReviewerPicker from '../../cos/ReviewerPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { chipColors } from '../../../lib/chipContrast';
-import * as api from '../../../services/api';
+import { syncGithubThreads } from '../../../services/apiBrainThreads.js';
+import { getAppIssues } from '../../../services/apiApps.js';
+import { createSlashdoTask } from '../../../services/apiAgents.js';
 import { timeAgo, formatCount } from '../../../utils/formatters';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import AddToThreadButton from '../../threads/AddToThreadButton';
@@ -250,7 +252,7 @@ function LabelFilterChip({ facet, hidden, onToggle }) {
  */
 export default function IssuesTab({ appId, appName }) {
   const [trackAssigned, trackingAssigned] = useAsyncAction(async () => {
-    const result = await api.syncGithubThreads({ appId }, { silent: true });
+    const result = await syncGithubThreads({ appId }, { silent: true });
     const summary = `${appName}: ${formatCount(result.created)} threads added, ${formatCount(result.updated)} updated`;
     if (result.possiblyTruncated) toast(`${summary}. More assigned issues may exist beyond this batch.`, { icon: '⚠️' });
     else toast.success(summary);
@@ -399,7 +401,7 @@ export default function IssuesTab({ appId, appName }) {
 
     setLoading(true);
     setError('');
-    const result = await api.getAppIssues(appId).catch(err => {
+    const result = await getAppIssues(appId).catch(err => {
       if (isCurrent()) setError(err?.message || 'Failed to load issues');
       return null;
     });
@@ -506,7 +508,7 @@ export default function IssuesTab({ appId, appName }) {
     // longer than the preview limit because they append a truncation notice.
     const completePreview = issue.bodyTruncated === false
       || (issue.bodyTruncated == null && typeof issue.body === 'string' && issue.body.length <= ISSUE_BODY_PREVIEW_MAX_CHARS);
-    const result = await api.createSlashdoTask(spec.command, appId, {
+    const result = await createSlashdoTask(spec.command, appId, {
       target: String(issue.number),
       ...(completePreview && isCompleteIssueContext(issueContext) ? { issueContext } : {}),
       ...picker.pin,
