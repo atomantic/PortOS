@@ -2331,11 +2331,13 @@ describe('orchestrated mode (brief.orchestrator)', () => {
 
   describe('final-video revision of footage', () => {
     const PRODUCTION = { id: 'mvpr-1', limits: { maxGenerations: 40, spendCapUsd: null }, usage: { generations: 10 } };
-    // Runs a footage film to its first final review, which flags 0:04 (and later 0:12).
-    const reachFinalReview = async (production = PRODUCTION) => {
+    beforeEach(() => {
       doubles.startAutoReview = stub('auto-review', async () => ({ run: { id: 'mvar-fix' } }));
       for (const name of ['stopAutoReview', 'cancelAutoReview', 'resumeAutoReview']) doubles[name] = stub(name, async () => ({}));
       service.__setAutonomousDepsForTests(doubles);
+    });
+    // Runs a footage film to its first final review, which flags 0:04 (and later 0:12).
+    const reachFinalReview = async (production = PRODUCTION) => {
       doubles.analyzeSong.mockImplementation(async () => {
         Object.assign(store.get('mv-auto'), { scenes: [{ sceneId: 'a', startSec: 0, endSec: 10 }, { sceneId: 'b', startSec: 10, endSec: 20 }] });
       });
@@ -2371,6 +2373,55 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(doubles.startAutoReview).toHaveBeenCalledOnce();
       expect(reviews().slice(-2)).toEqual(['final:revise', 'final:noted']);
       expect(runOf().orchestration.reviews.at(-1).notes).toMatch(/Revision limit reached/);
+    });
+
+    it.each(['failed', 'needs-human'])('parks when the child emits %s before its id is saved', async (status) => {
+      doubles.startAutoReview.mockImplementationOnce(async (projectId) => {
+        const child = { id: 'mvar-early', status, stopReason: 'The footage draft could not render' };
+        store.get(projectId).autoReviews = [child];
+        musicVideoEvents.emit('auto-review', { projectId, runId: child.id, run: child });
+        return { run: { id: child.id, status: 'running' } };
+      });
+      await reachFinalReview();
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'FINAL_REVISION_NEEDS_HUMAN',
+        error: expect.stringContaining('The footage draft could not render'),
+        output: { finalAutoReviewId: 'mvar-early', finalReviewedJobId: 'render-1' } });
+      expect(reviews().at(-1)).toBe('final:revise');
+      expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    });
+
+    it('renders and reviews once when the terminal event overlaps the stored revision check', async () => {
+      const child = { id: 'mvar-early', status: 'passed' };
+      doubles.startAutoReview.mockImplementationOnce(async (projectId) => {
+        store.get(projectId).autoReviews = [child];
+        // This rerender finishes before its own id is saved and immediately needs final review.
+        doubles.renderVideo.mockImplementationOnce(async () => {
+          store.get(projectId).renderHistoryId = 'render-2';
+          return { jobId: 'render-2' };
+        });
+        return { run: { id: child.id, status: 'running' } };
+      });
+      const projects = await import('./projects.js');
+      const read = projects.getProject;
+      let event;
+      const readSpy = vi.spyOn(projects, 'getProject').mockImplementation(async (projectId) => {
+        const project = await read(projectId);
+        if (!event && project.autonomousRun?.output.finalReviewedJobId === 'render-1') {
+          event = service.__testing.onAutoReviewEvent({ projectId, runId: child.id, run: child });
+        }
+        return project;
+      });
+      try {
+        await reachFinalReview();
+        expect(event).toBeDefined();
+        await event;
+        await settled('completed');
+        expect(runOf().output).toMatchObject({ finalAutoReviewId: null, finalReviewedJobId: 'render-2' });
+        expect(doubles.renderVideo).toHaveBeenCalledTimes(2);
+        expect(doubles.finalReviewFrames.mock.calls.map(([id]) => id)).toEqual(['render-1', 'render-2']);
+      } finally {
+        readSpy.mockRestore();
+      }
     });
 
     it.each([
