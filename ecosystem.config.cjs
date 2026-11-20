@@ -362,6 +362,8 @@ module.exports = {
       max_restarts: 10,
       min_uptime: '10s',
       restart_delay: 5000,
+      // Allow an in-flight patch apply, PM2 restart and rollback to settle.
+      kill_timeout: 190000,
       ...memoryLimits(HELPER_MAX_MEMORY)
     },
     {

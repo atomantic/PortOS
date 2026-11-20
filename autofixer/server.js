@@ -528,7 +528,8 @@ function scheduleNextCheck() {
 // loop runs outside a request lifecycle and must keep retrying autonomously.
 async function runCheckCycle() {
   try {
-    await checkAndFixProcesses();
+    if (!stopUi) await startDashboard();
+    if (!shuttingDown) await checkAndFixProcesses();
   } catch (error) {
     console.error(`❌ [Autofixer] Process check failed: ${error?.message || String(error)}`);
   } finally {
@@ -549,6 +550,21 @@ async function retireLegacyUi() {
   await execPm2(['save']);
 }
 
+async function startDashboard() {
+  try {
+    await retireLegacyUi();
+    if (shuttingDown) return;
+    stopUi = await startAutofixerUi({
+      withFixMutation: (mutate) => withFixMutation(() => shuttingDown
+        ? { status: 503, error: 'Autofixer is shutting down' }
+        : mutate()),
+    });
+    if (shuttingDown) stopUi();
+  } catch (error) {
+    console.error(`❌ [Autofixer UI] Could not start dashboard: ${error.message}. Retrying on the next monitor cycle.`);
+  }
+}
+
 async function main() {
   console.log(`🚀 [Autofixer] Starting PortOS Autofixer daemon`);
   console.log(`⏱️ [Autofixer] Check interval: ${CHECK_INTERVAL / 60000} minutes`);
@@ -558,11 +574,6 @@ async function main() {
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
   });
-
-  if (shuttingDown) return;
-  await retireLegacyUi();
-  if (shuttingDown) return;
-  stopUi = await startAutofixerUi({ withFixMutation });
 
   // Run immediately, then wait a full interval after each pass completes.
   if (!shuttingDown) await runCheckCycle();
@@ -582,6 +593,9 @@ async function shutdown() {
   // Stop the in-flight provider (its detached group) and record the attempt.
   // Worktree removal is left to the next startup's sweep, the guarantee.
   signalDetachedGroups('SIGTERM');
+  // An accepted staged apply can still be between patch, restart, and final
+  // disposition. Drain it while the dashboard refuses new mutations.
+  await withFixMutation(() => {});
   if (activeRepair) {
     const { outputBuffer, ...repair } = activeRepair;
     await recordInterrupted({ ...repair, output: outputBuffer.join('') }).catch((err) => {

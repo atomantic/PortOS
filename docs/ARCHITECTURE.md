@@ -101,7 +101,7 @@ PortOS/
 │   │   ├── *Validation.js     # Zod schemas, one file per route family
 │   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
 │   └── cos-runner/            # Isolated agent runner
-│       └── index.js           # Express routes in the monitor process
+│       └── index.js           # Standalone Express server
 │
 ├── browser/                   # portos-browser service
 │   ├── server.js              # Launches Chromium with CDP, runs health server

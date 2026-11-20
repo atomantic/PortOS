@@ -39,7 +39,7 @@ let errorLog;
 let progressLog;
 beforeEach(() => {
   vi.resetModules();
-  startAutofixerUi.mockClear();
+  startAutofixerUi.mockReset().mockResolvedValue(vi.fn());
   vi.useFakeTimers();
   vi.spyOn(process, 'on').mockReturnValue(process);
   errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -81,6 +81,39 @@ describe('Autofixer daemon repair input boundary', () => {
     expect(harness.list).toHaveBeenCalledTimes(2);
     await nextCycle();
     expect(harness.list).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps monitoring when the dashboard fails and retries the listener on the next cycle', async () => {
+    startAutofixerUi.mockRejectedValueOnce(new Error('port already occupied'));
+    await start();
+    expect(harness.provider).toHaveBeenCalledOnce();
+    expect(errorLog.mock.calls.flat().join('\n')).toContain('Could not start dashboard: port already occupied');
+    await nextCycle();
+    expect(startAutofixerUi).toHaveBeenCalledTimes(2);
+    expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+
+  it('drains a staged mutation and refuses queued mutations on shutdown', async () => {
+    harness.apps.mockResolvedValue([]);
+    const processExit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    await start();
+    const { withFixMutation } = startAutofixerUi.mock.calls[0][0];
+    const stop = process.on.mock.calls.find(([event]) => event === 'SIGTERM')[1];
+    let finish;
+    const apply = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const applied = withFixMutation(apply);
+    await Promise.resolve();
+    expect(apply).toHaveBeenCalledOnce();
+    const discard = vi.fn();
+    const queued = withFixMutation(discard);
+    const stopping = stop();
+    expect(processExit).not.toHaveBeenCalled();
+    finish({ success: true, disposition: 'applied' });
+    await expect(applied).resolves.toMatchObject({ disposition: 'applied' });
+    await expect(queued).resolves.toMatchObject({ status: 503 });
+    await stopping;
+    expect(discard).not.toHaveBeenCalled();
+    expect(processExit).toHaveBeenCalledWith(0);
   });
 
   it.each(['--err', '--out'])('refuses repair after failed %s collection and recovers next cycle', async stream => {
