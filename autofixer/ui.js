@@ -231,7 +231,8 @@ export async function startAutofixerUi({
   const scheme = httpsEnabled ? 'https' : 'http';
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '0.0.0.0', () => {
+    // PM2 can resurrect the old monitor with its retained (unused) port.
+    server.listen(port === 5559 ? PORTS.AUTOFIXER_UI : port, '0.0.0.0', () => {
       server.off('error', reject);
       resolve();
     });

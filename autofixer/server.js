@@ -270,8 +270,8 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const verifyCommand = typeof autofixerCfg.verifyCommand === 'string' ? autofixerCfg.verifyCommand.trim() : '';
 
   // Single completion path — write the session record + return the result.
-  const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }) => {
-    if (shuttingDown) return;
+  const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }, { settledPromotion = false } = {}) => {
+    if (shuttingDown && !settledPromotion) return;
     const endTime = new Date().toISOString();
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
@@ -393,49 +393,10 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   }
   const verifyOk = !verifyCommand || verify?.ok;
 
-  // Promotion gate — only a validated (and, if configured, verified) diff may
-  // touch the live checkout, and only when the user explicitly opted in.
-  let promoted = false;
-  let staged = false;
-  let promotionError = null;
-  if (validation.ok && verifyOk) {
-    if (autoPromote) {
-      await withFixMutation(async () => {
-        if (shuttingDown) return;
-        const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
-        if (applied.ok) {
-          const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
-          promoted = !restart.error;
-          promotionError = restart.error || null;
-          if (promoted) {
-            console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
-          } else {
-            // Applied cleanly but the restart failed — roll the patch back so the
-            // live tree isn't left mutated (which would make the next cycle
-            // double-apply or fail `git apply --check` forever).
-            const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
-            console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
-          }
-        } else {
-          promotionError = applied.error;
-          console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
-        }
-      });
-    } else {
-      staged = true;
-      console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
-    }
-  } else {
-    console.warn(`⚠️ [Autofixer] Fix not promotable: ${validation.reason || (verify && `verify exit ${verify.code}`) || 'unknown'}`);
-  }
-
-  // Always discard the disposable worktree.
-  await removeWorktree(app.repoPath, worktreePath);
-
-  const producedFix = validation.ok && verifyOk; // usable fix, regardless of restart outcome
-  const success = producedFix && (autoPromote ? promoted : true);
-  return finalize({
-    success,
+  const producedFix = validation.ok && verifyOk;
+  const staged = producedFix && !autoPromote;
+  const finish = ({ promoted = false, promotionError = null, settledPromotion = false } = {}) => finalize({
+    success: producedFix && (staged || promoted),
     cooldown: producedFix,
     exitCode: result.exitCode ?? -1,
     error: result.error || promotionError || (!validation.ok ? validation.reason : null) || null,
@@ -449,7 +410,38 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       ...(validation.ok ? {} : { diffRejectedReason: validation.reason }),
       ...(verify ? { verify: { ran: true, ok: verify.ok, exitCode: verify.code, contained: verify.contained } } : { verify: { ran: false } }),
     },
-  });
+  }, { settledPromotion });
+
+  try {
+    // Keep the final session write inside the promotion lock so shutdown cannot
+    // replace an already-applied fix with an interrupted record.
+    if (producedFix && autoPromote) {
+      return await withFixMutation(async () => {
+        if (shuttingDown) return;
+        const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
+        if (!applied.ok) {
+          console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
+          return finish({ promotionError: applied.error, settledPromotion: true });
+        }
+        const restart = await execPm2(['restart', processName]).catch(error => ({ error: error.message }));
+        if (restart.error) {
+          const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
+          console.error(`❌ [Autofixer] Restart failed for ${processName}: ${restart.error}${reverted.error ? `; rollback failed: ${reverted.error}` : '; patch rolled back'}`);
+          return finish({ promotionError: restart.error, settledPromotion: true });
+        }
+        console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+        return finish({ promoted: true, settledPromotion: true });
+      });
+    }
+    if (staged) {
+      console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
+    } else {
+      console.warn(`⚠️ [Autofixer] Fix not promotable: ${validation.reason || (verify && `verify exit ${verify.code}`) || 'unknown'}`);
+    }
+    return await finish();
+  } finally {
+    await removeWorktree(app.repoPath, worktreePath);
+  }
 }
 
 // Main check function

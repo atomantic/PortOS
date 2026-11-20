@@ -5,7 +5,7 @@ import { startAutofixerUi } from './ui.js';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
-  settings: {}, verify: vi.fn(), apply: vi.fn(),
+  settings: {}, diff: '', verify: vi.fn(), apply: vi.fn(),
 }));
 vi.mock('./ui.js', () => ({ startAutofixerUi: vi.fn(async () => vi.fn()) }));
 vi.mock('./shared.js', () => ({
@@ -29,7 +29,7 @@ vi.mock('./sandbox.js', () => ({
   pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: async () => true,
   repairWorkspaceHold: async () => null,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
-  collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
+  collectWorktreeDiff: async () => harness.diff, removeWorktree: vi.fn(),
   sweepStaleWorktrees: harness.sweep,
   validateProposedDiff: harness.validate,
   applyDiffToLive: harness.apply, revertDiffFromLive: vi.fn(), runVerifyCommand: harness.verify,
@@ -51,6 +51,7 @@ beforeEach(() => {
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
   harness.settings = {};
+  harness.diff = '';
   harness.index = null;
   harness.metadataExists = false;
   harness.verify.mockReset();
@@ -114,6 +115,29 @@ describe('Autofixer daemon repair input boundary', () => {
     await stopping;
     expect(discard).not.toHaveBeenCalled();
     expect(processExit).toHaveBeenCalledWith(0);
+  });
+
+  it('keeps the actual promotion and patch when shutdown begins during its restart', async () => {
+    const processExit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    harness.settings = { autofixer: { autoPromote: true } };
+    harness.provider.mockResolvedValue({ exitCode: 0, partial: false });
+    harness.validate.mockReturnValue({ ok: true, files: ['example.js'] });
+    harness.apply.mockResolvedValue({ ok: true });
+    harness.diff = 'example patch';
+    let finishRestart;
+    harness.pm2.mockImplementation(async ([cmd]) => cmd === 'restart'
+      ? new Promise(resolve => { finishRestart = resolve; })
+      : { stdout: '' });
+    await start();
+    const stop = process.on.mock.calls.find(([event]) => event === 'SIGTERM')[1];
+    const stopping = stop();
+    expect(processExit).not.toHaveBeenCalled();
+    finishRestart({});
+    await stopping;
+    const metadata = writeFile.mock.calls.filter(([path]) => path.endsWith('metadata.json.tmp'));
+    expect(metadata).toHaveLength(1);
+    expect(JSON.parse(metadata[0][1])).toMatchObject({ promoted: true, success: true, staged: false });
+    expect(writeFile.mock.calls.find(([path]) => path.endsWith('fix.patch'))?.[1]).toBe(harness.diff);
   });
 
   it.each(['--err', '--out'])('refuses repair after failed %s collection and recovers next cycle', async stream => {
