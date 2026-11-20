@@ -253,10 +253,17 @@ describe('composable skill template routing', () => {
     const missing = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'absent' }] });
     expect(missing).toContain('source checkout has no installed dependencies to link');
     expect(missing).toContain('Install dependencies inside this worktree');
-    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked' }] });
-    expect(linked).toContain('linked or provisioned: node_modules');
+    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked-match' }] });
+    expect(linked).toContain('node_modules linked (matches lockfile)');
     expect(linked).toContain('Never install through dependency paths linked to the source checkout');
     expect(linked).not.toContain('CLAIM_DEPENDENCY_PROVISIONING_STATUS');
+    const stale = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'stale', manager: 'pnpm' }] });
+    expect(stale).toContain('node_modules stale in source');
+    expect(stale).toContain('After verifying the dependency paths are local to this worktree, install here with `pnpm install --frozen-lockfile`');
+    const unverified = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'unverified', manager: 'npm', hasInstalledChildren: true }] });
+    expect(unverified).toContain('source lockfile match unverified');
+    expect(unverified).toContain('install here with `npm ci`');
+    expect(unverified).toContain('Install independently locked packages from their own worktree directories');
   });
 
   it('uses provider merge authority in both prompt paths and carries recovery evidence', async () => {

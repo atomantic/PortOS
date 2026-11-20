@@ -17,6 +17,7 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
@@ -69,10 +70,10 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
     sourceWorkspace, { ignoreExitCode: true }).catch(error => ({ exitCode: -1, stderr: error.message }));
   if (added.exitCode !== 0) return { refused: `git worktree add failed: ${String(added.stderr || '').trim().split('\n')[0]}` };
 
-  // Without the links the agent cannot run tests, but the checkout is still
-  // the right place to work, so a link failure is reported rather than fatal.
-  const dependencies = await linkWorktreeDependencies(sourceWorkspace, worktreePath).catch(error => {
-    console.error(`❌ Linking dependencies into ${worktreePath} failed: ${error.message}`);
+  const dependencies = await linkWorktreeDependencies(sourceWorkspace, worktreePath, {
+    verifyRootLockfile: app.id !== PORTOS_APP_ID,
+  }).catch(error => {
+    console.error(`❌ Provisioning dependencies into ${worktreePath} failed: ${error.message}`);
     return null;
   });
   return { claimCheckout: { repoPath: sourceWorkspace, worktreePath, branchName: branch, baseBranch, dependencies } };

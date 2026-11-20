@@ -53,9 +53,9 @@ git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" ${upstream}
 \`\`\`
 On collision never force or reuse the branch. Follow the selection exit.
 
-Repeat the binding and require bound:true before running any command in the worktree. Link dependencies (never npm install here), set cross-machine markers best-effort and remove invitations independently; an absent label must not prevent the other removal.
+Repeat the binding and require bound:true before running any command in the worktree. Follow the linker output. Set markers best-effort and remove each invitation independently.
 \`\`\`bash
-node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}" --claim
 ${mark}
 cd "\${WORKTREE}"
 \`\`\`
