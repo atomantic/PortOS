@@ -12,6 +12,7 @@ import { runDeferredUpdate, settleInterruptedUpdate } from './deferred-update.mj
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { installAdmittedUpdateFixture } from './lib/updateContractHarness.js';
 import { portosServiceListeners } from './lib/legacyUpdateActivity.mjs';
+import { POSIX_DETACHED_LAUNCHER } from './lib/posixDetachedLauncher.mjs';
 
 const roots = [];
 const fixture = () => {
@@ -534,6 +535,28 @@ describe('deferred update admission', () => {
     await expect(runDeferredUpdate({ admission, launch, wait, cwd: root, legacySnapshot,
       legacyCwds: async () => new Map([[4002, root]]), absent: () => true, emit: vi.fn() })).resolves.toBe(0);
     expect(wait).toHaveBeenCalledOnce();
+  });
+
+  it.each(['settled shell only', 'real updater child', 'unsettled shell'])('checks legacy work after a prior refusal with %s', async scenario => {
+    const { root, admission } = fixture();
+    const { id } = admission.deferredUpdate.request();
+    admission.deferredUpdate.finish(id, false, { errorCode: 'UPDATE_INTERRUPTION_REQUIRED' });
+    const control = join(root, 'data', 'update-detached', scenario === 'unsettled shell' ? 'other-ticket' : id);
+    const script = join(root, 'scripts', 'deferred-update.mjs');
+    const command = POSIX_DETACHED_LAUNCHER.trim().replaceAll('\n', ' ');
+    const legacySnapshot = async () => [{ pid: process.pid, ppid: 1, command: 'node supervisor' },
+      { pid: 4001, ppid: 1, command: `sh -c ${command} sh ${control} node ${script}` },
+      ...(scenario === 'real updater child' ? [{ pid: 4002, ppid: 4001, command: `node ${script}` }] : [])];
+    const launch = vi.fn(completedLaunch(admission));
+    const result = runDeferredUpdate({ admission, launch, cwd: root, platform: 'linux', policy: 'interrupt',
+      legacySnapshot, legacyCwds: async () => new Map(), absent: () => true, emit: vi.fn() });
+    if (scenario === 'settled shell only') {
+      await expect(result).resolves.toBe(0);
+      expect(launch).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(launch).not.toHaveBeenCalled();
+    }
   });
 
   it.each(['no control file', 'current PID'])('detects a legacy updater with %s', async kind => {

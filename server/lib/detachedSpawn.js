@@ -51,6 +51,7 @@
 // the supervisor records the exit status — exactly as if the original handle
 // had never gone away (#1332).
 
+import { POSIX_DETACHED_LAUNCHER } from '../../scripts/lib/posixDetachedLauncher.mjs';
 import { execFile, spawn } from './childProcess.js';
 import { EventEmitter } from 'events';
 import { constants as osConstants } from 'os';
@@ -66,6 +67,7 @@ import { withSpawnCwdEnv } from './spawnCwd.js';
 import { classifyWriterQuiescence, reserveDatabaseWriter, retireQuiescentWriters } from './databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { PATHS } from './paths.js';
+export { isDetachedSupervisorCommand } from '../../scripts/lib/posixDetachedLauncher.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -205,24 +207,6 @@ function createDetachedHandle({ pid = null, killProcessGroup = false } = {}) {
   };
   return handle;
 }
-
-// Double-fork launcher. argv: <controlDir> <bin> <bin-args…> — passed as
-// positional params (NOT interpolated into the script string) so paths/args
-// with spaces or shell metacharacters can't break quoting or inject.
-//   $1            → control dir (holds stdout.log/stderr.log/pid/exit)
-//   "$@" (after shift) → the job command + its args
-// The `{ … } &` group is a backgrounded subshell; when the outer `sh` hits EOF
-// and exits, that subshell reparents to init, taking the job with it.
-const LAUNCHER = `
-d="$1"; shift
-{
-  "$@" > "$d/stdout.log" 2> "$d/stderr.log" &
-  child=$!
-  printf '%s' "$child" > "$d/pid"
-  wait "$child"
-  printf '%s' "$?" > "$d/exit"
-} &
-`;
 
 // ─── Windows equivalent of the double-fork ───────────────────────────────────
 //
@@ -624,10 +608,6 @@ export async function snapshotMaintenanceProcesses({ platform = process.platform
   return rows;
 }
 
-// The supervisor subshell of EVERY detached launch — including launches from
-// versions that predate the writer registry — runs this exact script text.
-export const isDetachedSupervisorCommand = (command) => command.includes('d="$1"; shift') && command.includes('$d/pid');
-
 // Signal a whole process group; false when it no longer exists.
 export const signalProcessGroup = (pgid, signal) => {
   try { process.kill(-pgid, signal); return true; } catch (err) {
@@ -806,7 +786,7 @@ async function spawnDetachedWithReservation(bin, args, {
     ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher,
       preserveStartedOnBootstrapError: Boolean(onLaunchTimeout) })
       .catch((err) => { launcherSpawnError = err; return null; })
-    : spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
+    : spawn('sh', ['-c', POSIX_DETACHED_LAUNCHER, 'sh', controlDir, bin, ...args], {
       // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
       env: withSpawnCwdEnv(env ?? process.env, cwd),
       cwd,

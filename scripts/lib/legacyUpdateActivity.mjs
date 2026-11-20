@@ -9,6 +9,7 @@ import { recordedMediaChildIds } from '../../server/lib/mediaRecoveryActivity.js
 import { PORTS } from '../../server/lib/ports.js';
 import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 import { parseCommandArgs } from '../../server/lib/commandSecurity.js';
+import { isDetachedSupervisorCommand } from './posixDetachedLauncher.mjs';
 
 const runFile = promisify(execFile);
 
@@ -127,7 +128,8 @@ export async function legacyLauncherGroups(data, control) {
   return groups;
 }
 
-export async function observedLegacyUpdate({ root, priorPid = null, priorAt = null, groups = [], platform = process.platform, selfPid = process.pid,
+export async function observedLegacyUpdate({ root, priorPid = null, priorAt = null, groups = [], settledControl = null,
+  platform = process.platform, selfPid = process.pid,
   snapshot = snapshotLegacyProcesses, probeCwds = legacyProcessCwds } = {}) {
   const rows = await snapshot(platform);
   if (!rows.some(row => row.pid === selfPid)) throw new Error('Incomplete process table');
@@ -156,7 +158,12 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const isUpdater = row => {
     const command = normalize(String(row.command ?? ''));
     const [binary, ...args] = parseCommandArgs(String(row.command ?? ''));
-    if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(basename((binary ?? '').replaceAll('\\', '/')))
+    const executable = basename((binary ?? '').replaceAll('\\', '/'));
+    // A ticket can settle while its detached shell still writes the exit file.
+    // Keep scanning for actual updater processes and their mutating children.
+    if (settledControl && executable === 'sh' && args[0] === '-c'
+      && isDetachedSupervisorCommand(command) && command.includes(` sh ${settledControl} `)) return false;
+    if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(executable)
       && args.some(arg => isAbsolute(arg) && expectedPaths.has(normalize(canonical(arg))))) return true;
     const relative = script.exec(command)?.[1];
     if (absolute.test(command) || (relative && cwds.has(row.pid)
