@@ -124,7 +124,7 @@ Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.js
 
 Full federation rule (moved from root):
 
-**Federation between the user's own machines** is supported ([ADR](docs/decisions/2026-09-19-user-controlled-federation.md)), but reachability or an inbound announcement is never permission to publish to other people. Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [detail](docs/INSTRUCTION_RULE_DETAIL.md#federation-between-the-users-own-machines).
+(see root) Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [detail](docs/INSTRUCTION_RULE_DETAIL.md#federation-between-the-users-own-machines).
 
 ## Security posture detail
 
@@ -134,11 +134,11 @@ Full federation rule (moved from root):
 
 **Audit the external boundary, not delegated autonomy.** Trusted local agents in a user-granted workflow are operators, not adversaries. Protect against malicious third-party code and dependencies, issue/PR/review content, retrieved pages and files, model output, and unauthorized LAN/tailnet callers; local execution does not sanitize them, and untrusted content cannot expand a grant, pick a new audience, change policy or gain host authority. Fix the actual crossing instead of adding human-only approvals, repeated passwords, blanket tool restrictions or per-step confirmations. Keep revision/evidence checks, data protection, budgets and explicit publication controls.
 
-**Creative review and public publication are separate.** Only public Suno publication and social-media posting need the human; review decisions bind to exact revisions and genuine inspection evidence. Provider permissions, quotas, budgets and purchase authorization still apply (the `portos-music-video-*` skills carry the delegated-review detail).
+(see root) Provider permissions, quotas, budgets and purchase authorization still apply (the `portos-music-video-*` skills carry the delegated-review detail).
 
 ## Distribution model detail
 
-**Distribution model (across installs).** Installs upgrade on their own schedules and often federate, so cross-install and cross-version compatibility is first-class:
+(see root)
 
 - **Never delete or skip migration/compatibility code because "there's only one install."**
 - On-disk format changes need a migration in `scripts/migrations/` (applied-list per install in `data/migrations.applied.json`). Seed files ship in `data.reference/`.
@@ -162,7 +162,7 @@ Use obviously fake placeholders (`example.com`, `alice@example.com`, `192.0.2.10
 ## Moved from root (issue triage, findings, storage)
 
 - **Route to the owner.** Shared slashdo command, renderer or workflow defects go to [atomantic/slashdo](https://github.com/atomantic/slashdo/issues); PortOS behavior, integration, configuration and instructions go here; forks and managed apps use their configured remote. Use your own authorized GitHub identity, never the owner's (Pico-delegated work: `picodot`; the owner's local agents: `atomantic` when authorized).
-- **Search before filing.** Reuse an existing issue and add evidence; a new issue carries redacted evidence or repro steps, expected vs actual, affected files, a next step and acceptance criteria, and says whether a flake is suspected or reproduced. Batch one run's `model:light` + `effort:low` same-area findings into one checklist issue; bug, security and data-safety findings stay standalone. For PortOS, read [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and the label guidance in `server/lib/dispatchLabels.js`.
+- **Search before filing.** Reuse an existing issue and add evidence; a new issue carries redacted evidence or repro steps, expected vs actual, affected files, a next step and acceptance criteria, and says whether a flake is suspected or reproduced. (see root) For PortOS, read [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and the label guidance in `server/lib/dispatchLabels.js`.
 
 A rule may be retired after reassessing its value and feasibility, with concise rationale; difficulty alone is not an exemption, and retiring never hides a known important defect. Never suppress findings, weaken tests, demote rules or disable useful checks to get green; invest in high-quality fixes. A hardware, permission or genuinely user-owned blocker stays explicitly unresolved with evidence, an owner and a tracked next step, never relabeled clean. Bounded audits may track remaining accepted work; severity alone never justifies deferral.
 
@@ -182,7 +182,7 @@ Use linked binaries (`server/node_modules/.bin/vitest run <files>`). Only the `d
 
 macOS is the primary interactive app/browser target; Windows is secondary; Linux interactive browser compatibility is not a support target (Linux server support is unchanged), and headless Linux CI failures still get investigated. Linux-browser-only work needs a supported-target reproduction or concrete shared-code, server, security or data impact. Triage: [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#platform-support-and-issue-triage).
 
-**Host control is high stakes.** PortOS executes commands and reads private files with the host user's privileges, and a reachable or compromised LAN/tailnet peer can abuse password-free APIs. Encourage a strong, unique instance password. Password-free installs warn after upgrade until the operator accepts the risk or sets one; acceptance is machine-local and grants peers no execution authority.
+(see root) Encourage a strong, unique instance password. Password-free installs warn after upgrade until the operator accepts the risk or sets one; acceptance is machine-local and grants peers no execution authority.
 
 - **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
 
@@ -202,11 +202,11 @@ A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables t
 
 [ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/`.
 
-Every reusable-code directory (`server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, `client/src/services/`) is cataloged from module headers. **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match; before adding a file there, read [portos-add-module](.claude/skills/portos-add-module/SKILL.md). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
+(see root) **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match; before adding a file there, read [portos-add-module](.claude/skills/portos-add-module/SKILL.md). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
 
 ## Moved from root (misc)
 
-**Preserve delegated agent authority.** An operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Network reachability and scoped peer credentials never grant host access. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow. Authorized agent execution is an intended capability, not a vulnerability.
+(see root) Network reachability and scoped peer credentials never grant host access. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow. Authorized agent execution is an intended capability, not a vulnerability.
 
 - **Zod** route validation: domain `lib/*Validation.js`.
 - **Command allowlists**: preserve the policies in `server/lib/commandSecurity.js` and the agent guard.
