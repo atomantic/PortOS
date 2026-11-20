@@ -73,16 +73,18 @@ let renderProgress;
 let diagnosticTimer;
 const stageChannel = channel('portos.code-animation-stage.lifecycle');
 const renderChannel = channel('portos.composition-render.lifecycle');
-const observeStage = ({ stage, phase, elapsedMs }) => { stageProgress = { stage, phase, elapsedMs }; };
+const observeStage = ({ runId, stage, phase, elapsedMs, childPhase, childPid }) => {
+  stageProgress = { runId, stage, phase, elapsedMs, childPhase, childPid };
+};
 const observeRender = ({ phase, elapsedMs, encoderPid, frame, frames }) => {
   renderProgress = { phase, elapsedMs, encoderPid, frame, frames };
 };
 const reportPending = () => {
   const pending = runs.find(run => !run.settled);
   if (!pending) return;
-  const stage = stageProgress;
+  const stage = stageProgress?.runId === pending.run.id ? stageProgress : null;
   const render = renderProgress;
-  console.log(`🔬 Production fixture run ${runs.indexOf(pending) + 1} pending: stage=${stage?.stage ?? 'starting'}/${stage?.phase ?? 'starting'} stageAtMs=${stage?.elapsedMs ?? 0} render=${render?.phase ?? 'none'} renderAtMs=${render?.elapsedMs ?? 0} browserPid=${proc?.pid ?? 'none'} browserExited=${proc?.exitCode != null || proc?.signalCode != null} encoderPid=${render?.encoderPid ?? 'none'} frame=${render?.frame ?? 'none'}/${render?.frames ?? 'none'}`);
+  console.log(`🔬 Production fixture run ${runs.indexOf(pending) + 1} pending: stage=${stage?.stage ?? 'starting'}/${stage?.phase ?? 'starting'} stageAtMs=${stage?.elapsedMs ?? 0} childPhase=${stage?.childPhase ?? 'none'} childPid=${stage?.childPid ?? 'none'} render=${render?.phase ?? 'none'} renderAtMs=${render?.elapsedMs ?? 0} browserPid=${proc?.pid ?? 'none'} browserExited=${proc?.exitCode != null || proc?.signalCode != null} encoderPid=${render?.encoderPid ?? 'none'} frame=${render?.frame ?? 'none'}/${render?.frames ?? 'none'}`);
 };
 async function startTrackedRun(input, deps) {
   stageProgress = null;
