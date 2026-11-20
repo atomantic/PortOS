@@ -3,12 +3,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { maintenance, maintenanceBeginSchema, maintenanceResumeSchema } from '../lib/maintenanceAdmission.js';
 import { getMaintenanceStatus, resumeMaintenance } from '../services/maintenanceControl.js';
-import { assertHostControl } from '../services/authGate.js';
 
 const router = Router();
 router.get('/maintenance', (req, res) => res.json(getMaintenanceStatus()));
 router.get('/maintenance/runner-owner/:agentId', asyncHandler(async (req, res) => {
-  assertHostControl(req);
   const status = maintenance.status();
   if (status.state === 'unavailable' || !['Local operator', 'Operator session'].includes(status.hold?.owner))
     throw new ServerError('Begin a normal operator maintenance hold before inspection.', { status: 409, code: 'MAINTENANCE_STALE' });

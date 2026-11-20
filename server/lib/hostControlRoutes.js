@@ -79,6 +79,8 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   'GET /api/video-gen/history/:id/sharing-download',
   // Opens or reuses a tab in the signed-in managed browser and reads it.
   'GET /api/youtube/setup-check',
+  // The local recovery command checks private runner process and workspace identities.
+  'GET /api/system/maintenance/runner-owner/:agentId',
 ]);
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
