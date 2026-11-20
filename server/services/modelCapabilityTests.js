@@ -43,7 +43,6 @@
 import { cp, readdir, rm, } from 'fs/promises';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
-import sharp from 'sharp';
 import { pathWithin } from '../../lib/pathWithin.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, ensureDir, sha256File } from '../lib/fileUtils.js';
@@ -154,6 +153,7 @@ let fixtureHashCache = null;
 
 export async function loadVisionFixture() {
   if (visionFixtureCache) return visionFixtureCache;
+  const { default: sharp } = await import('sharp');
   const png = await sharp(VISION_FIXTURE_SVG).png().toBuffer();
   visionFixtureCache = {
     dataUrl: `data:image/png;base64,${png.toString('base64')}`,

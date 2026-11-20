@@ -8,7 +8,6 @@
  * tolerance uploads byte-for-byte; anything else is attention-cropped to the
  * largest rectangle of that ratio, never upscaled.
  */
-import sharp from 'sharp';
 import { fileToDataUri } from '../falQueue.js';
 import { aspectCropSize } from '../imageGen/aspectConform.js';
 
@@ -22,6 +21,7 @@ const RATIO = /^(\d+):(\d+)$/;
  */
 export async function frameDataUriAtAspect(filePath, aspect) {
   const ratio = RATIO.exec(typeof aspect === 'string' ? aspect : '');
+  const { default: sharp } = await import('sharp');
   const meta = ratio ? await sharp(filePath).metadata().catch(() => null) : null;
   const crop = meta && aspectCropSize(meta.width, meta.height, Number(ratio[1]), Number(ratio[2]));
   if (!crop) return { dataUri: await fileToDataUri(filePath), conformed: null };

@@ -8,7 +8,6 @@
  * same crop box (videoGen/falFrameAspect.js).
  */
 
-import sharp from 'sharp';
 import { atomicWrite } from '../../lib/fileUtils.js';
 
 // 2% — 1672x941 (1.7768) is Codex's own 16:9 and must pass untouched against a
@@ -36,6 +35,7 @@ export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_
 // are left for the existing invalid-image paths.
 export async function conformImageAspect(pngPath, targetW, targetH) {
   if (!positive(targetW) || !positive(targetH)) return null;
+  const { default: sharp } = await import('sharp');
   const meta = await sharp(pngPath).metadata().catch(() => null);
   const crop = aspectCropSize(meta?.width, meta?.height, Number(targetW), Number(targetH));
   if (!crop) return null;

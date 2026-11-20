@@ -1,7 +1,6 @@
 /** Resolve a document's local ES module graph for the opaque preview iframe. */
 import { readFile } from 'node:fs/promises';
 import { posix } from 'node:path';
-import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 
 /**
@@ -48,6 +47,7 @@ export async function inlineDocumentModule(entry, files, stack = new Set(), cach
   const file = files.get(entry);
   if (!file || stack.has(entry) || stack.size >= 32) throw new ServerError('Preview modules must form an acyclic local document graph', { status: 422, code: 'COMPOSITION_MODULE_INVALID' });
   const source = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
+  const { parse } = await import('@babel/parser');
   const ast = parse(source, { sourceType: 'module' });
   const nextStack = new Set([...stack, entry]);
   const replacements = [];

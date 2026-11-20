@@ -21,7 +21,6 @@
  *     (`sheet:comparison-solo`), cut in code at the exact centre column.
  */
 
-import sharp from 'sharp';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
@@ -126,6 +125,7 @@ export function buildCharacterComparisonSheetPrompt(universe, leftCharacter, rig
 async function splitComparisonSheet(filename, { saveImage, existing = {}, attachHalf } = {}) {
   const source = resolveImageInputPath(join(PATHS.images, filename)) || resolveImageInputPath(join(PATHS.imageRefs, filename));
   if (!source) throw new ServerError(`Comparison sheet "${filename}" is not in the image library`, { status: 404, code: 'NOT_FOUND' });
+  const { default: sharp } = await import('sharp');
   const { width, height } = await sharp(source).metadata();
   if (!width || !height || width < 2) throw new ServerError('Comparison sheet has no readable size', { status: 422, code: 'UNSUPPORTED_IMAGE' });
   const centre = Math.floor(width / 2);

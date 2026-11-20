@@ -31,7 +31,6 @@
 
 import { join } from 'path';
 import { readdir, readFile } from 'fs/promises';
-import sharp from 'sharp';
 import {
   atomicWrite, ensureDir, pathExists, readJSONFile, tryReadFile,
 } from '../../lib/fileUtils.js';
@@ -811,6 +810,7 @@ export async function compileAtlasInTail(recordId, {
       compositeOnto(atlas, cell.cell, placeInGrid(cell, r) * cellSize, r * cellSize);
     }
   }
+  const { default: sharp } = await import('sharp');
   const atlasBuffer = await sharp(atlas.data, { raw: { width: atlasWidth, height: atlasHeight, channels: 4 } })
     .png()
     .toBuffer();

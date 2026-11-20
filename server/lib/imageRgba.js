@@ -8,8 +8,6 @@
  * boundary for decoding encoded images and producing PNG bytes.
  */
 
-import sharp from 'sharp';
-
 /**
  * Decode an image to a raw RGBA frame `{ data, width, height }`.
  *
@@ -21,6 +19,7 @@ import sharp from 'sharp';
  * only so existing callers keep their pixel-for-pixel behaviour.
  */
 export async function decodeRgbaFrame(src, { autoOrient = false } = {}) {
+  const { default: sharp } = await import('sharp');
   const pipeline = sharp(src);
   const { data, info } = await (autoOrient ? pipeline.rotate() : pipeline)
     .ensureAlpha()
@@ -31,6 +30,7 @@ export async function decodeRgbaFrame(src, { autoOrient = false } = {}) {
 
 /** Encode a raw frame as PNG bytes without choosing a destination. */
 export async function encodePng({ data, width, height }, channels = 4) {
+  const { default: sharp } = await import('sharp');
   return sharp(data, { raw: { width, height, channels } })
     .png()
     .toBuffer();

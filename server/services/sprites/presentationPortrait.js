@@ -5,7 +5,6 @@
  */
 
 import { readFile } from 'fs/promises';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { keyChannelSplit } from './chromaKey.js';
 import { resolveSpriteAssetPath } from './paths.js';
@@ -40,6 +39,7 @@ export async function buildPresentationPortrait(recordId, record) {
     keyChannelSplit(chromaKey),
     chromaKey,
   );
+  const { default: sharp } = await import('sharp');
   const portraitBuffer = await sharp(frame.data, {
     raw: { width: frame.width, height: frame.height, channels: 4 },
   })

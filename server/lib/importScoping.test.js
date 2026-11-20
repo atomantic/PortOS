@@ -348,6 +348,13 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
       expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);
     },
   );
+  it.each(['routes/apps/index.js', 'routes/musicVideo.js', 'routes/localLlm.js'])(
+    'keeps native image processing and JavaScript parsing off ordinary requests to %s', (entry) => {
+      const { packages } = staticImportClosure(abs(entry));
+      expect(packages.has('sharp')).toBe(false);
+      expect(packages.has('@babel/parser')).toBe(false);
+    },
+  );
   it('arms local model subscriptions before either HTTP router loads', () => {
     expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
   });

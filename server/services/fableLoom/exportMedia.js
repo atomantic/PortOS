@@ -3,7 +3,6 @@ import { open, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import sharp from 'sharp';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { findFfmpeg, findFfprobe, runFfmpegProcess } from '../../lib/ffmpeg.js';
@@ -88,6 +87,7 @@ async function probe(path, format = 'mov') {
 }
 
 export async function fableLoomExportEncoder(kind) {
+  const { default: sharp } = await import('sharp');
   const image = { sharp: sharp.versions.sharp, vips: sharp.versions.vips,
     imageBuildHash: createHash('sha256').update(JSON.stringify(sharp.versions)).digest('hex') };
   if (kind === 'image') return image;
@@ -141,6 +141,7 @@ export async function prepareFableLoomExportMedia(bytes, kind, directory, option
   }
   checkExportCancelled(signal);
   if (kind === 'image') {
+    const { default: sharp } = await import('sharp');
     const image = sharp(bytes, { limitInputPixels: 16 * 1024 * 1024 });
     const metadata = await image.metadata();
     if (!['png', 'jpeg', 'webp'].includes(metadata.format) || (metadata.pages || 1) !== 1) {

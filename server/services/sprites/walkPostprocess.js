@@ -19,7 +19,6 @@
  *   pick different frames/values under Math.round's half-up.
  */
 
-import sharp from 'sharp';
 import { join } from 'path';
 import { readdir, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
@@ -309,6 +308,7 @@ function candLess(a, b) {
  * downscale. Drives cycle selection and loop-seam validation.
  */
 export async function signatureOf(frame) {
+  const { default: sharp } = await import('sharp');
   return sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels: 4 } })
     .flatten({ background: SIGNATURE_BACKGROUND })
     .resize(SIGNATURE_SIZE, SIGNATURE_SIZE, { kernel: 'linear', fit: 'fill' })
@@ -782,6 +782,7 @@ function cropFrame(frame, bbox) {
 // sharp premultiplies alpha before resampling and unpremultiplies after —
 // the same alpha-weighted LANCZOS the source's premultiplied_resize does.
 export async function premultipliedResize(frame, width, height) {
+  const { default: sharp } = await import('sharp');
   const data = await sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels: 4 } })
     .resize(width, height, { kernel: 'lanczos3', fit: 'fill' })
     .raw()
@@ -1042,6 +1043,7 @@ export async function extractVideoFrames(videoPath, rawDir) {
  */
 export async function prepareWalkAnchorChromaInput(anchorAbs, destAbs, chromaKey, chooseCanvas = null) {
   const background = hexToRgb(chromaKey);
+  const { default: sharp } = await import('sharp');
   const image = sharp(anchorAbs).flatten({ background });
   let preparation = 'composited-over-solid-chroma-matte';
   let canvas = null;
