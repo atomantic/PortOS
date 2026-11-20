@@ -24,6 +24,7 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
+import { inspectClaimDependencyLock } from './claimDependencyLock.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { MERGED_OWNERSHIP_HOLDS, claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
@@ -77,7 +78,12 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  * A root node_modules holding workspace links is rebuilt as a real directory
  * so those links resolve inside the worktree, not the source (#12633).
  */
-export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
+export async function linkWorktreeDependencies(sourceWorkspace, worktreePath, { verifyRootLockfile = false } = {}) {
+  const lock = verifyRootLockfile ? await inspectClaimDependencyLock(sourceWorkspace, worktreePath) : null;
+  // A stale root install can require a workspace-wide reinstall. Leave child
+  // dependency paths unlinked too so the package manager cannot write through them.
+  if (lock && lock.status !== 'matching') return [{ path: 'node_modules', ...lock }];
+
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
   const outcomes = await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
@@ -100,9 +106,10 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
         return { path: relativePath, status: 'existing' };
       }
     }
-    if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return { path: relativePath, status: 'linked' };
-    await symlink(sourcePath, targetPath, 'dir');
-    return { path: relativePath, status: 'linked' };
+    const root = relativePath === 'node_modules';
+    const provisioned = root && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath);
+    if (!provisioned) await symlink(sourcePath, targetPath, 'dir');
+    return { path: relativePath, status: root && lock ? 'linked-match' : 'linked' };
   }));
   return outcomes;
 }

@@ -5,26 +5,32 @@
  * there without installing — an `npm install` inside a symlinked worktree
  * follows the link and empties the source checkout's real node_modules.
  *
- * Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path>
+ * Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path> [--claim]
  *
  * The claim prompts run this right after their own `git worktree add` (#9052);
  * PortOS-created CoS worktrees get the same links from worktreeManager.
  * Existing entries in the worktree are left untouched.
  */
 
+import { realpathSync } from 'fs';
 import { resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { formatClaimDependencyStatus } from '../server/services/claimDependencyLock.js';
 import { linkWorktreeDependencies } from '../server/services/worktreeManager.js';
 
-const [sourceCheckout, worktreePath] = process.argv.slice(2);
+const [sourceCheckout, worktreePath, mode] = process.argv.slice(2);
 
-if (!sourceCheckout || !worktreePath) {
-  console.error('❌ Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path>');
+if (!sourceCheckout || !worktreePath || (mode && mode !== '--claim')) {
+  console.error('❌ Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path> [--claim]');
   process.exit(1);
 }
 
 try {
-  await linkWorktreeDependencies(resolve(sourceCheckout), resolve(worktreePath));
-  console.log(`🔗 Linked dependencies into ${worktreePath}`);
+  const claim = mode === '--claim';
+  const portosRoot = fileURLToPath(new URL('../', import.meta.url));
+  const verifyRootLockfile = claim && realpathSync(sourceCheckout) !== realpathSync(portosRoot);
+  const dependencies = await linkWorktreeDependencies(resolve(sourceCheckout), resolve(worktreePath), { verifyRootLockfile });
+  console.log(claim ? formatClaimDependencyStatus(dependencies) : `🔗 Linked dependencies into ${worktreePath}`);
 } catch (err) {
   console.error(`❌ Failed to link dependencies: ${err.message}`);
   process.exit(1);

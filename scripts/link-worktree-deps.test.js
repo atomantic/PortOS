@@ -39,6 +39,26 @@ describe('link-worktree-deps script', () => {
     expect(lstatSync(join(source, 'node_modules')).isSymbolicLink()).toBe(false);
   });
 
+  it('reports a managed claim’s stale pnpm install without linking dependency paths', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    const receipt = join(source, 'node_modules', '.pnpm', 'lock.yaml');
+    mkdirSync(dirname(receipt), { recursive: true });
+    mkdirSync(worktree);
+    const installed = "lockfileVersion: '9.0'\nimporters: {'.': {}}\n";
+    writeFileSync(receipt, installed);
+    writeFileSync(join(worktree, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\nimporters: {'.': {dependencies: {example: 1.0.0}}}\n");
+
+    const result = runScript(source, worktree, '--claim');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('node_modules stale in source');
+    expect(result.stdout).toContain('install here with `pnpm install --frozen-lockfile`');
+    expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
+    expect(readFileSync(receipt, 'utf8')).toBe(installed);
+  });
+
   it('resolves workspace links inside the worktree, not the source checkout (#12633)', () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-')));
     const source = join(root, 'source');

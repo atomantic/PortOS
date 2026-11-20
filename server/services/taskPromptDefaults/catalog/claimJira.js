@@ -48,8 +48,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-\${KEY}"
 mkdir -p "{worktreesRoot}"
 git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
 git -C {repoPath} worktree add --no-track -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
-# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
-node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
+# Check the linker output and follow its dependency guidance:
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}" --claim
 cd "\${WORKTREE}"
 \`\`\`
 

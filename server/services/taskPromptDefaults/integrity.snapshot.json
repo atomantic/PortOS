@@ -14,9 +14,9 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "270058a43a34bf1f38966b536f7f3f62",
-    "claim-issue-gitlab": "f67fff60052afb09d766dd6dc0488c23",
-    "claim-issue-jira": "82e6ec42bf29bfb7044e40f0d8b9f105",
+    "claim-issue": "ac4234de6eb96cac5753d5fb903f1d9f",
+    "claim-issue-gitlab": "4cf2c42c14349ead0e8ab20369855504",
+    "claim-issue-jira": "232dffb9064dba1b054c8bf103c4351d",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "0f3459ff958f97ace12f61430ede70d7",
     "code-reviewer-review": "aa8fbd3878dfd441955f2182c22a1699",
@@ -93,9 +93,9 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 72,
-    "claim-issue-gitlab": 63,
-    "claim-issue-jira": 30,
+    "claim-issue": 73,
+    "claim-issue-gitlab": 64,
+    "claim-issue-jira": 31,
     "code-quality": 6,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
@@ -289,7 +289,8 @@
       "8fde8b341be07630e558ad5f09fb5fc5",
       "d5d4e81f13f66385fab88c3b0262dab3",
       "537a1b8e355edee6b2d3fc92f89eeec7",
-      "29e7037cc2b45e9afd3b58a7eba7c0e5"
+      "29e7037cc2b45e9afd3b58a7eba7c0e5",
+      "270058a43a34bf1f38966b536f7f3f62"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -353,7 +354,8 @@
       "b6df1c09a8ab61394dfbf43a33e782c6",
       "9aa68e075fa1cde35d5674471ad7e5ba",
       "ab1c742ec1e52a5cf0c5a25b8da5e63c",
-      "bf968714197aaa91bd996daea3fbdfdd"
+      "bf968714197aaa91bd996daea3fbdfdd",
+      "f67fff60052afb09d766dd6dc0488c23"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -384,7 +386,8 @@
       "e27862793495692fd4c4fe0dad1eb745",
       "b793412731c754db0b88b4d84d7e454f",
       "42dba9e163d5f6912e2d1df2722bf9c4",
-      "8eb786c1ffbb0e589d7959ff829ed875"
+      "8eb786c1ffbb0e589d7959ff829ed875",
+      "82e6ec42bf29bfb7044e40f0d8b9f105"
     ],
     "code-quality": [
       "62752723eba7a39aa94e010911923cc8",

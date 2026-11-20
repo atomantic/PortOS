@@ -1,0 +1,109 @@
+/** Compare a managed claim's root lockfile with the source checkout's install receipt. */
+
+import { lstat, readFile, stat } from 'fs/promises';
+import { join } from 'path';
+import { isDeepStrictEqual } from 'util';
+
+const LOCKFILES = {
+  pnpm: 'pnpm-lock.yaml',
+  npm: 'package-lock.json',
+};
+
+const readText = path => readFile(path, 'utf8').catch(() => null);
+
+async function readCheckoutFile(path) {
+  const info = await lstat(path).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  // A checkout may supply a symlink. Never read its target as a lockfile.
+  return info && { text: info.isFile() ? await readText(path) : null };
+}
+
+async function declaredPackageManager(worktreePath) {
+  const manifest = await readCheckoutFile(join(worktreePath, 'package.json'));
+  try {
+    const { packageManager } = JSON.parse(manifest?.text ?? '{}');
+    return typeof packageManager === 'string' ? /^([^@]+)@/.exec(packageManager)?.[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+function compareNpmReceipt(lockfile, receipt) {
+  const expected = JSON.parse(lockfile).packages;
+  const installed = JSON.parse(receipt).packages;
+  // npm's hidden lockfile omits the project root and may omit platform-specific
+  // optional packages. Workspace links and their target records are included.
+  if (!isRecord(expected?.['']) || !isRecord(installed)) return 'unverified';
+  const matches = Object.entries(expected).every(([path, entry]) =>
+    path === '' || (entry?.optional === true && !Object.hasOwn(installed, path)) ||
+    isDeepStrictEqual(entry, installed[path])) &&
+    Object.keys(installed).every(path => Object.hasOwn(expected, path));
+  return matches ? 'matching' : 'stale';
+}
+
+function comparePnpmReceipt(lockfile, receipt) {
+  const normalize = text => text.replaceAll('\r\n', '\n').trimEnd();
+  // Compare the generated current lock without interpreting any project YAML.
+  // A filtered install or a differently serialized lock requires a local install.
+  if (![lockfile, receipt].every(text => /^lockfileVersion:[ \t]+\S/m.test(text))) return 'unverified';
+  return normalize(lockfile) === normalize(receipt) ? 'matching' : 'stale';
+}
+
+export async function inspectClaimDependencyLock(sourceWorkspace, worktreePath) {
+  const sourceModules = join(sourceWorkspace, 'node_modules');
+  if (!(await stat(sourceModules).catch(() => null))?.isDirectory()) return null;
+
+  const candidates = await Promise.all(Object.entries(LOCKFILES).map(async ([manager, filename]) => {
+    const file = await readCheckoutFile(join(worktreePath, filename));
+    return file && { manager, lockfile: file.text };
+  }));
+  const found = candidates.filter(Boolean);
+  if (!found.length) return null;
+  const declared = found.length > 1 ? await declaredPackageManager(worktreePath) : found[0].manager;
+  const candidate = found.find(({ manager }) => manager === declared);
+  if (!candidate) return { status: 'unverified' };
+
+  const { manager, lockfile } = candidate;
+  const receiptPath = manager === 'pnpm' ? join('.pnpm', 'lock.yaml') : '.package-lock.json';
+  const receipt = await readText(join(sourceModules, receiptPath));
+  if (!lockfile || !receipt) return { manager, status: 'unverified' };
+  const compare = manager === 'pnpm' ? comparePnpmReceipt : compareNpmReceipt;
+  try {
+    return { manager, status: compare(lockfile, receipt) };
+  } catch {
+    return { manager, status: 'unverified' };
+  }
+}
+
+export function formatClaimDependencyStatus(dependencies) {
+  if (!Array.isArray(dependencies) || !dependencies.length) {
+    return 'Dependency provisioning could not be verified. Inspect dependency paths and symlinks before installing. Never install through links to the source checkout.';
+  }
+
+  const blocked = dependencies.find(item => item.status === 'stale' || item.status === 'unverified');
+  if (blocked) {
+    const source = blocked.status === 'stale' ? 'stale in source' : 'source lockfile match unverified';
+    const install = {
+      pnpm: 'with `pnpm install --frozen-lockfile`',
+      npm: 'with `npm ci`',
+    }[blocked.manager] ?? 'using the repository’s documented frozen install';
+    return `Dependency provisioning: ${blocked.path} ${source}. PortOS skipped dependency linking. After verifying the dependency paths are local to this worktree, install here ${install}.`;
+  }
+
+  if (dependencies.every(item => item.status === 'absent')) {
+    return 'The source checkout has no installed dependencies to link. Install dependencies inside this worktree after verifying no dependency paths are symlinks.';
+  }
+
+  const descriptions = {
+    'linked-match': 'linked (matches lockfile)',
+    linked: 'linked',
+    absent: 'absent in source',
+    existing: 'existing and preserved',
+  };
+  const paths = dependencies.map(({ path, status }) => `${path} ${descriptions[status] ?? 'status unknown'}`);
+  return `Dependency provisioning: ${paths.join(', ')}. Never install through dependency paths linked to the source checkout. Inspect preserved paths before installing.`;
+}

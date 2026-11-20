@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
@@ -33,6 +33,12 @@ afterEach(async () => {
   await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
+const pnpmLock = version => `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      example:\n        specifier: ^${version}\n        version: ${version}\n`;
+const npmLock = (version, root = {}) => JSON.stringify({
+  lockfileVersion: 3,
+  packages: { ...root, 'node_modules/example': { version } },
+});
+
 describe('provisionClaimCheckout', () => {
   it('cuts the claim branch from the fetched default branch at the agent-cut claim path', async () => {
     // Origin moved after the clone; the checkout must start from the fetched tip.
@@ -53,6 +59,50 @@ describe('provisionClaimCheckout', () => {
     // --no-track: nothing pushes to main by accident from the claim branch.
     const upstream = await execGit(['rev-parse', '--abbrev-ref', '@{u}'], worktreePath, { ignoreExitCode: true });
     expect(upstream.exitCode).not.toBe(0);
+  });
+
+  it.each([
+    ['pnpm', 'matching', 'linked-match'],
+    ['pnpm', 'stale', 'stale'],
+    ['pnpm', 'missing', 'unverified'],
+    ['npm', 'matching', 'linked-match'],
+    ['npm', 'stale', 'stale'],
+  ])('checks the %s root lockfile before linking a %s install', async (manager, receiptState, expectedStatus) => {
+    const pnpm = manager === 'pnpm';
+    const filename = pnpm ? 'pnpm-lock.yaml' : 'package-lock.json';
+    const receiptPath = join(repo, 'node_modules', pnpm ? '.pnpm/lock.yaml' : '.package-lock.json');
+    const wanted = version => pnpm ? pnpmLock(version) : npmLock(version, {
+      '': { name: 'fixture' },
+      'node_modules/platform-optional': { version: '1.0.0', optional: true },
+    });
+    const installVersion = receiptState === 'matching' ? '2.0.0' : '1.0.0';
+    const receipt = pnpm ? pnpmLock(installVersion) : npmLock(installVersion);
+    await mkdir(join(repo, 'node_modules', '.pnpm'), { recursive: true });
+    await mkdir(join(repo, 'client', 'node_modules'), { recursive: true });
+    await writeFile(join(repo, 'client', 'package.json'), '{}');
+    await writeFile(join(repo, filename), wanted('2.0.0'));
+    await execGit([...IDENTITY, 'add', filename, 'client/package.json'], repo);
+    await execGit([...IDENTITY, 'commit', '-m', 'add lockfile'], repo);
+    await execGit(['push', 'origin', 'HEAD:main'], repo);
+    // A matching lockfile in the primary checkout cannot justify linking into
+    // a claim whose fetched branch wants a different dependency version.
+    await writeFile(join(repo, filename), wanted(installVersion));
+    if (receiptState !== 'missing') await writeFile(receiptPath, receipt);
+
+    const { claimCheckout } = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+
+    const root = join(claimDir(), 'node_modules');
+    const child = join(claimDir(), 'client', 'node_modules');
+    expect(claimCheckout.dependencies).toContainEqual(expect.objectContaining({ path: 'node_modules', status: expectedStatus }));
+    if (receiptState === 'matching') {
+      expect(realpathSync(root)).toBe(realpathSync(join(repo, 'node_modules')));
+      expect(realpathSync(child)).toBe(realpathSync(join(repo, 'client', 'node_modules')));
+    } else {
+      expect(claimCheckout.dependencies).toEqual([{ path: 'node_modules', status: expectedStatus, manager }]);
+      expect(existsSync(root)).toBe(false);
+      expect(existsSync(child)).toBe(false);
+    }
+    if (receiptState !== 'missing') expect(await readFile(receiptPath, 'utf8')).toBe(receipt);
   });
 
   it('refuses, creating nothing, when the claim branch already exists on origin', async () => {
