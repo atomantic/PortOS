@@ -61,7 +61,6 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/ci-gate-report.js',
   'scripts/ci-nightly-report.js',
   'scripts/ci-retry-cancelled-run.js',
-  'scripts/ci-recover-superseded-gate.js',
   'scripts/doctor.js',
   'scripts/checkGitVersion.js',
   'scripts/setup.js',
@@ -147,7 +146,6 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     'scripts/ci-gate-report.js',
     'scripts/ci-nightly-report.js',
     'scripts/ci-retry-cancelled-run.js',
-    'scripts/ci-recover-superseded-gate.js',
   ];
 
   it('the sparse jobs are exactly the ones claiming a sparse checkout', () => {
@@ -159,9 +157,9 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     // The `with:` key at the start of a line, not the literal anywhere: a
     // comment mentioning it must neither inflate the count nor evade it.
     const sparseJobs = (workflows.match(/^ +sparse-checkout: scripts$/gm) || []).length;
-    // CI's two gate jobs, two independent recovery jobs and the main-health
+    // CI's two gate jobs, one cancellation retry job and the main-health
     // reporter use scripts.
-    expect(sparseJobs).toBe(5);
+    expect(sparseJobs).toBe(4);
     for (const entry of SPARSE_CHECKOUT_SCRIPTS) {
       expect(workflows, entry).toContain(`node ${entry}`);
     }
