@@ -799,6 +799,10 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     let pgResult;
     let restoreWarning = null;
     try {
+      const { flushPendingUsageWrites } = await import('./usage.js');
+      await flushPendingUsageWrites().catch(() => {
+        throw new ServerError('Usage ledger could not be saved for this backup', { code: 'BACKUP_USAGE_FLUSH_FAILED' });
+      });
       const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
       changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags, { allowVanishedSources: true });
       console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
