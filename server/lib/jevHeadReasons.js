@@ -4,7 +4,7 @@
  * ONE definition, re-exported by `client/src/lib/jevHeadReasons.js`. These codes are SERVER
  * vocabulary (`headAdoptionBlocker`, `adoptJevHead`), so a new blocker must fail a test
  * (`jevHead.test.js`) rather than render as a raw slug. No imports, so the browser can load it
- * (`scripts/server-imports-no-client.guard.test.js` forbids the reverse edge). Each label names WHICH
+ * (`server/test/guards/modules/server-imports-no-client.test.js` forbids the reverse edge). Each label names WHICH
  * baseline the head lost to, since they send an operator to different places.
  */
 

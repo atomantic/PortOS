@@ -108,7 +108,7 @@ const post = async (app, path, body = {}, headers = {}) => callRoute(await app, 
 const actionPath = (suffix, id = action.id) => `/api/stacker-news/actions/${id}/${suffix}`;
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal and the real consumer workflow.
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal and the real consumer workflow.
 describe('Stacker News review and publication behind the default-deny gate (#16114)', () => {
   it('refuses a remote caller before approval persistence or saved-key execution, for any case or slash spelling', async () => {
     const app = appFor();

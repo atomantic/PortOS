@@ -1,7 +1,7 @@
 /**
  * Operator-facing labels for the codes `scoreAdherence` returns instead of a verdict (`server/services/scopeAdherence.js`).
  *
- * ONE definition re-exported by `client/src/lib/scopeAdherenceReasons.js`, not a mirror with a parity test (the client may import a pure `server/lib` leaf; the reverse edge is what `scripts/server-imports-no-client.guard.test.js` forbids), importable from the browser by having no imports. Coverage is asserted by the sibling test, so a code added to the service without a label fails rather than rendering the generic fallback. Every label reads as "no advisory", never a verdict: a scorer that couldn't answer has said nothing about the change.
+ * ONE definition re-exported by `client/src/lib/scopeAdherenceReasons.js`, not a mirror with a parity test (the client may import a pure `server/lib` leaf; the reverse edge is what `server/test/guards/modules/server-imports-no-client.test.js` forbids), importable from the browser by having no imports. Coverage is asserted by the sibling test, so a code added to the service without a label fails rather than rendering the generic fallback. Every label reads as "no advisory", never a verdict: a scorer that couldn't answer has said nothing about the change.
  */
 
 /** The codes `scoreAdherence` adds on top of the shared `JEV_FAILURE_CODES` and untrusted-content ones (forwarded unchanged). Declared HERE rather than in the service: the sibling test asserts every code has a label, and importing the service would drag its closure into a leaf test (the shape `lib/importScoping.test.js` budgets against); the service imports this. */

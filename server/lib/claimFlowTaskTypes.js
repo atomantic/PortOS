@@ -14,7 +14,7 @@
 // `metadata.analysisType`.
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
-// claimFlowTaskTypes.guard.test.js fails if a local copy of this list reappears.
+// server/test/guards/modules/claimFlowTaskTypes.test.js fails if a local copy of this list reappears.
 
 import { isTruthyMeta } from './metadataFlags.js';
 

@@ -9,7 +9,7 @@ afterAll(cleanupTempDataRoots);
 
 // Caller-prompted AI outside Pipeline (#10908). Every such write is gated by the
 // default-deny policy (#16018); the refusal and principal matrix live in
-// services/authGate.test.js and hostControlCoverage.test.js. The games, mood-board
+// services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js. The games, mood-board
 // and agent-personality routers keep their authorized workflows in the
 // hostControlPreGuard*.test.js suites. Effects are doubled at their AI service.
 const auth = vi.hoisted(() => ({ enabled: false }));

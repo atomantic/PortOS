@@ -521,7 +521,7 @@ router.delete('/token', asyncHandler(async (_req, res) => {
 // (`POST /api/messages/drafts/:id/approve` then `.../send`): creating the entry
 // records the approved text, sending it performs the POST. No scheduler, no
 // agent, no voice tool and no CoS tool reaches either — asserted structurally
-// by `beeperOutboxHumanGate.guard.test.js`, not left to convention.
+// by `server/test/guards/runtime/beeperOutboxHumanGate.test.js`, not left to convention.
 // Approval, send and breaker reset also require operator authority via the
 // central host-control gate. An HTTP call or first-contact flag alone is not
 // approval; genuine auth-off local and verified delegated sessions retain it.

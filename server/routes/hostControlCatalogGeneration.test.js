@@ -9,7 +9,7 @@ afterAll(cleanupTempDataRoots);
 
 // Catalog generation (#10891) and every other Catalog write are gated by the
 // default-deny policy (#16018); the refusal and principal matrix live in
-// services/authGate.test.js and hostControlCoverage.test.js. The extraction
+// services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js. The extraction
 // provider dispatch is doubled at its service.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({ extract: vi.fn(async () => ({ scrap: { id: 'example-scrap' }, draft: {} })) }));

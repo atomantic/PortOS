@@ -1243,7 +1243,7 @@ describe('recorded key', () => {
       expect(after.recorded.key, label).not.toBe(before.recorded.key);
       expect(after.floor.key, label).not.toBe(before.floor.key);
     }
-    // Assembled so this file does not itself read as a tree scanner to scripts/repo-scan-guards.guard.test.js.
+    // Assembled so this file does not itself read as a tree scanner to server/test/guards/repo-scan-guards.test.js.
     const unresolvable = { ...files, 'server/lib/side.test.js': ["import { it } from 'vitest';", "import { readServerSource } from './testHelper.js';", `it('r', () => ${'readServerSource'}(process.env.TARGET));`].join('\n') };
     expect(withRecord(unresolvable, 'server/lib/side.test.js', ['server/lib/side.test.js']).recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('readServerSource') });
   });
@@ -1408,7 +1408,7 @@ describe('python sidecars, external tools and machine-local state', () => {
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {
     // The fixture sources spell the data directory from pieces so this file
-    // does not itself trip lib/testDataIsolation.guard.test.js.
+    // does not itself trip server/test/guards/repo/testDataIsolation.test.js.
     const DATA = ['da', 'ta'].join('');
     const read = (rel) => ["import { it } from 'vitest';", "import { readFileSync } from 'node:fs';", "import { join } from 'node:path';", "import { homedir } from 'node:os';", `it('d', () => readFileSync(${rel}));`].join('\n');
     expect(keyOf({ ...TREE, 'server/lib/a.test.js': read(`join(__dirname, '../../${DATA}/settings.json')`) }).floor).toMatchObject({ memoizable: false, reason: expect.stringContaining('machine-local') });

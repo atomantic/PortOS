@@ -346,7 +346,7 @@ result path in `server/services/cos/cosToolRegistry.js`, and
 
 ## Validation
 
-- `server/lib/apiRouteGraph.guard.test.js` — source-derived HTTP inventory (at audit
+- `server/test/guards/modules/apiRouteGraph.test.js` — source-derived HTTP inventory (at audit
   time 2,138 operations / 2,141 declarations / 146 mounts), coverage of every
   declaration under `server/routes/`, and representative-route pins.
 - `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,

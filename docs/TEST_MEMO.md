@@ -349,7 +349,7 @@ under the run's own key only.
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.
-`scripts/browser-suite-registry.guard.test.js` reads every registered suite and fails
+`server/test/guards/repo/browser-suite-registry.test.js` reads every registered suite and fails
 on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a

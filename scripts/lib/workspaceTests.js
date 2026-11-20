@@ -41,10 +41,14 @@ export const SERVER_TEST_INCLUDE = Object.freeze([
   '../browser/**/*.test.js',
 ]);
 
-/** The slashdo submodule ships node:test suites; DB suites run only under vitest.config.db.js. */
+/**
+ * The slashdo submodule ships node:test suites; DB suites run only under vitest.config.db.js.
+ * Structural guard checks run only inside their runner (`test/guards/<subject>.guard.test.js`, #16996).
+ */
 export const SERVER_TEST_EXCLUDE = Object.freeze([
   '**/node_modules/**',
   '../lib/slashdo/**',
+  'test/guards/*/**',
   ...DB_TEST_INCLUDE,
 ]);
 

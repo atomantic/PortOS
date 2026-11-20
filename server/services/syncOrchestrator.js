@@ -181,7 +181,7 @@ async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = tr
   // per-file probe (the holders list and file times take the route's answer only).
   if (!probeOlderPeers) return null;
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
-  // Whole literals so the peer-surface guard (apiAccessPolicy.guard.test.js) can see both routes.
+  // Whole literals so the peer-surface guard (server/test/guards/modules/apiAccessPolicy.test.js) can see both routes.
   const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
   const found = await mapWithConcurrency(checked, 4, async (filename) => {
     const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(

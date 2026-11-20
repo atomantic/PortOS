@@ -2,7 +2,7 @@
  * Creative Director — project-start sink (#5920).
  *
  * Leaf seam that keeps `server/services/pipeline/*` and `creativeDirector/*` out of
- * a static import cycle (a boot-time TDZ hazard; see `serviceImportCycles.guard.test.js`).
+ * a static import cycle (a boot-time TDZ hazard; see `server/test/guards/modules/serviceImportCycles.test.js`).
  * The pipeline calls this leaf; the CD side REGISTERS its starter here at module
  * evaluation (`completionHook.js`, imported by `server/index.js`). A lazy
  * `await import()` would only hide the cycle from the guard, so it is not the fix.

@@ -181,39 +181,34 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      Impact selection is import-graph-driven by construction, so it has no
 //      edge that can reach them: the violating file is some *other* file, in
 //      some other directory, that the guard only ever sees as a path string.
-//      They sat structurally unselectable — `agent-instructions-files.guard.test.js`
+//      They sat structurally unselectable — the agent-instructions guard
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
 //      This half is selected by filename (#16553): every tracked
-//      `*.guard.test.js` (getGuardTests), so a new scanner registers by being
-//      named. repo-scan-guards.guard.test.js fails a scanner without the suffix.
+//      `*.guard.test.js` (getGuardTests). Nearly all of them are checks in a
+//      `server/test/guards/<subject>/` directory that the subject's runner
+//      (`<subject>.guard.test.js` beside it) runs in one worker over one shared
+//      corpus (#16996), so a new scanner registers by being placed there; the
+//      doc-parity guards, which compare a .md against source they read rather
+//      than import, are checks there too.
+//      server/test/guards/repo/repo-scan-guards.test.js fails a scanner that is
+//      neither suffixed nor in a guard directory.
 //
 // Everything here is deliberately cheap: it reads only prompt data or `git`
 // output, which is affordable on every PR including documentation-only ones,
 // where the alternative is reasoning per-scope about what can reach it. The
-// whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
-// a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
-// hosted CI enforces. A behavioural test that no scan needs does not belong
-// here: a suite that mixes the two keeps its scan in a sibling
-// `<name>.guard.test.js`.
+// separate guard files once measured ~23s of a 27s focused pregate (#16086),
+// mostly per-file worker startup and the same tree listed and read dozens of
+// times; one runner per subject over one corpus is what keeps the set cheap. A
+// behavioural test that no scan needs does not belong here: a suite that mixes
+// the two keeps its scan in a check module.
 //
 // The explicit list holds only what the suffix does not: guards whose file is
 // not named as one.
 export const EXPLICIT_ALWAYS_RUN_TESTS = [
-  // Doc-parity guards: each compares a .md next to it against source it reads
-  // rather than imports, so a docs-only PR that documented a removed endpoint
-  // would otherwise merge green.
-  'docs/api-doc.test.js',
-  'docs/doc-endpoint-methods.test.js',
-  'docs/docs-index.test.js',
-  'docs/deps-doc.test.js',
-  'docs/features/product-surfaces.test.js',
-  'scripts/doc-code-pointers.test.js',
   // Route policy scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
-  // Whole-tree route-mount scan (#12952, #16018).
-  'server/hostControlCoverage.test.js',
   // Base-relative server import-growth guard (#7993): a new eager edge in a widely
   // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
   // and fails closed when that commit cannot be read; pregate forwards the plan's base.
@@ -603,8 +598,8 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // selects them: the parity guard catches a client wrapper stranded by a
   // renamed mount, and the prompt-stage drift test a stale manifest — which is
   // what a scoped plan let merge before this rule existed (#5898). The
-  // route-graph guard (a route file nothing mounts) is
-  // server/lib/apiRouteGraph.guard.test.js and rides every plan by its name.
+  // route-graph guard (a route file nothing mounts) is a structural guard
+  // check (server/test/guards/modules/apiRouteGraph.test.js) and rides every plan.
   if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');

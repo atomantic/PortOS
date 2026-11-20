@@ -8,7 +8,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // The kill is gated by the default-deny write policy (#16018); the refusal and
-// principal matrix live in services/authGate.test.js and hostControlCoverage.test.js.
+// principal matrix live in services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js.
 // killProcess (SIGKILL to the named host PID) is doubled at its service.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({ killProcess: vi.fn(async () => true) }));

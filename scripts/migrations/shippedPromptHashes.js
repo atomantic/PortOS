@@ -9,7 +9,7 @@
  * with the current reference body; any other hash is the user's own edit and
  * is left alone. A template edit therefore needs no numbered migration: edit
  * the `.md`, then run `node scripts/regen-shipped-prompt-hashes.js`, which
- * retires the outgoing hash. `shippedPromptHashes.guard.test.js` fails on a
+ * retires the outgoing hash. `server/test/guards/repo/shippedPromptHashes.test.js` fails on a
  * body changed without the regen and on any current or retired hash lost
  * since the comparison base: a dropped hash strands installs still holding it.
  *

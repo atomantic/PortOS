@@ -574,7 +574,7 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
       ].join('\n'));
-      const guard = 'docs/api-doc.test.js';
+      const guard = 'scripts/node-version-drift.guard.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,

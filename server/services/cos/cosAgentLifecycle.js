@@ -1249,7 +1249,7 @@ export async function getAgentPrompt(agentId) {
 // `agentOrchestrator.js` (#3450). They lived here as deferred-import forwarders
 // into the process layer, which this STATE layer cannot import statically
 // without inverting the layering — so do not re-add one. Ask the facade for a
-// transition; `serviceImportCycles.guard.test.js` fails on any new deferred import of
+// transition; `server/test/guards/modules/serviceImportCycles.test.js` fails on any new deferred import of
 // `agentManagement.js` from this file.
 
 // Send a BTW (additional context) message to a running agent.

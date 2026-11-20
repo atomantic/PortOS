@@ -100,7 +100,7 @@ its caller's `with:` inputs, so they assert the steps GitHub runs. Its reads are
 anchored at `import.meta.url`, which makes `ci.yml` and `.github/actions/` test
 memo inputs for every test that uses it. actionlint validates each caller's
 inputs against the action's metadata while it lints `ci.yml`;
-`scripts/github-actions-pinned.guard.test.js` applies the SHA-pin contract to the
+`server/test/guards/repo/github-actions-pinned.test.js` applies the SHA-pin contract to the
 action files, and any change under `.github/actions/` makes the impact plan
 full, Windows included.
 
@@ -183,8 +183,8 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   file is always some *other* file the guard sees only as a path string. Left
   off the list they are structurally unselectable and can sit red on `main`
   while every PR reports green (issue #5055).
-- **Doc-parity guards** — `docs/api-doc.test.js` and `docs/deps-doc.test.js`
-  compare the `.md` beside them with source they read rather than import
+- **Doc-parity guards** — `server/test/guards/repo/api-doc.test.js` and `server/test/guards/repo/deps-doc.test.js`
+  compare a `.md` with source they read rather than import
   (the route graph, the dependency manifests). The `.md` is documentation-only
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
@@ -199,26 +199,33 @@ Full plans and pushes to `main` run all of them.
 **A tree guard registers by its filename.** The planner selects every tracked
 `*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
 read): a guard outside `client/src` joins every plan, and a client guard rides
-any `client/src` js/jsx change. The test memo never skips one. So a test that
-scans the tracked tree is named `<name>.guard.test.js`, and a suite that mixes
-one scan with behavioural tests keeps the scan in a sibling guard file, so the
-behavioural tests go back to import-graph selection instead of riding every
-push. `EXPLICIT_ALWAYS_RUN_TESTS` lists only the always-run tests whose file is
-not named as a guard (doc parity, route policy, import cycles, the
-prompt-upgrade contract).
+any `client/src` js/jsx change. The test memo never skips one.
+
+**Server scans are checks inside three structural guard runners (#16996).**
+`server/test/guards/{runtime,modules,repo}.guard.test.js` (`GUARD_CHECK_DIRS`
+in `scripts/lib/guardScanners.js`) each load every `*.test.js` in the same-named
+directory into one worker over one corpus (`scripts/lib/guardCorpus.js`: one
+`git ls-files`, each file read once); the Vitest config excludes the directories
+and a changed check selects its runner. A new scan goes in the directory for its
+subject; a standalone guard needs a reason in `STANDALONE_SERVER_GUARDS`.
+`EXPLICIT_ALWAYS_RUN_TESTS` lists the always-run tests that are neither (route
+policy, import growth, the prompt-upgrade contract).
 
 The content detectors in `scripts/lib/guardScanners.js` (git enumeration, the
 shared source walkers, `readdirSync` with `recursive: true`, a hand-rolled
 recursive directory walker, an unnamed cross-root read) select nothing. They
-are a one-way check in `scripts/repo-scan-guards.guard.test.js`: a test they
-recognise as a scanner fails unless it carries the suffix or is listed in that
-file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
+are a one-way check in `server/test/guards/repo/repo-scan-guards.test.js`: a test they
+recognise as a scanner fails unless it carries the suffix, lives in a guard
+directory, or is listed in that file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
 or its walk reads a temporary directory). A scanner the detectors cannot see
 (one that scans through an imported helper) is still selected by its name.
 
-Because they run on every PR, each always-run guard has a per-file time budget
-(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
-runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets `CI_GUARD_BUDGET` to `enforce` only on the scheduled run (`ci.yml`, #16810), where `scripts/run-ci-tests.js` runs the always-run guards as their own Vitest pass and fails the job naming any file over the budget. Other runs keep them in the normal pass and emit a `::warning::`. Windows, browser and DB jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+Because they run on every PR, each always-run file has a time budget
+(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; ~1.5x the 3s local
+target). Only the scheduled Linux server run enforces it (`CI_GUARD_BUDGET=enforce`,
+`ci.yml`, #16810): `scripts/run-ci-tests.js` runs the always-run guards in their own
+pass and fails any file over budget. Other runs warn with a `::warning::`, and local
+pregate only reports it (`docs/PREGATE.md`).
 
 ### The bundled `lib/slashdo` submodule
 
@@ -1078,7 +1085,7 @@ successor run".
 - Any server source change adds `server/lib/apiRouteParity.test.js` and
   `scripts/generate-prompt-stage-call-sites.test.js`: they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
-  The route-graph guard, `server/lib/apiRouteGraph.guard.test.js`, rides every
+  The route-graph guard, `server/test/guards/modules/apiRouteGraph.test.js`, rides every
   plan by its name.
 - A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
   `server/lib/db.ddlParity.test.js`, which fails when the generated file is
@@ -1143,7 +1150,7 @@ action clears it (the review ledger that recorded this was retired in #16425).
 The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
 (`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
 in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
-`scripts/dbImageDigestPin.guard.test.js` rejects a second copy. Do not move the Debian
+`server/test/guards/repo/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
 snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the

@@ -1,6 +1,6 @@
 # Scripts reference
 
-Top-level scripts, ML runners, operator tools, and fixtures or experiments need a caller or a live documentation entry. The guard in `server/scriptReferences.guard.test.js` checks these references. Vitest collects `*.test.js` files directly.
+Top-level scripts, ML runners, operator tools, and fixtures or experiments need a caller or a live documentation entry. The guard in `server/test/guards/repo/scriptReferences.test.js` checks these references. Vitest collects `*.test.js` files directly.
 
 Python ML runners and probes live under `scripts/ml/`. Their input and lock files live under `scripts/ml/requirements/`. Manual maintenance and demo scripts live under `scripts/ops/`. npm entry points and setup wrappers run from `scripts/`.
 

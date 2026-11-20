@@ -98,7 +98,7 @@ const storedVoice = {
 const mounts = [['/api/voice', voiceRoutes]];
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js. Voice config feeds the system prompt, tools and
+// server/test/guards/modules/hostControlCoverage.test.js. Voice config feeds the system prompt, tools and
 // the runtime reconcile (#10990, #13055), so one refusal and the saved-and-reconciled
 // authorized workflow stay here.
 const configBody = {

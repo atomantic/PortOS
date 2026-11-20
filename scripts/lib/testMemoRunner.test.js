@@ -61,9 +61,17 @@ describe('planTestMemo and recordTestMemo', () => {
     const guard = 'server/lib/layering.guard.test.js';
     const source = 'server/lib/unrelated.js';
     // Keep the real scanner and assertions; this standalone Vitest fixture
-    // supplies globals instead of resolving its intentionally stubbed package.
-    const original = readFileSync(new URL('../../server/lib/layering.guard.test.js', import.meta.url), 'utf8');
-    writeRepo(root, { [guard]: original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, ''), [source]: 'export const unrelated = true;\n' });
+    // supplies globals instead of resolving its intentionally stubbed package,
+    // and roots the check at the fixture instead of at this repository.
+    const original = readFileSync(new URL('../../server/test/guards/modules/libLayering.test.js', import.meta.url), 'utf8');
+    const scanner = original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, '')
+      .replace(/^import \{[^}]*\} from '[^']*guardCorpus\.js';\n/m, [
+        "import { readFileSync as readFixtureText } from 'node:fs';",
+        `const REPO_ROOT = ${JSON.stringify(root)};`,
+        "const readText = (path) => readFixtureText(path, 'utf8');",
+        '',
+      ].join('\n'));
+    writeRepo(root, { [guard]: scanner, [source]: 'export const unrelated = true;\n' });
     const config = join(root, 'vitest.config.mjs');
     writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.guard.test.js"], maxWorkers: 1 } };\n');
     const planned = () => {

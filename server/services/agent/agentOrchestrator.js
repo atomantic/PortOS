@@ -2,7 +2,7 @@
  * agentOrchestrator — the one place callers ask for an agent LIFECYCLE TRANSITION.
  *
  * Sits ABOVE the core agent cluster and is imported BY nobody inside it, so its edges stay
- * static. **Enforced by `serviceImportCycles.guard.test.js`: no module reachable FROM this one may
+ * static. **Enforced by `server/test/guards/modules/serviceImportCycles.test.js`: no module reachable FROM this one may
  * import it back, statically OR via `import(...)`.** Inside the closure, push what the
  * importer wanted into a leaf (`agentState.js`), never a deferred import or a barrel.
  *

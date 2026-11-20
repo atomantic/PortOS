@@ -61,7 +61,7 @@ vi.mock('../services/maintenanceRun.js', () => maintenance);
 vi.mock('../services/taskSchedule.js', () => ({}));
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal before the provider
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal before the provider
 // dispatch and the authorized workflow for each Writers Room and maintenance write.
 const mounts = [['/api/writers-room', writersRoomRoutes], ['/api/cos', cosScheduleRoutes]];
 const work = '/api/writers-room/works/wr-work-example';
