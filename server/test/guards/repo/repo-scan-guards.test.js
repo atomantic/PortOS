@@ -137,7 +137,12 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     const plan = buildCiTestPlan(['docs/README.md'], { trackedFiles: [...trackedTests, 'docs/README.md'] });
     expect(serverSide.filter((p) => !plan.server.files.includes(p))).toEqual([]);
     for (const { runner } of SERVER_CHECK_DIRS) expect(getAlwaysRunTests()).toContain(runner);
-    for (const [, check] of ONCE_MISSED_WALKERS) expect(isGuardCheck(check), check).toBe(true);
+    // Each former walker is a check its subject runner loads, not just a check-shaped path.
+    for (const [, check] of ONCE_MISSED_WALKERS) {
+      const dir = SERVER_CHECK_DIRS.find(({ dir: checkDir }) => check.startsWith(`${checkDir}/`));
+      expect(isGuardCheck(check) && dir !== undefined, check).toBe(true);
+      expect(guardCheckModules(join(REPO_ROOT, dir.dir)), check).toContain(check.slice(dir.dir.length + 1));
+    }
   });
 
   it('selects every client guard when a client source file changes', () => {
