@@ -222,6 +222,14 @@ directory, or is listed in that file's `SCANNERS_WITHOUT_SUFFIX` with the reason
 or its walk reads a temporary directory). A scanner the detectors cannot see
 (one that scans through an imported helper) is still selected by its name.
 
+Because they run on every PR, each always-run guard has a time budget: each
+structural guard runner's checks (the sum of a check's test times) and every other
+always-run file whole (`CI_GUARD_BUDGET_MS`, 3s, in `scripts/lib/guardBudget.js`;
+~2x the 1.5s local target). Only the scheduled Linux server run enforces it
+(`CI_GUARD_BUDGET=enforce`, `ci.yml`, #16810): `scripts/run-ci-tests.js` runs the
+always-run guards in their own pass and fails any guard over budget. Other runs
+warn with a `::warning::`, and local pregate only reports it (`docs/PREGATE.md`).
+
 ### The bundled `lib/slashdo` submodule
 
 `server/lib/slashdoLoader.test.js` and `server/lib/slashdoInvocation.test.js`

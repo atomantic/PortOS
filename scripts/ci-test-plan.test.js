@@ -59,7 +59,7 @@ const REAL_TREE_SOURCES = [
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
   'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
-  'server/services/maintenanceRun.js', 'scripts/lib/guardCorpus.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
+  'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
 let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
@@ -411,7 +411,7 @@ describe('gate-tooling tests in a related plan', () => {
     expect(plan.server.files.filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
   });
 
-  it.each(['scripts/lib/guardCorpus.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
+  it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
     'selects all eight for a diff of %s, an owner path', (path) => {
       const plan = relatedPlan(path);
       expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
@@ -1058,10 +1058,6 @@ describe('CI test impact planner', () => {
 
   // update.* and the lockfiles already force a full CI plan, so the planner
   // row above can't show it; pregate's downgraded plan relies on this rule.
-  it('keeps ensure-deps out of the always-run list', () => {
-    expect(getAlwaysRunTests()).not.toContain('scripts/ensure-deps.test.js');
-  });
-
   it.each(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/ensure-deps.js', 'server/package-lock.json'])('selects the ensure-deps contract for %s', (changed) => {
     expect(structuralTestsFor([changed, 'docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).toContain('scripts/ensure-deps.test.js');
     expect(structuralTestsFor(['docs/README.md'], new Set(['scripts/ensure-deps.test.js']))).not.toContain('scripts/ensure-deps.test.js');

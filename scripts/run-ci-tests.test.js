@@ -558,6 +558,72 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
   }
 });
 
+describe('always-run guard time budget through the real runner (#16551, #16996)', () => {
+  it('fails the run on a guard or a runner check over budget only when enforced, timed in its own pass, and warns otherwise', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-guard-budget-'));
+    try {
+      // Every selected file passes. The standalone guard reports a wall time over the CI
+      // budget; the runner's total is long, but only its one slow check is over.
+      installFakeNpm(fixture, [
+        'const fs = require("fs");',
+        'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+        'const out = process.argv.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+        `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
+        'const slow = process.env.FAKE_SLOW_GUARD;',
+        'const testResults = selection.include.map(rel => rel.endsWith("repo.guard.test.js")',
+        '  ? { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0, endTime: 9000, assertionResults: [',
+        '    { status: "passed", ancestorTitles: ["slowCheck", "case"], duration: slow === "no-such-file" ? 5 : 3500 },',
+        '    { status: "passed", ancestorTitles: ["fastCheck", "case"], duration: 5 }] }',
+        '  : { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
+        '    endTime: rel.endsWith(slow) ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
+        'fs.writeFileSync(out, JSON.stringify({ testResults }));',
+        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
+        'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+      ].join('\n'));
+      const guard = 'scripts/node-version-drift.guard.test.js';
+      const runner = 'server/test/guards/repo.guard.test.js';
+      const other = 'scripts/lib/releaseTitle.test.js';
+      const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+        encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
+          PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
+      });
+      const over = `${guard} 6.5s; ${runner} > slowCheck 3.5s over the 3.0s per-guard budget.`;
+      const ranSets = (stdout) => (stdout.match(/^RAN .*$/gm) ?? []).map((line) => JSON.parse(line.slice(4)).sort());
+
+      const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
+      expect(enforced.status).toBe(1);
+      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${over}`);
+      // The always-run guards ran alone, before the rest of the selection.
+      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+
+      // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
+      // it stays in the one normal pass with the rest of the selection and never fails the run.
+      for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
+        const reported = run(extraEnv);
+        expect(reported.status, reported.stderr).toBe(0);
+        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${over}`);
+        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+      }
+
+      const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
+      expect(fast.status, fast.stderr).toBe(0);
+      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > slowCheck 0.0s; ${runner} > fastCheck 0.0s (budget 3.0s).`);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
+    const jobs = readCiJobs();
+    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
+    expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
+    expect(jobs.server).toContain(expression);
+  });
+});
+
 describe('ci.yml shard wiring', () => {
   // Composite actions expanded: these contracts hold for the steps GitHub runs.
   const CI_JOBS = readCiJobs();

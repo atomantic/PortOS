@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
+import { formatErrorAnnotation, formatWarningAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
@@ -21,6 +21,8 @@ import {
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards } from './lib/guardBudget.js';
+import { getAlwaysRunTests } from './lib/ciPlanRules.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -438,6 +440,33 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   return retry.status || result.status;
 }
 
+/**
+ * Reports the always-run guards in `files` that ran over CI_GUARD_BUDGET_MS: each
+ * structural guard runner's checks, and every other always-run file whole.
+ * With `enforce` (the scheduled hosted run) an over-budget guard returns 1,
+ * naming each one; otherwise it is a warning annotation and returns 0. A guard
+ * with no reading (it crashed, or ran nothing) is left to the test status,
+ * which already fails that run.
+ */
+function guardBudgetStatus(files, results, { enforce }) {
+  const watched = new Set(files);
+  const timed = guardDurations(results.filter(({ file }) => watched.has(file)));
+  const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
+  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
+  const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
+  if (over.length === 0) return 0;
+  const title = 'Always-run guard over its time budget';
+  const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-guard budget. Speed the check up (read the tree through scripts/lib/guardCorpus.js, which lists and reads it once per runner) rather than raising the budget.`;
+  if (!enforce) {
+    console.log(`⚠️ ${title}, reported only on this run (the scheduled hosted run enforces it): ${detail}`);
+    console.log(formatWarningAnnotation(title, detail));
+    return 0;
+  }
+  console.error(`❌ ${title}: ${detail}`);
+  console.error(formatErrorAnnotation(title, detail));
+  return 1;
+}
+
 async function main() {
   const scope = process.argv[2];
   if (!Object.hasOwn(TEST_SCOPES, scope)) {
@@ -447,6 +476,12 @@ async function main() {
   const workspace = workspaceOf(scope);
   const { script } = TEST_SCOPES[scope];
 
+  // Pregate's guard stage asks for per-file wall times for this runner only.
+  const durationsPath = process.env.PORTOS_PREGATE_DURATIONS_PATH;
+  delete process.env.PORTOS_PREGATE_DURATIONS_PATH;
+  // Set by ci.yml's Linux server job only; a nested runner a test spawns must not inherit it.
+  const enforceGuardBudget = process.env.CI_GUARD_BUDGET === 'enforce';
+  delete process.env.CI_GUARD_BUDGET;
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
@@ -521,6 +556,17 @@ async function main() {
     process.exitCode = 0;
     return;
   }
+  // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
+  // hosted run enforces it, and only there do the guards run first as their own
+  // Vitest pass, so a related or full selection's heavy suites do not stretch
+  // their wall times. Every other run keeps them in the one pass with the rest
+  // of the selection and reports an over-budget guard as a warning.
+  const alwaysRun = new Set(getAlwaysRunTests());
+  const guardRun = enforceGuardBudget ? plan.run.filter(test => alwaysRun.has(test)) : [];
+  const budgetWatched = enforceGuardBudget ? guardRun : plan.run.filter(test => alwaysRun.has(test));
+  const rest = plan.run.filter(test => !guardRun.includes(test));
+  const passes = guardRun.length > 0 && rest.length > 0
+    ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
   if (extraArgs.length) {
     clearVitestDependencies(repoRoot, scope);
@@ -528,18 +574,32 @@ async function main() {
     if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
   }
   const passed = [];
+  const results = [];
+  let interrupted = false;
   const onResult = (result) => {
+    if (result.interrupted) interrupted = true;
+    for (const { file, durationMs, checks } of result.fileResults ?? []) {
+      results.push({ file: relative(repoRoot, file).split(sep).join('/'), durationMs, checks });
+    }
     passed.push(...passedTestFiles(result.fileResults ?? [], {
       repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
     }));
   };
-  const selection = writeSelectionFile({ scope, include: plan.run, exclude: [] });
-  process.env.PORTOS_CI_TEST_SELECTION = selection.path;
-  let status;
+  let status = 0;
   try {
-    status = await spawnNpm(workspace, script, extraArgs, label, { name: scope, onResult });
+    for (const [index, [include, passLabel]] of passes.entries()) {
+      if (interrupted) break;
+      const selection = writeSelectionFile({ scope, include, exclude: [] });
+      process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+      try {
+        status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult })) || status;
+      } finally {
+        rmSync(selection.dir, { recursive: true, force: true });
+      }
+      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, { enforce: enforceGuardBudget }) || status;
+    }
   } finally {
-    rmSync(selection.dir, { recursive: true, force: true });
+    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results)));
   }
   process.exitCode = status;
   if (!memoDir || passed.length === 0) return;
