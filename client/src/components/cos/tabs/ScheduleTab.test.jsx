@@ -241,6 +241,7 @@ describe('Schedule labels', () => {
     await user.type(screen.getByRole('textbox', { name: 'Filter tasks by name' }), 'security');
     expect(screen.queryByText('claim-issue')).toBeNull();
     await user.click(screen.getByText('better-security'));
+    await user.click(await screen.findByRole('button', { name: /^Prompt & dependencies/ }));
     const labels = await screen.findByRole('textbox', { name: 'Custom labels' });
     await user.type(labels, 'backend');
     await user.tab();

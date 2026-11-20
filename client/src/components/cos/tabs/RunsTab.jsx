@@ -1,8 +1,9 @@
 import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribution.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import * as api from '../../../services/api';
+import { TABS } from '../constants';
 import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -12,6 +13,8 @@ import useListResource from '../../../hooks/useListResource';
 import ProcessLogModal from '../../ui/ProcessLogModal';
 import { writeClipboardSilently } from '../../../lib/clipboard';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
+
+const runEventsPath = TABS.find(({ id }) => id === 'run-events').to;
 
 // Map an AI run's source to the PM2 process whose system log holds the full
 // context for that run. CoS-agent runs are driven by the `portos-cos` process;
@@ -452,6 +455,12 @@ export default function RunsTab() {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                             </svg>
                           </button>
+                          {run.source === 'cos-agent' && (
+                            <Link to={`${runEventsPath}?${new URLSearchParams({ run: run.id })}`}
+                              className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
+                              View run events
+                            </Link>
+                          )}
                         </div>
                       </div>
 

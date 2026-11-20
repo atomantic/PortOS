@@ -52,12 +52,13 @@ import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import {
   NAV_PRESENTATION,
+  NAV_DESTINATION_PRESENTATION,
   SECTIONS_BEFORE_GOALS,
   SECTIONS_AFTER_GOALS,
   SECTIONS_BELOW_MORE,
 } from '../lib/navPresentation.js';
 import { PORTS } from '../lib/ports.js';
-import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
+import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS, SECTION_FEATURE } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarMusicVideos } from '../hooks/useSidebarMusicVideos.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
@@ -93,10 +94,10 @@ function ThemeModeToggle({ className = '' }) {
 
 const SECTION_PRESENTATION = {
   Brain: { icon: Brain, defaultTo: '/brain/inbox' },
-  Calendar: { icon: CalendarDays },
+  Calendar: { icon: CalendarDays, defaultTo: '/calendar/agenda' },
   'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks' },
   Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
-  Create: { icon: Sparkles, defaultTo: '/media' },
+  Create: { icon: Sparkles, defaultTo: '/create/media' },
   'Dev Tools': { icon: Terminal },
   Health: { icon: Heart, defaultTo: '/meatspace/overview' },
   Models: { icon: Cpu, defaultTo: '/models/llms' },
@@ -131,37 +132,30 @@ const navRowForPath = (path) => {
     section: command.section,
     feature: command.feature,
     ...(command.navGroup ? { navGroup: command.navGroup } : {}),
-    ...(command.parentPath ? { parentPath: command.parentPath } : {}),
     ...NAV_PRESENTATION[path],
   };
 };
 
 const presentedNavRows = Object.keys(NAV_PRESENTATION).map(navRowForPath);
 
-// A row whose destination is one tab of a group stays active across the whole
-// group by declaring the prefix its sibling tabs share.
-const activePrefixByPath = new Map(
-  presentedNavRows.filter((row) => row.activePathPrefix).map((row) => [row.to, row.activePathPrefix])
+// A hub can own several route prefixes when its records have legacy URLs.
+const activePrefixesByPath = new Map(presentedNavRows.map((row) =>
+  [row.to, row.activePathPrefixes || [row.activePathPrefix || row.to]]));
+const pathWithinRow = (pathname, rowPath) => (
+  (activePrefixesByPath.get(rowPath) || [rowPath]).some((prefix) =>
+    pathname === prefix || pathname.startsWith(prefix + '/'))
 );
-const pathWithinRow = (pathname, rowPath) => {
-  const prefix = activePrefixByPath.get(rowPath) ?? rowPath;
-  return pathname === prefix || pathname.startsWith(prefix + '/');
-};
 
 const sectionNavItem = (section) => {
   const children = presentedNavRows
-    .filter((row) => row.section === section && !row.single && !row.parentPath)
+    .filter((row) => row.section === section && !row.single)
     .concat(LOCAL_SECTION_ROWS[section] || [])
     .sort((a, b) => a.label.localeCompare(b.label));
-  const sharedFeature = children[0]?.feature
-    && children.every((child) => child.feature === children[0].feature)
-    ? children[0].feature
-    : undefined;
   const childByPath = new Map(children.filter((child) => child.to).map((child) => [child.to, child]));
   const groups = getSectionNavGroups(section)
     .map((group) => ({ ...group, children: group.tabs.map((tab) => childByPath.get(tab.to)).filter(Boolean) }))
     .filter((group) => group.children.length > 0);
-  return { label: section, feature: sharedFeature, children, groups, ...SECTION_PRESENTATION[section] };
+  return { label: section, feature: SECTION_FEATURE.get(section), children, groups, ...SECTION_PRESENTATION[section] };
 };
 
 const mainRows = ['/', '/review', '/eidoverse'].map(navRowForPath);
@@ -385,7 +379,7 @@ export default function Layout() {
   const manifestEntryByPath = useMemo(() => {
     const map = new Map();
     filterNavByFeatures([...commandByPath.values()], isFeatureEnabled).forEach((c) => {
-      map.set(c.path, { path: c.path, label: c.label, icon: Navigation });
+      map.set(c.path, { path: c.path, label: c.label, icon: NAV_DESTINATION_PRESENTATION[c.path]?.icon || Navigation });
     });
     return map;
   }, [isFeatureEnabled]);
@@ -422,26 +416,6 @@ export default function Layout() {
         }),
       };
     };
-    const decorateParentChild = (child) => {
-      if (!child.to) return child;
-      const parentGrandChildren = presentedNavRows
-        .filter((row) => row.parentPath === child.to)
-        .sort((a, b) => a.label.localeCompare(b.label))
-        .map((row) => ({
-          to: row.to,
-          label: row.label,
-          title: row.label,
-          icon: row.icon,
-          activePathPrefix: row.to,
-        }));
-      if (parentGrandChildren.length > 0) {
-        return {
-          ...child,
-          grandChildren: parentGrandChildren,
-        };
-      }
-      return child;
-    };
     // Feature gate, applied before any decoration: a disabled feature drops its
     // whole section (POST) or just its tagged rows (DataDog, JIRA), and a
     // section left with no navigable child disappears with them. Sections that
@@ -451,7 +425,7 @@ export default function Layout() {
       if (!Array.isArray(item.children)) return [item];
       const children = item.children.filter((child) => isFeatureEnabled(child.feature));
       if (children.length === item.children.length) return [item];
-      const navigable = item.dynamic || children.some((child) => child.to || child.href);
+      const navigable = item.dynamic || item.defaultTo || children.some((child) => child.to || child.href);
       const groups = item.groups
         ?.map((group) => ({ ...group, children: group.children.filter((child) => isFeatureEnabled(child.feature)) }))
         .filter((group) => group.children.length > 0);
@@ -474,7 +448,7 @@ export default function Layout() {
         };
       }
       if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map((c) => decorateParentChild(decorateDynamicChild(c))) };
+        return { ...item, children: item.children.map(decorateDynamicChild) };
       }
       return item;
     });
@@ -520,11 +494,12 @@ export default function Layout() {
 
   const { pinned, recent, pin, unpin, isPinned } = useNavWorkingSet(resolveNavEntry);
 
-  // Auto-expand sections when on a child page
+  // Auto-expand sections when the current route belongs to them.
   useEffect(() => {
+    const owningSection = getNavCommandForPath(location.pathname)?.section;
     resolvedNavItems.forEach(item => {
-      if (item.children) {
-        const isChildActive = item.children.some(child =>
+      if (item.children?.length) {
+        const isChildActive = owningSection === item.label || item.children.some(child =>
           (child.to && pathWithinRow(location.pathname, child.to)) ||
           (Array.isArray(child.grandChildren) && child.grandChildren.some(gc => {
             const prefix = gc.activePathPrefix || gc.to;
@@ -581,6 +556,8 @@ export default function Layout() {
     if (item.single && item.to) {
       return isActive(item.to);
     }
+    const owningSection = getNavCommandForPath(location.pathname)?.section;
+    if (owningSection === item.label) return true;
     if (item.children) {
       return item.children.some(child =>
         (child.to && isActive(child.to)) ||
@@ -666,7 +643,7 @@ export default function Layout() {
       if (defaultChildPath) {
         navigate(defaultChildPath);
         // Ensure the section is expanded so the user can see siblings
-        if (!expandedSections[item.label] && !sidebarCollapsed) {
+        if (item.children?.length && !expandedSections[item.label] && !sidebarCollapsed) {
           toggleSection(item.label);
         }
       } else {
@@ -698,6 +675,7 @@ export default function Layout() {
             className={`flex-1 min-w-0 ${sectionRowClasses} ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
             title={sidebarCollapsed ? item.label : undefined}
             aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
+            aria-current={isSectionActive(item) ? 'true' : undefined}
           >
             <div className="flex items-center gap-3 min-w-0">
               <Icon size={20} className="shrink-0" />
@@ -706,7 +684,7 @@ export default function Layout() {
               </span>
             </div>
           </button>
-          {!sidebarCollapsed && (
+          {!sidebarCollapsed && item.children?.length > 0 && (
             <button
               type="button"
               aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}

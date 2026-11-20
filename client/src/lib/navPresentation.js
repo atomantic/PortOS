@@ -110,12 +110,10 @@ import { AudioLines,
   Plug,
   TerminalSquare,
 } from 'lucide-react';
+import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 
-// NAV_COMMANDS owns every structural field shared with the sidebar. This map
-// intentionally contains presentation only: giving a manifest path an icon is
-// what opts that destination into the sidebar. External and runtime-hydrated
-// rows have no manifest destination and stay explicitly local below.
-export const NAV_PRESENTATION = {
+// Destination icons also serve local navigation and saved Pinned/Recent rows.
+export const NAV_DESTINATION_PRESENTATION = {
   '/': { icon: Home, single: true },
   '/review': { icon: ClipboardList, single: true },
   '/eidoverse': { icon: Orbit, single: true },
@@ -152,20 +150,20 @@ export const NAV_PRESENTATION = {
   '/cos/agents': { icon: Cpu },
   '/cos/briefing': { icon: Newspaper },
   '/cos/config': { icon: Settings },
-  '/cos/digest': { icon: Calendar },
+  '/cos/briefing/digest': { icon: Calendar },
   '/feature-agents': { icon: Wand2 },
   '/cos/gsd': { icon: Compass },
   '/cos/health': { icon: Activity },
   '/cos/learning': { icon: GraduationCap },
   '/cos/memory': { icon: Brain },
   '/cos/mind': { icon: MessageSquare },
-  '/cos/run-events': { icon: ScrollText },
+  '/cos/runs/events': { icon: ScrollText },
   '/cos/runs': { icon: Play },
   '/cos/schedule': { icon: Clock },
   '/agents': { icon: Users },
   '/cos/jobs': { icon: Bot },
   '/cos/tasks': { icon: FileText },
-  '/cos/workflow': { icon: ChartGantt },
+  '/cos/schedule/timeline': { icon: ChartGantt },
   '/messages/beeper': { icon: MessageCircle },
   '/messages/config': { icon: Settings },
   '/messages/contacts': { icon: Users },
@@ -178,10 +176,12 @@ export const NAV_PRESENTATION = {
   '/x': { icon: AtSign },
   '/3d': { icon: Boxes },
   '/authors': { icon: FilePen },
-  '/catalog': { icon: Sparkles },
-  '/casting': { icon: Drama },
-  '/environments': { icon: Mountain },
-  '/objects': { icon: Package },
+  '/create/media': { icon: Layers },
+  '/create/story': { icon: PenLine },
+  '/catalog': { icon: Sparkles, activePathPrefixes: ['/catalog', '/casting', '/environments', '/objects'] },
+  '/catalog/casting': { icon: Drama },
+  '/catalog/environments': { icon: Mountain },
+  '/catalog/objects': { icon: Package },
   '/creative-commission': { icon: CalendarClock },
   '/code-animation': { icon: FileCode2 },
   '/creative-director': { icon: Clapperboard },
@@ -314,6 +314,21 @@ export const NAV_PRESENTATION = {
   '/post/rhetoric': { icon: Feather },
   '/post/wordplay': { icon: MessageCircle },
 };
+
+const hubTabGroups = new Set(['brain', 'calendar', 'cos', 'digital-twin', 'meatspace', 'messages']);
+const localDestinations = new Set(NAV_COMMANDS.filter((command) =>
+  hubTabGroups.has(command.tabGroup)
+  || command.section === 'POST'
+  || (command.section === 'Settings' && command.tabId)
+).map((command) => command.path));
+const inPageDestinations = new Set(NAV_COMMANDS
+  .filter(({ parentPath }) => parentPath)
+  .map(({ path }) => path));
+inPageDestinations.add('/media/threejs');
+
+// Dynamic project lists give direct access to individual records.
+export const NAV_PRESENTATION = Object.fromEntries(Object.entries(NAV_DESTINATION_PRESENTATION)
+  .filter(([path, { dynamic }]) => !localDestinations.has(path) && (dynamic || !inPageDestinations.has(path))));
 
 export const SECTIONS_BEFORE_GOALS = [
   'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create', 'Dev Tools',

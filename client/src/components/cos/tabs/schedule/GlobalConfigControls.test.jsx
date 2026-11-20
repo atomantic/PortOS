@@ -36,7 +36,12 @@ const BASE_CONFIG = {
 // The real `onUpdate` (ScheduleTab's handleUpdateTask) is async, and several
 // handlers here attach a rejection handler to what it returns — so the default
 // mock must resolve a promise, not `undefined`.
-function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {}, providers = [] } = {}) {
+function openOverrides(section) {
+  const trigger = screen.queryByRole('button', { name: section });
+  if (trigger) fireEvent.click(trigger);
+}
+
+function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {}, providers = [], openSections = true } = {}) {
   render(
     <GlobalConfigControls
       taskType={taskType}
@@ -50,6 +55,13 @@ function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskTy
       allTaskTypes={['feature-ideas']}
     />
   );
+  if (openSections) {
+    openOverrides(/^Schedule & execution options/);
+    openOverrides(/^PR & issue filters/);
+    openOverrides(/^Swarm, branches & agent options/);
+    openOverrides(/^PR policy & reviewer overrides/);
+    openOverrides(/^Prompt & dependencies/);
+  }
   return onUpdate;
 }
 
@@ -58,6 +70,27 @@ const prSelect = () => screen.queryByLabelText('After opening PR');
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+it('keeps secondary settings collapsed and shows active filter overrides', () => {
+  renderControls({
+    taskType: 'claim-issue',
+    taskMetadata: { issueAuthorFilter: 'trusted', issueExcludeLabels: ['hold'] },
+    config: {
+      globalOverrideFields: ['taskMetadata.issueAuthorFilter', 'taskMetadata.issueExcludeLabels'],
+    },
+    openSections: false,
+  });
+
+  expect(screen.getByRole('combobox', { name: 'Interval Type' })).toBeVisible();
+  expect(screen.getByRole('combobox', { name: 'Provider (optional)' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Run Now' })).toBeVisible();
+  expect(screen.queryByRole('textbox', { name: 'Cron expression' })).toBeNull();
+  expect(screen.queryByRole('combobox', { name: 'Issue author filter' })).toBeNull();
+  const filters = screen.getByRole('button', { name: 'PR & issue filters Overrides: 2 active' });
+  expect(filters).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(filters);
+  expect(screen.getByLabelText(/issue author filter/i)).toBeVisible();
 });
 
 describe('GlobalConfigControls — After opening PR', () => {
@@ -461,12 +494,15 @@ describe('GlobalConfigControls — failed saves', () => {
     const onUpdate = vi.fn().mockResolvedValue(false);
     const setUpdating = vi.fn();
     renderControls({ onUpdate, setUpdating });
+    openOverrides(/^Edit schedule/);
     const expression = screen.getByLabelText('Cron expression');
     fireEvent.change(expression, { target: { value: '15 8 * * *' } });
 
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save schedule' })));
 
     expect(screen.getByLabelText('Cron expression')).toHaveValue('15 8 * * *');
+    fireEvent.click(screen.getByRole('button', { name: /^Edit schedule/ }));
+    expect(screen.getByRole('button', { name: 'Run Now' })).toBeDisabled();
     expect(screen.getByText('Unsaved changes — save before closing')).toBeInTheDocument();
     expect(setUpdating).toHaveBeenLastCalledWith(false);
   });

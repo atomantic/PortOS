@@ -1,5 +1,6 @@
 /** Schedule status and upcoming run previews for the UI and daemon. */
 
+import { isDeepStrictEqual } from 'node:util';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { loadState, isImprovementEnabled } from './cos/cosState.js';
@@ -27,6 +28,31 @@ import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { normalizeSuggestedAfter } from '../lib/scheduleRunOrder.js';
 import { aggregatePerpetualParks, aggregatePerpetualStall } from './taskSchedulePerpetual.js';
 import { createFeatureGate, shouldRunTask, getAvailableOnDemandRequests } from './taskScheduleEvaluator.js';
+
+// This uses the shipped task's own defaults, including the metadata presets
+// that differ across audits. The schedule UI only counts fields it can edit.
+function globalOverrideFields(taskType, interval, suggestedAfter) {
+  const defaults = DEFAULT_TASK_INTERVALS[taskType] || {};
+  const metadata = interval.taskMetadata || {};
+  const defaultMetadata = defaults.taskMetadata || {};
+  const differs = (value, fallback) => (
+    !isDeepStrictEqual(value ?? fallback, fallback)
+    && !(Array.isArray(value) && value.length === 0 && fallback == null)
+  );
+  const fields = Object.keys(interval).filter((key) =>
+    key !== 'suggestedAfter' && key !== 'taskMetadata' && differs(interval[key], defaults[key]));
+  const metadataKeys = new Set([...Object.keys(metadata), ...Object.keys(defaultMetadata)]);
+  for (const key of metadataKeys) {
+    // An explicit null metadata object clears the task's shipped metadata.
+    const changed = interval.taskMetadata === null
+      ? defaultMetadata[key] != null
+      : differs(metadata[key], defaultMetadata[key]);
+    if (changed) fields.push(`taskMetadata.${key}`);
+  }
+  const defaultOrder = normalizeSuggestedAfter(AUDIT_SUGGESTED_AFTER[taskType], taskType);
+  if (differs(suggestedAfter, defaultOrder)) fields.push('suggestedAfter');
+  return fields;
+}
 
 /**
  * The apps that run `taskType` on a cron of their OWN — enabled for the task,
@@ -159,6 +185,7 @@ export async function getScheduleStatus() {
     const appSchedules = await resolveHiddenAppSchedules(taskType, interval, activeApps, allOverrides, featureEnabled, schedule);
 
     const auditMeta = getAuditScheduleMetadata(taskType);
+    const suggestedAfter = normalizeSuggestedAfter(interval.suggestedAfter ?? AUDIT_SUGGESTED_AFTER[taskType], taskType);
     const taskStatus = {
       ...interval,
       ...auditMeta,
@@ -172,7 +199,8 @@ export async function getScheduleStatus() {
       // absent one inherits the shipped order — so editing AUDIT_SUGGESTED_AFTER
       // reaches existing installs without a migration. An explicit `[]` is a
       // user's clear and is key-present, so `??` keeps it.
-      suggestedAfter: normalizeSuggestedAfter(interval.suggestedAfter ?? AUDIT_SUGGESTED_AFTER[taskType], taskType),
+      suggestedAfter,
+      globalOverrideFields: globalOverrideFields(taskType, interval, suggestedAfter),
       // WHY this task sits where it does — rationale for the order above, not
       // the order itself.
       runGuidance: AUDIT_RUN_GUIDANCE[taskType] || (isAuditTaskType(taskType) ? 'Run when this area has a concrete need; coordinate overlapping fixes and validate after each merge.' : null),
