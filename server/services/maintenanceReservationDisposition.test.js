@@ -188,7 +188,8 @@ describe('fresh local activity check', () => {
     runnerOrigin: 'http://127.0.0.1:5558', fetcher: fetch });
 
   it('accepts an idle held install with queued work preserved', async () => {
-    await expect(probe(fetcher())).resolves.toBeUndefined();
+    const activity = { ...idle(), llm: { ...idle().llm, directCallsTracked: true } };
+    await expect(probe(fetcher({ activity }))).resolves.toEqual(activity);
   });
   it('checks the actual system maintenance endpoint on both sides of the activity read', async () => {
     const urls = [];
