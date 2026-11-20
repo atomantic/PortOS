@@ -52,10 +52,10 @@ Test at the highest practical public boundary (route, service workflow, store ad
 
 **Authentication and HTTPS are opt-in and off by default**: never assume a password is set.
 
-- **Auth**: an optional instance password (`server/services/auth.js`, `authGate.js`) gates `/api/*` and `/data/*` except `ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js`. Paired peers use scoped pair credentials (`peerFetch`); legacy Basic is unscoped.
+- **Auth**: an optional instance password (`server/services/auth.js`, `authGate.js`) gates `/api/*` and `/data/*` except `ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js` (`/api/auth/status`, `/api/auth/whoami`, `/api/auth/login`, `/api/auth/logout`, `/api/system/health`, `/api/eidoverse/travel/guest`).
 - **PortOS-spawned agents** authenticate with `PORTOS_API_TOKEN`: any `curl` against this install's API carries `-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"`; on `401 AUTH_REQUIRED`, check for a missing, expired or invalid token first. It is empty when no password is set and never given to a public-content review stage.
 - **Agents PortOS did not spawn** use `node scripts/portos-api.js …`; never ask for or type the instance password ([docs/AGENT_API_KEY.md](docs/AGENT_API_KEY.md)).
-- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`; a non-tailnet peer gets no server authentication. Details: [detail](docs/INSTRUCTION_RULE_DETAIL.md#authentication-and-https-detail).
+- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. [Detail](docs/INSTRUCTION_RULE_DETAIL.md#authentication-and-https-detail).
 
 **Preserve delegated agent authority.** An operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Network reachability and scoped peer credentials never grant host access. Security findings test both unauthorized refusal and the preserved authorized workflow; authorized agent execution is an intended capability, not a vulnerability.
 
@@ -90,7 +90,7 @@ Test at the highest practical public boundary (route, service workflow, store ad
 
 ## Architecture
 
-The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`. PM2 manages app lifecycles. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs`.
+The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs`.
 
 **Never run `npm ci` or `npm install` inside an ordinary CoS worktree (`data/cos/worktrees/*`).** Its `node_modules` (root, `client/`, `server/`) symlink to the primary checkout, so npm empties the primary's dependencies and every agent spawn fails (`posix_spawn failed`). Use linked binaries (`server/node_modules/.bin/vitest run <files>`). A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` after `git worktree add`. Recovery: `docs/TROUBLESHOOTING.md` ("Every Agent Spawn Fails…").
 
