@@ -93,7 +93,7 @@ const fileStore = makeFileBranchPolicyArchive();
 const backend = async () => isFileBackend() ? fileStore : makePgBranchPolicyArchive(await import('../../lib/db.js'));
 
 export async function readIndexedArchivePolicies(dir, repoPath, branches) {
-  const stamp = await readBranchPolicyArchiveStamp(dir);
+  const stamp = await readBranchPolicyArchiveStamp(dir, { recoverPending: true });
   if (!stamp) return null;
   const store = await backend();
   const rows = await store.read(stamp, repoPath, branches);
@@ -111,16 +111,27 @@ export const withArchivePolicyRead = queue;
 
 /**
  * For membership publication the atomic index replacement changes the stamp.
- * For metadata-only writes rotate the revision first. A process exit or index
- * update failure between source publication and SQL commit leaves a mismatch,
- * which makes the next scoped reader rebuild from the authoritative files.
+ * Metadata-only writes mark the revision pending until the source settles.
+ * An interrupted write or failed projection commit leaves the archive
+ * unreadable from the index until the next scoped reader rebuilds it.
  */
 export function publishArchivePolicyChange(dir, publish, { index, ids, restore = false } = {}) {
   return queue(async () => {
-    const before = await readBranchPolicyArchiveStamp(dir);
+    const before = await readBranchPolicyArchiveStamp(dir, { recoverPending: true });
     const previousIndex = before && !restore && await readBranchPolicyArchiveIndex(dir).catch(() => null);
-    if (before && !index) await atomicWrite(join(dir, BRANCH_POLICY_REVISION_FILE), randomUUID());
-    const result = await publish();
+    let result;
+    if (before && !index) {
+      const revision = randomUUID();
+      const revisionPath = join(dir, BRANCH_POLICY_REVISION_FILE);
+      await atomicWrite(revisionPath, `pending:${process.pid}:${revision}`);
+      try {
+        result = await publish();
+      } finally {
+        await atomicWrite(revisionPath, revision);
+      }
+    } else {
+      result = await publish();
+    }
     if (!previousIndex || restore) return result;
 
     const currentIndex = index ?? previousIndex;

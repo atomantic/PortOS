@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
+import { readBranchPolicyArchiveStamp } from '../lib/cos/branchPolicyArchiveRows.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { readBranchCompletionHold, readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { publishArchivePolicyChange } from './cos/cosBranchPolicyArchive.js';
@@ -89,7 +90,14 @@ describe.skipIf(!runDb)('PostgreSQL branch policy projection', () => {
   it('updates only affected archive rows and rejects an old database stamp after interrupted publication', async () => {
     await withTransaction(backfill);
     const next = agent('agent-a', repoPath, 'feature/moved');
-    await publishArchivePolicyChange(dir(), () => writeAgent(next), { ids: [next.id] });
+    await publishArchivePolicyChange(dir(), async () => {
+      // A standalone migration does not share the writer's local queue.
+      expect(await readBranchPolicyArchiveStamp(dir())).toBeNull();
+      await withTransaction(backfill);
+      expect(fixture.metadataReads).toBe(3);
+      await writeAgent(next);
+      expect(await readBranchPolicyArchiveStamp(dir())).toBeNull();
+    }, { ids: [next.id] });
     expect(fixture.metadataReads).toBe(4);
     await expect(hold()).resolves.toBeNull();
     await expect(hold({ branch: 'feature/moved' })).resolves.toBe('pr-completion-human-handoff');

@@ -10,6 +10,7 @@ import {
   branchPolicyScope, normalizedPolicyWorkspace, projectPolicyAgent, registeredCompletion, reviewTargetBranches,
 } from '../lib/cos/branchCompletionProjection.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
+import { BRANCH_POLICY_PUBLICATION_PENDING } from '../lib/cos/branchPolicyArchiveRows.js';
 import {
   readBranchPolicyArchiveIndex, readBranchPolicyArchiveRecord, validateBranchPolicyArchiveRow,
 } from '../lib/cos/branchPolicyArchiveSource.js';
@@ -51,7 +52,10 @@ async function readScopedPolicies(repoPath, branches, repairIndex) {
   const { readIndexedArchivePolicies, withArchivePolicyRead } = await import('./cos/cosBranchPolicyArchive.js');
   return withArchivePolicyRead(async () => {
     const live = await readLivePolicyAgents();
-    const rows = await readIndexedArchivePolicies(policyArchiveDir(), repoPath, branches).catch(() => null);
+    const rows = await readIndexedArchivePolicies(policyArchiveDir(), repoPath, branches).catch(error => {
+      if (error.code === BRANCH_POLICY_PUBLICATION_PENDING) throw error;
+      return null;
+    });
     if (rows === null) return readPolicies(repairIndex, repoPath, live);
     const agents = new Map([...live].filter(([, agent]) => samePath(agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath, repoPath)));
     const dangling = [];

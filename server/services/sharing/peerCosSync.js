@@ -302,24 +302,29 @@ export async function syncCosHistoryFromPeer(peer) {
     try {
       const staged = await pullMissingCosArchives(peer.instanceId, missing, stagingRoot);
       return await withBackupAssetPublication(async () => {
-        for (const entry of staged) {
-          const { date, agentId, file, stagedPath } = entry;
-          const safeLabel = `${date}/${agentId}/${file}`;
-          const destDir = join(cosAgentsDir(), date, agentId);
-          try {
-            const buffer = await readFile(stagedPath);
-            await ensureDir(destDir);
-            if (file === 'metadata.json') {
-              const { writeArchivedAgentMetadata } = await import('../cos/cosAgentIndex.js');
-              await writeArchivedAgentMetadata(destDir, buffer);
-            } else {
+        const metadataIds = [...new Set(staged.filter(entry => entry.file === 'metadata.json').map(entry => entry.agentId))];
+        const publish = async invalidate => {
+          for (const { date, agentId, file, stagedPath } of staged) {
+            const safeLabel = `${date}/${agentId}/${file}`;
+            const destDir = join(cosAgentsDir(), date, agentId);
+            try {
+              const buffer = await readFile(stagedPath);
+              await ensureDir(destDir);
               await atomicWrite(join(destDir, file), buffer);
+              if (file === 'metadata.json') invalidate(agentId);
+              peerSyncEvents.emit('asset-arrived', { filename: safeLabel, kind: 'cos-archive', peerId: peer.instanceId });
+              console.log(`📥 peerSync: pulled cos archive ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+            } catch (err) {
+              logFailureWithStack(`⚠️ peerSync: cos-archive publication ${safeLabel} failed`, err);
             }
-            peerSyncEvents.emit('asset-arrived', { filename: safeLabel, kind: 'cos-archive', peerId: peer.instanceId });
-            console.log(`📥 peerSync: pulled cos archive ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
-          } catch (err) {
-            logFailureWithStack(`⚠️ peerSync: cos-archive publication ${safeLabel} failed`, err);
           }
+        };
+        if (metadataIds.length) {
+          const { invalidateArchivedRecord } = await import('../cos/cosAgentIndex.js');
+          const { publishArchivePolicyChange } = await import('../cos/cosBranchPolicyArchive.js');
+          await publishArchivePolicyChange(cosAgentsDir(), () => publish(invalidateArchivedRecord), { ids: metadataIds });
+        } else {
+          await publish();
         }
         // A resolved download does not prove publication. Re-diff before the
         // index commit, while the same lease still protects landed bytes.

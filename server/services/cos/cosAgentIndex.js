@@ -361,7 +361,8 @@ async function migrateAgentsToDateBucketsLeased() {
 
     // Try to get date from metadata
     if (existsSync(metaPath)) {
-      const content = await tryReadFile(metaPath);
+      const { ok, value: content } = await tryReadFileStrict(metaPath);
+      if (!ok) throw new Error(`Cannot read legacy agent metadata for ${agentId}`);
       if (content) {
         const raw = safeJSONParse(content, null);
         if (raw?.completedAt) {
