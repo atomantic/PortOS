@@ -58,6 +58,7 @@ jobs:
       # its own. See FULL_SUITE_SHARDS in scripts/ci-test-plan.js.
       server_shards: ${{ steps.plan.outputs.server_shards }}
       client_shards: ${{ steps.plan.outputs.client_shards }}
+      browser_shards: ${{ steps.plan.outputs.browser_shards }}
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       # The DB job's `services:` image cannot run a script, so it reads the
       # reference docker-compose.yml pins through this job's output.
@@ -388,6 +389,7 @@ jobs:
       # binaries in the image scan workflow. Mirrors scripts/lib/actionlint.js:
       # the parity test in scripts/run-actionlint.test.js fails if they drift.
       - name: Install pinned actionlint
+        if: fromJSON(needs.impact.outputs.plan).workflow_lint
         env:
           ACTIONLINT_VERSION: 1.7.12
           ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
@@ -401,6 +403,7 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
 
       - name: Lint workflows with actionlint
+        if: fromJSON(needs.impact.outputs.plan).workflow_lint
         env:
           CI_LINT_MODE: ${{ fromJSON(needs.impact.outputs.plan).lint_mode }}
           CI_LINT_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).lint_files) }}
@@ -410,6 +413,7 @@ jobs:
       # runner-context diagnostic. A nonzero exit alone also means a missing
       # shellcheck or a broken launch, which would be a silent no-op.
       - name: Prove actionlint rejects the known-bad fixture
+        if: fromJSON(needs.impact.outputs.plan).workflow_lint
         run: |
           fixture=scripts/fixtures/actionlint/runner-context-in-job-env.yml
           out=$(node scripts/run-actionlint.js "$fixture" 2>&1) && { echo "$out"; echo "::error::actionlint accepted the known-bad fixture"; exit 1; }
@@ -508,9 +512,8 @@ jobs:
     # Owns the registered browser suites; the Linux unit job excludes that
     # exact registry. PRs run the smoke profile; scheduled, release and
     # dispatched runs run the complete profile. No Postgres: the suites run on
-    # the file backend under NODE_ENV=test. Two deterministic shards split the
-    # aggregate capture workload without changing quiet-project sequencing or
-    # the independent 720-second watchdog on either runner.
+    # the file backend under NODE_ENV=test. Two or more suites use two shards
+    # without changing quiet-project sequencing or the per-runner watchdog.
     name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: fromJSON(needs.impact.outputs.plan).browser
@@ -520,7 +523,7 @@ jobs:
       # Keep every shard's evidence if another fails; CI Gate requires all.
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: ${{ fromJSON(needs.impact.outputs.browser_shards) }}
     permissions:
       contents: read
     steps:
@@ -532,13 +535,12 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # pg_dump must match the service major. The step timeout backs up the
-      # helper's 390-second download budget; cache hits never skip setup.
-      - name: Install PostgreSQL client and audio verification tools
+      # The step timeout backs up the helper's download budget.
+      - name: Install audio verification tools
         timeout-minutes: 9
         uses: ./.github/actions/db-tools
         with:
-          pg-major: '17'
+          include-postgres: 'false'
 
       # Read the runner's Chrome tree into the page cache before any suite
       # launches it (#9641). The recurring startup hang was captured with the
@@ -777,6 +779,7 @@ jobs:
 
   docker-containment-live:
     name: Docker containment live
+    # Impact must succeed before this job can install or execute dependencies.
     needs: impact
     # Path-gated by the impact planner's static import closure of the live
     # suite (DOCKER_CONTAINMENT_LIVE_ENTRIES), and part of CI Gate.
@@ -791,8 +794,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require maintainer release for Dependabot
-        run: node scripts/ci-dependabot-admission.js
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26.x
@@ -838,6 +839,7 @@ jobs:
 
   supercollider-live:
     name: SuperCollider native ${{ matrix.arch }}
+    # Impact must succeed before this job can install or execute dependencies.
     needs: impact
     # Path-gated by the impact planner's static import closure of the live
     # suite and setup script, and part of CI Gate: a red run blocks the merge.
@@ -869,8 +871,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require maintainer release for Dependabot
-        run: node scripts/ci-dependabot-admission.js
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26.x

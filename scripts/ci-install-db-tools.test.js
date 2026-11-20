@@ -35,7 +35,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror, cache) {
+function run(mirror, cache, { includePostgres = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -65,7 +65,9 @@ function run(mirror, cache) {
   // Keep the production GNU sed invocation intact while adapting its in-place
   // flag only inside this synthetic command fixture on macOS.
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
-  fake('curl', 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done');
+  fake('curl', `
+echo curl >> '${log}'
+while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done`);
   fake('sha256sum', 'if [ "$(uname -s)" = Darwin ]; then exec shasum -a 256 "$@"; fi\nexec /usr/bin/sha256sum "$@"');
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
   fake('timeout', `
@@ -105,18 +107,20 @@ fi`);
       APT_ROOT: root,
       BASH_ENV: bashEnv,
       TEST_CLOCK: clock,
-      PG_MAJOR: '17',
+      ...(includePostgres ? { PG_MAJOR: '17' } : { INCLUDE_POSTGRES: 'false' }),
       GITHUB_PATH: githubPath,
       ...(cache ? { APT_PACKAGE_CACHE: packageCache } : {}),
     },
   });
   const read = (file) => readFileSync(file, { encoding: 'utf8', flag: 'a+' });
+  const pgdg = join(root, 'etc/apt/sources.list.d/pgdg.list');
   const out = {
     ...result,
     budgets: read(log).split('\n').filter((line) => line.startsWith('timeout ')).map((line) => Number(line.split(' ')[1])),
     calls: read(log).split('\n').filter((line) => line.startsWith('apt-get ')).map((line) => line.replace(/ -o \S+/g, '')),
     sources: read(sourcesFile),
-    pgdg: read(join(root, 'etc/apt/sources.list.d/pgdg.list')),
+    pgdg: existsSync(pgdg) ? read(pgdg) : null,
+    fetchedPgKey: read(log).includes('curl'),
     githubPath: read(githubPath),
     downloaded: read(log).includes(`download ${PACKAGE_FILE}`),
     cachedPackage: read(join(packageCache, PACKAGE_FILE)),
@@ -142,6 +146,21 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
   });
 
+  it('installs ffmpeg without fetching the PostgreSQL key, adding PGDG, or exposing its binaries', () => {
+    const result = run('ok', 'warm', { includePostgres: false });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.fetchedPgKey).toBe(false);
+    expect(result.pgdg).toBeNull();
+    expect(result.calls).toEqual([
+      'apt-get update',
+      'apt-get --print-uris install -y ffmpeg',
+      'apt-get install -y --download-only ffmpeg',
+      'apt-get install -y --no-download ffmpeg',
+    ]);
+    expect(result.sources).toBe(RUNNER_SOURCES);
+    expect(result.githubPath).toBe('');
+  });
+
   it('recovers from a stalled runner mirror through the official archive, keeping signing', () => {
     const result = run('slowRunner', 'cold');
     expect(result.status, result.stderr).toBe(0);
@@ -163,7 +182,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('fails as an installation failure once the whole budget is spent', () => {
     const result = run('dead', 'warm');
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('::error title=DB tool installation failed::');
+    expect(result.stderr).toContain('::error title=CI tool installation failed::');
     expect(result.stderr).toContain('within 390s');
     expect(result.budgets).toEqual([180, 210]);
     expect(result.calls).not.toContain(INSTALL_FROM_CACHE);
@@ -199,23 +218,29 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.cachedPackage).toBe(PACKAGE_BYTES);
   });
 
-  it('installs the client major of the DB job\'s PostgreSQL service', () => {
+  it('installs the service-major PostgreSQL client for the DB job and ffmpeg alone for browser', () => {
     // The DB service image is the compose pin (ci.yml's impact job prints it).
     const serviceMajor = PINNED_DB_IMAGE.match(/:pg(\d+)@/)?.[1];
     expect(serviceMajor).toBeTruthy();
-    // Both jobs install through the db-tools action; expanded, its steps carry
-    // each caller's `pg-major` input.
+    // Both jobs install through the db-tools action; the expanded steps reflect
+    // each caller's inputs and the defaults.
     const jobs = readCiJobs();
     for (const id of ['database', 'browser']) {
       const body = jobs[id];
       expect(body, id).toContain('uses: ./.github/actions/db-tools');
       const identify = body.split('- name: Identify APT package cache\n')[1].split('\n      - name:')[0];
       const cache = body.split('- name: Cache APT package downloads\n')[1].split('\n      - name:')[0];
-      const install = body.split('- name: Run the DB tool installer\n')[1].split('\n      - name:')[0];
-      expect(identify).toContain(`PG_MAJOR: '${serviceMajor}'`);
-      expect(install).toContain(`PG_MAJOR: '${serviceMajor}'`);
+      const install = body.split('- name: Install the selected tools\n')[1].split('\n      - name:')[0];
+      for (const step of [identify, install]) {
+        if (id === 'database') {
+          expect(step).toContain(`PG_MAJOR: '${serviceMajor}'`);
+          expect(step).toContain('INCLUDE_POSTGRES: true');
+        } else {
+          expect(step).toContain("INCLUDE_POSTGRES: 'false'");
+        }
+      }
       expect(identify).toContain('. /etc/os-release');
-      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}-"');
+      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}-"');
       expect(identify).toContain('echo "prefix=$prefix" >> "$GITHUB_OUTPUT"');
       expect(identify).toContain('echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"');
       expect(cache).toContain('uses: actions/cache@');
@@ -225,7 +250,7 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       expect(install).toContain('APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages');
       expect(install).toContain('run: bash scripts/ci-install-db-tools.sh');
       expect(install).not.toContain('if:');
-      expect(body.indexOf('- name: Cache APT package downloads')).toBeLessThan(body.indexOf('- name: Run the DB tool installer'));
+      expect(body.indexOf('- name: Cache APT package downloads')).toBeLessThan(body.indexOf('- name: Install the selected tools'));
     }
   });
 });

@@ -11,6 +11,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput, writeStepSummary } from './lib/githubOutput.js';
+import { selectWorkflowFiles } from './lib/actionlint.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { guardTestFiles } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -975,7 +976,7 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
       ? `route-only client App.jsx change: related client contracts${fanOutNote(plan, 'client')}`
       : plan.full
         ? `full matrix: ${plan.reason}`
-        : `client-impacting source changed${fanOutNote(plan, 'client')}`,
+        : `${plan.build ? 'client-impacting source changed' : 'client test and contract coverage selected'}${fanOutNote(plan, 'client')}`,
   browser: plan.browserFiles.length > 0
     ? (plan.full ? `full matrix: ${plan.reason}` : `${plan.browserFiles.length} cross-workspace browser suite(s) selected`)
     : 'skipped: no cross-workspace browser suite selected',
@@ -1319,6 +1320,7 @@ const finishPlan = (plan, options = {}) => {
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
+    browser: plan.browserFiles.length > 1 ? [1, 2] : [1],
     // The native contract set stays on one runner and never follows the
     // application import graph, even when the primary jobs run full suites.
     windows: [1],
@@ -1473,6 +1475,7 @@ export function githubPlanOutput(plan) {
     db: plan.db,
     lint_mode: plan.lint.mode,
     lint_files: plan.lint.files,
+    workflow_lint: plan.lint.mode === 'full' || selectWorkflowFiles(plan.lint.files).length > 0,
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
@@ -1501,7 +1504,7 @@ export function formatPlanSummary(output, shards, gatedBaseSha) {
     `- Server tests: ${code(output.server_mode)} (shards ${code(shards.server)})`,
     `- Client tests: ${code(output.client_mode)} (shards ${code(shards.client)})`,
     `- DB tests: ${code(output.db)}`,
-    `- Cross-workspace browser suites: ${code(output.browser_files)}`,
+    `- Cross-workspace browser suites: ${code(output.browser_files)} (shards ${code(shards.browser)})`,
     `- Client lint: ${code(output.lint_mode)}`,
     `- Client build: ${code(output.build)}`,
     `- Server smoke: ${code(output.smoke)}`,
@@ -1529,12 +1532,14 @@ export function emitGitHubPlan(plan, { gatedBaseSha } = {}) {
   // leaf job's matrix is `fromJSON(needs.impact.outputs.<suite>_shards)`.
   writeStepOutput('server_shards', JSON.stringify(plan.shards.server));
   writeStepOutput('client_shards', JSON.stringify(plan.shards.client));
+  writeStepOutput('browser_shards', JSON.stringify(plan.shards.browser));
   writeStepOutput('windows_shards', JSON.stringify(plan.shards.windows));
   writeStepSummary(formatPlanSummary(output, plan.shards, gatedBaseSha));
   console.log(JSON.stringify({
     ...output,
     server_shards: plan.shards.server,
     client_shards: plan.shards.client,
+    browser_shards: plan.shards.browser,
     windows_shards: plan.shards.windows,
     changed_files: plan.changedFiles,
   }, null, 2));

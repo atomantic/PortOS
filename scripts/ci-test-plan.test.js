@@ -560,8 +560,16 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     ].join('\n'));
     git('add', '--all');
 
-    expect(plan(leaf)).toMatchObject({ full: false, build: false,
-      client_mode: 'files', client_files: [consumer] });
+    expect(plan(leaf)).toMatchObject({
+      full: false,
+      build: false,
+      client_mode: 'files',
+      client_files: [consumer],
+      suite_reasons: {
+        client: 'client test and contract coverage selected',
+        build: 'skipped: no client-impacting source changed',
+      },
+    });
     expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
 
     write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
@@ -1577,23 +1585,24 @@ describe('CI test impact planner', () => {
       if (runner !== 'windows') expect(count, runner).toBeGreaterThan(1);
     }
 
-    const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: TRACKED });
+    const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      browser: [1, 2],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
-    expect(scoped.shards).toEqual({ server: [1], client: [1], windows: [1] });
+    expect(scoped.shards).toEqual({ server: [1], client: [1], browser: [1], windows: [1] });
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'files',
       windowsSources: [],
-      shards: { server: [1], client: [1], windows: [1] } });
+      shards: { server: [1], client: [1], browser: [1], windows: [1] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
-    expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
+    expect(docsOnly.shards).toEqual({ server: [1], client: [1], browser: [1], windows: [1] });
   });
 
   it('never selects a model-capability fixture sandbox as a suite on a feature-name match', () => {
@@ -1621,7 +1630,7 @@ describe('CI test impact planner', () => {
         lint: { mode: 'files', files: [source] }, build: false, smoke: true, windows: false });
       // Sharding partitions the selection; it never drops a selector.
       expect(plan.server.files).toEqual(expect.arrayContaining(tests));
-      expect(plan.shards).toEqual({ server: SERVER_FANOUT, client: [1], windows: [1] });
+      expect(plan.shards).toEqual({ server: SERVER_FANOUT, client: [1], browser: [1], windows: [1] });
       expect(plan.suiteReasons.server).toMatch(/exceed the 125-file cap, sharded 2 ways/);
       // A broad shared dependency can still reach the slashdo contracts.
       expect(plan.slashdo).toBe(true);
@@ -1678,7 +1687,7 @@ describe('CI test impact planner', () => {
 
       const broad = buildCiTestPlan([source], { trackedFiles, serverReach: reach(1069) });
       expect(broad.server.mode).toBe('related');
-      expect(broad.shards).toEqual({ server: SERVER_FANOUT, client: [1], windows: [1] });
+      expect(broad.shards).toEqual({ server: SERVER_FANOUT, client: [1], browser: [1], windows: [1] });
       expect(broad.suiteReasons.server).toMatch(/related import reach of 1069 suites exceeds the 125-file cap, sharded 2 ways/);
 
       const narrow = buildCiTestPlan([source], { trackedFiles, serverReach: reach(50) });
@@ -1814,13 +1823,14 @@ describe('CI test impact planner', () => {
     expect(logs.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      browser: [1],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
 
     const nearbySocket = buildCiTestPlan(['server/sockets/apps.js'], { trackedFiles });
     expect(nearbySocket.full).toBe(false);
     expect(nearbySocket.server.mode).toBe('related');
-    expect(nearbySocket.shards).toEqual({ server: [1], client: [1], windows: [1] });
+    expect(nearbySocket.shards).toEqual({ server: [1], client: [1], browser: [1], windows: [1] });
   });
 
   it('honors an explicit full-CI request', () => {
@@ -2180,11 +2190,12 @@ it('projects transitive browser consumers through the planner CLI without replac
     expect(related.server_files).not.toContain(staticSuite);
     expect(related.server_files).not.toContain(deferredSuite);
     expect(browsers(related)).toEqual([staticSuite, deferredSuite]);
+    expect(related.browser_shards).toEqual([1, 2]);
     expect(related.suite_reasons.browser).toBe('2 cross-workspace browser suite(s) selected');
     expect(browsers(plan([leaf, staticSuite]))).toEqual([staticSuite, deferredSuite]);
     expect(browsers(plan([unrelated]))).toEqual([]);
     expect(browsers(plan(['docs/README.md']))).toEqual([]);
-    expect(browsers(plan([staticSuite]))).toEqual([staticSuite]);
+    expect(plan([staticSuite])).toMatchObject({ browser: true, browser_files: [staticSuite], browser_shards: [1] });
     expect(browsers(plan([], true))).toEqual([staticSuite, deferredSuite, independentSuite]);
 
     // Inconclusive discovery widens only the affected registered suite while
@@ -2600,8 +2611,25 @@ describe('path-gated single-purpose jobs', () => {
     }
     // Every other impact output stays a declared, separately emitted value.
     const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^      (\w+): \$\{\{/gm)].map(([, name]) => name);
-    expect(impactOutputs).toEqual(['plan', 'server_shards', 'client_shards', 'windows_shards', 'db_image']);
+    expect(impactOutputs).toEqual(['plan', 'server_shards', 'client_shards', 'browser_shards', 'windows_shards', 'db_image']);
     for (const [, name] of ci.matchAll(/needs\.impact\.outputs\.(\w+)/g)) expect(impactOutputs, name).toContain(name);
+  });
+
+  it('gates actionlint setup, execution and fixture proof on workflow coverage', () => {
+    const workflow = '.github/workflows/ci.yml';
+    const lint = (mode, files) => githubPlanOutput({
+      ...buildCiTestPlan(['docs/README.md']),
+      lint: { mode, files },
+    }).workflow_lint;
+    expect(lint('full', [])).toBe(true);
+    expect(lint('files', [workflow])).toBe(true);
+    expect(lint('files', ['client/src/App.test.jsx'])).toBe(false);
+    expect(lint('skip', [])).toBe(false);
+    expect(githubPlanOutput(buildCiTestPlan([workflow], { trackedFiles: [workflow] })).workflow_lint).toBe(true);
+    const { lint: job } = readCiJobs();
+    for (const name of ['Install pinned actionlint', 'Lint workflows with actionlint', 'Prove actionlint rejects the known-bad fixture']) {
+      expect(job).toContain(`- name: ${name}\n        if: fromJSON(needs.impact.outputs.plan).workflow_lint`);
+    }
   });
 
   it('writes the plan, the shard matrices and the step summary through the GitHub command files', () => {
@@ -2615,10 +2643,11 @@ describe('path-gated single-purpose jobs', () => {
       emitGitHubPlan(plan, { gatedBaseSha: 'a'.repeat(40) });
       const lines = readFileSync(env.GITHUB_OUTPUT, 'utf8').trim().split('\n');
       const outputs = Object.fromEntries(lines.map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
-      expect(Object.keys(outputs)).toEqual(['plan', 'server_shards', 'client_shards', 'windows_shards']);
+      expect(Object.keys(outputs)).toEqual(['plan', 'server_shards', 'client_shards', 'browser_shards', 'windows_shards']);
       expect(JSON.parse(outputs.plan)).toEqual(githubPlanOutput(plan));
       expect(JSON.parse(outputs.plan)).toMatchObject({ full: false, lint_files: [], browser: false, browser_files: [] });
       expect(JSON.parse(outputs.server_shards)).toEqual(plan.shards.server);
+      expect(JSON.parse(outputs.browser_shards)).toEqual([1]);
       const summary = readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8');
       expect(summary).toBe(`${formatPlanSummary(githubPlanOutput(plan), plan.shards, 'a'.repeat(40))}\n`);
       expect(summary).toMatch(/^### CI impact plan\n\n- Reason: `documentation-only change`\n/);

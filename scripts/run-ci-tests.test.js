@@ -712,7 +712,7 @@ describe('ci.yml shard wiring', () => {
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
-    expect(body).toMatch(/matrix:\n\s+shard: \[1, 2\]/);
+    expect(body).toContain('shard: ${{ fromJSON(needs.impact.outputs.browser_shards) }}');
     expect(body).toContain('fail-fast: false');
     expect(step).toContain('CI_TEST_MODE: files');
     expect(step).toContain('CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}');
