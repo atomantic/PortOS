@@ -18,8 +18,8 @@ import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { PATHS } from '../../server/lib/fileUtils.js';
-import { applyAgyUsageRepair, planAgyUsageRepairFromDisk } from '../../server/services/agyUsageBackfill.js';
 import { summarizeAgyRepairAdditions } from '../../server/services/agyUsageRepair.js';
+import { withUsageRepairDatabase } from '../lib/usageRepairDatabase.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -42,28 +42,28 @@ async function main() {
   const argv = process.argv.slice(2);
   const apply = argv.includes('--apply');
   const home = argValue(argv, '--home') || homedir();
-  const dataDir = argValue(argv, '--data') || join(ROOT, 'data');
-  if (!apply) {
-    printPlan(await planAgyUsageRepairFromDisk({ home, dataDir }));
-    console.log('Dry run. Reconcile now on the Usage page applies this while PortOS is running. --apply writes the ledger only after PortOS is stopped.');
-    return;
-  }
-  if (resolve(dataDir) !== resolve(PATHS.data)) {
+  const dataDir = argValue(argv, '--data') || PATHS.data;
+  if (apply && resolve(dataDir) !== resolve(PATHS.data)) {
     console.error(`❌ --apply writes the active install ledger. Re-run without --data, or pass --data ${PATHS.data}.`);
     process.exitCode = 1;
     return;
   }
-  const result = await applyAgyUsageRepair({ home, dataDir });
-  console.log(`Applied ${result.added} addition(s): ${result.images} image row(s).`);
-  if (result.note) console.log(`Note: ${result.note}`);
-  if (result.backedUp) console.log(`Backed up the ledger to ${result.backupDir}`);
-  if (result.added === 0) console.log('Nothing to apply.');
+  await withUsageRepairDatabase({ root: ROOT, dataDir, activeDataDir: PATHS.data }, async () => {
+    const { applyAgyUsageRepair, planAgyUsageRepairFromDisk } = await import('../../server/services/agyUsageBackfill.js');
+    if (!apply) {
+      printPlan(await planAgyUsageRepairFromDisk({ home, dataDir }));
+      console.log('Dry run. Reconcile now on the Usage page applies this while PortOS is running. --apply writes the ledger only after PortOS is stopped.');
+      return;
+    }
+    const result = await applyAgyUsageRepair({ home, dataDir });
+    console.log(`Applied ${result.added} addition(s): ${result.images} image row(s).`);
+    if (result.note) console.log(`Note: ${result.note}`);
+    if (result.backedUp) console.log(`Backed up the ledger to ${result.backupDir}`);
+    if (result.added === 0) console.log('Nothing to apply.');
+  });
 }
 
-main().finally(async () => {
-  const { close } = await import('../../server/lib/db.js');
-  await close();
-}).catch((err) => {
+main().catch((err) => {
   console.error(`❌ Antigravity usage backfill failed: ${err.message}`);
   process.exitCode = 1;
 });
