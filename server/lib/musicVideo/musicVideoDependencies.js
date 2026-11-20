@@ -306,7 +306,7 @@ const compositionRef = (project, startSec, endSec) => {
 };
 
 // Video-level inputs the final render reads (filmLookFinish, shotSegments title card, ending parts, cameras,
-// overscan, sound bed, lyric overlay). Each joins only when set so a project without them keeps its evidence.
+// overscan, sound bed, timeline audio layers, lyric overlay). Each joins only when set so a project without them keeps its evidence.
 // Left out on purpose: `videoSettings` (read only when generating takes, not by the render) and a shot's
 // `colorMatch` field (the render reads the selected take's correction, tracked by `colorMatchRef`).
 const finishInputs = (project) => Object.fromEntries([
@@ -318,6 +318,7 @@ const finishInputs = (project) => Object.fromEntries([
   ['overscan', musicVideoOverscan(project) || null],
   ['lyricOverlayEnabled', project.lyricOverlayEnabled === false ? false : null],
   ['soundBed', project.soundBed || null],
+  ['audioLayers', Array.isArray(project.audioLayers) && project.audioLayers.length ? project.audioLayers : null],
 ].filter(([, value]) => value !== null));
 // The correction the render applies to a shot (selected take's match, camera doNotMatch, flash stills) is its own
 // reference, not part of `layerRef`: it is recorded on every shot, so a later match or a disable flips the render,
