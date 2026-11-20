@@ -78,7 +78,7 @@ import {
 import {
   restoredParams, isUnderUploadsRoot, normalizeTempPaths, admitCompletion, stageTerminalTransition,
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads, restoreQueueSnapshot, drainMediaJobQueue,
-  isPersistBlocked, hasPendingTransitions, setCompletionRecoveryDeferred, settlePersistChain,
+  isPersistBlocked, hasPendingTransitions, configureTerminalTransitions, settlePersistChain,
   resetPersistenceForTests,
 } from './persistence.js';
 import {
@@ -533,10 +533,10 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
 
 
 
-export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
+export async function initMediaJobQueue({ deferCompletionRecovery = false, prepareTerminalHooks = null } = {}) {
   installVideoExecutionRecorder();
   if (initPromise) return initPromise;
-  setCompletionRecoveryDeferred(deferCompletionRecovery);
+  configureTerminalTransitions({ deferCompletionRecovery, prepareTerminalHooks });
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);

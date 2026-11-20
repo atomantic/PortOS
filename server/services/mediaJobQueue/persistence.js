@@ -135,6 +135,7 @@ let persistChain = Promise.resolve();
 // Terminal outcomes stay private until the snapshot containing them succeeds.
 // Recovery commits storage only; it never invokes a generator again.
 const pendingTransitions = new Map();
+let prepareHooks = null;
 // Only a completion publishes durable output. Its commit holds backup admission
 // from staging the terminal row through the hook fan-out, never while rendering
 // or waiting in the queue; failures and cancellations stay unadmitted so a
@@ -172,13 +173,15 @@ export async function persistTerminalTransition(job) {
     return;
   } catch (error) {
     noteFailure();
+    if (error?.code === 'MEDIA_JOB_HOOK_LOAD_FAILED') throw error;
     if (!isTransientPersistError(error)) throw storageRecovery();
   }
   await sleep(TERMINAL_PERSIST_RETRY_MS);
   try {
     await persist();
-  } catch (_error) {
+  } catch (error) {
     noteFailure();
+    if (error?.code === 'MEDIA_JOB_HOOK_LOAD_FAILED') throw error;
     throw storageRecovery();
   }
 }
@@ -212,7 +215,14 @@ export function persist() {
 async function persistImpl({ onSnapshotWritten, trimArchive = true } = {}) {
   if (trimArchive) trimArchiveForSnapshot();
   const snapshot = captureQueueSnapshot();
-  await atomicWrite(JOBS_FILE, JSON.stringify(snapshot.data));
+  const payload = JSON.stringify(snapshot.data);
+  // Prepare listeners for exactly the rows this write acknowledges. This is
+  // before disk publication so even the first (or replayed) event is delivered
+  // under the original backup lease. An import failure leaves the row staged.
+  if (prepareHooks && snapshot.transitions.length) {
+    await Promise.all(snapshot.transitions.map(([job]) => prepareHooks(job)));
+  }
+  await atomicWrite(JOBS_FILE, payload);
   onSnapshotWritten?.();
   await acknowledgeWrittenTransitions(snapshot.transitions);
   if (snapshot.hasDeferredCompletion) recoverCompletionsUnderAdmission();
@@ -651,13 +661,15 @@ export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT
 export const isPersistBlocked = () => persistBlocked;
 export const hasPendingTransitions = () => pendingTransitions.size > 0;
 // Boot defers completion recovery until the domain hooks are wired.
-export function setCompletionRecoveryDeferred(deferred) {
-  completionRecoveryDeferred = deferred;
+export function configureTerminalTransitions({ deferCompletionRecovery, prepareTerminalHooks }) {
+  completionRecoveryDeferred = deferCompletionRecovery;
+  prepareHooks = prepareTerminalHooks;
 }
 // Settles with whatever write is last in the chain when called.
 export const settlePersistChain = () => persistChain.catch(() => {});
 
 export function resetPersistenceForTests() {
+  prepareHooks = null;
   pendingTransitions.clear();
   // A leftover rejection from a previous test's ENOENT writes must not poison
   // later persist() calls.

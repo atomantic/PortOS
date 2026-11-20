@@ -39,6 +39,7 @@ const ROUTE_METHODS = Object.freeze(['delete', 'get', 'head', 'options', 'patch'
 const ROUTE_METHOD_SET = new Set([...ROUTE_METHODS, 'all']);
 
 const DEFAULT_IMPORT_RE = /\bimport\s+([A-Za-z_$][\w$]*)(?:\s*,\s*\{[^}]*\})?\s+from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
+const LAZY_ROUTER_RE = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRouter\(\s*\(\s*\)\s*=>\s*import\(\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*\)\s*\)/g;
 // `[^}]*` rather than a lazy `[\s\S]*?`: the lazy form can run from a bare
 // package import (`import { Router } from 'express'`) into the next relative
 // import and swallow that statement's first binding.
@@ -72,7 +73,7 @@ const importedName = (fragment) => {
 
 const parseImports = (source, filePath) => {
   const imports = new Map();
-  for (const match of source.matchAll(DEFAULT_IMPORT_RE)) {
+  for (const match of [...source.matchAll(DEFAULT_IMPORT_RE), ...source.matchAll(LAZY_ROUTER_RE)]) {
     const resolved = resolveLocalModule(filePath, match[3]);
     if (resolved) imports.set(match[1], { file: resolved, imported: 'default' });
   }
@@ -118,7 +119,7 @@ export function parseRouteModule(filePath, repoRoot = DEFAULT_REPO_ROOT) {
   // Follow its imported source just like a router import; route-free factories add no paths.
   for (const match of source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     const factory = imports.get(match[2]);
-    if (factory) imports.set(match[1], factory);
+    if (factory && !imports.has(match[1])) imports.set(match[1], factory);
   }
   const defaultExport = source.match(DEFAULT_EXPORT_RE)?.[1] || null;
   const rootChild = imports.get(defaultExport) || resolveComposedRouter(source.match(RETURN_COMPOSED_ROUTER_RE)?.[1] || '', repoRoot);

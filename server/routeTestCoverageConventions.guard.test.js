@@ -24,7 +24,7 @@ const UNTESTED_ALLOWLIST = new Map([
 
 /** `server/routes/...` paths imported by `server/index.js`, repo-relative. */
 function mountedRouteModules(indexSource) {
-  return [...indexSource.matchAll(/from\s+['"](\.\/routes\/[^'"]+)['"]/g)]
+  return [...indexSource.matchAll(/(?:from\s+|import\(\s*)['"](\.\/routes\/[^'"]+)['"]/g)]
     .map((m) => `server/${m[1].slice(2)}`);
 }
 
@@ -47,8 +47,8 @@ function untestedMounted() {
 
 describe('mounted route modules are reached by a test (#12048)', () => {
   it('reads the mounts and resolves test imports the way the scan relies on', () => {
-    expect(mountedRouteModules("import a from './routes/apps/index.js';\nimport { b } from \"./routes/x.js\";"))
-      .toEqual(['server/routes/apps/index.js', 'server/routes/x.js']);
+    expect(mountedRouteModules("import a from './routes/apps/index.js';\nimport { b } from \"./routes/x.js\";\nconst c = createLazyRouter(() => import('./routes/c.js'));"))
+      .toEqual(['server/routes/apps/index.js', 'server/routes/x.js', 'server/routes/c.js']);
     expect(importedModules('server/routes/foo.test.js', "vi.mock('../services/a.js');\nconst { default: r } = await import('./foo.js');"))
       .toEqual(['server/services/a.js', 'server/routes/foo.js']);
   });

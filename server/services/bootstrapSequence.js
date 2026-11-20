@@ -303,13 +303,13 @@ export const warmMandatoryStores = async ({
   onWarmFailure = () => process.exit(1)
 }) => {
   try {
-    await warmUniverses();
-    await warmSeries();
-    await warmIssues();
-    await warmStoryBuilder();
-    await warmWritersRoom();
-    await warmCatalogUserTypes();
-    await warmCreativeDirector();
+    await Promise.all([
+      warmUniverses(),
+      warmSeries().then(() => warmIssues()).then(() => warmStoryBuilder()),
+      warmWritersRoom(),
+      warmCatalogUserTypes(),
+      warmCreativeDirector(),
+    ]);
     await pruneLegacyFiles();
   } catch (err) {
     console.error(`❌ Mandatory store warmup failed at boot — refusing to start: ${err?.stack ?? err.message}`);

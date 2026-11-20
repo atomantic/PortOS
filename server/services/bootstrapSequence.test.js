@@ -599,19 +599,29 @@ describe('warmMandatoryStores', () => {
     };
   };
 
-  it('warms every store in soft-reference order, pruning last', async () => {
+  it('warms independent stores concurrently and prunes after every dependency settles', async () => {
     const recorder = createRecorder();
-    await warmMandatoryStores(buildDeps(recorder));
-    expect(recorder.calls).toEqual([
-      'warmUniverses',
-      'warmSeries',
-      'warmIssues',
-      'warmStoryBuilder',
-      'warmWritersRoom',
-      'warmCatalogUserTypes',
-      'warmCreativeDirector',
-      'pruneLegacyFiles'
+    const series = deferred();
+    const issues = deferred();
+    const director = deferred();
+    const deps = buildDeps(recorder, {
+      warmSeries: recorder.step('warmSeries', () => series.promise),
+      warmIssues: recorder.step('warmIssues', () => issues.promise),
+      warmCreativeDirector: recorder.step('warmCreativeDirector', () => director.promise),
+    });
+    const warming = warmMandatoryStores(deps);
+    expect([...recorder.calls].sort()).toEqual([
+      'warmCatalogUserTypes', 'warmCreativeDirector', 'warmSeries', 'warmUniverses', 'warmWritersRoom',
     ]);
+    series.resolve();
+    await flush();
+    expect(recorder.calls.at(-1)).toBe('warmIssues');
+    issues.resolve();
+    await flush();
+    expect(recorder.calls.at(-1)).toBe('warmStoryBuilder');
+    director.resolve();
+    await warming;
+    expect(recorder.calls.at(-1)).toBe('pruneLegacyFiles');
   });
 
   it('refuses to start when a store cannot select its backend', async () => {
