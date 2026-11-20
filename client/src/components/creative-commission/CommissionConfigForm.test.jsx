@@ -10,7 +10,18 @@ const api = vi.hoisted(() => ({
   listImageModels: vi.fn(), listVideoModels: vi.fn(),
   listUniverseNames: vi.fn(), listUniverseStyles: vi.fn(), listMoodBoardNames: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMusic.js', () => ({ listMusicEngines: api.listMusicEngines }));
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listImageModels: api.listImageModels,
+  listVideoModels: api.listVideoModels,
+}));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
+  listUniverseNames: api.listUniverseNames,
+  listUniverseStyles: api.listUniverseStyles,
+}));
+vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: api.listMoodBoardNames }));
 vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ providers: [] })) }));
 
 

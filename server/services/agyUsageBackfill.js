@@ -2,12 +2,12 @@
  * Apply the Antigravity usage repair to the server's in-memory ledger.
  *
  * Reconcile on the Usage page calls this from the historical-backfill job, on
- * the same thread that owns usage.json. Repair ids already on the ledger make
+ * the same thread that owns the ledger. Repair ids already on the ledger make
  * a repeat a no-op. The on-disk ledger is copied before the first write of a
  * batch that has something to add.
  */
 
-import { copyFile, mkdir, readdir, readFile } from 'fs/promises';
+import { readdir, readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { familyForProvider } from '../lib/provider/providerFamilies.js';
@@ -17,7 +17,7 @@ import {
   planAgyUsageRepair,
   summarizeAgyRepairAdditions,
 } from './agyUsageRepair.js';
-import { addDatedUsageBatch, getUsage, loadUsage } from './usage.js';
+import { addDatedUsageBatch, backupUsageRepairLedger, loadUsage, readUsageRepairLedger } from './usage.js';
 
 const faultLabel = (err) => {
   if (err?.code) return String(err.code);
@@ -26,12 +26,11 @@ const faultLabel = (err) => {
 
 const oneLine = (value) => String(value ?? '').replace(/[\r\n]+/g, ' ');
 
-async function readJson(path, fallback, { strict = false, label = 'file' } = {}) {
+async function readJson(path, fallback, { label = 'file' } = {}) {
   try {
     return JSON.parse(await readFile(path, 'utf8'));
   } catch (err) {
     if (err.code === 'ENOENT') return fallback;
-    if (strict) throw err;
     console.warn(`⚠️ Antigravity usage repair skipped unreadable ${label} (${faultLabel(err)})`);
     return fallback;
   }
@@ -83,28 +82,13 @@ export async function planAgyUsageRepairFromDisk({
   repairIds = null,
   providerId = null,
 } = {}) {
-  const storedIds = repairIds ?? (await readJson(join(dataDir, 'usage.json'), {}, { strict: true }))?.grokRepairIds;
+  const storedIds = repairIds ?? (await readUsageRepairLedger(dataDir))?.grokRepairIds;
   const gallery = await collectGallery(dataDir);
   return planAgyUsageRepair({
     media: gallery,
     repairIds: Array.isArray(storedIds) ? storedIds : [],
     providerId: providerId || await providerIdFromFile(dataDir),
   });
-}
-
-async function backupLedger(dataDir) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = join(dataDir, 'backups', `agy-usage-${stamp}`);
-  await mkdir(dest, { recursive: true });
-  for (const name of ['usage.json', 'usage-interactive-scan.json']) {
-    const source = join(dataDir, name);
-    try {
-      await copyFile(source, join(dest, name));
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-    }
-  }
-  return dest;
 }
 
 /**
@@ -118,21 +102,21 @@ export async function applyAgyUsageRepair({
   providerId = null,
 } = {}) {
   if (resolve(dataDir) !== resolve(PATHS.data)) {
-    throw new Error(`Antigravity usage repair writes ${PATHS.data}/usage.json`);
+    throw new Error('Antigravity usage repair writes only the active install ledger');
   }
-  await loadUsage();
+  const ledger = await loadUsage({ includeRepairEvidence: true });
   const resolvedProviderId = providerId
     || (providers ? agyUsageProviderIdFromList(providers) : await providerIdFromFile(dataDir));
   const plan = await planAgyUsageRepairFromDisk({
     dataDir,
-    repairIds: getUsage().grokRepairIds || [],
+    repairIds: ledger.grokRepairIds || [],
     providerId: resolvedProviderId,
   });
   const note = plan.notes[0] || null;
   if (plan.additions.length === 0) {
     return { ...summarizeAgyRepairAdditions([]), backedUp: false, note, backupDir: null };
   }
-  const backupDir = await backupLedger(dataDir);
+  const backupDir = await backupUsageRepairLedger(dataDir, 'agy-usage', { includeWatermark: true });
   const written = await addDatedUsageBatch(plan.additions);
   return { ...summarizeAgyRepairAdditions(written), backedUp: true, note, backupDir };
 }

@@ -9,7 +9,7 @@ afterAll(cleanupTempDataRoots);
 
 // Automatic repository intake (#11037). Link create and capture are gated by the
 // default-deny write policy (#16018); the refusal and principal matrix live in
-// services/authGate.test.js and hostControlCoverage.test.js, and the data-only
+// services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js, and the data-only
 // autoClone:false path in services/brain.test.js. The real Brain router and
 // service run here; storage (in memory), the clone and the post-clone intake
 // queue are doubled, so the workflow watches the agent dispatch at its end.

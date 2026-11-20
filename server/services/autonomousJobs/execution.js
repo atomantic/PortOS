@@ -10,7 +10,8 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * reject into the void. Behavior is preserved verbatim from the pre-split module.
  */
 
-import { spawn } from '../../lib/childProcess.js';import { PATHS } from '../../lib/fileUtils.js'
+import { spawn } from '../../lib/childProcess.js'
+import { PATHS } from '../../lib/fileUtils.js'
 import { prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js'
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../../lib/commandSecurity.js'

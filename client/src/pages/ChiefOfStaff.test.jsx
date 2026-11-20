@@ -58,7 +58,36 @@ const localLlm = vi.hoisted(() => ({
   getToolUseModels: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiAgents.js', () => ({
+  getCosStatus: api.getCosStatus,
+  getCosTasks: api.getCosTasks,
+  getCosTask: api.getCosTask,
+  getCosAgents: api.getCosAgents,
+  getCosHealth: api.getCosHealth,
+  getCosLearningSummary: api.getCosLearningSummary,
+  getCosActionableInsights: api.getCosActionableInsights,
+  getCosBudgetUsage: api.getCosBudgetUsage,
+  getPersistentMind: api.getPersistentMind,
+  forceCosEvaluate: api.forceCosEvaluate,
+  updateCosTask: api.updateCosTask,
+  pauseCos: api.pauseCos,
+  resumeCos: api.resumeCos,
+  forceHealthCheck: api.forceHealthCheck,
+  updateCosConfig: api.updateCosConfig,
+  getCosTodayActivity: api.getCosTodayActivity,
+  getCosLearning: api.getCosLearning,
+  getCosLearningDurations: api.getCosLearningDurations,
+  getCosPopularTemplates: api.getCosPopularTemplates,
+  getCosCompletedAgents: api.getCosCompletedAgents,
+  getCosPendingAgentFeedback: api.getCosPendingAgentFeedback,
+}));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: api.getProviders,
+  getProviderStatuses: api.getProviderStatuses,
+}));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../services/apiAvatar.js', () => ({ getRiggedAvatars: api.getRiggedAvatars }));
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),

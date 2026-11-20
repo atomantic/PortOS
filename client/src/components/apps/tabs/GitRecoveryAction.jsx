@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import * as api from '../../../services/api';
+import { getProviders } from '../../../services/apiProviders.js';
+import { addCosTask } from '../../../services/apiAgents.js';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from '../../cos/AgentJobProviderFields';
 import Modal from '../../ui/Modal';
@@ -15,7 +16,7 @@ export default function GitRecoveryAction({ appId, appName, disabled }) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    api.getProviders({ silent: true }).then(data => {
+    getProviders({ silent: true }).then(data => {
       if (cancelled) return;
       setProviders(data?.providers || []);
       setActiveProviderId(data?.activeProvider || '');
@@ -26,7 +27,7 @@ export default function GitRecoveryAction({ appId, appName, disabled }) {
   const runnable = hasRunnableAgentProvider(providers, selection.providerId, activeProviderId);
   const [queue, queueing] = useAsyncAction(async () => {
     if (!runnable || queued || disabled) return;
-    await api.addCosTask({
+    await addCosTask({
       description: `Preserve pending work and reconcile the application checkout for ${appName}`,
       prompt: `Investigate and resolve pending Git work in this app's configured checkout so it can safely update to the latest origin default branch (normally main).
 Work in this app's actual configured checkout, not a fresh worktree that hides its dirty state. Read its repository instructions and discover its path, origin, default branch and branch protections first. Respect forks: origin is the target, never substitute upstream. Keep scope to this selected app's checkout; inspect other managed or companion repositories only when this app's own repository configuration directly depends on them. Inspect linked worktrees and active agents only to protect ownership, and do not modify or remove unrelated worktrees.

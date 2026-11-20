@@ -8,7 +8,7 @@ import {
   retireEidoverseController,
   setEidoverseControllerArmed,
   updateEidoverseControllerConfig,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
 import { formatCount, formatDateShort, timeAgo } from '../../utils/formatters';
 
 /**

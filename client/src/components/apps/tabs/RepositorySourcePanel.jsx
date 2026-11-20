@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Server,
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getAppRepositorySources, syncAppRepositoryFork } from '../../../services/apiApps.js';
 import {
   countText,
   describeForkUnsyncable,
@@ -171,7 +171,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     if (initial) setLoading(true);
     else setRefreshing(true);
     setError(null);
-    const result = await api.getAppRepositorySources(appId, { silent: true }).catch((reason) => {
+    const result = await getAppRepositorySources(appId, { silent: true }).catch((reason) => {
       setError(reason.message || 'Could not inspect the app repositories');
       return null;
     });
@@ -259,7 +259,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
 
   const handleSyncOnly = async () => {
     setSyncingFork(true);
-    const result = await api.syncAppRepositoryFork(appId, { silent: true }).catch((reason) => {
+    const result = await syncAppRepositoryFork(appId, { silent: true }).catch((reason) => {
       const scopeProblem = forgeScopeFailureFrom(reason);
       if (scopeProblem) setScopeFailure(scopeProblem);
       else toast.error(reason.message || 'Could not sync the app fork');

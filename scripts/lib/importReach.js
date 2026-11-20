@@ -10,78 +10,49 @@
  * every suite that reaches the cluster. This module reports both numbers per
  * source so a plan's selection size is attributable.
  *
- * The scan is textual, like `staticImportGraph.js`: a literal `import('…')`
- * outside a comment-only line is an edge. A specifier inside a string or a
- * trailing comment can add an extra edge (reach over-reports, never under).
- * Computed specifiers are not edges — Vite cannot follow them either.
+ * Edges come from the shared module graph (`moduleGraph.js`), the one the
+ * planner's DB and browser closures and pregate's local selection read: a
+ * literal `import('…')` is an edge, a computed one is not (Vite cannot follow
+ * it either), and comments or quoted fixtures never add one.
  *
  * Builtins only: `scripts/ci-test-plan.js` imports this before `npm ci`.
  */
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, posix } from 'path';
-import { staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
+import { join } from 'path';
+import { MODULE_SOURCE_RE, createModuleGraph, resolveModuleCandidates } from './moduleGraph.js';
 import { isDirectlyInvoked } from './directInvocation.js';
 import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTests.js';
 
-const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
-const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'];
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(?:\/\*.*?\*\/\s*)*(['"`])([^'"`]+?)\1\s*[,)]/g;
-// `*` opens a comment continuation only when followed by space, `/` or EOL; `*gen() {}` is code.
-const COMMENT_LINE_RE = /^\s*(?:\/\/|\*(?:[\s/]|$))/;
-const LEADING_BLOCK_COMMENT_RE = /^\s*\/\*.*?\*\//;
-const OPEN_BLOCK_COMMENT_RE = /^\s*\/\*/;
-
-/** `{ static, dynamic }` relative and bare specifiers, in source order. */
-export function importSpecifiersFromSource(src) {
-  const code = src.split('\n')
-    .map((line) => line.replace(LEADING_BLOCK_COMMENT_RE, ''))
-    .filter((line) => !COMMENT_LINE_RE.test(line) && !OPEN_BLOCK_COMMENT_RE.test(line))
-    .join('\n');
-  const dynamic = [];
-  for (const match of code.matchAll(DYNAMIC_IMPORT_RE)) {
-    if (!match[2].includes('${')) dynamic.push(match[2]);
-  }
-  return { static: staticImportSpecifiersFromSource(code), dynamic };
-}
-
-export function resolveSpecifier(fromRel, spec, known) {
-  if (!spec.startsWith('.')) return null;
-  const base = posix.normalize(posix.join(posix.dirname(fromRel), spec.split(/[?#]/)[0]));
-  if (base === '..' || base.startsWith('../')) return null;
-  const candidates = [base, ...RESOLVE_EXTENSIONS.map((ext) => `${base}${ext}`),
-    ...RESOLVE_EXTENSIONS.map((ext) => `${base}/index${ext}`)];
-  return candidates.find((candidate) => known.has(candidate)) ?? null;
-}
-
 /**
- * Resolved repo-relative edges for every module in `files`.
- * `readText(rel)` returns the source or null. An edge that is both static and
- * dynamic is recorded as static.
+ * Resolved repo-relative edges for every module of `graph` (`createModuleGraph`).
+ * A module that cannot be read or tokenized has no entry and is listed in
+ * `uninspected` instead, because its edges are unknown. An edge that is both
+ * static and dynamic is recorded as static.
  *
- * @returns {Map<string, { static: Set<string>, dynamic: Set<string> }>}
+ * @returns {{ edges: Map<string, { static: Set<string>, dynamic: Set<string> }>, uninspected: string[] }}
  */
-export function buildImportGraph(files, readText) {
-  const known = new Set(files);
-  const graph = new Map();
-  for (const file of files) {
+export function importEdges(graph) {
+  const edges = new Map();
+  const uninspected = [];
+  for (const file of graph.files) {
     if (!MODULE_SOURCE_RE.test(file)) continue;
-    const text = readText(file);
-    if (text == null) continue;
-    const specs = importSpecifiersFromSource(text);
-    const edges = { static: new Set(), dynamic: new Set() };
-    for (const spec of specs.static) {
-      const target = resolveSpecifier(file, spec, known);
-      if (target && target !== file) edges.static.add(target);
+    let deferred;
+    let statics;
+    try {
+      ({ deferred } = graph.specifiersOf(file));
+      statics = graph.staticDependencies(file).dependencies;
+    } catch {
+      uninspected.push(file);
+      continue;
     }
-    for (const spec of specs.dynamic) {
-      const target = resolveSpecifier(file, spec, known);
-      if (target && target !== file && !edges.static.has(target)) edges.dynamic.add(target);
-    }
-    graph.set(file, edges);
+    const staticTargets = new Set(statics.filter((target) => target !== file));
+    const dynamicTargets = new Set(deferred.flatMap((spec) => resolveModuleCandidates(file, spec, graph.known))
+      .filter((target) => target !== file && !staticTargets.has(target)));
+    edges.set(file, { static: staticTargets, dynamic: dynamicTargets });
   }
-  return graph;
+  return { edges, uninspected };
 }
 
 function reverseEdges(graph, dynamic) {
@@ -152,22 +123,32 @@ export function formatReachSummary(report, { limit = 3 } = {}) {
   const shown = rows.slice(0, limit)
     .map((row) => `${row.source} ${row.dynamicReach} (static ${row.staticReach})`);
   const more = rows.length > limit ? `, +${rows.length - limit} more` : '';
-  return `dynamic-aware fan-out ${report.selected} suite(s): ${shown.join(', ')}${more}`;
+  const unknown = report.uninspected?.length
+    ? `; reach unknown: ${report.uninspected[0]}${report.uninspected.length > 1 ? ` and ${report.uninspected.length - 1} more` : ''} could not be read`
+    : '';
+  return `dynamic-aware fan-out ${report.selected} suite(s): ${shown.join(', ')}${more}${unknown}`;
 }
 
 /**
- * Tracked (plus given untracked) module files. A collection may supply its own
- * `readText(repoRelativePath)` snapshot; otherwise read directly under `cwd`.
+ * Reach of `sources` over a module graph. A collection passes its own
+ * `graph` (`createModuleGraph`) so the planner tokenizes each file once;
+ * otherwise the tracked files of `cwd` (or the given `files`) are read
+ * directly, an absent file counting as unreadable. A module that cannot be
+ * inspected may hide any number of edges, so `selected` then assumes every
+ * test the graph holds and `uninspected` names the modules.
  */
-export function measureRepoImportReach({ cwd, files, sources, isTest = serverRunnerTestPredicate(), readText }) {
-  const paths = files ?? execFileSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .split('\0').filter(Boolean);
-  const modules = paths.filter((rel) => MODULE_SOURCE_RE.test(rel) && !rel.includes('node_modules/'));
-  const graph = buildImportGraph(modules, readText ?? ((rel) => {
-    const abs = join(cwd, ...rel.split('/'));
-    return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
-  }));
-  return importReachReport(graph, sources.filter((source) => graph.has(source)), isTest);
+export function measureRepoImportReach({ cwd, files, sources, isTest = serverRunnerTestPredicate(), graph }) {
+  const moduleGraph = graph ?? createModuleGraph(
+    files ?? execFileSync('git', ['ls-files', '-z'], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean),
+    (rel) => {
+      const abs = join(cwd, ...rel.split('/'));
+      return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
+    },
+  );
+  const { edges, uninspected } = importEdges(moduleGraph);
+  const report = importReachReport(edges, sources.filter((source) => edges.has(source)), isTest);
+  if (uninspected.length === 0) return report;
+  return { ...report, selected: Math.max(report.selected, moduleGraph.files.filter(isTest).length), uninspected };
 }
 
 function main() {
@@ -187,12 +168,3 @@ function main() {
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();
-
-const MOCK_CALL_RE = /\bvi\s*\.\s*(?:mock|doMock|unmock|importActual|importMock)\s*\(\s*(['"`])([^'"`]+?)\1/g;
-
-/** Every specifier a test names: static, `import()` and the `vi.mock` family. */
-export function testReferenceSpecifiers(src) {
-  const { static: staticSpecs, dynamic } = importSpecifiersFromSource(src);
-  const mocked = [...src.matchAll(MOCK_CALL_RE)].map((match) => match[2]);
-  return [...new Set([...staticSpecs, ...dynamic, ...mocked])];
-}

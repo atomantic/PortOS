@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
-import { getRetiredDataInventory, deleteRetiredData } from '../../services/api';
+import { getRetiredDataInventory, deleteRetiredData } from '../../services/apiLoraTraining.js';
 import { formatBytes, formatCount } from '../../utils/formatters';
 
 // Leftovers of the retired LoRA-training feature (#13536). Rendered only while

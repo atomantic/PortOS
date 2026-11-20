@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   correctPersistentMindJournalEvent: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   getPersistentMindJournal: (...args) => mocks.getPersistentMindJournal(...args),
   correctPersistentMindJournalEvent: (...args) => mocks.correctPersistentMindJournalEvent(...args),
 }));

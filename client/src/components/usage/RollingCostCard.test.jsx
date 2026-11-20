@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import RollingCostCard, { niceTicks } from './RollingCostCard';
 
 const api = vi.hoisted(() => ({ getUsageRollingCost: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ getUsageRollingCost: api.getUsageRollingCost }));
 
 const payload = {
   range: '3m',

@@ -1,4 +1,4 @@
-import * as api from '../../services/api';
+import { createGoal, applyGoalOrganization } from '../../services/apiGoals.js';
 
 // Every API call below swallows its rejection and folds it into the `false` return
 // value, so each one passes `{ silent: true }` — the caller that acts on `false` owns
@@ -15,7 +15,7 @@ export async function applyOrganizationSuggestion(suggestion) {
 
   // Create apex goal if suggested as new
   if (suggestion.apexGoal?.suggestedTitle && !suggestion.apexGoal?.existingId) {
-    const apex = await api.createGoal({
+    const apex = await createGoal({
       title: suggestion.apexGoal.suggestedTitle,
       description: suggestion.apexGoal.suggestedDescription || '',
       horizon: 'lifetime',
@@ -44,7 +44,7 @@ export async function applyOrganizationSuggestion(suggestion) {
   if (suggestion.suggestedSubApex?.length) {
     const results = await Promise.all(suggestion.suggestedSubApex.map(sg => {
       const parentId = apexId || (sg.suggestedParentId !== '__new_apex__' ? sg.suggestedParentId : null) || null;
-      return api.createGoal({
+      return createGoal({
         title: sg.title,
         description: sg.description || '',
         horizon: 'lifetime',
@@ -58,7 +58,7 @@ export async function applyOrganizationSuggestion(suggestion) {
 
   // Apply organization to existing goals
   if (organization?.length) {
-    const ok = await api.applyGoalOrganization(organization, SILENT).then(() => true, () => false);
+    const ok = await applyGoalOrganization(organization, SILENT).then(() => true, () => false);
     if (!ok) return false;
   }
 

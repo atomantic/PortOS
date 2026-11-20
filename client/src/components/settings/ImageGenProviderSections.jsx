@@ -26,7 +26,8 @@ import GoogleModelSelect from '../imageGen/GoogleModelSelect';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
-import { getVideoGenModelContext, getProviders } from '../../services/api';
+import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
+import { getProviders } from '../../services/apiProviders.js';
 import {
   isLocalImageConfigured, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, HIGGSFIELD_IMAGE_DEFAULT_MODEL, higgsfieldImageFamily,
   GOOGLE_IMAGE_DEFAULT_MODEL, googleImageFamily,

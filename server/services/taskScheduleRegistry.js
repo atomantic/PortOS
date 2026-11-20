@@ -88,7 +88,7 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
 /**
  * Target scope for a task type — which app (if any) a run must name. The vocabulary lives in
  * `lib/taskTargetScope.js` because `server/lib` may not import upward into `server/services`
- * (`lib/layering.guard.test.js`); re-exported here for registry readers.
+ * (`server/test/guards/modules/libLayering.test.js`); re-exported here for registry readers.
  */
 export {
   INSTALL_WIDE_TASK_TYPES,

@@ -14,7 +14,7 @@
  */
 
 import { Link } from 'react-router';
-import { listAuthors } from '../../services/api';
+import { listAuthors } from '../../services/apiAuthors.js';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';

@@ -15,10 +15,12 @@ vi.mock('../services/socket', () => ({
 // Mock the API so the initial fetch resolves to a known map.
 const listMediaAnnotations = vi.fn();
 const setMediaAnnotation = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   listMediaAnnotations: (...args) => listMediaAnnotations(...args),
   setMediaAnnotation: (...args) => setMediaAnnotation(...args),
 }));
+vi.mock('../services/apiMediaHolders.js', () => ({ getMediaHolders: vi.fn(async () => ({ items: {} })) }));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
 
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
 

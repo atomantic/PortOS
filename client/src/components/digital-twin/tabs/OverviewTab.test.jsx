@@ -2,14 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinTraits: vi.fn(),
   getDigitalTwinConfidence: vi.fn(),
   getDigitalTwinGaps: vi.fn(),
   getDigitalTwinCompleteness: vi.fn(),
-  getProviders: vi.fn(),
   detectSoulContradictions: vi.fn(),
   updateSoulSettings: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../SoulWizard', () => ({ default: () => null }));
@@ -21,7 +23,13 @@ vi.mock('../TwinProviderPicker.jsx', () => ({
   default: ({ providers }) => <div data-testid="picker">{providers.map((p) => p.id).join(',')}</div>,
 }));
 
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinTraits,
+  getDigitalTwinConfidence,
+  getDigitalTwinGaps,
+  getDigitalTwinCompleteness,
+} from '../../../services/apiDigitalTwin.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import OverviewTab from './OverviewTab';
 
 const STATUS = { documentCount: 2, healthScore: 50, enabledDocuments: 2, documentsByCategory: {} };
@@ -32,15 +40,15 @@ const renderTab = () => render(
 describe('OverviewTab failed reads', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinTraits.mockResolvedValue({ traits: { openness: 0.5 } });
-    api.getDigitalTwinConfidence.mockResolvedValue({ confidence: { overall: 0.5 } });
-    api.getDigitalTwinGaps.mockResolvedValue({ gaps: [{ dimension: 'x' }] });
-    api.getDigitalTwinCompleteness.mockResolvedValue(null);
-    api.getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true }] });
+    getDigitalTwinTraits.mockResolvedValue({ traits: { openness: 0.5 } });
+    getDigitalTwinConfidence.mockResolvedValue({ confidence: { overall: 0.5 } });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [{ dimension: 'x' }] });
+    getDigitalTwinCompleteness.mockResolvedValue(null);
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true }] });
   });
 
   it('shows an error with Retry when traits/confidence/gaps fail instead of an empty personality map', async () => {
-    api.getDigitalTwinGaps.mockRejectedValueOnce(new Error('gaps offline'));
+    getDigitalTwinGaps.mockRejectedValueOnce(new Error('gaps offline'));
     renderTab();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load personality traits, confidence and gaps.*gaps offline/i);
@@ -52,7 +60,7 @@ describe('OverviewTab failed reads', () => {
   });
 
   it('shows an error with Retry for a failed provider list instead of an empty picker', async () => {
-    api.getProviders.mockRejectedValueOnce(new Error('providers down')).mockResolvedValueOnce({ providers: [{ id: 'example', enabled: true }] });
+    getProviders.mockRejectedValueOnce(new Error('providers down')).mockResolvedValueOnce({ providers: [{ id: 'example', enabled: true }] });
     renderTab();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load AI providers/i);

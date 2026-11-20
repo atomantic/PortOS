@@ -4,7 +4,6 @@ import { describe, it, expect, vi } from 'vitest';
 
 // RunsTab pulls in the API barrel transitively; stub it so importing the
 // module for the pure-helper test doesn't drag real HTTP wrappers into scope.
-vi.mock('../../../services/api', () => ({}));
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
 import { runLogProcessName } from './RunsTab';

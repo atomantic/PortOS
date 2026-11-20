@@ -3,22 +3,23 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiApps.js', () => ({
   handleSelfRestart: vi.fn(),
-  PORTOS_APP_ID: 'portos-default',
-  provisionTailnetCert: vi.fn(),
   restartApp: vi.fn(),
+}));
+vi.mock('../../services/apiCore.js', () => ({
+  PORTOS_APP_ID: 'portos-default',
+}));
+vi.mock('../../services/apiSystem.js', () => ({
+  provisionTailnetCert: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import {
-  handleSelfRestart,
-  provisionTailnetCert,
-  restartApp,
-} from '../../services/api';
+import { handleSelfRestart, restartApp } from '../../services/apiApps.js';
+import { provisionTailnetCert } from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 import TailnetHelpBanner from './TailnetHelpBanner';
 

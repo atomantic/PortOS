@@ -5,7 +5,7 @@ import {
   videoGenModel, videoGenModelContext, videoGenStatus,
 } from '../test/videoGenPageMocks.jsx';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
-import { cancelVideoGen, getActiveVideoJob } from '../services/api';
+import { cancelVideoGen, getActiveVideoJob } from '../services/apiImageVideo.js';
 import { lastEventSource, MockEventSource } from '../test/mockEventSource';
 
 const MODEL = videoGenModel('h3-one');

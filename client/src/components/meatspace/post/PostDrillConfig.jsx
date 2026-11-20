@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, Target, Layers, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
+import {
+  updatePostConfig,
+  getPostAdaptivePreview,
+  getPostMultiplicationProgress,
+  getPostPowersProgress,
+  getPostCognitiveProgress,
+  getMemoryItems,
+} from '../../../services/apiMeatspace.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ProviderModelSelector from '../../ProviderModelSelector';

@@ -16,7 +16,7 @@
  *
  * `server/sockets/` is the largest population of "outside the request lifecycle"
  * async code in the tree. This is the same rule and the same shape as
- * `server/timerCallbackConventions.guard.test.js` — the two share their lexer,
+ * `server/test/guards/runtime/timerCallbackConventions.test.js` — the two share their lexer,
  * callback parser and await checker via `server/lib/sourceScan.js`, so they
  * cannot drift on what "owns its rejection" means.
  *

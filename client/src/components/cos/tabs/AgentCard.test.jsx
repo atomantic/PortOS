@@ -18,8 +18,10 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiBrain.js', () => ({
   normalizeBrainScanReportPath: path => path,
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
   submitCosAgentFeedback: vi.fn(),
   sendCosAgentBtw: vi.fn(),
   getCosAgent: vi.fn(),
@@ -38,7 +40,15 @@ vi.mock('../../../lib/clipboard', () => ({
   copyToClipboard: (...args) => copyToClipboard(...args),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getCosAgent,
+  getCosAgentStats,
+  submitCosAgentFeedback,
+  sendCosAgentBtw,
+  getCosAgentPrompt,
+  addCosTask,
+  hydrateCosAgentDescription,
+} from '../../../services/apiAgents.js';
 import AgentCard from './AgentCard';
 
 const agent = {
@@ -167,7 +177,7 @@ describe('AgentCard runtime presentation', () => {
     expect(screen.getByRole('button', { name: 'Show earlier (120)' })).toBeInTheDocument();
     unmount();
 
-    api.getCosAgent.mockResolvedValue({ ...agent, output: toolLines(200) });
+    getCosAgent.mockResolvedValue({ ...agent, output: toolLines(200) });
     render(<MemoryRouter><AgentCard agent={agent} completed initiallyExpanded /></MemoryRouter>);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Show full transcript' }));
     expect(await screen.findByText('🔧 step 0')).toBeInTheDocument();
@@ -272,21 +282,21 @@ describe('AgentCard runtime presentation', () => {
 
   it('distinguishes a live process, a zombie, and missing process stats', async () => {
     const runningAgent = { ...runningAt(30_000), pid: 4242 };
-    api.getCosAgentStats.mockResolvedValueOnce({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
+    getCosAgentStats.mockResolvedValueOnce({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
     const { unmount } = render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
     expect(await screen.findByText('12.3%')).toBeInTheDocument();
     expect(screen.getByText('64MB')).toBeInTheDocument();
     expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
     unmount();
 
-    api.getCosAgentStats.mockResolvedValueOnce({ active: false, pid: 4242 });
+    getCosAgentStats.mockResolvedValueOnce({ active: false, pid: 4242 });
     const zombie = render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
     expect(await screen.findByText('ZOMBIE')).toBeInTheDocument();
     zombie.unmount();
 
-    api.getCosAgentStats.mockResolvedValueOnce(null);
+    getCosAgentStats.mockResolvedValueOnce(null);
     render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
-    await waitFor(() => expect(api.getCosAgentStats).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(getCosAgentStats).toHaveBeenCalledTimes(3));
     expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
     expect(screen.queryByText(/PID 4242/)).not.toBeInTheDocument();
   });
@@ -438,7 +448,7 @@ describe('AgentCard feedback', () => {
       feedback: { rating: 'positive', submittedAt: '2026-07-13T12:00:00.000Z' },
     };
     const onFeedbackChange = vi.fn();
-    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: updatedAgent });
+    submitCosAgentFeedback.mockResolvedValue({ success: true, agent: updatedAgent });
 
     render(
       <MemoryRouter>
@@ -448,7 +458,7 @@ describe('AgentCard feedback', () => {
 
     await user.click(screen.getByRole('button', { name: 'Mark as helpful' }));
 
-    expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
+    expect(submitCosAgentFeedback).toHaveBeenCalledWith(
       agent.id,
       { rating: 'positive', comment: undefined },
       { silent: true }
@@ -466,7 +476,7 @@ describe('AgentCard feedback', () => {
         submittedAt: '2026-07-13T12:00:00.000Z'
       }
     };
-    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: updatedAgent });
+    submitCosAgentFeedback.mockResolvedValue({ success: true, agent: updatedAgent });
 
     render(
       <MemoryRouter>
@@ -478,7 +488,7 @@ describe('AgentCard feedback', () => {
     await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), updatedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Needs work' }));
 
-    expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
+    expect(submitCosAgentFeedback).toHaveBeenCalledWith(
       agent.id,
       { rating: 'negative', comment: updatedAgent.feedback.comment },
       { silent: true }
@@ -495,7 +505,7 @@ describe('AgentCard feedback', () => {
       ...ratedAgent,
       feedback: { ...ratedAgent.feedback, comment: 'The focused test coverage was useful.' }
     };
-    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: detailedAgent });
+    submitCosAgentFeedback.mockResolvedValue({ success: true, agent: detailedAgent });
 
     render(
       <MemoryRouter>
@@ -507,7 +517,7 @@ describe('AgentCard feedback', () => {
     await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), detailedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Save detail' }));
 
-    expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
+    expect(submitCosAgentFeedback).toHaveBeenCalledWith(
       agent.id,
       { rating: 'positive', comment: detailedAgent.feedback.comment },
       { silent: true }
@@ -524,7 +534,7 @@ describe('AgentCard finish action', () => {
       completedAt: null,
       metadata: { ...agent.metadata, executionMode: 'tui', tuiKind: 'claude' },
     };
-    api.sendCosAgentBtw.mockResolvedValue({ success: true });
+    sendCosAgentBtw.mockResolvedValue({ success: true });
 
     render(
       <MemoryRouter>
@@ -534,7 +544,7 @@ describe('AgentCard finish action', () => {
 
     await user.click(screen.getByRole('button', { name: 'Finish work and write sentinel' }));
 
-    expect(api.sendCosAgentBtw).toHaveBeenCalledWith(
+    expect(sendCosAgentBtw).toHaveBeenCalledWith(
       runningAgent.id,
       'Finish work and write sentinel.',
       { silent: true }
@@ -770,7 +780,7 @@ describe('AgentCard responsive header', () => {
 describe('AgentCard transcript truncation (#3498)', () => {
   it('says the transcript was clipped when the server returns a capped tail', async () => {
     const user = userEvent.setup();
-    api.getCosAgent.mockResolvedValue({
+    getCosAgent.mockResolvedValue({
       ...agent,
       output: [{ line: 'last line', timestamp: agent.completedAt }],
       outputTruncated: true,
@@ -792,7 +802,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
   it('still reports the clip when the tail window yielded no renderable lines', async () => {
     const user = userEvent.setup();
-    api.getCosAgent.mockResolvedValue({
+    getCosAgent.mockResolvedValue({
       ...agent,
       output: [],
       outputTruncated: true,
@@ -815,7 +825,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
   it('stays quiet when the whole transcript fit under the cap', async () => {
     const user = userEvent.setup();
-    api.getCosAgent.mockResolvedValue({
+    getCosAgent.mockResolvedValue({
       ...agent,
       output: [{ line: 'only line', timestamp: agent.completedAt }],
       outputTruncated: false,
@@ -830,7 +840,7 @@ describe('AgentCard transcript truncation (#3498)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Show' }));
 
-    await waitFor(() => expect(api.getCosAgent).toHaveBeenCalledWith(agent.id, { silent: true }));
+    await waitFor(() => expect(getCosAgent).toHaveBeenCalledWith(agent.id, { silent: true }));
     expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
   });
 });
@@ -1042,26 +1052,26 @@ describe('AgentCard goal fidelity', () => {
   });
 
   it('queues an isolated investigation with the original prompt and app, then links to the task', async () => {
-    api.getCosAgentPrompt.mockResolvedValue({ prompt: 'Resolve issue #123 acceptance criteria' });
-    api.addCosTask.mockResolvedValue({ id: 'task-investigation', approvalRequired: false });
+    getCosAgentPrompt.mockResolvedValue({ prompt: 'Resolve issue #123 acceptance criteria' });
+    addCosTask.mockResolvedValue({ id: 'task-investigation', approvalRequired: false });
     render(<MemoryRouter><AgentCard agent={{ ...withReview({ verdict: 'rethink', missing: ['Example gap'] }),
       metadata: { ...agent.metadata, taskApp: 'example-app' } }} completed /></MemoryRouter>);
     await userEvent.click(screen.getByRole('button', { name: 'Investigate findings' }));
-    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() => expect(addCosTask).toHaveBeenCalledWith(expect.objectContaining({
       app: 'example-app', type: 'user', isInvestigation: true,
       prompt: expect.stringContaining('Resolve issue #123 acceptance criteria'),
     }), { silent: true }));
-    expect(api.addCosTask.mock.calls[0][0].prompt).toContain('Example gap');
+    expect(addCosTask.mock.calls[0][0].prompt).toContain('Example gap');
     expect(await screen.findByRole('link', { name: 'View queued investigation' })).toHaveAttribute('href', '/cos/tasks?task=task-investigation&source=user');
     expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
   });
 
   it('keeps prompt retrieval failures visible and permits retry without queuing incomplete context', async () => {
-    api.getCosAgentPrompt.mockRejectedValue(new Error('Prompt unavailable'));
+    getCosAgentPrompt.mockRejectedValue(new Error('Prompt unavailable'));
     render(<MemoryRouter><AgentCard agent={withReview({ verdict: 'fix-first' })} completed /></MemoryRouter>);
     await userEvent.click(screen.getByRole('button', { name: 'Investigate findings' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Prompt unavailable');
-    expect(api.addCosTask).not.toHaveBeenCalled();
+    expect(addCosTask).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Investigate findings' })).toBeEnabled();
   });
 
@@ -1278,7 +1288,7 @@ describe('AgentCard truncated task description', () => {
 
   it('renders the preview without fetching, then hydrates the rest on expand', async () => {
     const user = userEvent.setup();
-    api.hydrateCosAgentDescription.mockResolvedValue({
+    hydrateCosAgentDescription.mockResolvedValue({
       ...longAgent,
       metadata: { ...longAgent.metadata, taskDescription: 'The preview the listing carried, and the rest of it', taskDescriptionTruncated: false },
     });
@@ -1286,14 +1296,14 @@ describe('AgentCard truncated task description', () => {
     render(<MemoryRouter><AgentCard agent={longAgent} liveOutputs={{}} /></MemoryRouter>);
 
     expect(screen.getByText('The preview the listing carried')).toBeInTheDocument();
-    expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
+    expect(hydrateCosAgentDescription).not.toHaveBeenCalled();
 
     await user.click(screen.getAllByRole('button', { name: /Show more/ })[0]);
 
     await waitFor(() => {
       expect(screen.getByText('The preview the listing carried, and the rest of it')).toBeInTheDocument();
     });
-    expect(api.hydrateCosAgentDescription).toHaveBeenCalledTimes(1);
+    expect(hydrateCosAgentDescription).toHaveBeenCalledTimes(1);
   });
 
   // The control: an untruncated description must never cost a round trip, which
@@ -1307,7 +1317,7 @@ describe('AgentCard truncated task description', () => {
     const toggle = screen.queryAllByRole('button', { name: /Show more/ })[0];
     if (toggle) await user.click(toggle);
 
-    expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
+    expect(hydrateCosAgentDescription).not.toHaveBeenCalled();
   });
 });
 
@@ -1316,7 +1326,7 @@ describe('AgentCard truncated task description', () => {
 // pattern lives in lib/issueRefs.test.js — this pins the WIRING, the half that
 // silently regresses when a prop is dropped in a refactor.
 it('links a task-summary issue reference at the tracker the run was stamped with', async () => {
-  api.getCosAgent.mockResolvedValue({ ...agent, output: [] });
+  getCosAgent.mockResolvedValue({ ...agent, output: [] });
   render(
     <MemoryRouter>
       <AgentCard
@@ -1336,19 +1346,19 @@ it('links a task-summary issue reference at the tracker the run was stamped with
 
 
 it('loads process stats only after opening an active agent with no output', async () => {
-  api.getCosAgentStats.mockResolvedValue({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
+  getCosAgentStats.mockResolvedValue({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
   render(<MemoryRouter><AgentCard agent={{ ...agent, status: 'running', completedAt: null, result: null, output: [] }} /></MemoryRouter>);
-  expect(api.getCosAgentStats).not.toHaveBeenCalled();
+  expect(getCosAgentStats).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('12.3%')).toBeInTheDocument();
 });
 
 
 it('loads a clipped summary only when the reader asks for the detail', async () => {
-  api.getCosAgent.mockResolvedValue({ ...agent, metadata: { ...agent.metadata, taskSummary: 'The full summary with its conclusion.' }, output: [] });
+  getCosAgent.mockResolvedValue({ ...agent, metadata: { ...agent.metadata, taskSummary: 'The full summary with its conclusion.' }, output: [] });
   render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, taskSummary: 'The preview', taskSummaryTruncated: true } }} completed /></MemoryRouter>);
   expect(screen.queryByText('The preview')).not.toBeInTheDocument();
-  expect(api.getCosAgent).not.toHaveBeenCalled();
+  expect(getCosAgent).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('The full summary with its conclusion.')).toBeInTheDocument();
   expect(screen.queryByText('Summary preview.')).not.toBeInTheDocument();
@@ -1357,21 +1367,21 @@ it('loads a clipped summary only when the reader asks for the detail', async () 
 it('refreshes expanded local stats on matching events without polling and reconciles missed events', async () => {
   vi.useFakeTimers();
   const running = { ...agent, status: 'running', completedAt: null, result: null };
-  api.getCosAgentStats.mockResolvedValue({ active: true, cpu: 12.3, memoryMb: 64 });
+  getCosAgentStats.mockResolvedValue({ active: true, cpu: 12.3, memoryMb: 64 });
   const view = render(<MemoryRouter><AgentCard agent={running} initiallyExpanded /></MemoryRouter>);
   await act(async () => {});
   expect(screen.getByText('12.3%')).toBeInTheDocument();
   await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
+  expect(getCosAgentStats).toHaveBeenCalledTimes(1);
   await act(async () => socket.receive('cos:agent:output', { agentId: 'another-agent' }));
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
-  api.getCosAgentStats.mockResolvedValue({ active: true, cpu: 24.6, memoryMb: 128 });
+  expect(getCosAgentStats).toHaveBeenCalledTimes(1);
+  getCosAgentStats.mockResolvedValue({ active: true, cpu: 24.6, memoryMb: 128 });
   await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
   expect(screen.getByText('24.6%')).toBeInTheDocument();
   await act(async () => socket.receive('cos:agent:updated', { id: agent.id }));
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(3);
+  expect(getCosAgentStats).toHaveBeenCalledTimes(3);
   await act(async () => socket.receive('connect'));
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(4);
+  expect(getCosAgentStats).toHaveBeenCalledTimes(4);
   await act(async () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     document.dispatchEvent(new Event('visibilitychange'));
@@ -1381,36 +1391,36 @@ it('refreshes expanded local stats on matching events without polling and reconc
     document.dispatchEvent(new Event('visibilitychange'));
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(5);
+  expect(getCosAgentStats).toHaveBeenCalledTimes(5);
   view.unmount();
   await act(async () => socket.receive('connect'));
   await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(5);
-  api.getCosAgentStats.mockImplementation(() => new Promise(() => {}));
+  expect(getCosAgentStats).toHaveBeenCalledTimes(5);
+  getCosAgentStats.mockImplementation(() => new Promise(() => {}));
 });
 
 it.each([{ remote: true }, { completed: true }, { paused: true }])('does not read stats for an ineligible expanded card %j', async props => {
   render(<MemoryRouter><AgentCard agent={agent} initiallyExpanded {...props} /></MemoryRouter>);
   await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
   await act(async () => socket.receive('connect'));
-  expect(api.getCosAgentStats).not.toHaveBeenCalled();
+  expect(getCosAgentStats).not.toHaveBeenCalled();
 });
 
 it('drops an outstanding stats response when collapsed and reads afresh on reopening', async () => {
   let resolveStats;
-  api.getCosAgentStats.mockReturnValueOnce(new Promise(resolve => { resolveStats = resolve; }));
+  getCosAgentStats.mockReturnValueOnce(new Promise(resolve => { resolveStats = resolve; }));
   const running = { ...agent, status: 'running', completedAt: null, result: null };
   render(<MemoryRouter><AgentCard agent={running} initiallyExpanded /></MemoryRouter>);
   await act(async () => {});
   fireEvent.click(screen.getByRole('button', { name: 'Hide', exact: true }));
   await act(async () => resolveStats({ active: true, cpu: 99.9 }));
   await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
-  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
-  api.getCosAgentStats.mockResolvedValueOnce({ active: true, cpu: 11.1 });
+  expect(getCosAgentStats).toHaveBeenCalledTimes(1);
+  getCosAgentStats.mockResolvedValueOnce({ active: true, cpu: 11.1 });
   fireEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('11.1%')).toBeInTheDocument();
   expect(screen.queryByText('99.9%')).not.toBeInTheDocument();
-  api.getCosAgentStats.mockRejectedValueOnce(new Error('Temporary failure'));
+  getCosAgentStats.mockRejectedValueOnce(new Error('Temporary failure'));
   await act(async () => socket.receive('cos:agent:updated', { id: agent.id }));
   expect(screen.getByText('11.1%')).toBeInTheDocument();
 });
@@ -1419,7 +1429,7 @@ it('drops an outstanding stats response when collapsed and reads afresh on reope
 it.each([false, true])('keeps a completed summary behind Show and its duplicate transcript behind a separate disclosure (remote=%s)', async (remote) => {
   const summary = 'Completed the example task.';
   const record = { ...agent, metadata: { ...agent.metadata, taskSummary: summary }, output: [{ type: 'stdout', line: summary }] };
-  api.getCosAgent.mockResolvedValue(record);
+  getCosAgent.mockResolvedValue(record);
   render(<MemoryRouter><AgentCard agent={record} completed remote={remote} /></MemoryRouter>);
   expect(screen.queryByText(summary)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
@@ -1434,7 +1444,7 @@ it.each([false, true])('keeps a completed summary behind Show and its duplicate 
 
 
 it('retries a clipped summary after the expanded detail request fails', async () => {
-  api.getCosAgent.mockRejectedValueOnce(new Error('Temporary failure'))
+  getCosAgent.mockRejectedValueOnce(new Error('Temporary failure'))
     .mockResolvedValueOnce({ ...agent, metadata: { ...agent.metadata, taskSummary: 'Recovered full summary.' }, output: [] });
   render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, taskSummary: 'Clipped preview', taskSummaryTruncated: true } }} completed /></MemoryRouter>);
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
@@ -1442,7 +1452,7 @@ it('retries a clipped summary after the expanded detail request fails', async ()
   await waitFor(() => expect(retry).toBeEnabled());
   await userEvent.click(retry);
   expect(await screen.findByText('Recovered full summary.')).toBeInTheDocument();
-  expect(api.getCosAgent).toHaveBeenCalledTimes(2);
+  expect(getCosAgent).toHaveBeenCalledTimes(2);
 });
 
 
@@ -1461,7 +1471,7 @@ it('loads prior pipeline stage output through the full transcript disclosure', a
     stages: [{ name: 'Plan' }, { name: 'Implement' }], currentStage: 1,
     stageResults: [{ stage: 0, agentId: 'prior-stage', success: true }],
   } }, output: [{ line: 'Implementation transcript' }] };
-  api.getCosAgent.mockImplementation(async id => id === 'prior-stage'
+  getCosAgent.mockImplementation(async id => id === 'prior-stage'
     ? { output: [{ line: 'Prior planning transcript' }] } : record);
   render(<MemoryRouter><AgentCard agent={record} completed /></MemoryRouter>);
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
@@ -1476,17 +1486,17 @@ it('loads prior pipeline stage output through the full transcript disclosure', a
 // empty transcript: the card claimed "No output captured" and never re-read.
 it('shows a retryable error when the full transcript read fails', async () => {
   const completedAgent = { ...agent, metadata: { ...agent.metadata, taskSummary: 'Done' } };
-  api.getCosAgent.mockRejectedValueOnce(new Error('Server unavailable'))
+  getCosAgent.mockRejectedValueOnce(new Error('Server unavailable'))
     .mockResolvedValueOnce({ ...completedAgent, output: [{ line: 'Recovered transcript' }] });
   render(<MemoryRouter><AgentCard agent={completedAgent} completed /></MemoryRouter>);
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
   expect(await screen.findByText(/Could not load the transcript — Server unavailable/)).toBeInTheDocument();
   expect(screen.queryByText('No output captured')).not.toBeInTheDocument();
-  expect(api.getCosAgent).toHaveBeenCalledTimes(1);
+  expect(getCosAgent).toHaveBeenCalledTimes(1);
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByText('Recovered transcript')).toBeInTheDocument();
-  expect(api.getCosAgent).toHaveBeenCalledTimes(2);
+  expect(getCosAgent).toHaveBeenCalledTimes(2);
 });
 
 it('shows a retryable error when a prior pipeline stage read fails', async () => {
@@ -1495,7 +1505,7 @@ it('shows a retryable error when a prior pipeline stage read fails', async () =>
     stageResults: [{ stage: 0, agentId: 'prior-stage', success: true }],
   } }, output: [{ line: 'Implementation transcript' }] };
   let stageReads = 0;
-  api.getCosAgent.mockImplementation(async id => {
+  getCosAgent.mockImplementation(async id => {
     if (id !== 'prior-stage') return record;
     stageReads += 1;
     if (stageReads === 1) throw new Error('Stage read failed');
@@ -1519,7 +1529,7 @@ it('retries a failed stage while another stage read is still in flight', async (
     stageResults: [{ stage: 0, agentId: 'plan-stage', success: true }, { stage: 1, agentId: 'research-stage', success: true }],
   } }, output: [{ line: 'Implementation transcript' }] };
   let planReads = 0;
-  api.getCosAgent.mockImplementation(id => {
+  getCosAgent.mockImplementation(id => {
     if (id === 'research-stage') return new Promise(() => {});
     if (id !== 'plan-stage') return Promise.resolve(record);
     planReads += 1;
@@ -1540,7 +1550,7 @@ it('retries a failed stage while another stage read is still in flight', async (
 
 it('keeps the runner transcript separate when no completion summary was saved', async () => {
   const completedAgent = { ...agent, metadata: {}, output: [{ line: 'exec: example tool output' }] };
-  api.getCosAgent.mockResolvedValue(completedAgent);
+  getCosAgent.mockResolvedValue(completedAgent);
   render(<MemoryRouter><AgentCard agent={completedAgent} completed /></MemoryRouter>);
   await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
   expect(await screen.findByText('No completion summary was saved. The runner transcript is available separately.')).toBeInTheDocument();
@@ -1553,7 +1563,7 @@ it('keeps the current cleanup verdict primary and labels stale report and warnin
   const current = { ...agent, result: { success: true, cleanupPending: true, warnings: ['Cleanup queued: old-internal-code'] },
     metadata: { ...agent.metadata, taskSummary: 'Cleanup is queued with the checkout preserved.',
       cleanupOutcome: { status: 'already-absent', reason: 'already-absent-merged', committedIntegrationVerified: true } } };
-  api.getCosAgent.mockResolvedValue({ ...current, output: [] });
+  getCosAgent.mockResolvedValue({ ...current, output: [] });
   render(<MemoryRouter><AgentCard agent={current} completed /></MemoryRouter>);
   expect(screen.getByText('Code merged.')).toBeInTheDocument();
   expect(screen.getByText('Local worktree already removed; merged delivery confirmed.')).toBeInTheDocument();

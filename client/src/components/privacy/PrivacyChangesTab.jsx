@@ -3,9 +3,13 @@ import {
   Plus, Repeat, ChevronDown, ChevronRight, ExternalLink, Check, Ban, Mail, ArrowRight,
 } from 'lucide-react';
 import {
-  getPrivacyChanges, getPrivacyChange, getVaultRecords,
-  markChangeOrgUpdated, markChangeOrgRemoved, draftChangeUpdateEmail,
-} from '../../services/api';
+  getPrivacyChanges,
+  getPrivacyChange,
+  getVaultRecords,
+  markChangeOrgUpdated,
+  markChangeOrgRemoved,
+  draftChangeUpdateEmail,
+} from '../../services/apiPrivacy.js';
 import toast from '../ui/Toast';
 import DeclareChangeDrawer from './DeclareChangeDrawer';
 import { VAULT_TYPES, CHANGE_KINDS, labelFor } from './constants';

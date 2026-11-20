@@ -1,4 +1,4 @@
-// PM2 and on-disk app registry access shared by the repair loop and dashboard.
+// Shared PM2 and data access for the monitor and dashboard.
 import { spawn } from 'child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
 import { existsSync } from 'fs';

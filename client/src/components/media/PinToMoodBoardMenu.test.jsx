@@ -15,7 +15,16 @@ const api = vi.hoisted(() => ({
   createMediaCollection: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMoodBoard.js', () => ({
+  listMoodBoards: api.listMoodBoards,
+  createMoodBoard: api.createMoodBoard,
+  addMoodBoardItem: api.addMoodBoardItem,
+  removeMoodBoardItem: api.removeMoodBoardItem,
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listMediaCollections: api.listMediaCollections,
+  createMediaCollection: api.createMediaCollection,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const imageItem = {

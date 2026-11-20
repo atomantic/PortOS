@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Link } from 'react-router';
 import { MergeAction, PullRequestReviewButton, DEFAULT_MERGE_METHOD, ACTION_STATUS_LABEL, actionStatusForTask } from '../apps/tabs/PullRequestActionControls';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
-import { actOnGitHubNotificationPullRequest } from '../../services/api';
+import { actOnGitHubNotificationPullRequest } from '../../services/apiGithub.js';
 import toast from '../ui/Toast';
 import { useCosTaskUpdates } from '../../hooks/useCosTaskUpdates';
 

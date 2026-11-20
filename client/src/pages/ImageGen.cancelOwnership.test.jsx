@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { loadImageGenPage, renderImageGenPage, resetImageGenMockState, state } from '../test/imageGenPageMocks.jsx';
-import { cancelImageGen } from '../services/api';
+import { cancelImageGen } from '../services/apiImageVideo.js';
 import { lastEventSource, MockEventSource } from '../test/mockEventSource';
 
 await loadImageGenPage();
@@ -59,7 +59,7 @@ describe('Image Gen render ownership', () => {
 
     MockEventSource.reset();
     let resolveActive;
-    const { getActiveImageJob } = await import('../services/api');
+    const { getActiveImageJob } = await import('../services/apiImageVideo.js');
     getActiveImageJob.mockReturnValueOnce(new Promise((resolve) => { resolveActive = resolve; }));
     const second = await renderImageGenPage();
     second.unmount();

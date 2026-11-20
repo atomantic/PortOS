@@ -8,7 +8,7 @@ afterAll(cleanupTempDataRoots);
 
 // Instruction-store writes (prompts, mind recipes, personas, tools, twin settings)
 // are plain writes under the default-deny gate (#16018), whose principal matrix lives
-// in services/authGate.test.js; hostControlCoverage.test.js pins every mounted one.
+// in services/authGate.test.js; server/test/guards/modules/hostControlCoverage.test.js pins every mounted one.
 // This suite keeps the twin-settings router's authorized workflow and what it persists.
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (original) => ({

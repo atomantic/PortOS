@@ -22,7 +22,16 @@ const api = vi.hoisted(() => ({
   deleteProviderService: vi.fn(),
   refreshProviderServiceCatalog: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviderCatalog: api.getProviderCatalog,
+  createProviderPreset: api.createProviderPreset,
+  getProviderServices: api.getProviderServices,
+  getProviderServiceDefinitions: api.getProviderServiceDefinitions,
+  createProviderService: api.createProviderService,
+  updateProviderService: api.updateProviderService,
+  deleteProviderService: api.deleteProviderService,
+  refreshProviderServiceCatalog: api.refreshProviderServiceCatalog,
+}));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));

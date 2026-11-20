@@ -123,7 +123,7 @@ describe.skipIf(process.platform === 'win32')('node scripts/setup.js', () => {
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
     mkdirSync(join(root, 'server', 'lib'), { recursive: true });
     mkdirSync(join(root, 'bin'));
-    for (const label of ['client']) mkdirSync(join(root, label));
+    mkdirSync(join(root, 'client'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     for (const file of ['setup.js', 'ensure-deps.js', 'lib/directInvocation.js', 'lib/workspaceDependencies.js']) {
       copyFileSync(join(REPO_ROOT, 'scripts', file), join(root, 'scripts', file));

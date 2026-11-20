@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   getPipelinePerspectiveRewrites: vi.fn(),
   createPipelinePerspectiveRewrite: vi.fn(),
   deletePipelinePerspectiveRewrite: vi.fn(),
@@ -18,7 +18,7 @@ import {
   getPipelinePerspectiveRewrites,
   createPipelinePerspectiveRewrite,
   deletePipelinePerspectiveRewrite,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
 const ISSUE = {
   id: 'iss-1',

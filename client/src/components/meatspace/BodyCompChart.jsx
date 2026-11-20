@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 import { Trash2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getBodyHistory, removeBodyEntry } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -21,7 +21,7 @@ export default function BodyCompChart() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
-    const history = await api.getBodyHistory({ silent: true }).catch(() => null);
+    const history = await getBodyHistory({ silent: true }).catch(() => null);
     setFailed(history === null);
     setEntries(Array.isArray(history) ? history : []);
     setLoading(false);
@@ -154,7 +154,7 @@ export default function BodyCompChart() {
                     confirmIcon={Trash2}
                     ariaLabel={`Confirm delete body entry ${entry.date}`}
                     onConfirm={() => confirmDelete(async () => {
-                      const removed = await api.removeBodyEntry(id).catch(() => null);
+                      const removed = await removeBodyEntry(id).catch(() => null);
                       if (removed) setRemovingId(id);
                     })}
                     onCancel={cancelDelete}

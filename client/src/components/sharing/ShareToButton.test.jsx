@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSharing.js', () => ({
   listShareBuckets: vi.fn(),
   exportToShareBucket: vi.fn(),
   listShareSubscriptions: vi.fn(),
@@ -13,7 +13,12 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import * as api from '../../services/api';
+import {
+  listShareBuckets,
+  listShareSubscriptions,
+  subscribeToShareBucket,
+  exportToShareBucket,
+} from '../../services/apiSharing.js';
 import ShareToButton from './ShareToButton';
 
 const BUCKET_A = { id: 'bkt-a', name: 'Bucket A', mode: 'auto-merge', path: '/exports/a' };
@@ -21,8 +26,8 @@ const BUCKET_B = { id: 'bkt-b', name: 'Bucket B', mode: 'inbox', path: '/exports
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listShareBuckets.mockResolvedValue({ buckets: [BUCKET_A, BUCKET_B] });
-  api.listShareSubscriptions.mockResolvedValue({ subscriptions: [] });
+  listShareBuckets.mockResolvedValue({ buckets: [BUCKET_A, BUCKET_B] });
+  listShareSubscriptions.mockResolvedValue({ subscriptions: [] });
 });
 
 describe('ShareToButton', () => {
@@ -35,7 +40,7 @@ describe('ShareToButton', () => {
     const user = userEvent.setup();
     render(<ShareToButton kind="series" ids={['s1']} />);
     await user.click(screen.getByRole('button', { name: /Share/i }));
-    await waitFor(() => expect(api.listShareBuckets).toHaveBeenCalled());
+    await waitFor(() => expect(listShareBuckets).toHaveBeenCalled());
     expect(await screen.findByText('Bucket A')).toBeTruthy();
     expect(screen.getByText('Bucket B')).toBeTruthy();
   });
@@ -65,7 +70,7 @@ describe('ShareToButton', () => {
   });
 
   it('subscribes a series record to a bucket on click', async () => {
-    api.subscribeToShareBucket.mockResolvedValue({
+    subscribeToShareBucket.mockResolvedValue({
       subscription: { id: 'sub-s1-bkt-a', bucketId: 'bkt-a' },
     });
     const user = userEvent.setup();
@@ -73,14 +78,14 @@ describe('ShareToButton', () => {
     await user.click(screen.getByRole('button', { name: /Share/i }));
     await screen.findByText('Bucket A');
     await user.click(screen.getByText('Bucket A'));
-    await waitFor(() => expect(api.subscribeToShareBucket).toHaveBeenCalledWith(
+    await waitFor(() => expect(subscribeToShareBucket).toHaveBeenCalledWith(
       { bucketId: 'bkt-a', recordKind: 'series', recordId: 's1' },
       { silent: true },
     ));
   });
 
   it('shares a media item one-shot on click', async () => {
-    api.exportToShareBucket.mockResolvedValue({
+    exportToShareBucket.mockResolvedValue({
       exports: [{ recordCount: 3, assetCount: 1 }],
     });
     const user = userEvent.setup();
@@ -89,7 +94,7 @@ describe('ShareToButton', () => {
     await user.click(screen.getByRole('button', { name: /Share/i }));
     await screen.findByText('Bucket A');
     await user.click(screen.getByText('Bucket A'));
-    await waitFor(() => expect(api.exportToShareBucket).toHaveBeenCalledWith(
+    await waitFor(() => expect(exportToShareBucket).toHaveBeenCalledWith(
       'bkt-a',
       { kind: 'media', items },
       { silent: true },
@@ -98,7 +103,7 @@ describe('ShareToButton', () => {
 
   it('shows an error row with Retry when the bucket read fails, not "No buckets yet"', async () => {
     const user = userEvent.setup();
-    api.listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
+    listShareBuckets.mockRejectedValueOnce(new Error('buckets 500'));
     render(<ShareToButton kind="series" ids={['s1']} />);
     await user.click(screen.getByRole('button', { name: /Share/i }));
 
@@ -111,7 +116,7 @@ describe('ShareToButton', () => {
 
   it('does not render unchecked rows when the subscription read fails', async () => {
     const user = userEvent.setup();
-    api.listShareSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
+    listShareSubscriptions.mockRejectedValueOnce(new Error('subs 500'));
     render(<ShareToButton kind="series" ids={['s1']} />);
     await user.click(screen.getByRole('button', { name: /Share/i }));
 

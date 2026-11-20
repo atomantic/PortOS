@@ -3,10 +3,11 @@ import { Loader2, Wand2, ChevronRight, ChevronDown, FileDown } from 'lucide-reac
 import toast from '../../ui/Toast';
 import {
   updatePipelineSeason,
-  generatePipelineVolumeCover, generatePipelineVolumeBackCover,
+  generatePipelineVolumeCover,
+  generatePipelineVolumeBackCover,
   generatePipelineVolumeCoverConcepts,
   pipelineVolumePdfUrl,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import VolumeCoverEditorBox from './VolumeCoverEditorBox.jsx';
 
 export default function VolumeCoversPanel({ series, season, seasons, onSeriesUpdate }) {

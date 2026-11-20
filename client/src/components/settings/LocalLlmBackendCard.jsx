@@ -1,11 +1,8 @@
 import { ArrowRightLeft, ArrowUpCircle, Power, PowerOff, Star } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatContextLength } from '../../utils/formatters';
-import {
-  patchSettingsSlice,
-  switchLocalLlmBackend,
-  upgradeLocalLlmBackend,
-} from '../../services/api';
+import { patchSettingsSlice } from '../../services/apiSystem.js';
+import { switchLocalLlmBackend, upgradeLocalLlmBackend } from '../../services/apiLocalLlm.js';
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 

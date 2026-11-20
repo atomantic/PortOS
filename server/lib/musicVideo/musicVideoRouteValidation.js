@@ -36,7 +36,7 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { MUSIC_VIDEO_WIPE_SEC, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
-import { MUSIC_VIDEO_MAX_SUBJECTS } from './musicVideoLimits.js';
+import { MUSIC_VIDEO_AUDIO_LAYER_LIMIT, MUSIC_VIDEO_AUDIO_LAYER_MAX_START_SEC, MUSIC_VIDEO_AUDIO_LAYER_MAX_VOLUME, MUSIC_VIDEO_MAX_SUBJECTS } from './musicVideoLimits.js';
 import { STORYBOARD_ID_PATTERN } from '../storyboardVocabulary.js';
 import { MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES, MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES, MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN } from './musicVideoCameos.js';
 import {
@@ -1015,6 +1015,22 @@ const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
+// Timeline audio layers (services/musicVideo/audioLayers.js). A PATCH names
+// the project's existing layers by id; one it leaves out is removed. Only the
+// upload route adds a layer, so a patch carries no filename.
+const musicVideoAudioLayerPatchSchema = z.object({
+  id: z.string().min(1).max(64),
+  startSec: z.number().min(0).max(MUSIC_VIDEO_AUDIO_LAYER_MAX_START_SEC).optional(),
+  volume: z.number().min(0).max(MUSIC_VIDEO_AUDIO_LAYER_MAX_VOLUME).optional(),
+  muted: z.boolean().optional(),
+  label: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// `POST /:id/audio-layers?startSec=…`: where on the song a new layer lands.
+export const musicVideoAudioLayerUploadQuerySchema = z.object({
+  startSec: z.coerce.number().min(0).max(MUSIC_VIDEO_AUDIO_LAYER_MAX_START_SEC).optional(),
+}).strict();
+
 // Automation-first brief: which render tools the agent may use, the director's
 // free-text guidance, and a spend cap (null = no cap). A patch merges per
 // sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
@@ -1296,6 +1312,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   previz: musicVideoPrevizSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
+  audioLayers: z.array(musicVideoAudioLayerPatchSchema).max(MUSIC_VIDEO_AUDIO_LAYER_LIMIT).optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
   templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),

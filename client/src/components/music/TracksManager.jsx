@@ -33,13 +33,22 @@ import TrackRenderCard from './TrackRenderCard';
 import TrackRenderModal from './TrackRenderModal';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { listMusicVideoMidiSources } from '../../services/apiMusicVideo.js';
-import { trackAudioUrl } from '../../services/apiTracks.js';
 import {
-  listTracks, createTrack, updateTrack, deleteTrack,
-  uploadTrackAudio, attachTrackAudio, listMusicLibrary, listAlbums,
-  selectTrackRender, deleteTrackRender,
-  TRACK_TITLE_MAX, TRACK_LYRICS_MAX, TRACK_PROMPT_MAX,
-} from '../../services/api';
+  trackAudioUrl,
+  listTracks,
+  createTrack,
+  updateTrack,
+  deleteTrack,
+  uploadTrackAudio,
+  attachTrackAudio,
+  listMusicLibrary,
+  selectTrackRender,
+  deleteTrackRender,
+  TRACK_TITLE_MAX,
+  TRACK_LYRICS_MAX,
+  TRACK_PROMPT_MAX,
+} from '../../services/apiTracks.js';
+import { listAlbums } from '../../services/apiAlbums.js';
 
 // Cap audio uploads to match the server's MUSIC_UPLOAD_MAX_BYTES (50MB).
 const AUDIO_MAX_BYTES = 50 * 1024 * 1024;

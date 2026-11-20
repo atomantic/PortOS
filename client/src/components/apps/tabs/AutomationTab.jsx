@@ -8,7 +8,9 @@ import useListResource from '../../../hooks/useListResource.js';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
 import AppProviderPin from '../../cos/AppProviderPin';
-import * as api from '../../../services/api';
+import { getAppTaskTypes, updateAppTaskTypeOverride, toggleAllAppTaskTypes } from '../../../services/apiApps.js';
+import { getCosSchedule, getCosStatus, resumeCos, triggerCosOnDemandTask } from '../../../services/apiAgents.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { AGENT_OPTIONS, hasProviderPin, providerPinDivergesFromSchedule, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import { PROVIDER_TYPES, providerDisplayName } from '../../../utils/providers';
@@ -60,10 +62,10 @@ export default function AutomationTab({ appId, appName }) {
   // not render as an empty catalogue. Each is a one-element list so the shared
   // useListResource state machine (loading/ready/error + retry) applies.
   const fetchOverrides = useCallback(
-    () => api.getAppTaskTypes(appId, { silent: true }).then(d => [d?.taskTypeOverrides || {}]),
+    () => getAppTaskTypes(appId, { silent: true }).then(d => [d?.taskTypeOverrides || {}]),
     [appId],
   );
-  const fetchSchedule = useCallback(() => api.getCosSchedule({ silent: true }).then(d => [d || {}]), []);
+  const fetchSchedule = useCallback(() => getCosSchedule({ silent: true }).then(d => [d || {}]), []);
   const overridesResource = useListResource(fetchOverrides);
   const scheduleResource = useListResource(fetchSchedule);
   const overrides = overridesResource.items[0] || {};
@@ -74,8 +76,8 @@ export default function AutomationTab({ appId, appName }) {
 
   const fetchData = useCallback(async () => {
     const [statusData, providersData] = await Promise.all([
-      api.getCosStatus().catch(() => null),
-      api.getProviders({ silent: true }).catch((error) => ({ error }))
+      getCosStatus().catch(() => null),
+      getProviders({ silent: true }).catch((error) => ({ error }))
     ]);
     setPaused(statusData?.paused === true);
     // A failed provider read keeps the last good catalogue and shows a retry row.
@@ -97,7 +99,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleResume = async () => {
     setResuming(true);
-    const result = await api.resumeCos({ silent: true }).catch(err => {
+    const result = await resumeCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -110,7 +112,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const saveOverride = async (taskType, patch) => {
     setSaving(true);
-    const result = await api.updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
+    const result = await updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -163,7 +165,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleTrigger = async (taskType) => {
     const toastId = toast.loading(`Sending ${taskType} request for ${appName}…`);
-    const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
+    const result = await triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     }).finally(() => toast.dismiss(toastId));
@@ -206,7 +208,7 @@ export default function AutomationTab({ appId, appName }) {
   const handleToggleAll = async () => {
     setSaving(true);
     const newEnabled = !allEnabled;
-    const result = await api.toggleAllAppTaskTypes(appId, newEnabled, { silent: true }).catch(err => {
+    const result = await toggleAllAppTaskTypes(appId, newEnabled, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

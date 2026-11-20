@@ -16,7 +16,7 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
-import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir, writeArchivedAgentMetadata } from './cosAgentIndex.js';
 import { readProtectedCleanupOwners } from './cosAgentLifecycle.js';
 import { releaseAgentReservation } from '../agent/agentMaintenanceReservations.js';
 
@@ -41,6 +41,7 @@ export async function archiveStaleAgents() {
 
     const idx = await loadAgentIndex();
     const archived = [];
+    const evict = [];
 
     for (const id of staleIds) {
       // Ensure agent is persisted to date-bucketed disk before removing from state
@@ -58,31 +59,31 @@ export async function archiveStaleAgents() {
         if (existsSync(flatDir) && !existsSync(targetDir)) {
           // Write metadata then move (byte-safe fallback that never deletes the
           // source unless the whole copy landed)
-          await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
+          await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
           await moveAgentDir(flatDir, targetDir)
             .catch(err => console.error(`❌ Failed to archive agent ${id}: ${err.message}`));
           if (!existsSync(targetDir)) continue; // Skip index update if move failed
-        } else if (!existsSync(targetDir)) {
-          await ensureDir(targetDir);
-          await atomicWrite(join(targetDir, 'metadata.json'), agentWithoutOutput).catch(() => {});
-          invalidateArchivedRecord(id);
+        } else if (!existsSync(join(targetDir, 'metadata.json'))) {
+          await writeArchivedAgentMetadata(targetDir, agentWithoutOutput);
         }
 
         idx.set(id, dateStr);
         archived.push({ ...agent, id });
       }
 
-      delete state.agents[id];
+      evict.push(id);
     }
 
-    await saveState(state);
-    // Ordered before `saveAgentIndex`, which prunes the projection to the ids
-    // the index owns.
+    // Publish archive membership before evicting the live record. Until then
+    // the live record shadows its archive copy during safety checks.
     await recordArchivedAgentOrder(archived);
     await saveAgentIndex();
-    console.log(`📦 Archived ${staleIds.length} stale agents from state.json (retained on disk)`);
-    cosEvents.emit('agents:changed', { action: 'auto-archive', archived: staleIds.length });
-    return { archived: staleIds.length };
+    const agents = { ...state.agents };
+    for (const id of evict) delete agents[id];
+    await saveState({ ...state, agents }, { changedAgentIds: evict });
+    console.log(`📦 Archived ${evict.length} stale agents from state.json (retained on disk)`);
+    cosEvents.emit('agents:changed', { action: 'auto-archive', archived: evict.length });
+    return { archived: evict.length };
   }));
 }
 

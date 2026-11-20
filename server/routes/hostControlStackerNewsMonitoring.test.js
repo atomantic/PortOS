@@ -35,7 +35,7 @@ const territoryId = '00000000-0000-4000-8000-000000000002';
 const base = '/api/stacker-news';
 const mounts = [[base, routes]];
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; every write here is gated by the method default,
+// server/test/guards/modules/hostControlCoverage.test.js; every write here is gated by the method default,
 // so this keeps one refusal and the authorized workflow of each write.
 const workflows = [
   ['post', `${base}/accounts/${accountId}/sync`, {}, effects.syncAccount, 200],

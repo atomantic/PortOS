@@ -5,11 +5,21 @@ import PersonaMasterDetail from '../persona/PersonaMasterDetail';
 import toast from '../ui/Toast';
 import { copyToClipboard } from '../../lib/clipboard';
 import {
-  listArtists, createArtist, updateArtist, deleteArtist, generateImage, getArtistSubmissionProfile,
-  ARTIST_NAME_MAX, ARTIST_GENRE_MAX, ARTIST_BIO_MAX, ARTIST_MUSICAL_STYLE_MAX,
-  ARTIST_PHYSICAL_DESCRIPTION_MAX, ARTIST_PORTRAIT_STYLE_MAX, ARTIST_PORTRAIT_IMAGE_URL_MAX,
+  listArtists,
+  createArtist,
+  updateArtist,
+  deleteArtist,
+  getArtistSubmissionProfile,
+  ARTIST_NAME_MAX,
+  ARTIST_GENRE_MAX,
+  ARTIST_BIO_MAX,
+  ARTIST_MUSICAL_STYLE_MAX,
+  ARTIST_PHYSICAL_DESCRIPTION_MAX,
+  ARTIST_PORTRAIT_STYLE_MAX,
+  ARTIST_PORTRAIT_IMAGE_URL_MAX,
   ARTIST_SUBMISSION_FIELD_SPECS,
-} from '../../services/api';
+} from '../../services/apiArtists.js';
+import { generateImage } from '../../services/apiSystem.js';
 
 const FIELDS = [
   { key: 'name', label: 'Name', placeholder: 'Nova Vale', maxLength: ARTIST_NAME_MAX },

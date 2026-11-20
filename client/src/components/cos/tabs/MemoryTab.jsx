@@ -3,7 +3,17 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {Trash2, X, Check, XCircle, Pencil, AlertTriangle, Brain, Bot} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
-import * as api from '../../../services/api';
+import { getCosConfig, updateCosConfig } from '../../../services/apiAgents.js';
+import {
+  searchMemories,
+  getMemories,
+  getMemoryStats,
+  getEmbeddingStatus,
+  getMemoryBackendStatus,
+  approveMemory,
+  rejectMemory,
+  deleteMemory,
+} from '../../../services/apiMemory.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatCount, formatDateNumeric, formatPercent } from '../../../utils/formatters';
@@ -58,7 +68,7 @@ export default function MemoryTab({ apps = [] }) {
   useEffect(() => {
     if (embeddingConfigLoaded) return;
     let active = true;
-    api.getCosConfig().then(cfg => {
+    getCosConfig().then(cfg => {
       if (!active) return;
       if (cfg?.embeddingProviderId) {
         setEmbeddingProviderId(cfg.embeddingProviderId);
@@ -77,14 +87,14 @@ export default function MemoryTab({ apps = [] }) {
   const queryKey = JSON.stringify([sourceFilter, filters, submittedSearch]);
   const list = useSocketResource(async ({ signal }) => {
     const result = submittedSearch
-      ? await api.searchMemories(submittedSearch, { limit: 20, appId }, { signal, silent: true })
-      : await api.getMemories({ limit: 100, ...filters, appId }, { signal, silent: true });
+      ? await searchMemories(submittedSearch, { limit: 20, appId }, { signal, silent: true })
+      : await getMemories({ limit: 100, ...filters, appId }, { signal, silent: true });
     if (!Array.isArray(result?.memories)) throw new Error('Invalid memory list response');
     return result.memories;
   }, { namespace: 'cos', events: MEMORY_EVENTS, resourceKey: queryKey, enabled: view !== 'graph' });
 
   const queue = useSocketResource(async ({ signal }) => {
-    const pending = await api.getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true });
+    const pending = await getMemories({ status: 'pending_approval', limit: 50, appId }, { signal, silent: true });
     if (!Array.isArray(pending?.memories)) throw new Error('Invalid pending memory response');
     return pending.memories;
   }, { namespace: 'cos', events: QUEUE_EVENTS, resourceKey: sourceFilter });
@@ -92,7 +102,7 @@ export default function MemoryTab({ apps = [] }) {
   // discard a usable approval queue (or vice versa).
   const counts = useSocketResource(
     async ({ signal }) => {
-      const result = await api.getMemoryStats({ signal, silent: true });
+      const result = await getMemoryStats({ signal, silent: true });
       if (!Number.isFinite(result?.active)) throw new Error('Invalid memory counts response');
       return result;
     },
@@ -101,7 +111,7 @@ export default function MemoryTab({ apps = [] }) {
 
   const status = useSocketResource(async () => {
     const [embeddingStatus, backendStatus] = await Promise.all([
-      api.getEmbeddingStatus(), api.getMemoryBackendStatus()
+      getEmbeddingStatus(), getMemoryBackendStatus()
     ]);
     return { embeddingStatus, backendStatus };
   }, { events: STATUS_EVENTS });
@@ -144,8 +154,8 @@ export default function MemoryTab({ apps = [] }) {
     counts.refetch();
   };
 
-  const handleApprove = (id) => handleMemoryAction(id, api.approveMemory, 'approved', (prev) => ({ active: (prev.active || 0) + 1 }));
-  const handleReject = (id) => handleMemoryAction(id, api.rejectMemory, 'rejected', () => ({}));
+  const handleApprove = (id) => handleMemoryAction(id, approveMemory, 'approved', (prev) => ({ active: (prev.active || 0) + 1 }));
+  const handleReject = (id) => handleMemoryAction(id, rejectMemory, 'rejected', () => ({}));
 
   const handleSearch = () => {
     const query = searchQuery.trim();
@@ -154,7 +164,7 @@ export default function MemoryTab({ apps = [] }) {
   };
 
   const handleDelete = async (id) => {
-    await api.deleteMemory(id);
+    await deleteMemory(id);
     toast.success('Memory archived');
     list.updateData(prev => prev?.filter(memory => memory.id !== id));
     list.refetch();
@@ -417,7 +427,7 @@ export default function MemoryTab({ apps = [] }) {
                         onClick={async () => {
                           const pid = embeddingProviderId || hookProviderId;
                           const mid = embeddingModel || hookModel;
-                          await api.updateCosConfig({ embeddingProviderId: pid, embeddingModel: mid });
+                          await updateCosConfig({ embeddingProviderId: pid, embeddingModel: mid });
                           toast.success('Embedding config saved');
                           fetchData();
                         }}

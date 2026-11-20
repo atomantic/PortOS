@@ -82,7 +82,6 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
           resolveId(id, importer) {
             if (id === '/board-fixture.jsx') return '\0board-fixture.jsx';
             if (importer?.endsWith('/MoodBoardStylePanel.jsx')) {
-              if (id === '../../services/api') return join(root, 'src/services/apiMoodBoard.js');
               if (id === '../../services/socket') return '\0board-socket';
               if (id.endsWith('/useVisionModelIds')) return '\0board-vision';
               if (id.endsWith('/useProviderModels')) return '\0board-providers';
@@ -91,7 +90,6 @@ describe.skipIf(!chrome)('mood board in Chromium', () => {
               if (id.endsWith('/ProviderModelSelector')) return '\0board-empty';
             }
             if (!importer?.endsWith('/MoodBoardDetail.jsx')) return;
-            if (id === '../services/api') return join(root, 'src/services/apiMoodBoard.js');
             if (id === '../services/socket') return '\0board-socket';
             if (/MoodBoard(Generate|Collage)Panel|Gallery(Image|Video)Picker|VideoFramePicker|MediaLightbox/.test(id)) return '\0board-empty';
             if (id.endsWith('/PromptFromMedia')) return '\0board-prompt';

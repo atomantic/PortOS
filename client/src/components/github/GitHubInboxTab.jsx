@@ -13,7 +13,7 @@ import {
   getGitHubAccounts,
   getGitHubNotifications,
   syncGitHubNotifications,
-} from '../../services/api';
+} from '../../services/apiGithub.js';
 
 // Whether a row still belongs in the view after an action moved it. Mirrors
 // VIEW_FILTERS in server/services/githubNotifications.js: the inbox holds

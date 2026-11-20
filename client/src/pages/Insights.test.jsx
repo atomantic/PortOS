@@ -8,8 +8,10 @@ vi.mock('react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiHealth.js', () => ({
   getGenomeHealthCorrelations: vi.fn(),
+}));
+vi.mock('../services/apiSystem.js', () => ({
   getInsightThemes: vi.fn(),
   getInsightNarrative: vi.fn(),
   refreshInsightThemes: vi.fn(),
@@ -20,13 +22,13 @@ vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+import { getGenomeHealthCorrelations } from '../services/apiHealth.js';
 import {
-  getGenomeHealthCorrelations,
   getInsightThemes,
   getInsightNarrative,
   refreshInsightThemes,
   refreshInsightNarrative,
-} from '../services/api';
+} from '../services/apiSystem.js';
 import { OverviewTab, TABS } from './Insights';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 

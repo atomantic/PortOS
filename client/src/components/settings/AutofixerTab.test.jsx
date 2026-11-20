@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AutofixerTab } from './AutofixerTab';
-import { getSettings, updateSettings } from '../../services/api';
-vi.mock('../../services/api', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
+vi.mock('../../services/apiSystem.js', () => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+}));
 vi.mock('../FeatureProviderPicker', () => ({ default: () => null }));
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 describe('Autofixer promotion settings', () => {

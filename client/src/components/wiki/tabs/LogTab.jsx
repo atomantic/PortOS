@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import * as api from '../../../services/api';
+import { getNote } from '../../../services/apiNotes.js';
 import useLatestRequest from '../../../hooks/useLatestRequest';
 import { RefreshCw, Clock } from 'lucide-react';
 import { formatCount, timeAgo } from '../../../utils/formatters';
@@ -17,7 +17,7 @@ export default function LogTab({ vaultId, allNotes }) {
   const loadLog = async () => {
     const isCurrent = beginLoad();
     setLoading(true);
-    const data = await api.getNote(vaultId, 'wiki/log.md').catch(() => null);
+    const data = await getNote(vaultId, 'wiki/log.md').catch(() => null);
     if (!isCurrent()) return;
     setLog(data?.error ? null : data);
     setLoading(false);

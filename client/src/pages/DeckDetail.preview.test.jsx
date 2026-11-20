@@ -13,16 +13,18 @@ const getGalleryImages = vi.fn();
 const getVideoHistoryItem = vi.fn();
 let previewProps = null;
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiDecks.js', () => ({
   deleteDeck: vi.fn(),
   generateDeckPrompts: vi.fn(),
   getDeck: (...a) => getDeck(...a),
-  listUniverseSummaries: vi.fn(async () => []),
   removeDeckSample: vi.fn(),
   renderDeckCard: vi.fn(),
   renderDeckCards: vi.fn(),
   updateDeck: vi.fn(),
   updateDeckCard: vi.fn(),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  listUniverseSummaries: vi.fn(async () => []),
 }));
 vi.mock('../services/apiImageVideo', () => ({
   getGalleryImages: (...a) => getGalleryImages(...a),

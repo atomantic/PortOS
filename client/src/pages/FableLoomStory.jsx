@@ -59,10 +59,19 @@ import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
 import { asFableLoomRenderSettings } from '../../../server/lib/fableLoomProduction.js';
 import { fableLoomBoardPick } from '../../../server/lib/fableLoomBoard.js';
 import {
-  addLoomEpisode, addLoomNode, deleteLoomEpisode, generateImage, generateVideo,
-  getLoom, getPipelineSeries, getUniverse, updateLoomEpisode, updateLoomNode,
-  startLoomFalVideo, weaveLoomEpisode,
-} from '../services/api';
+  addLoomEpisode,
+  addLoomNode,
+  deleteLoomEpisode,
+  getLoom,
+  updateLoomEpisode,
+  updateLoomNode,
+  startLoomFalVideo,
+  weaveLoomEpisode,
+} from '../services/apiFableLoom.js';
+import { generateImage } from '../services/apiSystem.js';
+import { generateVideo } from '../services/apiImageVideo.js';
+import { getPipelineSeries } from '../services/apiPipeline.js';
+import { getUniverse } from '../services/apiUniverseBuilder.js';
 
 // Phone-first sizing: a 44px touch target next to the overflow trigger, then
 // the denser desktop row from `sm` up. Base and variants never both set the

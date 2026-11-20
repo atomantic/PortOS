@@ -3,7 +3,7 @@ import { X, Save, Plus, Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import { FormField } from '../../ui/FormField';
-import * as api from '../../../services/api';
+import { getMemory, updateMemory } from '../../../services/apiMemory.js';
 import useMounted from '../../../hooks/useMounted';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
@@ -31,7 +31,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   const [changeReason, setChangeReason] = useState('');
   const latest = useSocketResource(
     async ({ signal }) => {
-      const result = await api.getMemory(memory.id, { signal, silent: true });
+      const result = await getMemory(memory.id, { signal, silent: true });
       if (result?.id !== memory.id || !Number.isInteger(result.version) || result.version < 1) throw new Error('Invalid memory revision response');
       return result;
     },
@@ -70,7 +70,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
     }
 
     setSaving(true);
-    const result = await api.updateMemory(memory.id, {
+    const result = await updateMemory(memory.id, {
       expectedVersion: fullMemory?.version,
       changeReason: changeReason || undefined,
       content: formData.content,

@@ -35,8 +35,13 @@ import usePendingDeletePeerNames from '../hooks/usePendingDeletePeerNames';
 import { refreshMediaUsages } from '../hooks/useMediaUsages';
 import { getMediaJob } from '../services/apiMediaJobs';
 import {
-  deleteVideoHistoryItem, cancelVideoPendingDelete, cancelImagePendingDelete, stitchVideos, makeVideoVertical, deleteImage,
-} from '../services/api';
+  deleteVideoHistoryItem,
+  cancelVideoPendingDelete,
+  cancelImagePendingDelete,
+  stitchVideos,
+  makeVideoVertical,
+  deleteImage,
+} from '../services/apiImageVideo.js';
 
 const FILTERS = [
   { id: 'all', label: 'All' },

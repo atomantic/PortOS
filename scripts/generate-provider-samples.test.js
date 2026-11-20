@@ -103,7 +103,7 @@ describe('provider sample generator', () => {
   // reference at all — everything is keyed by provider id — so shifting every
   // line in its own source (the one place its tuple/literal/override tables
   // live) must reproduce byte-identical output. See
-  // `scripts/lib/positionInvariance.js` and `server/lib/generatedManifests.guard.test.js`.
+  // `scripts/lib/positionInvariance.js` and `server/test/guards/repo/generatedManifests.test.js`.
   it('builds byte-identical output after every line in the generator shifts', { timeout: 20000 }, async () => {
     const original = readFileSync(GENERATOR_PATH, 'utf8');
     // Drop the shebang before shifting: a hashbang is only legal as the very

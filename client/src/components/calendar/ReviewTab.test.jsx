@@ -13,11 +13,11 @@ const dayEvents = (from, to) => Array.from({ length: to - from }, (_, i) => ({
   id: `event-${from + i}`, title: `Event ${from + i}`, startTime: '2026-01-01T09:00:00',
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCalendar.js', () => ({
   getDailyReview: vi.fn(() => Promise.resolve(reviewPage([]))),
 }));
 
-import * as api from '../../services/api';
+import { getDailyReview } from '../../services/apiCalendar.js';
 import ReviewTab from './ReviewTab';
 
 describe('ReviewTab', () => {
@@ -35,7 +35,7 @@ describe('ReviewTab', () => {
 
     render(<MemoryRouter><ReviewTab /></MemoryRouter>);
 
-    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-01', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-01', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
     expect(screen.getByLabelText('Review date').value).toBe('2026-01-01');
     expect(screen.queryByRole('button', { name: 'Today' })).toBeNull();
   });
@@ -45,11 +45,11 @@ describe('ReviewTab', () => {
     vi.setSystemTime(new Date(2026, 0, 1, 20));
 
     render(<MemoryRouter><ReviewTab /></MemoryRouter>);
-    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-01', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-01', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledWith('2026-01-02', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalledWith('2026-01-02', expect.objectContaining({ limit: 200, offset: 0 }), expect.anything()));
     expect(screen.getByLabelText('Review date').value).toBe('2026-01-02');
   });
 
@@ -57,7 +57,7 @@ describe('ReviewTab', () => {
     vi.setSystemTime(new Date(2026, 0, 1, 20));
 
     render(<MemoryRouter><ReviewTab accounts={[]} /></MemoryRouter>);
-    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalled());
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalled());
 
     expect(screen.getByText('No calendar connected')).toBeTruthy();
     const link = screen.getByRole('link', { name: 'Add a calendar account' });
@@ -69,7 +69,7 @@ describe('ReviewTab', () => {
     vi.setSystemTime(new Date(2026, 0, 1, 20));
 
     render(<MemoryRouter><ReviewTab accounts={[{ id: 'acct-1', name: 'Personal' }]} /></MemoryRouter>);
-    await waitFor(() => expect(api.getDailyReview).toHaveBeenCalled());
+    await waitFor(() => expect(getDailyReview).toHaveBeenCalled());
 
     expect(screen.getByText('No events for this date')).toBeTruthy();
     expect(screen.queryByText('No calendar connected')).toBeNull();
@@ -79,14 +79,14 @@ describe('ReviewTab', () => {
   describe('paged days', () => {
     it('loads the 201st event, keeping the full-day counts visible', async () => {
       vi.setSystemTime(new Date(2026, 0, 1, 20));
-      api.getDailyReview
+      getDailyReview
         .mockResolvedValueOnce(reviewPage(dayEvents(0, 200), { total: 201, nextOffset: 200 }))
         .mockResolvedValueOnce(reviewPage(dayEvents(200, 201), { total: 201, offset: 200 }));
 
       render(<MemoryRouter><ReviewTab accounts={[{ id: 'acct-1' }]} /></MemoryRouter>);
 
       expect(await screen.findByText('Event 200')).toBeTruthy();
-      expect(api.getDailyReview).toHaveBeenLastCalledWith('2026-01-01', { limit: 200, offset: 200 }, expect.anything());
+      expect(getDailyReview).toHaveBeenLastCalledWith('2026-01-01', { limit: 200, offset: 200 }, expect.anything());
       expect(screen.getByText('201 events')).toBeTruthy();
       expect(screen.getByText('201 to review')).toBeTruthy();
       expect(screen.getAllByLabelText('Confirm - it happened')).toHaveLength(201);
@@ -95,7 +95,7 @@ describe('ReviewTab', () => {
 
     it('keeps loaded rows when a later page fails and resumes from the same cursor on Retry', async () => {
       vi.setSystemTime(new Date(2026, 0, 1, 20));
-      api.getDailyReview
+      getDailyReview
         .mockResolvedValueOnce(reviewPage(dayEvents(0, 200), { total: 201, nextOffset: 200 }))
         .mockRejectedValueOnce(new Error('boom'))
         .mockResolvedValueOnce(reviewPage(dayEvents(200, 201), { total: 201, offset: 200 }));
@@ -110,19 +110,19 @@ describe('ReviewTab', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       expect(await screen.findByText('Event 200')).toBeTruthy();
-      expect(api.getDailyReview).toHaveBeenLastCalledWith('2026-01-01', { limit: 200, offset: 200 }, expect.anything());
+      expect(getDailyReview).toHaveBeenLastCalledWith('2026-01-01', { limit: 200, offset: 200 }, expect.anything());
       expect(screen.queryByRole('alert')).toBeNull();
     });
 
     it('never shows an obsolete day when its response resolves after a date change', async () => {
       vi.setSystemTime(new Date(2026, 0, 1, 20));
       let resolveFirst;
-      api.getDailyReview
+      getDailyReview
         .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
         .mockResolvedValueOnce(reviewPage([{ id: 'new-day', title: 'New day event', startTime: '2026-01-02T09:00:00' }]));
 
       render(<MemoryRouter><ReviewTab accounts={[{ id: 'acct-1' }]} /></MemoryRouter>);
-      await waitFor(() => expect(api.getDailyReview).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(getDailyReview).toHaveBeenCalledTimes(1));
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       expect(await screen.findByText('New day event')).toBeTruthy();
 

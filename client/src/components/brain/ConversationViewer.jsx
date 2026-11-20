@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, ArrowLeft, Library, Edit2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getChatgptArchive } from '../../services/apiBrain.js';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import MarkdownOutput from '../cos/MarkdownOutput';
@@ -24,7 +24,7 @@ export default function ConversationViewer({ record, onClose, onEdit, onSendToCa
     setArchive(null);
     setLoading(true);
     setError(null);
-    api.getChatgptArchive(record.sourceRef, { silent: true })
+    getChatgptArchive(record.sourceRef, { silent: true })
       .then((data) => { if (active) { setArchive(data); setLoading(false); } })
       .catch((err) => { if (active) { setError(err.message); setLoading(false); } });
     return () => { active = false; };

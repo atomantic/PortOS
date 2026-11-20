@@ -1,28 +1,43 @@
 import { createRequire } from 'node:module';
+import { once } from 'node:events';
 import { spawn } from 'child_process';
 import { waitForChild } from './childProcess.js';
-import { readFile } from 'fs/promises';
+import { readFile, realpath } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
-import { PORTS } from '../server/lib/ports.js';
 import { isPm2ProcessName } from '../lib/pm2ProcessName.js';
-import { createStagedFixStore } from './stagedFixes.js';
-import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { PORTS } from '../server/lib/ports.js';
+import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
 
-const requireFromServer = createRequire(new URL('../server/package.json', import.meta.url));
-const UI_TEMPLATE_FILE = join(dirname(fileURLToPath(import.meta.url)), 'ui.template.html');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-export async function startAutofixerUi({
-  port = Number(process.env.PORT || PORTS.AUTOFIXER_UI),
-  express = requireFromServer('express'),
-  withFixMutation,
-} = {}) {
+const express = createRequire(new URL('../server/package.json', import.meta.url))('express');
+
+// UI markup lives in a sibling template file so this module stays mostly logic.
+// The served document is fully static, so load it once at startup.
+const UI_TEMPLATE_FILE = join(__dirname, 'ui.template.html');
+
+// An updater already running before the pull still carries the old PM2 list.
+async function retireLegacyDashboard() {
+  const processes = await listProcessesStrict();
+  for (const proc of processes ?? []) {
+    if (proc.name !== 'portos-autofixer-ui' || !Number.isSafeInteger(proc.pm_id)) continue;
+    const script = proc.pm2_env?.pm_exec_path;
+    if (typeof script !== 'string' || await realpath(script).catch(() => null) !== await realpath(__filename)) continue;
+    await execPm2(['delete', String(proc.pm_id)]);
+    // An older updater can save the PM2 list before this child finishes booting.
+    await execPm2(['save']);
+  }
+}
+
+export async function startAutofixerUi(stagedFixes, port = process.env.PORT || PORTS.AUTOFIXER_UI) {
+  await retireLegacyDashboard();
   const app = express();
-  const UI_HTML = await readFile(UI_TEMPLATE_FILE, 'utf8');
-  const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm2, withFixMutation });
+  const html = await readFile(UI_TEMPLATE_FILE, 'utf8');
 
   async function loadHistory() {
     const data = await readFile(INDEX_FILE, 'utf8').catch(() => '[]');
@@ -104,48 +119,32 @@ export async function startAutofixerUi({
     return apps.some(app => (app.pm2ProcessNames || []).includes(processName));
   }
 
-  // API: Restart a PM2 process
-  app.post('/api/restart/:process', auth.requireHostControl, async (req, res) => {
-    const processName = req.params.process;
-    if (!(await isRegisteredProcess(processName))) {
-      return res.status(400).json({ success: false, error: 'Unknown process' });
-    }
-    console.log(`🔄 [Autofixer UI] Restarting process: ${processName}`);
-    const { stdout, stderr } = await execPm2(['restart', processName]).catch(err => ({
-      stdout: '',
-      stderr: err.message
-    }));
-    if (stderr && !stdout) {
-      console.error(`❌ [Autofixer UI] Restart failed for ${processName}: ${stderr}`);
-      return res.status(500).json({ success: false, error: stderr });
-    }
-    console.log(`✅ [Autofixer UI] Restarted ${processName}`);
-    res.json({ success: true });
-  });
-
-  // API: Stop a PM2 process
-  app.post('/api/stop/:process', auth.requireHostControl, async (req, res) => {
-    const processName = req.params.process;
-    if (!(await isRegisteredProcess(processName))) {
-      return res.status(400).json({ success: false, error: 'Unknown process' });
-    }
-    console.log(`⏹️ [Autofixer UI] Stopping process: ${processName}`);
-    const { stdout, stderr } = await execPm2(['stop', processName]).catch(err => ({
-      stdout: '',
-      stderr: err.message
-    }));
-    if (stderr && !stdout) {
-      console.error(`❌ [Autofixer UI] Stop failed for ${processName}: ${stderr}`);
-      return res.status(500).json({ success: false, error: stderr });
-    }
-    console.log(`✅ [Autofixer UI] Stopped ${processName}`);
-    res.json({ success: true });
-  });
+  for (const action of ['restart', 'stop']) {
+    app.post(`/api/${action}/:process`, auth.requireHostControl, async (req, res) => {
+      const processName = req.params.process;
+      if (!(await isRegisteredProcess(processName))) {
+        return res.status(400).json({ success: false, error: 'Unknown process' });
+      }
+      const controlsSelf = processName === 'portos-autofixer';
+      // PM2 waits for this process to exit. Send the acknowledgement before
+      // dispatching a command that will close this connection.
+      if (controlsSelf) res.status(202).json({ success: true });
+      console.log(`🔄 [Autofixer UI] Requested ${action} for ${processName}`);
+      const { stdout, stderr } = await execPm2([action, processName]).catch(error => ({ stdout: '', stderr: error.message }));
+      if (stderr && !stdout) {
+        console.error(`❌ [Autofixer UI] Could not ${action} ${processName}: ${stderr}`);
+        if (!controlsSelf) res.status(500).json({ success: false, error: stderr });
+        return;
+      }
+      console.log(`✅ [Autofixer UI] PM2 completed ${action} for ${processName}`);
+      if (!controlsSelf) res.json({ success: true });
+    });
+  }
 
   // Serve main UI — the process list is populated client-side via /api/apps,
   // so this route just returns the static document loaded at startup.
   app.get('/', (req, res) => {
-    res.send(UI_HTML);
+    res.send(html);
   });
 
   // Server-Sent Events endpoint for streaming logs
@@ -229,23 +228,16 @@ export async function startAutofixerUi({
   const { dir: CERT_DIR } = certPaths(DATA_DIR);
   const { server, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR, httpMirror: false });
   const scheme = httpsEnabled ? 'https' : 'http';
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    // PM2 can resurrect the old monitor with its retained (unused) port.
-    server.listen(port === 5559 ? PORTS.AUTOFIXER_UI : port, '0.0.0.0', () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-  server.on('error', error => {
-    console.error(`❌ [Autofixer UI] Listener failed: ${error.message}`);
-  });
-  const stopCertReload = httpsEnabled ? watchCertReload(server, CERT_DIR) : null;
+  const listening = once(server, 'listening');
+  // PM2 can resurrect the old monitor with its saved, unused port.
+  server.listen(String(port) === '5559' ? PORTS.AUTOFIXER_UI : port, '0.0.0.0');
+  await listening;
   console.log(`🚀 [Autofixer UI] Running on ${scheme}://localhost:${server.address().port}`);
   const gated = await auth.isEnabled().catch(() => true);
   console.log(`🔐 [Autofixer UI] Password gate ${gated ? 'ENABLED (PortOS password required)' : 'off (no PortOS password set)'}`);
+  const stopWatching = httpsEnabled ? watchCertReload(server, CERT_DIR) : null;
   return () => {
-    stopCertReload?.();
+    stopWatching?.();
     server.close();
     server.closeAllConnections();
   };

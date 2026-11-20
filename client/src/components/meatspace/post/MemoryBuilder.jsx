@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save, CalendarClock } from 'lucide-react';
-import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
+import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/apiMeatspace.js';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';

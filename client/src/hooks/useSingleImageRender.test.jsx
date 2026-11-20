@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const generateImage = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   generateImage: (...args) => generateImage(...args),
 }));
 // pipelineImageCfgToRenderOpts is exercised for real (pure); pass a minimal cfg.

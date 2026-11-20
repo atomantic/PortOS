@@ -16,7 +16,7 @@ import {
   WINDOW_SLACK_MS
 } from './usageReconciler.js';
 
-const listRunIds = async (runsDir) => readdir(runsDir, { withFileTypes: true })
+export const listUsageRunIds = async (runsDir) => readdir(runsDir, { withFileTypes: true })
   .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name))
   .catch(() => []);
 
@@ -132,6 +132,7 @@ async function claimSettledUsage(runs, candidates, { home, providers }) {
  */
 export async function scanHistoricalUsage({
   runsDir,
+  runIds,
   home,
   reconciledRunIds = [],
   siblingReconciledRunIds = [],
@@ -153,7 +154,7 @@ export async function scanHistoricalUsage({
   const candidates = [];
   const settled = [];
 
-  for (const runId of await listRunIds(runsDir)) {
+  for (const runId of runIds ?? await listUsageRunIds(runsDir)) {
     const metadataPath = join(runsDir, runId, 'metadata.json');
     const metadata = await readJSONFile(metadataPath, null);
     if (!metadata || !metadata.providerId

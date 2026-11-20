@@ -3,7 +3,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import ManageImportedDataPanel from './ManageImportedDataPanel';
 
 const api = vi.hoisted(() => ({ getTimelineSources: vi.fn(), eraseTimelineSource: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiTimeline.js', () => ({
+  getTimelineSources: api.getTimelineSources,
+  eraseTimelineSource: api.eraseTimelineSource,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
 vi.mock('../../hooks/usePrefersReducedMotion', () => ({ default: () => true }));
 const sources = [{ source: 'browser', eventCount: 3 }, { source: 'discord', eventCount: 2 }];

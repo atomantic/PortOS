@@ -14,7 +14,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
-import { getProviders, getSettings, listImageModels, listVideoModels, listMusicEngines } from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings } from '../../services/apiSystem.js';
+import { listImageModels, listVideoModels } from '../../services/apiImageVideo.js';
+import { listMusicEngines } from '../../services/apiMusic.js';
 import UniverseMoodBoardPicker, { useStyleSourceLists } from '../media/UniverseMoodBoardPicker';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends';
 import CronSchedulePicker from '../CronSchedulePicker';

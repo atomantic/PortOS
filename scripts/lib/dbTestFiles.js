@@ -3,7 +3,7 @@ import { posix } from 'node:path';
 /**
  * The DB-backed test files, relative to the Vitest root (server/). Exported
  * as the single source of truth: the DB config's `include` uses it, and the drift
- * guard in lib/db.inventory.guard.test.js imports it to assert no checkHealth()-gated
+ * guard in server/test/guards/repo/db.inventory.test.js imports it to assert no checkHealth()-gated
  * suite is left out. `**\/db.test.js` only matches a file named exactly
  * `db.test.js` — a `<name>.db.test.js` suite is NOT auto-included and must be
  * listed explicitly below (the drift guard fails the build if you forget).
@@ -81,8 +81,10 @@ export const DB_TEST_INCLUDE = [
   'lib/db/schema/syncFeed.db.test.js',
   'services/cos/cosTaskRepository.db.test.js',
   'services/releaseSynchronizationStore.db.test.js',
+  'services/usageLedger.db.test.js',
   'scripts/db-migrations/018-cos-tasks-from-files.db.test.js',
   'services/cos/cosAgentRepository.db.test.js',
+  'services/branchCompletionPolicy.db.test.js',
   'scripts/db-migrations/020-cos-agents-from-state.db.test.js',
   'scripts/db-migrations/022-unlock-canon-joined-records.db.test.js',
   'scripts/db-migrations/023-owned-records-join-universe-canon.db.test.js',

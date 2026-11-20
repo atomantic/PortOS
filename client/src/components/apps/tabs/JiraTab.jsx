@@ -3,7 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import KanbanBoard from '../../KanbanBoard';
 import JiraConfigPanel from '../JiraConfigPanel';
-import * as api from '../../../services/api';
+import { getMySprintTickets } from '../../../services/apiSystem.js';
 
 /**
  * Everything JIRA for one app: the integration config and the sprint Kanban
@@ -32,7 +32,7 @@ export default function JiraTab({ app, onRefresh }) {
 
     setLoading(true);
     setError(null);
-    api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
+    getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
       .then(rows => { if (isCurrent()) setTickets(Array.isArray(rows) ? rows : []); })
       .catch(err => { if (isCurrent()) setError(err?.message || 'Request failed'); })
       .finally(() => { if (isCurrent()) setLoading(false); });

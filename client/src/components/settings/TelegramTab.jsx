@@ -4,9 +4,14 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
 import {
-  getSettings, getTelegramStatus, updateTelegramConfig,
-  deleteTelegramConfig, testTelegram, updateTelegramForwardTypes, updateTelegramMethod
-} from '../../services/api';
+  getSettings,
+  getTelegramStatus,
+  updateTelegramConfig,
+  deleteTelegramConfig,
+  testTelegram,
+  updateTelegramForwardTypes,
+  updateTelegramMethod,
+} from '../../services/apiSystem.js';
 
 export function TelegramTab() {
   const botTokenId = useId();

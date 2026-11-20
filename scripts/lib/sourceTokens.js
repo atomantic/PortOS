@@ -290,11 +290,21 @@ export function staticEdges(tokens, match) {
   return specs;
 }
 
-/** Static and deferred ES imports, including executable template expressions. */
+// Vitest calls that name a module by specifier; `importActual`/`importMock` load it.
+const MOCK_METHODS = new Set(['mock', 'doMock', 'unmock', 'importActual', 'importMock']);
+
+const literalArgument = (token) => (token?.t === 's' ? token.v
+  : token?.t === 'tpl' && token.exprs.length === 0 ? token.quasis[0] : null);
+
+/**
+ * Static and deferred ES imports, including executable template expressions,
+ * plus the literal specifiers of `vi.mock`-family calls (`mocked`).
+ */
 export function moduleImports(src, { jsx = true } = {}) {
   const tokens = tokenize(src, new Set(), { jsx });
   const statics = [];
   const deferred = [];
+  const mocked = [];
   let computed = false;
   const scan = (stream) => {
     // Static declarations do not nest inside an expression; their braces only
@@ -313,16 +323,20 @@ export function moduleImports(src, { jsx = true } = {}) {
         token.exprs.forEach(scan);
         continue;
       }
-      if (token.t !== 'id' || token.v !== IMPORT_KEYWORD || stream[i + 1]?.v !== '(') continue;
-      if (stream[i - 1]?.t === 'p' && ['.', '?.'].includes(stream[i - 1].v)) continue;
-      const arg = stream[i + 2];
+      const member = stream[i - 1]?.t === 'p' && ['.', '?.'].includes(stream[i - 1].v);
+      if (!member && token.t === 'id' && token.v === 'vi' && stream[i + 1]?.t === 'p' && stream[i + 1].v === '.'
+        && stream[i + 2]?.t === 'id' && MOCK_METHODS.has(stream[i + 2].v) && stream[i + 3]?.v === '(') {
+        const literal = literalArgument(stream[i + 4]);
+        if (literal !== null) mocked.push(literal);
+        continue;
+      }
+      if (member || token.t !== 'id' || token.v !== IMPORT_KEYWORD || stream[i + 1]?.v !== '(') continue;
+      const literal = literalArgument(stream[i + 2]);
       const end = stream[i + 3];
-      const literal = arg?.t === 's' ? arg.v
-        : arg?.t === 'tpl' && arg.exprs.length === 0 ? arg.quasis[0] : null;
       if (literal === null || end?.t !== 'p' || ![')', ','].includes(end.v)) computed = true;
       else deferred.push(literal);
     }
   };
   scan(tokens);
-  return { statics, deferred, computed };
+  return { statics, deferred, mocked, computed };
 }

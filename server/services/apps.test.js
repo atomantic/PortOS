@@ -507,19 +507,17 @@ describe('PortOS production process manifest', () => {
     const seed = JSON.parse(readFileSync(new URL('../../data.reference/apps.json', import.meta.url), 'utf8')).apps[PORTOS_APP_ID];
     const scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts;
     const expectedNames = scripts.start.match(/--only "([^"]+)"/)[1].split(',');
-    const legacy = [
-      { name: 'portos-ui', port: 5554 },
-      { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
-      { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
-    ];
-    const autofixer = { name: 'portos-autofixer', port: 5560, ports: { ui: 5560 } };
-    expect(expectedNames).toEqual(['portos-server', 'portos-cos', 'portos-autofixer', 'portos-browser']);
     readJSONFile.mockResolvedValue({ apps: existing ? {
       [PORTOS_APP_ID]: {
         ...seed,
         description: 'Custom description',
         pm2ProcessNames: [...expectedNames, 'portos-ui', 'portos-autofixer-ui'],
-        processes: [...seed.processes.filter(({ name }) => name !== autofixer.name), ...legacy],
+        processes: [
+          ...seed.processes.filter(({ name }) => name !== 'portos-autofixer'),
+          { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
+          { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
+          { name: 'portos-ui', port: 5554 },
+        ],
       },
     } : {} });
 
@@ -528,8 +526,9 @@ describe('PortOS production process manifest', () => {
     expect(app.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: null, startCommands: ['npm start'] });
     expect(app.processes[0]).toMatchObject({ name: 'portos-server', port: 5555, ports: { api: 5555 } });
-    expect(app.processes[2]).toEqual(autofixer);
-    expect(seed.processes[2]).toEqual(autofixer);
+    const autofixer = { name: 'portos-autofixer', port: 5560, ports: { ui: 5560 } };
+    expect(app.processes.find(({ name }) => name === autofixer.name)).toEqual(autofixer);
+    expect(seed.processes.find(({ name }) => name === autofixer.name)).toEqual(autofixer);
     expect(seed.pm2ProcessNames).toEqual(expectedNames);
     expect(seed.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(seed).toMatchObject({ uiPort: app.uiPort, apiPort: app.apiPort, devUiPort: app.devUiPort, startCommands: app.startCommands, buildCommand: app.buildCommand });

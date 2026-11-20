@@ -65,6 +65,7 @@ import { buildSongAudioMix, clipSoundVoices } from './clipSoundMix.js';
 import { songClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
+import { audioLayerBeds } from './audioLayers.js';
 import { intercutClips } from './intercut.js';
 import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideo/musicVideoProductionMedium.js';
@@ -232,18 +233,35 @@ export async function resolveMasterAudioPath(project) {
 }
 
 // #8988: resolve the project's explicitly chosen sound-design bed (a
-// music-library track) to a verified path under data/music/, or null when the
-// song is the sole audio master (the default).
+// music-library track) to a verified path under data/music/, and the audio
+// layers placed on the editor timeline (audioLayers.js) to bed-chain entries
+// on song time. Null when the song is the sole audio master (the default).
+// The answer is `{ path, volume, layers }`: `path` is null when only layers
+// are set. Every caller hands it to buildSongAudioMix (clipSoundMix.js),
+// which cuts each layer at the song's end.
 export async function resolveSoundBedPath(project) {
   const bed = projectSoundBed(project);
+  let path = null;
   // A (synced) record naming the song itself as its bed mixes nothing.
-  if (!bed || bed.trackId === project.trackId) return null;
-  const track = await getTrack(bed.trackId);
-  const safe = track?.audioFilename ? safeUnder(PATHS.music, track.audioFilename) : null;
-  if (!safe || !existsSync(safe)) {
-    throw new ServerError('The sound-design bed track is missing — choose another bed or clear it', { status: 404, code: 'SOUND_BED_MISSING' });
+  if (bed && bed.trackId !== project.trackId) {
+    const track = await getTrack(bed.trackId);
+    path = track?.audioFilename ? safeUnder(PATHS.music, track.audioFilename) : null;
+    if (!path || !existsSync(path)) {
+      throw new ServerError('The sound-design bed track is missing — choose another bed or clear it', { status: 404, code: 'SOUND_BED_MISSING' });
+    }
   }
-  return { path: safe, volume: bed.volume };
+  const layers = await audioLayerBeds(project, {
+    resolvePath: (filename) => {
+      const safe = safeUnder(PATHS.music, filename);
+      if (!safe || !existsSync(safe)) {
+        throw new ServerError('An audio layer\'s file is missing — remove that layer or upload it again', { status: 404, code: 'AUDIO_LAYER_MISSING' });
+      }
+      return safe;
+    },
+    durationOf: (_layer, assetPath) => probeVideoDuration(assetPath).catch(() => null),
+  });
+  if (!path && !layers.length) return null;
+  return { path, volume: path ? bed.volume : null, layers };
 }
 
 // A still/card section has no source clip to measure, so its authored span IS

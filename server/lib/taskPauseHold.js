@@ -37,7 +37,7 @@ export function isResumablePausedTask(task, agentId) {
 
 // === Pause-release adapter (registration-based) ===
 // Releasing the hold is more than a metadata clear (#3730): the paused run left a branch and often a worktree, and the resumed run must be POINTED at them or it redoes the work. Resolving the pointer needs the paused agent's RECORD
-// in the agent graph, which `cosTaskStore.js` can't import (static cycle, see `services/serviceImportCycles.guard.test.js`), so the agent-addressed half is injected: `agentManagement.js` registers it at module load (as `services/sharing/recordEvents.js` does).
+// in the agent graph, which `cosTaskStore.js` can't import (static cycle, see `server/test/guards/modules/serviceImportCycles.test.js`), so the agent-addressed half is injected: `agentManagement.js` registers it at module load (as `services/sharing/recordEvents.js` does).
 // Until registration every call is a silent no-op, which is what the task store's own unit suites want.
 
 let pauseReleaseAdapter = null;

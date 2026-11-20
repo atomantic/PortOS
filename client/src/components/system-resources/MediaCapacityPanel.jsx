@@ -5,7 +5,7 @@ import { useSocketSubscription } from '../../hooks/useSocketSubscription.js';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent.js';
 import useMounted from '../../hooks/useMounted.js';
 import socket from '../../services/socket';
-import * as api from '../../services/api.js';
+import { getInstances } from '../../services/apiSystem.js';
 import Pill from '../ui/Pill';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import {
@@ -90,7 +90,7 @@ export default function MediaCapacityPanel({ media }) {
   const revision = useRef(0);
   const loadPeers = useCallback(async () => {
     const request = ++revision.current;
-    const data = await api.getInstances({ silent: true }).catch(() => null);
+    const data = await getInstances({ silent: true }).catch(() => null);
     if (!mounted.current || request !== revision.current) return;
     // A read that failed, and a read that came back without a peer array, are
     // both "we do not know" — distinct from `[]`, which is "read fine, no

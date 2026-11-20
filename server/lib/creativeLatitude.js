@@ -45,7 +45,7 @@
  * `promptRunner.runPromptThroughProvider` (`source` allowlist, which
  * `aiProvider.callProviderAISimple` callers pass too). Classify a new
  * creative stage or service there; `creativeLatitude.test.js` and
- * `creativeLatitude.sources.guard.test.js` fail on unclassified entries. Context
+ * `server/test/guards/modules/creativeLatitude.sources.test.js` fail on unclassified entries. Context
  * budgeting before the stamp reserves `CREATIVE_LATITUDE_TOKENS`. The clause
  * is shown, never hidden (#11317): where the user typed the LLM's text, the
  * service stamps with `withCreativeLatitude` and returns the sent text plus
@@ -162,7 +162,7 @@ export const OPERATIONAL_STAGE_PREFIXES = Object.freeze([
 
 /**
  * Run-source tags that are NOT creative — infrastructure, self-analysis, and
- * model benchmarking. Purely a forcing function: `creativeLatitude.sources.guard.test.js`
+ * model benchmarking. Purely a forcing function: `server/test/guards/modules/creativeLatitude.sources.test.js`
  * scans every `source:` literal handed to the shared runners and fails on one
  * that appears in neither table, so a new creative service can't ship
  * unstamped just because nobody remembered this file.
@@ -239,7 +239,7 @@ export function isCreativeStage(stageName) {
  *
  * An ALLOWLIST, unlike the stage side: run sources are dominated by
  * operational calls (health checks, classification, PM2 standardization), so
- * the safe default flips. `creativeLatitude.sources.guard.test.js` scans the
+ * the safe default flips. `server/test/guards/modules/creativeLatitude.sources.test.js` scans the
  * repo's `source:` literals and fails on one that is in neither table, so an
  * unclassified creative service can't ship silently either.
  */

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import MoodBoardReferenceStrip from './MoodBoardReferenceStrip';
-import * as api from '../../services/api';
+import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/apiMoodBoard.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMoodBoard.js', () => ({
   listMoodBoards: vi.fn(),
   getMoodBoard: vi.fn(),
   createMoodBoard: vi.fn(),
@@ -19,8 +19,8 @@ const expand = () => fireEvent.click(screen.getByRole('button', { name: /mood bo
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  api.listMoodBoards.mockResolvedValue(BOARDS);
-  api.getMoodBoard.mockImplementation((id) => Promise.resolve(BOARDS.find((b) => b.id === id) || null));
+  listMoodBoards.mockResolvedValue(BOARDS);
+  getMoodBoard.mockImplementation((id) => Promise.resolve(BOARDS.find((b) => b.id === id) || null));
 });
 
 describe('MoodBoardReferenceStrip — uncontrolled (localStorage) mode', () => {
@@ -72,7 +72,7 @@ describe('MoodBoardReferenceStrip — controlled (persisted link) mode', () => {
 
   it('creates a board named for the record and links it via onChange', async () => {
     const onChange = vi.fn();
-    api.createMoodBoard.mockResolvedValue({ id: 'mb-new', name: 'Example Universe', items: [] });
+    createMoodBoard.mockResolvedValue({ id: 'mb-new', name: 'Example Universe', items: [] });
     render(
       <MoodBoardReferenceStrip storageKey="u" value="" onChange={onChange} newBoardName="Example Universe" />,
     );
@@ -80,13 +80,13 @@ describe('MoodBoardReferenceStrip — controlled (persisted link) mode', () => {
     await screen.findByLabelText('Board');
     fireEvent.click(screen.getByRole('button', { name: /^New$/ }));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('mb-new'));
-    expect(api.createMoodBoard).toHaveBeenCalledWith({ name: 'Example Universe' }, { silent: true });
+    expect(createMoodBoard).toHaveBeenCalledWith({ name: 'Example Universe' }, { silent: true });
   });
 
   it('offers create-and-link even when no boards exist yet', async () => {
     const onChange = vi.fn();
-    api.listMoodBoards.mockResolvedValue([]);
-    api.createMoodBoard.mockResolvedValue({ id: 'mb-first', name: 'Example Universe', items: [] });
+    listMoodBoards.mockResolvedValue([]);
+    createMoodBoard.mockResolvedValue({ id: 'mb-first', name: 'Example Universe', items: [] });
     render(
       <MoodBoardReferenceStrip storageKey="u" value="" onChange={onChange} newBoardName="Example Universe" />,
     );

@@ -27,9 +27,8 @@ vi.mock('../components/messages/ContactsTab', () => ({ default: () => <div>conta
 
 const featureMock = vi.hoisted(() => ({ features: [{ id: 'beeper', label: 'Beeper', enabled: true }] }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiMessages.js', () => ({
   getMessageAccounts: vi.fn(() => Promise.resolve([])),
-  getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../services/apiSystem.js', async (importOriginal) => ({

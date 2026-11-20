@@ -7,7 +7,14 @@ import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { copyToClipboard } from '../lib/clipboard';
-import * as api from '../services/api';
+import {
+  getApiCatalog,
+  getInternalOpenApiSpec,
+  getOpenApiSpec,
+  getSocketEventCatalog,
+  getSettings,
+} from '../services/apiSystem.js';
+import { getCosToolCatalog, getPersistentMindTools } from '../services/apiAgents.js';
 import { formatCount } from '../utils/formatters';
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE'];
@@ -68,7 +75,7 @@ function CatalogView() {
   const [limit, setLimit] = useState(PAGE_SIZE);
 
   useEffect(() => {
-    api.getApiCatalog({ silent: true }).then(setCatalog).catch((err) => setError(err.message));
+    getApiCatalog({ silent: true }).then(setCatalog).catch((err) => setError(err.message));
   }, []);
 
   const filtered = useMemo(() => {
@@ -190,7 +197,7 @@ function RestReferenceView() {
 
   useEffect(() => {
     let cancelled = false;
-    const load = surface === 'internal' ? api.getInternalOpenApiSpec : api.getOpenApiSpec;
+    const load = surface === 'internal' ? getInternalOpenApiSpec : getOpenApiSpec;
     setSpec(null);
     setError('');
     load({ silent: true })
@@ -308,7 +315,7 @@ function EventCatalogView() {
   const [coverage, setCoverage] = useState('all');
 
   useEffect(() => {
-    api.getSocketEventCatalog({ silent: true }).then(setCatalog).catch((err) => setError(err.message));
+    getSocketEventCatalog({ silent: true }).then(setCatalog).catch((err) => setError(err.message));
   }, []);
 
   const events = useMemo(() => {
@@ -406,10 +413,10 @@ function AgentToolsView() {
 
   useEffect(() => {
     Promise.all([
-      api.getCosToolCatalog({ scope: 'mind', silent: true }),
-      api.getCosToolCatalog({ scope: 'agent', silent: true }),
-      api.getPersistentMindTools({ silent: true }),
-      api.getSettings({ silent: true }),
+      getCosToolCatalog({ scope: 'mind', silent: true }),
+      getCosToolCatalog({ scope: 'agent', silent: true }),
+      getPersistentMindTools({ silent: true }),
+      getSettings({ silent: true }),
     ]).then(([catalog, agentCatalog, authority, settings]) =>
       setData({ catalog, agentCatalog, authority, agentContext: settings.agentContext || {} })).catch((err) => setError(err.message));
   }, []);

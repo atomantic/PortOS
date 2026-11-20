@@ -16,10 +16,9 @@ import {
   pipelineAutopilotSseUrl,
   getPipelineSeries,
   listPipelineIssues,
-  getProviders,
-  getSettings,
-  patchSettingsSlice,
-} from '../../services/api';
+} from '../../services/apiPipeline.js';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
 import { autopilotStepLabel, describeAutopilotVerification, autopilotMarkerTerminal } from '../../lib/autopilotMilestones';
 import Pill from '../ui/Pill';

@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({ practiceSong: vi.fn() }));
+vi.mock('../../services/apiSongbook.js', () => ({
+  practiceSong: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
 import PracticeLogger from './PracticeLogger.jsx';
-import { practiceSong } from '../../services/api';
+import { practiceSong } from '../../services/apiSongbook.js';
 import toast from '../ui/Toast';
 
 const song = (overrides = {}) => ({

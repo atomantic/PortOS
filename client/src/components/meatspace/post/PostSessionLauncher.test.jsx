@@ -10,11 +10,13 @@ import { MemoryRouter } from 'react-router';
 // whether or not the component unwrapped the response, so it stayed green while
 // the launcher threw on every mount in the real app. Mirror the server contract
 // here or this file proves nothing about provider handling.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn().mockResolvedValue({
     activeProvider: 'openai',
     providers: [{ id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4' }],
   }),
+}));
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostReviewReps: vi.fn().mockResolvedValue({ reps: [] }),
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
   getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
@@ -32,13 +34,23 @@ vi.mock('../../../services/api', () => ({
     ] }],
   }),
   updatePostConfig: vi.fn().mockResolvedValue({}),
-  // useUserTimezone (via the today day key) reads getSettings; pin to UTC.
+}));
+vi.mock('../../../services/apiSystem.js', () => ({
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 import PostSessionLauncher, { buildCleanConditions, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
 import { otherPostSections, TOPIC_SURFACE_SECTIONS } from './practiceCatalog';
-import { getPostRecommendations, getMorseProgress, getPostProgress, getPostReviewReps, getPostBenchmarkProtocol, getMemoryItems, updatePostConfig, getPostCognitiveProgress } from '../../../services/api';
+import {
+  getPostRecommendations,
+  getMorseProgress,
+  getPostProgress,
+  getPostReviewReps,
+  getPostBenchmarkProtocol,
+  getMemoryItems,
+  updatePostConfig,
+  getPostCognitiveProgress,
+} from '../../../services/apiMeatspace.js';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10; structured conditions issue #4442). Both were lifted from

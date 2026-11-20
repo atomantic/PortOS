@@ -2,7 +2,7 @@
  * Attribute an ecosystem config's parsed port labels to the app that owns them.
  *
  * A PM2 ecosystem config can describe several surfaces (e.g. `portos-server`/`portos-ui`
- * beside `portos-autofixer`), so "first process carrying the label wins" would
+ * beside `portos-autofixer-ui`), so "first process carrying the label wins" would
  * attribute a sibling's port to the app. Rule: (1) prefer a process on the app's own
  * SURFACE (name minus a trailing role suffix); (2) otherwise accept a carrier only
  * when its name declares no role at all (a bare `frontend` beside `backend`). When
@@ -88,7 +88,7 @@ export function attributeProcessPorts(processes, app) {
     const carriers = procs.filter(proc => isPort(proc.ports?.[label]));
     const attributed = carriers.find(proc => processSurface(proc.name) === appSurface)
       // No carrier on the app's own surface: accept only a role-less name. A
-      // suffixed sibling like `portos-autofixer` is ignored.
+      // suffixed sibling like `portos-autofixer-ui` is ignored.
       || carriers.find(proc => processSurface(proc.name) === proc.name);
     if (!attributed) continue;
     ports[label] = attributed.ports[label];

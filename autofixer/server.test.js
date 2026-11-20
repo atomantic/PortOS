@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFile, rename } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { startAutofixerUi } from './ui.js';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
-  settings: {}, diff: '', verify: vi.fn(), apply: vi.fn(),
+  settings: {}, startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(),
 }));
-vi.mock('./ui.js', () => ({ startAutofixerUi: vi.fn(async () => vi.fn()) }));
+vi.mock('./ui.js', () => ({ startAutofixerUi: harness.startUi }));
 vi.mock('./shared.js', () => ({
   DATA_DIR: '/example/data', AUTOFIXER_DIR: '/example/autofixer', INDEX_FILE: '/example/index.json',
   loadApps: harness.apps, execPm2: harness.pm2, listProcessesStrict: harness.list,
@@ -29,7 +27,7 @@ vi.mock('./sandbox.js', () => ({
   pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: async () => true,
   repairWorkspaceHold: async () => null,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
-  collectWorktreeDiff: async () => harness.diff, removeWorktree: vi.fn(),
+  collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
   sweepStaleWorktrees: harness.sweep,
   validateProposedDiff: harness.validate,
   applyDiffToLive: harness.apply, revertDiffFromLive: vi.fn(), runVerifyCommand: harness.verify,
@@ -39,7 +37,6 @@ let errorLog;
 let progressLog;
 beforeEach(() => {
   vi.resetModules();
-  startAutofixerUi.mockReset().mockResolvedValue(vi.fn());
   vi.useFakeTimers();
   vi.spyOn(process, 'on').mockReturnValue(process);
   errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -51,14 +48,13 @@ beforeEach(() => {
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
   harness.settings = {};
-  harness.diff = '';
+  harness.startUi.mockReset().mockResolvedValue(vi.fn());
   harness.index = null;
   harness.metadataExists = false;
   harness.verify.mockReset();
   harness.apply.mockReset();
 });
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -70,74 +66,29 @@ const start = async () => {
 const nextCycle = () => vi.advanceTimersByTimeAsync(15 * 60 * 1000);
 
 describe('Autofixer daemon repair input boundary', () => {
-  it('retires the old dashboard before opening its port and continues monitoring', async () => {
-    vi.stubEnv('pm_id', '1');
-    const legacy = { name: 'portos-autofixer-ui', pm_id: 7, pm2_env: {
-      pm_exec_path: fileURLToPath(new URL('./ui.js', import.meta.url)),
-    } };
-    harness.list.mockResolvedValueOnce([legacy]).mockResolvedValue([]);
+  it('starts the dashboard with the shared staged-fix store before scanning PM2', async () => {
     await start();
-    expect(harness.pm2.mock.calls).toEqual([[['delete', '7']], [['save']]]);
-    expect(harness.pm2.mock.invocationCallOrder.at(-1)).toBeLessThan(startAutofixerUi.mock.invocationCallOrder[0]);
-    expect(harness.list).toHaveBeenCalledTimes(2);
-    await nextCycle();
-    expect(harness.list).toHaveBeenCalledTimes(3);
+    expect(harness.startUi).toHaveBeenCalledWith(expect.objectContaining({
+      mutate: expect.any(Function), serialize: expect.any(Function),
+    }));
+    expect(harness.startUi.mock.invocationCallOrder[0]).toBeLessThan(harness.list.mock.invocationCallOrder[0]);
   });
 
-  it('keeps monitoring when the dashboard fails and retries the listener on the next cycle', async () => {
-    startAutofixerUi.mockRejectedValueOnce(new Error('port already occupied'));
+  it('keeps scanning and retries the dashboard after a listener failure', async () => {
+    harness.startUi.mockRejectedValueOnce(Object.assign(new Error('Example port in use'), { code: 'EADDRINUSE' }));
     await start();
-    expect(harness.provider).toHaveBeenCalledOnce();
-    expect(errorLog.mock.calls.flat().join('\n')).toContain('Could not start dashboard: port already occupied');
+    expect(errorLog.mock.calls.flat().join('\n')).toContain('Dashboard startup failed');
+    expect(harness.list).toHaveBeenCalledOnce();
     await nextCycle();
-    expect(startAutofixerUi).toHaveBeenCalledTimes(2);
+    expect(harness.startUi).toHaveBeenCalledTimes(2);
     expect(harness.list).toHaveBeenCalledTimes(2);
   });
 
-  it('drains a staged mutation and refuses queued mutations on shutdown', async () => {
-    harness.apps.mockResolvedValue([]);
-    const processExit = vi.spyOn(process, 'exit').mockImplementation(() => {});
+  it('never tries to repair the combined watchdog itself', async () => {
+    harness.apps.mockResolvedValue([{ pm2ProcessNames: ['portos-autofixer'] }]);
+    harness.list.mockResolvedValue([{ name: 'portos-autofixer', pm2_env: { status: 'errored' } }]);
     await start();
-    const { withFixMutation } = startAutofixerUi.mock.calls[0][0];
-    const stop = process.on.mock.calls.find(([event]) => event === 'SIGTERM')[1];
-    let finish;
-    const apply = vi.fn(() => new Promise(resolve => { finish = resolve; }));
-    const applied = withFixMutation(apply);
-    await Promise.resolve();
-    expect(apply).toHaveBeenCalledOnce();
-    const discard = vi.fn();
-    const queued = withFixMutation(discard);
-    const stopping = stop();
-    expect(processExit).not.toHaveBeenCalled();
-    finish({ success: true, disposition: 'applied' });
-    await expect(applied).resolves.toMatchObject({ disposition: 'applied' });
-    await expect(queued).resolves.toMatchObject({ status: 503 });
-    await stopping;
-    expect(discard).not.toHaveBeenCalled();
-    expect(processExit).toHaveBeenCalledWith(0);
-  });
-
-  it('keeps the actual promotion and patch when shutdown begins during its restart', async () => {
-    const processExit = vi.spyOn(process, 'exit').mockImplementation(() => {});
-    harness.settings = { autofixer: { autoPromote: true } };
-    harness.provider.mockResolvedValue({ exitCode: 0, partial: false });
-    harness.validate.mockReturnValue({ ok: true, files: ['example.js'] });
-    harness.apply.mockResolvedValue({ ok: true });
-    harness.diff = 'example patch';
-    let finishRestart;
-    harness.pm2.mockImplementation(async ([cmd]) => cmd === 'restart'
-      ? new Promise(resolve => { finishRestart = resolve; })
-      : { stdout: '' });
-    await start();
-    const stop = process.on.mock.calls.find(([event]) => event === 'SIGTERM')[1];
-    const stopping = stop();
-    expect(processExit).not.toHaveBeenCalled();
-    finishRestart({});
-    await stopping;
-    const metadata = writeFile.mock.calls.filter(([path]) => path.endsWith('metadata.json.tmp'));
-    expect(metadata).toHaveLength(1);
-    expect(JSON.parse(metadata[0][1])).toMatchObject({ promoted: true, success: true, staged: false });
-    expect(writeFile.mock.calls.find(([path]) => path.endsWith('fix.patch'))?.[1]).toBe(harness.diff);
+    expect(harness.provider).not.toHaveBeenCalled();
   });
 
   it.each(['--err', '--out'])('refuses repair after failed %s collection and recovers next cycle', async stream => {

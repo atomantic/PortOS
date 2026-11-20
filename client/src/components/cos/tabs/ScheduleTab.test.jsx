@@ -16,10 +16,16 @@ const api = vi.hoisted(() => ({
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn() }));
-vi.mock('../../../services/apiLocalLlm', () => apiLocalLlm);
+vi.mock('../../../services/apiLocalLlm', () => ({ ...apiLocalLlm, getLocalLlmStatus: api.getLocalLlmStatus }));
 
 vi.mock('../../ui/Toast', () => ({ default: toast }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosSchedule: api.getCosSchedule,
+  triggerCosOnDemandTask: api.triggerCosOnDemandTask,
+  updateCosTaskInterval: api.updateCosTaskInterval,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 
 const { default: ScheduleTab, mergeUpdatedTaskInterval } = await import('./ScheduleTab');
 

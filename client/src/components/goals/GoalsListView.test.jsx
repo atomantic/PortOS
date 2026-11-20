@@ -16,7 +16,7 @@ const { toastError, toastSuccess, organizeGoals, createGoal, applyGoalOrganizati
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(() => {}, { error: toastError, success: toastSuccess }),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGoals.js', () => ({
   createGoal,
   organizeGoals,
   applyGoalOrganization,

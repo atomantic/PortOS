@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import * as api from '../../services/api';
+import { reviewLoomEpisodeContinuity } from '../../services/apiFableLoom.js';
 import LoomContinuityPanel from './LoomContinuityPanel';
 
-vi.mock('../../services/api');
+vi.mock('../../services/apiFableLoom.js');
 
 describe('LoomContinuityPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.reviewLoomEpisodeContinuity.mockResolvedValue({
+    reviewLoomEpisodeContinuity.mockResolvedValue({
       passed: false,
       nodesEvaluated: 3,
       summary: { errors: 1, warnings: 0, info: 0 },

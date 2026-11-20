@@ -10,8 +10,8 @@ const api = vi.hoisted(() => ({
 const runGoogleAutoConfig = vi.hoisted(() => vi.fn());
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
-vi.mock('../../services/api', () => api);
-vi.mock('../../services/apiCalendar', () => ({ runGoogleAutoConfig }));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
+vi.mock('../../services/apiCalendar', () => ({ runGoogleAutoConfig , getGoogleAuthStatus: api.getGoogleAuthStatus, startGoogleAutoConfig: api.startGoogleAutoConfig, getGoogleAuthUrl: api.getGoogleAuthUrl }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../FeatureProviderPicker', () => ({ default: () => null }));

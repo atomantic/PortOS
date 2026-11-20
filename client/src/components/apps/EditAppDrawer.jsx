@@ -2,7 +2,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { BarChart3, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
-import * as api from '../../services/api';
+import { getDatadogInstances } from '../../services/apiSystem.js';
+import {
+  upgradeAppTls,
+  getAppWorkTracker,
+  getAppLayeredIntelligence,
+  getAppTaskTypes,
+  updateApp,
+  updateAppTaskTypeOverride,
+} from '../../services/apiApps.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
@@ -40,7 +49,7 @@ const TABS = [
 const TAB_IDS = TABS.map(t => t.id);
 
 // Silent: the DataDog section renders its own error row with Retry.
-const loadDatadogInstances = () => api.getDatadogInstances({ silent: true })
+const loadDatadogInstances = () => getDatadogInstances({ silent: true })
   .then(data => (data?.instances ? Object.values(data.instances) : []));
 
 // Port fields that must be validated on save even when their tab is unmounted.
@@ -126,7 +135,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setTlsUpgrading(true);
     setTlsError(null);
     try {
-      const result = await api.upgradeAppTls(app.id, { tlsPort: port, force });
+      const result = await upgradeAppTls(app.id, { tlsPort: port, force });
       setTlsResult(result);
       setFormData(prev => ({ ...prev, tlsPort: String(port) }));
       toast.success(result.overwrote
@@ -148,7 +157,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.getAppWorkTracker(app.id)
+    getAppWorkTracker(app.id)
       .then(info => { if (!cancelled) setWorkTrackerInfo(info); })
       .catch(() => { if (!cancelled) setWorkTrackerInfo(null); });
     return () => { cancelled = true; };
@@ -164,15 +173,15 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setLiLoaded(false);
     setLiError(false);
     Promise.all([
-      api.getAppLayeredIntelligence(app.id),
-      api.getProviders({ silent: true }),
+      getAppLayeredIntelligence(app.id),
+      getProviders({ silent: true }),
       // Scheduling (enabled/interval/provider/model) lives in the per-app task
       // override now (#2322); behavior (sources/scopes/rules/handoff) stays in the
       // layeredIntelligence config. Merge the override on top so the tab shows the
       // scheduling source of truth. A failed override read fails the whole tab:
       // defaulting it would show a running loop as off, and toggling "off" then
       // diffs as no change, so the loop could not be stopped from here.
-      api.getAppTaskTypes(app.id, { silent: true })
+      getAppTaskTypes(app.id, { silent: true })
     ]).then(([li, provData, taskTypes]) => {
       if (cancelled) return;
       const behavior = li?.config || null;
@@ -314,7 +323,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
     if (liUpdate) data.layeredIntelligence = liUpdate;
 
-    await api.updateApp(app.id, data).catch(err => {
+    await updateApp(app.id, data).catch(err => {
       setError(err.message);
       setSaving(false);
       throw err;
@@ -325,7 +334,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // user changed a scheduling field.
     const schedUpdate = buildLayeredIntelligenceScheduleUpdate(liBaseline, liConfig);
     if (schedUpdate) {
-      await api.updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
+      await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
         setError(err.message);
         setSaving(false);
         throw err;

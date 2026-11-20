@@ -12,7 +12,15 @@ const api = vi.hoisted(() => ({
   updateGitHubAccount: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiGithub.js', () => ({
+  applyGitHubAuditSuggestion: api.applyGitHubAuditSuggestion,
+  getGitHubAccounts: api.getGitHubAccounts,
+  getGitHubAudit: api.getGitHubAudit,
+  getGitHubAuditChanges: api.getGitHubAuditChanges,
+  runGitHubAudit: api.runGitHubAudit,
+  undoGitHubAuditChange: api.undoGitHubAuditChange,
+  updateGitHubAccount: api.updateGitHubAccount,
+}));
 
 const GitHubAuditTab = (await import('./GitHubAuditTab')).default;
 

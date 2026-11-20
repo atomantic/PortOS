@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
-import { cancelCodeAnimationExport, exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor } from '../../services/api';
+import {
+  cancelCodeAnimationExport,
+  exportCodeAnimation,
+  getCodeAnimationPackage,
+  getCodeAnimationThreeVendor,
+} from '../../services/apiCodeAnimation.js';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { importsThree, inlineThreeVendor } from '../../lib/threeVendorImportMap';

@@ -19,7 +19,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiMusicVideo.js', () => api);
 // The shared Film style picker reads the catalog through the api barrel.
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCodeAnimation.js', () => ({
   listFilmStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', summary: 'A fixture style.', nativeMoves: [] }]),
   getFilmStyle: vi.fn(async () => ({ id: 'example-style', nativeMoves: [] })),
 }));

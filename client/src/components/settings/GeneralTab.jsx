@@ -8,7 +8,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ThemePickerPanel from '../ThemePickerPanel';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 
 // Coordinate inputs are free text so a partially-typed "-" or "37." isn't
 // clobbered mid-edit; parse + range-check only on save. Both blank = clear.

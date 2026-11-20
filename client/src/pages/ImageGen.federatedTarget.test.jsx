@@ -78,7 +78,7 @@ describe('ImageGen federated render target', () => {
     expect(screen.getByLabelText(/^Guidance/)).toHaveAttribute('max', '20');
     await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).not.toBeDisabled());
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
-    const { buildFormData, generateImageMultipart } = await import('../services/api');
+    const { buildFormData, generateImageMultipart } = await import('../services/apiImageVideo.js');
     await waitFor(() => expect(generateImageMultipart).toHaveBeenCalled());
     expect(buildFormData).toHaveBeenCalledWith(expect.objectContaining({
       mediaProviderPeerId: 'peer-example', modelId: 'peer-flux', initImageFile: 'fixture.png',
@@ -108,7 +108,7 @@ describe('ImageGen federated render target', () => {
   // A stale snapshot still records `state: 'ready'`; gating on it would leave
   // Generate live against a peer the server is about to refuse.
   it('disables Generate and explains why when the peer’s capacity window lapsed', async () => {
-    const { getInstances } = await import('../services/api');
+    const { getInstances } = await import('../services/apiSystem.js');
     getInstances.mockResolvedValueOnce({
       peers: [{
         ...imageGenPeer(),

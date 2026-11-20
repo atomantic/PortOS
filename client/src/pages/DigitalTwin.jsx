@@ -1,6 +1,6 @@
 import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import * as api from '../services/api';
+import { getDigitalTwinStatus, getDigitalTwinSettings } from '../services/apiDigitalTwin.js';
 import { Heart } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -45,8 +45,8 @@ export default function DigitalTwin() {
   // Failed reconciliation preserves the last good snapshot without duplicate toasts.
   const fetchData = useCallback(async () => {
     const [status, settings] = await Promise.all([
-      api.getDigitalTwinStatus({ silent: true }),
-      api.getDigitalTwinSettings({ silent: true })
+      getDigitalTwinStatus({ silent: true }),
+      getDigitalTwinSettings({ silent: true })
     ]);
     return { status, settings };
   }, []);

@@ -4,7 +4,7 @@
  * No parity suite: `client/src/lib/agentOutcome.js` re-exports this module rather
  * than copying it (the one-way client→`server/lib` edge the repo allows for a pure
  * leaf), so there is only ever one implementation to test. A server test may not
- * import client source — `scripts/server-imports-no-client.guard.test.js` freezes the
+ * import client source — `server/test/guards/modules/server-imports-no-client.test.js` freezes the
  * legacy cross-imports and refuses new ones.
  */
 

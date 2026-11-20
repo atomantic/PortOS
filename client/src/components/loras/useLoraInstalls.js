@@ -1,7 +1,11 @@
 import { useState, useCallback } from 'react';
 import toast from '../ui/Toast';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
-import { installLoraFromCivitai, previewLoraInstall, installLoraFromHuggingfaceStream } from '../../services/api';
+import {
+  installLoraFromCivitai,
+  previewLoraInstall,
+  installLoraFromHuggingfaceStream,
+} from '../../services/apiImageVideo.js';
 import { hfCardKey, suggestionKey } from './loraDisplay';
 
 // Install state machine for the LoRA Manager: the Civitai form + suggestion

@@ -3,7 +3,15 @@ import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink, User, Key, Monitor, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatDateTime } from '../../utils/formatters';
-import * as api from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
+import { getGoogleAuthUrl, saveGoogleAuthCredentials, startGoogleAutoConfig } from '../../services/apiCalendar.js';
+import {
+  enableGmailApi,
+  createMessageAccount,
+  deleteMessageAccount,
+  updateMessageAccount,
+  clearMessageCache,
+} from '../../services/apiMessages.js';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -70,7 +78,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const loadConfig = useCallback(async () => {
     setConfigLoading(true);
-    const settings = await api.getSettings({ silent: true }).catch(() => null);
+    const settings = await getSettings({ silent: true }).catch(() => null);
     if (!settings || typeof settings !== 'object') {
       setConfigLoadError(true);
       setConfigLoading(false);
@@ -122,7 +130,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const handleReauthorize = () => {
     setReauthorizing(true);
-    api.getGoogleAuthUrl({ returnTo: 'messages', silent: true })
+    getGoogleAuthUrl({ returnTo: 'messages', silent: true })
       .then(({ url }) => {
         window.open(url, '_blank');
         toast.success('Complete authorization in the opened browser tab');
@@ -136,7 +144,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
       return toast.error('Both Client ID and Client Secret are required');
     }
     setSavingOAuth(true);
-    const saved = await api.saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
+    const saved = await saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
     setSavingOAuth(false);
     if (!saved) return toast.error('Failed to save credentials');
     toast.success('OAuth credentials saved');
@@ -145,7 +153,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleAutoConfigStart = async () => {
-    const result = await api.startGoogleAutoConfig({ silent: true }).catch(() => null);
+    const result = await startGoogleAutoConfig({ silent: true }).catch(() => null);
     if (!result || result.error) return toast.error(result?.error || 'Failed to open browser');
     setAutoConfigStep('login');
     toast.success('Google Cloud Console opened in PortOS browser');
@@ -167,7 +175,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleEnableGmailApi = () => {
-    api.enableGmailApi({ silent: true })
+    enableGmailApi({ silent: true })
       .then(r => toast.success(r.message))
       .catch(() => toast.error('Failed to open Gmail API page'));
   };
@@ -189,7 +197,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
         voiceMode: config.voiceMode
       }
     };
-    const result = await api.updateSettings(patch, { silent: true }).catch(() => null);
+    const result = await updateSettings(patch, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to save config');
     toast.success('Message config saved');
     setConfigDirty(false);
@@ -204,7 +212,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    const result = await api.createMessageAccount(form, { silent: true }).catch(() => null);
+    const result = await createMessageAccount(form, { silent: true }).catch(() => null);
     setSaving(false);
     if (!result) return toast.error('Failed to create account');
     setShowForm(false);
@@ -215,7 +223,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const handleDelete = async (id) => {
     setDeleting(id);
-    const ok = await api.deleteMessageAccount(id).then(() => true).catch(() => false);
+    const ok = await deleteMessageAccount(id).then(() => true).catch(() => false);
     setDeleting(null);
     if (!ok) return;
     toast.success('Account deleted');
@@ -223,7 +231,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleToggle = async (account) => {
-    const result = await api.updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
+    const result = await updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
@@ -233,7 +241,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   // already-replied thread (#2796). Default-on for Gmail (absent === on).
   const handleToggleIngestSent = async (account) => {
     const next = account.syncConfig?.ingestSent === false; // flipping to enabled
-    const result = await api.updateMessageAccount(
+    const result = await updateMessageAccount(
       account.id,
       { syncConfig: { ...account.syncConfig, ingestSent: next } },
       { silent: true }
@@ -252,7 +260,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
     }
     setConfirmClear(null);
     setClearingCache(accountId);
-    const result = await api.clearMessageCache(accountId).catch(() => null);
+    const result = await clearMessageCache(accountId).catch(() => null);
     setClearingCache(null);
     if (!result) return;
     toast.success('Cache cleared');

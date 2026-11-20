@@ -6,7 +6,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 
 ## Guides (living documents)
 
-A living doc describes current behaviour and operator procedure; issue numbers, dated evidence, and "what changed" belong in the commit or PR. Each guide is capped at 40 KB (grandfathered files are ratcheted in `docs/docs-index.test.js`); a doc at its ceiling is split by topic, not appended to.
+A living doc describes current behaviour and operator procedure; issue numbers, dated evidence, and "what changed" belong in the commit or PR. Each guide is capped at 40 KB (grandfathered files are ratcheted in `server/test/guards/repo/docs-index.test.js`); a doc at its ceiling is split by topic, not appended to.
 
 | Doc | Covers |
 |-----|--------|

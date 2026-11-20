@@ -4,7 +4,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 
 // Calendar MCP sync (#11051), host-browser automation (#12952) and generic sync
 // (#13055) are gated by the default-deny write policy (#16018); the refusal and
-// principal matrix live in services/authGate.test.js and hostControlCoverage.test.js.
+// principal matrix live in services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js.
 // The real Calendar router, MCP service and provider picker run here, so the
 // workflow proves the sync still reaches the configured CLI. Persistence and the
 // CLI sink are doubled; no real calendar, database, provider or instance data is used.

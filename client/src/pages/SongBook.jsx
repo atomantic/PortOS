@@ -25,7 +25,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { listSongs, createSong, deleteSong, updateSong } from '../services/api';
+import { listSongs, createSong, deleteSong, updateSong } from '../services/apiSongbook.js';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, instrumentLabel, inputClass, labelClass,
   isSongDue, songNextReviewAt,

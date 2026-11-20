@@ -5,7 +5,7 @@ import {
   MIND_BUNDLE_MAX_CHARS,
   MIND_BUNDLE_PASSPHRASE_MIN_CHARS,
 } from '../../lib/mindBundle.js';
-import * as api from '../../services/api';
+import { previewPersistentMindBundle, applyPersistentMindBundle } from '../../services/apiAgents.js';
 import { formatCount, formatDateTime } from '../../utils/formatters.js';
 import Banner from '../ui/Banner';
 
@@ -105,7 +105,7 @@ export default function PersistentMindImportPanel() {
     setPending('preview');
     setError(null);
     setApplied(null);
-    await api.previewPersistentMindBundle({ bundle: bundleText, passphrase })
+    await previewPersistentMindBundle({ bundle: bundleText, passphrase })
       .then((result) => {
         setPreview(result);
         // Default every group to "keep mine". An import must never be the
@@ -123,7 +123,7 @@ export default function PersistentMindImportPanel() {
     if (pending || !preview) return;
     setPending('apply');
     setError(null);
-    await api.applyPersistentMindBundle({ bundle: bundleText, passphrase, choices })
+    await applyPersistentMindBundle({ bundle: bundleText, passphrase, choices })
       .then((result) => {
         setApplied(result);
         setPreview(null);

@@ -1,0 +1,67 @@
+/**
+ * Every `vi.mock` literal factory under the server-side test trees defines only
+ * members its target exports. Scanner and rationale: scripts/lib/mockContractScan.js.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { exportNames, mask, mockDrift, unusedAllowed } from '../../../../scripts/lib/mockContractScan.js';
+import { readText, REPO_ROOT as ROOT, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
+
+/** Deliberate fixture adapters: `<test file>|<module specifier>|<key>` -> reason. */
+const ALLOWED = new Map([
+  ['server/services/memoryBackend.test.js|./memory.js|__backend', 'sentinel the suite reads to assert which backend was selected'],
+  ['server/services/memoryBackend.test.js|./memoryDB.js|__backend', 'sentinel the suite reads to assert which backend was selected'],
+]);
+
+const used = new Set();
+const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used });
+
+function trackedTests() {
+  return workingTreeFiles(ROOT, ['server', 'scripts', 'lib', 'autofixer'])
+    .filter((f) => /\.test\.[cm]?js$/.test(f) && existsSync(join(ROOT, f)));
+}
+
+describe('vi.mock factory contract conventions', () => {
+  it('flags a planted key the real module does not export', () => {
+    const probe = join(ROOT, 'server/lib/__probe.test.js');
+    const src = [
+      "vi.mock('./validateRequest.js', () => ({ validate: vi.fn(), plantedDeadKey: vi.fn() }));",
+      "// vi.mock('./validateRequest.js', () => ({ commentedDeadKey: vi.fn() }));",
+      "vi.mock('./validateRequest.js', async () => ({ ...(await vi.importActual('./validateRequest.js')), spreadKey: vi.fn() }));",
+    ].join('\n');
+    expect(drift(probe, src)).toEqual(['server/lib/__probe.test.js:1 — ./validateRequest.js mocks plantedDeadKey']);
+  });
+
+  it('does not read a JSX-text apostrophe as a string opener (#12794)', () => {
+    const src = [
+      'export function Panel() {',
+      "  return <p>Style is prepended to every scene's image prompt.</p>;",
+      '}',
+      'export default Panel;',
+    ].join('\n');
+    expect(mask(src)).toContain('export default Panel');
+    expect(mask('export const a = <i>the default\'s value</i>;\nexport const b = 1;')).toContain('export const b');
+    expect(mask('export const a = <i>Zoë\'s</i>;\nexport const b = 1;')).toContain('export const b');
+    expect(mask("export const a = 'x';\nexport const b = 1;")).toContain('export const b');
+    expect(mask("export const c = 'don\\'t';")).not.toContain('don');
+  });
+
+  it('collects the default export of a component with an apostrophe in JSX text (#12794)', () => {
+    const file = join(ROOT, 'client/src/components/writers-room/StoryboardConfigTab.jsx');
+    expect(exportNames(file).has('default')).toBe(true);
+  });
+
+  it('follows export * when collecting real exports', () => {
+    expect(exportNames(join(ROOT, 'server/lib/fileUtils.js'))).toContain('safeJSONParse');
+  });
+
+  it('mocks only members the real modules export', () => {
+    const files = trackedTests();
+    expect(files.length).toBeGreaterThan(100);
+    const violations = files.flatMap((f) => drift(join(ROOT, f), readText(join(ROOT, f))));
+    expect(violations, 'delete the dead key, or point the mock at the module that really exports it').toEqual([]);
+    expect(unusedAllowed(ALLOWED, used), 'delete the stale ALLOWED entry').toEqual([]);
+  });
+});

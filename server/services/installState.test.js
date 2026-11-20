@@ -462,7 +462,7 @@ describe('detectStaleDeps (direct)', () => {
       '/repo/client/package.json': 300,
       '/repo/client/node_modules/.package-lock.json': 200, // client: manifest-newer
       '/repo/server/package.json': 100,
-      // server: no receipt → not-installed
+      // No server receipt means it is not installed.
     });
     const result = await __internal.detectStaleDeps(ROOT, { statMtime });
     const byName = Object.fromEntries(result.workspaces.map(w => [w.name, w]));

@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiBrain.js', () => ({
   runBrainParityCheck: vi.fn(),
 }));
 
-import { runBrainParityCheck } from '../../services/api';
+import { runBrainParityCheck } from '../../services/apiBrain.js';
 import BrainParityPanel from './BrainParityPanel';
 
 const PEER = { id: 'peer-local-1', instanceId: 'inst-peer-1', name: 'Example Peer' };

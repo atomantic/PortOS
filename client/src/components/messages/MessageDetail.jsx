@@ -2,7 +2,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, ImageOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
-import * as api from '../../services/api';
+import { getSettings } from '../../services/apiSystem.js';
+import {
+  getMessageThread,
+  refreshMessage,
+  generateMessageDraft,
+  updateMessageDraft,
+  createMessageDraft,
+  executeMessageAction,
+} from '../../services/apiMessages.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 
@@ -133,7 +141,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
 
   // Load voice mode default from settings
   useEffect(() => {
-    api.getSettings()
+    getSettings()
       .then(s => setUseVoice(s?.messages?.voiceMode ?? false))
       .catch(err => console.warn(`⚠️ Failed to load voice mode setting: ${err.message}`));
   }, []);
@@ -146,7 +154,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const { threadId, accountId } = message;
   const hasThreadRef = !!(threadId && accountId);
   const fetchThread = useCallback(
-    () => api.getMessageThread(accountId, threadId, { silent: true }).then(data => data?.messages || []),
+    () => getMessageThread(accountId, threadId, { silent: true }).then(data => data?.messages || []),
     [accountId, threadId],
   );
   const {
@@ -166,7 +174,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const handleRefresh = async () => {
     const generation = ++refreshGeneration.current;
     setRefreshing(true);
-    const result = await api.refreshMessage(message.accountId, message.id).catch(() => null);
+    const result = await refreshMessage(message.accountId, message.id).catch(() => null);
     if (generation !== refreshGeneration.current) return;
     setRefreshing(false);
     if (!result) return;
@@ -189,7 +197,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const handleGenerateReply = async () => {
     if (!account) return toast.error('No account available');
     setGenerating(true);
-    const draft = await api.generateMessageDraft({
+    const draft = await generateMessageDraft({
       accountId: account.id,
       replyToMessageId: displayedMessage.id,
       threadId: displayedMessage.threadId,
@@ -211,8 +219,8 @@ export default function MessageDetail({ message, accounts, onBack }) {
     const to = [displayedMessage.from?.email].filter(Boolean);
     const subject = `Re: ${displayedMessage.subject || ''}`;
     const result = generatedDraftId
-      ? await api.updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
-      : await api.createMessageDraft({
+      ? await updateMessageDraft(generatedDraftId, { to, subject, body: replyBody }).catch(() => null)
+      : await createMessageDraft({
           accountId: account.id,
           replyToMessageId: displayedMessage.id,
           threadId: displayedMessage.threadId,
@@ -229,7 +237,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   const handleAction = (action) => {
     if (!displayedMessage.accountId) return;
     setActioning(action);
-    api.executeMessageAction(displayedMessage.accountId, displayedMessage.id, action)
+    executeMessageAction(displayedMessage.accountId, displayedMessage.id, action)
       .then(() => {
         toast.success(`Message ${action}d`);
         onBack();

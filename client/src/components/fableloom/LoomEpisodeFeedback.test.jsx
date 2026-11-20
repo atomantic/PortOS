@@ -2,15 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   feedbackLoomEpisode: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
 
-import * as api from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { feedbackLoomEpisode } from '../../services/apiFableLoom.js';
 import LoomEpisodeFeedback from './LoomEpisodeFeedback';
 
 const loom = { id: 'loom-1', name: 'Example Loom' };
@@ -27,8 +30,8 @@ const providers = [{
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers });
-  api.feedbackLoomEpisode.mockResolvedValue({ loom: { ...loom }, changedScenes: 1 });
+  getProviders.mockResolvedValue({ activeProvider: 'codex', providers });
+  feedbackLoomEpisode.mockResolvedValue({ loom: { ...loom }, changedScenes: 1 });
 });
 
 describe('LoomEpisodeFeedback', () => {
@@ -52,7 +55,7 @@ describe('LoomEpisodeFeedback', () => {
     await user.selectOptions(screen.getByLabelText('Thinking effort'), 'high');
     await user.click(screen.getByRole('button', { name: 'Apply AI feedback' }));
 
-    await waitFor(() => expect(api.feedbackLoomEpisode).toHaveBeenCalledWith(
+    await waitFor(() => expect(feedbackLoomEpisode).toHaveBeenCalledWith(
       'loom-1',
       'ep-1',
       expect.objectContaining({
@@ -75,6 +78,6 @@ describe('LoomEpisodeFeedback', () => {
       />,
     );
     await waitFor(() => expect(screen.getByRole('button', { name: 'Apply AI feedback' })).toBeDisabled());
-    expect(api.feedbackLoomEpisode).not.toHaveBeenCalled();
+    expect(feedbackLoomEpisode).not.toHaveBeenCalled();
   });
 });

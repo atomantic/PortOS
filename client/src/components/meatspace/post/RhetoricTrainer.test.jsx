@@ -2,13 +2,19 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RhetoricTrainer from './RhetoricTrainer';
 import { findEnabledByRole } from '../../../test/enabledBarrier.js';
-import { evaluateRhetoricAttempt, getLoadedLlmModels, getProviders, submitTrainingEntry } from '../../../services/api';
+import { evaluateRhetoricAttempt, submitTrainingEntry } from '../../../services/apiMeatspace.js';
+import { getLoadedLlmModels } from '../../../services/apiLocalLlm.js';
+import { getProviders } from '../../../services/apiProviders.js';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   evaluateRhetoricAttempt: vi.fn(),
-  getLoadedLlmModels: vi.fn(() => Promise.resolve({ ollama: [], lmstudio: [], sourceErrors: [] })),
-  getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
   submitTrainingEntry: vi.fn(() => Promise.resolve()),
+}));
+vi.mock('../../../services/apiLocalLlm.js', () => ({
+  getLoadedLlmModels: vi.fn(() => Promise.resolve({ ollama: [], lmstudio: [], sourceErrors: [] })),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
 describe('RhetoricTrainer', () => {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
-import * as api from '../../services/api';
+import { analyzeDigitalTwinTraits } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
 import { filterSelectableModels } from '../../utils/providers';
 import { formatDateNumeric } from '../../utils/formatters';
@@ -40,7 +40,7 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
       return;
     }
     setAnalyzing(true);
-    const result = await api.analyzeDigitalTwinTraits(
+    const result = await analyzeDigitalTwinTraits(
       selectedProvider.providerId,
       selectedProvider.model,
       true,

@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect } from 'react';
-import { getCalendarEvents } from '../services/api';
+import { getCalendarEvents } from '../services/apiCalendar.js';
 import socket from '../services/socket';
 import { usePagedCollection } from './usePagedCollection';
 

@@ -8,7 +8,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal before the self-update
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal before the self-update
 // effect and the authorized workflow of the brain-link and ask routers.
 const auth = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../services/auth.js', async (importOriginal) => ({

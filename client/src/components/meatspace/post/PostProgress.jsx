@@ -4,7 +4,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
 import { useNavigate } from 'react-router';
-import { getPostProgress } from '../../../services/api';
+import { getPostProgress } from '../../../services/apiMeatspace.js';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { formatDurationMin } from '../../../utils/formatters';
 import { DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';

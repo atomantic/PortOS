@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { History, Loader2, RotateCcw, X } from 'lucide-react';
 import Modal from '../../ui/Modal';
 import InlineDiff from '../../ui/InlineDiff';
-import { restorePipelineStageVersion, PIPELINE_STAGE_LABELS } from '../../../services/api';
+import { restorePipelineStageVersion, PIPELINE_STAGE_LABELS } from '../../../services/apiPipeline.js';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { timeAgo } from '../../../utils/formatters';
 import toast from '../../ui/Toast';

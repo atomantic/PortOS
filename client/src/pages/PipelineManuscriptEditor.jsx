@@ -56,12 +56,20 @@ import ManuscriptReadAloud from '../components/pipeline/manuscript/ManuscriptRea
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import { acceptedSectionsOf } from '../components/pipeline/manuscript/ManuscriptCommentCard';
 import {
-  getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
-  savePipelineManuscriptSection, reformatPipelineManuscriptText, restorePipelineStageVersion,
-  analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
-  cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
+  getPipelineSeries,
+  updatePipelineSeries,
+  getPipelineManuscript,
+  getPipelineManuscriptReview,
+  savePipelineManuscriptSection,
+  reformatPipelineManuscriptText,
+  restorePipelineStageVersion,
+  analyzePipelineManuscriptCompleteness,
+  startPipelineManuscriptCompleteness,
+  cancelPipelineManuscriptCompleteness,
+  getPipelineManuscriptCompletenessStatus,
   pipelineManuscriptCompletenessSseUrl,
-} from '../services/api';
+} from '../services/apiPipeline.js';
+import { getProviders } from '../services/apiProviders.js';
 
 // Stable empty array so sections that gain no comments/spans don't get a fresh
 // `[]` identity every render.

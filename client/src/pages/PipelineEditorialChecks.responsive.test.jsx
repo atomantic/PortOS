@@ -9,7 +9,7 @@ const getEditorialChecks = vi.fn();
 const listPipelineSeries = vi.fn();
 const getPipelineManuscriptReview = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   listPipelineSeries: (...a) => listPipelineSeries(...a),
   updatePipelineSeries: vi.fn(),
   getEditorialChecks: (...a) => getEditorialChecks(...a),

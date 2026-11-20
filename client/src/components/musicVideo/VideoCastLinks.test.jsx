@@ -2,10 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VideoCastLinks from './VideoCastLinks.jsx';
-import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../../services/api';
+import {
+  linkVideoSubjects,
+  listVideoSubjectLinks,
+  restoreVideoSubjectDescription,
+  saveVideoSubjectToCatalog,
+} from '../../services/apiCatalog.js';
 import toast from '../ui/Toast';
 
-vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), restoreVideoSubjectDescription: vi.fn(), saveVideoSubjectToCatalog: vi.fn() }));
+vi.mock('../../services/apiCatalog.js', () => ({
+  listVideoSubjectLinks: vi.fn(),
+  linkVideoSubjects: vi.fn(),
+  restoreVideoSubjectDescription: vi.fn(),
+  saveVideoSubjectToCatalog: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, onSelect }) => (isOpen ? (

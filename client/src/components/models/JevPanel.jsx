@@ -19,7 +19,7 @@ import {
   scoreJev,
   trainJevHead,
   unloadJev,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import { jevHeadBlockerLabel } from '../../lib/jevHeadReasons';
 

@@ -13,7 +13,16 @@ const api = vi.hoisted(() => ({
   deleteRapidReaderLibraryEntry: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiRapidReader.js', () => ({
+  ACCELERANDO_LICENSE_URL: api.ACCELERANDO_LICENSE_URL,
+  ACCELERANDO_SOURCE_PAGE_URL: api.ACCELERANDO_SOURCE_PAGE_URL,
+  getAccelerandoBook: api.getAccelerandoBook,
+  listRapidReaderLibrary: api.listRapidReaderLibrary,
+  getRapidReaderLibraryEntry: api.getRapidReaderLibraryEntry,
+  createRapidReaderLibraryEntry: api.createRapidReaderLibraryEntry,
+  fetchRapidReaderLibraryEntry: api.fetchRapidReaderLibraryEntry,
+  deleteRapidReaderLibraryEntry: api.deleteRapidReaderLibraryEntry,
+}));
 
 const RapidReaderPage = (await import('./RapidReader')).default;
 const { writeRapidReaderProgress } = await import('../lib/rapidReaderPosition');

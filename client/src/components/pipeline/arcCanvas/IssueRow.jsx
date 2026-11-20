@@ -4,7 +4,7 @@ import { Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { timeAgo } from '../../../utils/formatters';
-import { deletePipelineIssue, updatePipelineIssue } from '../../../services/api';
+import { deletePipelineIssue, updatePipelineIssue } from '../../../services/apiPipeline.js';
 import CoverArt from './CoverArt.jsx';
 
 const ISSUE_STATUS_COLORS = {

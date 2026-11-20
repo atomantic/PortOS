@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getAutobiographyStats: vi.fn(),
   getAutobiographyStories: vi.fn(),
   getAutobiographyThemes: vi.fn(),
@@ -18,7 +18,13 @@ vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi
 vi.mock('../StoryCraftPanel', () => ({ default: () => null }));
 
 import AutobiographyTab from './AutobiographyTab';
-import * as api from '../../../services/api';
+import {
+  getAutobiographyStats,
+  getAutobiographyConfig,
+  getAutobiographyStories,
+  getAutobiographyThemes,
+  getAutobiographySuggestions,
+} from '../../../services/apiDigitalTwin.js';
 
 const STORY = {
   id: 'story-1', themeId: 'childhood', themeLabel: 'Childhood', promptText: 'A question?',
@@ -31,15 +37,15 @@ const renderTab = () => render(<MemoryRouter><AutobiographyTab onRefresh={vi.fn(
 describe('AutobiographyTab failed loads', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getAutobiographyStats.mockResolvedValue({ totalStories: 1, totalWords: 4, byTheme: {} });
-    api.getAutobiographyConfig.mockResolvedValue(null);
-    api.getAutobiographyStories.mockResolvedValue([STORY]);
-    api.getAutobiographyThemes.mockResolvedValue([THEME]);
-    api.getAutobiographySuggestions.mockResolvedValue([]);
+    getAutobiographyStats.mockResolvedValue({ totalStories: 1, totalWords: 4, byTheme: {} });
+    getAutobiographyConfig.mockResolvedValue(null);
+    getAutobiographyStories.mockResolvedValue([STORY]);
+    getAutobiographyThemes.mockResolvedValue([THEME]);
+    getAutobiographySuggestions.mockResolvedValue([]);
   });
 
   it('shows a retryable error instead of "No stories yet" when the story read fails', async () => {
-    api.getAutobiographyStories.mockRejectedValueOnce(new Error('boom'));
+    getAutobiographyStories.mockRejectedValueOnce(new Error('boom'));
     const user = userEvent.setup();
     renderTab();
 
@@ -52,21 +58,21 @@ describe('AutobiographyTab failed loads', () => {
   });
 
   it('keeps "No stories yet" for a genuinely empty journal', async () => {
-    api.getAutobiographyStories.mockResolvedValue([]);
+    getAutobiographyStories.mockResolvedValue([]);
     renderTab();
     expect(await screen.findByText('No stories yet')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('shows a retryable error row when the themes read fails', async () => {
-    api.getAutobiographyThemes.mockRejectedValueOnce(new Error('boom'));
+    getAutobiographyThemes.mockRejectedValueOnce(new Error('boom'));
     renderTab();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load story themes');
     expect(await screen.findByText("A question?")).toBeInTheDocument();
   });
 
   it('shows a retryable error row when the story ideas read fails', async () => {
-    api.getAutobiographySuggestions.mockRejectedValueOnce(new Error('boom'));
+    getAutobiographySuggestions.mockRejectedValueOnce(new Error('boom'));
     renderTab();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load story ideas');
   });

@@ -4,7 +4,10 @@ import { expect, it, vi } from 'vitest';
 import LoomBoard from './LoomBoard';
 
 const api = vi.hoisted(() => ({ listStoryboards: vi.fn(), makeStoryboardFromFableLoom: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiStoryboards.js', () => ({
+  listStoryboards: api.listStoryboards,
+  makeStoryboardFromFableLoom: api.makeStoryboardFromFableLoom,
+}));
 vi.mock('../MediaImage', () => ({ default: () => null }));
 
 it('does not show another episode’s storyboard links while the current list is unavailable', async () => {

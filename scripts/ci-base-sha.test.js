@@ -319,8 +319,11 @@ describe('ci.yml server node_modules cache', () => {
   });
 });
 
-it('checks the server entry point on the always-run impact job', () => {
-  const jobs = workflowJobs(WORKFLOW);
-  expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node scripts\/ci-impact-diagnostics\.js syntax -- node --check server\/index\.js/);
-  expect(jobs.server).not.toContain('node --check server/index.js');
+describe('ci.yml sidecar dependencies', () => {
+  it('uses server dependencies for Autofixer tests and checks server syntax in the impact job', () => {
+    const jobs = workflowJobs(WORKFLOW);
+    expect(jobs.impact).toContain('ci-impact-diagnostics.js syntax -- node --check server/index.js');
+    expect(jobs.server).toContain('uses: ./.github/actions/setup-server');
+    expect(WORKFLOW).not.toMatch(/npm ci[^\n]*--prefix autofixer/);
+  });
 });

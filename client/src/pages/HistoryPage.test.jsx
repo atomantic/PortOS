@@ -9,7 +9,13 @@ const api = vi.hoisted(() => ({
   deleteHistoryEntry: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiHistory.js', () => ({
+  getHistory: api.getHistory,
+  getHistoryStats: api.getHistoryStats,
+  getHistoryActions: api.getHistoryActions,
+  clearHistory: api.clearHistory,
+  deleteHistoryEntry: api.deleteHistoryEntry,
+}));
 
 import { HistoryPage } from './HistoryPage';
 

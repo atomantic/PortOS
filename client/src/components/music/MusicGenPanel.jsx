@@ -33,8 +33,15 @@ import toast from '../ui/Toast';
 import { analyzeMusicLyrics } from '../../lib/musicDuration.js';
 import { formatDurationSec } from '../../utils/formatters.js';
 import {
-  listMusicEngines, generateMusic, previewMusicPrompt, installAudioModel, removeAudioModel, getActiveProcessing, getMediaJob, getTrack, cancelMediaJob,
-} from '../../services/api';
+  listMusicEngines,
+  generateMusic,
+  previewMusicPrompt,
+  installAudioModel,
+  removeAudioModel,
+} from '../../services/apiMusic.js';
+import { getActiveProcessing } from '../../services/apiSystem.js';
+import { getMediaJob, cancelMediaJob } from '../../services/apiMediaJobs.js';
+import { getTrack } from '../../services/apiTracks.js';
 import { formatDownloadGb } from '../../utils/formatters';
 import { useFederatedMediaTarget } from '../../hooks/useFederatedMediaTarget.js';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';

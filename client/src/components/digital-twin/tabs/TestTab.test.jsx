@@ -16,9 +16,8 @@ const bus = vi.hoisted(() => {
 });
 
 vi.mock('../../../services/socket', () => ({ default: { on: bus.on, off: bus.off } }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinTests: vi.fn(),
-  getProviders: vi.fn(),
   getDigitalTwinTestHistory: vi.fn(),
   getBehavioralFeedbackStats: vi.fn(),
   getDigitalTwinPersonas: vi.fn(),
@@ -27,13 +26,24 @@ vi.mock('../../../services/api', () => ({
   submitBehavioralFeedback: vi.fn(),
   generateSoulTests: vi.fn(),
 }));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./ValuesAlignmentPanel', () => ({ default: () => null }));
 vi.mock('./AdversarialBoundaryPanel', () => ({ default: () => null }));
 vi.mock('./MultiTurnPanel', () => ({ default: () => null }));
 
 import TestTab from './TestTab';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinTests,
+  getDigitalTwinTestHistory,
+  getBehavioralFeedbackStats,
+  getDigitalTwinPersonas,
+  runSoulMultiTests,
+  runSoulTests,
+} from '../../../services/apiDigitalTwin.js';
+import { getProviders } from '../../../services/apiProviders.js';
 
 const PROGRESS = 'digital-twin:test-progress';
 const passed = (model) => ({ score: 1, passed: 1, total: 1, results: [{ testId: 1, result: 'passed' }], model });
@@ -43,12 +53,12 @@ let finalResponse;
 beforeEach(() => {
   vi.clearAllMocks();
   bus.handlers.clear();
-  api.getDigitalTwinTests.mockResolvedValue([{ testId: 1, testName: 'Honesty', prompt: 'p', expectedBehavior: 'e', failureSignals: 'f' }]);
-  api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', enabled: true, models: ['alpha', 'beta'] }] });
-  api.getDigitalTwinTestHistory.mockResolvedValue([]);
-  api.getBehavioralFeedbackStats.mockResolvedValue(null);
-  api.getDigitalTwinPersonas.mockResolvedValue([]);
-  api.runSoulMultiTests.mockImplementation(() => new Promise((resolve) => { finalResponse = resolve; }));
+  getDigitalTwinTests.mockResolvedValue([{ testId: 1, testName: 'Honesty', prompt: 'p', expectedBehavior: 'e', failureSignals: 'f' }]);
+  getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', enabled: true, models: ['alpha', 'beta'] }] });
+  getDigitalTwinTestHistory.mockResolvedValue([]);
+  getBehavioralFeedbackStats.mockResolvedValue(null);
+  getDigitalTwinPersonas.mockResolvedValue([]);
+  runSoulMultiTests.mockImplementation(() => new Promise((resolve) => { finalResponse = resolve; }));
 });
 
 // Start a two-model batch and return the request id the tab minted for it.
@@ -57,8 +67,8 @@ async function startBatch(user) {
   await user.click(await screen.findByRole('button', { name: 'alpha' }));
   await user.click(screen.getByRole('button', { name: 'beta' }));
   await user.click(screen.getByRole('button', { name: /Run Selected Tests/ }));
-  await waitFor(() => expect(api.runSoulMultiTests).toHaveBeenCalled());
-  return api.runSoulMultiTests.mock.calls[0][3];
+  await waitFor(() => expect(runSoulMultiTests).toHaveBeenCalled());
+  return runSoulMultiTests.mock.calls[0][3];
 }
 
 const frame = (requestId, model, result) => ({ requestId, providerId: 'p1', model, result });
@@ -126,19 +136,19 @@ describe('TestTab multi-model progress (#10063)', () => {
 
   it('leaves single-model runs on the single-provider endpoint', async () => {
     const user = userEvent.setup();
-    api.runSoulTests.mockResolvedValue(passed('alpha'));
+    runSoulTests.mockResolvedValue(passed('alpha'));
     render(<TestTab onRefresh={vi.fn()} />);
     await user.click(await screen.findByRole('button', { name: 'alpha' }));
     await user.click(screen.getByRole('button', { name: /Run Selected Tests/ }));
-    await waitFor(() => expect(api.runSoulTests).toHaveBeenCalled());
-    expect(api.runSoulMultiTests).not.toHaveBeenCalled();
+    await waitFor(() => expect(runSoulTests).toHaveBeenCalled());
+    expect(runSoulMultiTests).not.toHaveBeenCalled();
   });
 });
 
 describe('TestTab failed reads stay distinct from empty lists (#12783)', () => {
   it('shows a retryable error, not "No Test Suite Found", when the suite read fails', async () => {
     const user = userEvent.setup();
-    api.getDigitalTwinTests.mockRejectedValueOnce(new Error('suite offline'));
+    getDigitalTwinTests.mockRejectedValueOnce(new Error('suite offline'));
     render(<TestTab onRefresh={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the behavioral test suite — suite offline');
@@ -152,7 +162,7 @@ describe('TestTab failed reads stay distinct from empty lists (#12783)', () => {
 
   it('shows a retryable error instead of an empty provider picker when providers fail to load', async () => {
     const user = userEvent.setup();
-    api.getProviders.mockRejectedValueOnce(new Error('providers offline'));
+    getProviders.mockRejectedValueOnce(new Error('providers offline'));
     render(<TestTab onRefresh={vi.fn()} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI providers');
@@ -164,10 +174,10 @@ describe('TestTab failed reads stay distinct from empty lists (#12783)', () => {
 
   it('flags failed history and persona reads inline while the rest of the tab stays usable', async () => {
     const user = userEvent.setup();
-    api.getDigitalTwinTestHistory
+    getDigitalTwinTestHistory
       .mockRejectedValueOnce(new Error('history offline'))
       .mockResolvedValueOnce([{ runId: 'r1', score: 1, passed: 1, total: 1, model: 'alpha', timestamp: new Date().toISOString() }]);
-    api.getDigitalTwinPersonas
+    getDigitalTwinPersonas
       .mockRejectedValueOnce(new Error('personas offline'))
       .mockResolvedValueOnce([{ id: 'persona-1', name: 'Alice Example' }]);
     render(<TestTab onRefresh={vi.fn()} />);

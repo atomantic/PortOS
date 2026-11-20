@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CreditCard, RefreshCw, Save } from 'lucide-react';
-import * as api from '../../services/api';
+import {
+  getSubscriptions,
+  getUsage,
+  getProviderUsage,
+  updateSubscriptions,
+  setSubscriptionEnabled,
+} from '../../services/apiSystem.js';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -198,19 +204,19 @@ export default function SubscriptionsTab() {
   const beginSavingsLoad = useLatestRequest();
 
   const loadPlans = useCallback(async () => {
-    const data = await api.getSubscriptions({ silent: true }).catch(() => null);
+    const data = await getSubscriptions({ silent: true }).catch(() => null);
     if (data?.families) setRows(data.families);
   }, []);
 
   const loadSavings = useCallback(async () => {
     const isCurrent = beginSavingsLoad();
-    const data = await api.getUsage({ period }).catch(() => null);
+    const data = await getUsage({ period }).catch(() => null);
     if (!isCurrent()) return;
     setSavings(data?.subscriptionSavings ?? null);
   }, [period, beginSavingsLoad]);
 
   const loadQuotas = useCallback(async (refresh = false) => {
-    const data = await api.getProviderUsage({ refresh }).catch(() => null);
+    const data = await getProviderUsage({ refresh }).catch(() => null);
     // A failed read keeps whatever was already on screen: the meters are
     // supporting detail here, and blanking them would look like "the plan has
     // no quota" rather than "the scrape didn't answer".
@@ -275,7 +281,7 @@ export default function SubscriptionsTab() {
     const body = {};
     if (patch.cost !== undefined) body.costs = { [row.family]: patch.cost };
     if (patch.tier !== undefined) body.tiers = { [row.family]: patch.tier };
-    const result = await api.updateSubscriptions(body).catch(() => null);
+    const result = await updateSubscriptions(body).catch(() => null);
     if (!result?.families) return;
     setRows(result.families);
     if (patch.cost !== undefined) await loadSavings();
@@ -289,7 +295,7 @@ export default function SubscriptionsTab() {
   });
 
   const onToggle = (row) => withBusy(row.family, async () => {
-    const result = await api.setSubscriptionEnabled(
+    const result = await setSubscriptionEnabled(
       { family: row.family, enabled: !row.enabled },
     ).catch(() => null);
     if (!result?.families) return;

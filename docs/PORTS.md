@@ -38,8 +38,8 @@ commands target the PM2 listener.
 | 5556 | portos-browser | cdp | Chrome DevTools Protocol |
 | 5557 | portos-browser | health | Browser health check API |
 | 5558 | portos-cos | api | CoS Agent Runner (isolated process) |
-| 5559 | — | retired | Former Autofixer daemon port (never bound) |
-| 5560 | portos-autofixer | ui | Autofixer web UI |
+| 5559 | — | retired | Former Autofixer port reservation |
+| 5560 | portos-autofixer | ui | Autofixer dashboard and API |
 | 5561 | portos-db (Docker container) | - | Infrastructure dependency: PostgreSQL Docker container provisioned by `scripts/setup-db.js` / Docker Compose (not a PM2 process in `server/services/apps.js`; native mode uses system pg on 5432). |
 | 5562 | portos-whisper | whisper-server | Loopback whisper.cpp speech-to-text server. |
 | 5563 | portos-server | eidoverse-host | Optional legacy HTTPS/WebSocket bridge for Eidoverse Worlds (on demand → loopback `:8940`). Prefer the same-origin path on `:5555` — `/eidoverse-host` plus root allowlist proxies — so a single-port tailcat forward (`:15555` → `:5555`) can embed the iframe. |

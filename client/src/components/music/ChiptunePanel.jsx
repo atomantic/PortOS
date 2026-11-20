@@ -20,10 +20,9 @@ import useMounted from '../../hooks/useMounted';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { buildChiptuneSchedule, createChiptunePlayer } from '../../lib/chiptunePlayback.js';
 import { formatTimecode } from '../../utils/formatters';
-import {
-  generateTrackChiptune, renderTrackChiptune, publishTrackChiptune,
-  getApps, getSettings, patchSettingsSlice,
-} from '../../services/api';
+import { generateTrackChiptune, renderTrackChiptune, publishTrackChiptune } from '../../services/apiTracks.js';
+import { getApps } from '../../services/apiApps.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const DEFAULT_SUBDIR = 'game/assets/music';

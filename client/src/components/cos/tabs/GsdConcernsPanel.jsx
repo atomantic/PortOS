@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Bug, Shield, Zap, Package, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { createGsdConcernTasks } from '../../../services/apiGSD.js';
 import { pluralize } from '../../../lib/textUtils';
 
 const SEVERITY_CONFIG = {
@@ -25,7 +25,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
 
   const handleCreateTask = async (concernId) => {
     setCreating(concernId);
-    const result = await api.createGsdConcernTasks(appId, { concernIds: [concernId] }, { silent: true }).catch(err => {
+    const result = await createGsdConcernTasks(appId, { concernIds: [concernId] }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -38,7 +38,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
 
   const handleCreateAll = async () => {
     setCreating('all');
-    const result = await api.createGsdConcernTasks(appId, { all: true }, { silent: true }).catch(err => {
+    const result = await createGsdConcernTasks(appId, { all: true }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

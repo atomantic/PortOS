@@ -3,7 +3,7 @@
  * body from `composeClaimIssuePrompt` and the claim-flow completion section are
  * the two largest fixed costs in every claim run's context, and nothing else
  * stopped them growing. Modeled on the living-docs ratchet in
- * docs/docs-index.test.js (#16221).
+ * server/test/guards/repo/docs-index.test.js (#16221).
  *
  * A ceiling is the variant's byte size on main when it was recorded. Growth past
  * it fails; a shrink always passes. After a prompt shrinks, lower its entry so

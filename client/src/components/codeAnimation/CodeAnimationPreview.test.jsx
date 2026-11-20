@@ -34,13 +34,25 @@ const socket = vi.hoisted(() => {
   };
 });
 vi.mock('../../services/socket', () => ({ default: socket }));
-vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn(), getCodeAnimationThreeVendor: vi.fn() }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  uploadGalleryVideo: vi.fn(),
+}));
+vi.mock('../../services/apiCodeAnimation.js', () => ({
+  exportCodeAnimation: vi.fn(),
+  cancelCodeAnimationExport: vi.fn(),
+  getCodeAnimationPackage: vi.fn(),
+  getCodeAnimationThreeVendor: vi.fn(),
+}));
 vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }) }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
 
 import CodeAnimationPreview, { prepareAnimationHtml } from './CodeAnimationPreview';
-import { exportCodeAnimation, getCodeAnimationPackage, getCodeAnimationThreeVendor } from '../../services/api';
+import {
+  exportCodeAnimation,
+  getCodeAnimationPackage,
+  getCodeAnimationThreeVendor,
+} from '../../services/apiCodeAnimation.js';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import toast from '../ui/Toast';

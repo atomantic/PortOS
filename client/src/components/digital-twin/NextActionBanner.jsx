@@ -10,7 +10,8 @@ import {
   Copy,
   Check
 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getDigitalTwinEnrichQuestion, submitSoulEnrichAnswer } from '../../services/apiDigitalTwin.js';
+import { getActiveProvider } from '../../services/apiProviders.js';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
@@ -101,7 +102,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setQuestionError(null);
-    const result = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true, structuredOnly: !generate })
+    const result = await getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined, { silent: true, structuredOnly: !generate })
       .then((q) => ({ q, error: null }), (error) => ({ q: null, error }));
     if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
     if (result.error) {
@@ -114,7 +115,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     // Structured questions ran out on an automatic load: a generated question
     // waits for the user's click (no silent provider call, #14445).
     if (q?.exhausted && !providerNameRef.current) {
-      api.getActiveProvider({ silent: true }).then((provider) => { providerNameRef.current = provider?.name || ''; setProviderName(providerNameRef.current); }, () => {});
+      getActiveProvider({ silent: true }).then((provider) => { providerNameRef.current = provider?.name || ''; setProviderName(providerNameRef.current); }, () => {});
     }
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
@@ -167,7 +168,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    const result = await api.submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
+    const result = await submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
     if (!result) {
       toast.error('Failed to save response. Please try again.');
       setSubmitting(false);

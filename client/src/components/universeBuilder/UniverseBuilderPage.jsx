@@ -23,7 +23,7 @@ import {
   importUniverseMarkdown,
   waitForUniverseWrites,
   WORLD_CATEGORY_KEY_MAX,
-} from '../../services/api';
+} from '../../services/apiUniverseBuilder.js';
 import useUniverseBucketActions from '../../hooks/useUniverseBucketActions';
 import useUniverseDraft from './useUniverseDraft';
 import useUniverseExpand from './useUniverseExpand';

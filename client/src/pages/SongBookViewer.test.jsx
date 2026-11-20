@@ -16,7 +16,18 @@ const api = vi.hoisted(() => ({
   listRounds: vi.fn(),
   listTracks: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSongbook.js', () => ({
+  getSong: api.getSong,
+  updateSong: api.updateSong,
+  deleteSong: api.deleteSong,
+  listSongAttachments: api.listSongAttachments,
+  uploadSongAttachment: api.uploadSongAttachment,
+  deleteSongAttachment: api.deleteSongAttachment,
+  practiceSong: api.practiceSong,
+  songAttachmentUrl: api.songAttachmentUrl,
+}));
+vi.mock('../services/apiRounds.js', () => ({ listRounds: api.listRounds }));
+vi.mock('../services/apiTracks.js', () => ({ listTracks: api.listTracks }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import toast from '../components/ui/Toast';

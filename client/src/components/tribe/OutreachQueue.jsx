@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Copy, MessageSquareReply, Sparkles } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTribeOutreach, generateTribeOutreachDraft } from '../../services/apiTribe.js';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
@@ -23,7 +23,7 @@ const agoLabel = (days) => (days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${
 // replied to. Detection is server-side and LLM-free; the "Draft reply" button is
 // the only path that calls a provider (user action, per the AI-provider policy).
 // Nothing is ever auto-sent — the generated draft is filed for review.
-const fetchOutreachThreads = () => api.getTribeOutreach({ silent: true }).then((result) => result?.threads || []);
+const fetchOutreachThreads = () => getTribeOutreach({ silent: true }).then((result) => result?.threads || []);
 
 export default function OutreachQueue() {
   const { items: threads, state: threadsState, error: threadsError, retry: retryThreads, setItems: setThreads } = useListResource(fetchOutreachThreads);
@@ -68,7 +68,7 @@ export default function OutreachQueue() {
       handle: thread.handle,
       lastInboundAt: thread.lastInboundAt,
     };
-    const result = await api.generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
+    const result = await generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
       // The Care Queue loaded once, so the thread may have moved on (409):
       //  - ALREADY_REPLIED: you answered it → drop the now-resolved nudge.
       //  - STALE_INBOUND: they sent a newer message → it's STILL unanswered, so
@@ -77,7 +77,7 @@ export default function OutreachQueue() {
         setThreads((prev) => prev.filter((t) => t.conversationKey !== key));
         toast.success(`Looks like you already replied to ${thread.personName}`);
       } else if (err?.code === 'STALE_INBOUND') {
-        api.getTribeOutreach({ silent: true })
+        getTribeOutreach({ silent: true })
           .then((r) => setThreads(r?.threads || []))
           .catch(() => {});
         toast(`${thread.personName} sent a newer message — refreshed`);

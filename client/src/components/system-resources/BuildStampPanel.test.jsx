@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ getSystemBuild: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ getSystemBuild: api.getSystemBuild }));
 
 const serverBuild = (overrides = {}) => ({
   commit: 'abc1234567890abcdef1234567890abcdef12345',

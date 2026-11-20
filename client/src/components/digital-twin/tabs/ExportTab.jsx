@@ -9,7 +9,7 @@ import {Download,
   Eye,
   BookOpen} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import { getDigitalTwinDocuments, getDigitalTwinExportFormats, exportSoul } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { downloadBlob } from '../../../lib/downloadBlob';
@@ -19,8 +19,8 @@ import useListResource from '../../../hooks/useListResource';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 
-const fetchDocuments = () => api.getDigitalTwinDocuments({ silent: true });
-const fetchFormats = () => api.getDigitalTwinExportFormats({ silent: true });
+const fetchDocuments = () => getDigitalTwinDocuments({ silent: true });
+const fetchFormats = () => getDigitalTwinExportFormats({ silent: true });
 
 export default function ExportTab({ onRefresh: _onRefresh }) {
   const documentsResource = useListResource(fetchDocuments);
@@ -58,7 +58,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const result = await api.exportSoul(
+      const result = await exportSoul(
         selectedFormat,
         selectedDocs.length > 0 ? selectedDocs : null,
         includeDisabled

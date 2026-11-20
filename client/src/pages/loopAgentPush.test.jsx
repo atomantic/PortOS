@@ -13,12 +13,21 @@ vi.mock('../services/socket', () => {
     receive: (event, payload) => { for (const fn of listeners.get(event) ?? []) fn(payload); },
   } };
 });
-vi.mock('../services/api', () => ({
-  getLoops: vi.fn(), getLoopProviders: vi.fn(), getAgents: vi.fn(), killAgent: vi.fn(),
-  stopLoop: vi.fn(), resumeLoop: vi.fn(), triggerLoop: vi.fn(), deleteLoop: vi.fn(),
+vi.mock('../services/apiLoops.js', () => ({
+  getLoops: vi.fn(),
+  getLoopProviders: vi.fn(),
+  stopLoop: vi.fn(),
+  resumeLoop: vi.fn(),
+  triggerLoop: vi.fn(),
+  deleteLoop: vi.fn(),
+}));
+vi.mock('../services/apiAgents.js', () => ({
+  getAgents: vi.fn(),
+  killAgent: vi.fn(),
 }));
 import socket from '../services/socket';
-import * as api from '../services/api';
+import { getLoops, getLoopProviders } from '../services/apiLoops.js';
+import { getAgents } from '../services/apiAgents.js';
 import Loops from './Loops';
 import AgentsPage from './AgentsPage';
 
@@ -35,9 +44,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-  api.getLoops.mockResolvedValue([loop]);
-  api.getLoopProviders.mockResolvedValue({ providers: [] });
-  api.getAgents.mockResolvedValue([]);
+  getLoops.mockResolvedValue([loop]);
+  getLoopProviders.mockResolvedValue({ providers: [] });
+  getAgents.mockResolvedValue([]);
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -46,31 +55,31 @@ it('renders loop iteration pushes, preserves last-good data and reconciles only 
   await flush();
   expect(screen.getByText('#0 iterations')).toBeInTheDocument();
   await act(async () => { await vi.advanceTimersByTimeAsync(65000); });
-  expect(api.getLoops).toHaveBeenCalledTimes(1);
-  api.getLoops.mockResolvedValue([{ ...loop, currentIteration: 1 }]);
+  expect(getLoops).toHaveBeenCalledTimes(1);
+  getLoops.mockResolvedValue([{ ...loop, currentIteration: 1 }]);
   await flush(() => socket.receive('loop:iteration:complete', { id: loop.id }));
   expect(screen.getByText('#1 iterations')).toBeInTheDocument();
-  api.getLoops.mockRejectedValueOnce(new Error('offline'));
+  getLoops.mockRejectedValueOnce(new Error('offline'));
   await flush(() => socket.receive('connect'));
-  expect(api.getLoops).toHaveBeenCalledTimes(3);
+  expect(getLoops).toHaveBeenCalledTimes(3);
   expect(screen.getByText('#1 iterations')).toBeInTheDocument();
   await visibility('hidden');
   await flush(() => socket.receive('loop:iteration:start', { id: loop.id }));
-  expect(api.getLoops).toHaveBeenCalledTimes(3);
+  expect(getLoops).toHaveBeenCalledTimes(3);
   await visibility('visible');
-  expect(api.getLoops).toHaveBeenCalledTimes(4);
+  expect(getLoops).toHaveBeenCalledTimes(4);
   await visibility('visible');
-  expect(api.getLoops).toHaveBeenCalledTimes(4);
+  expect(getLoops).toHaveBeenCalledTimes(4);
   view.unmount();
   expect(socket.emit).toHaveBeenCalledWith('loops:unsubscribe');
   await flush(() => { socket.receive('connect'); socket.receive('loop:updated', {}); });
   await visibility('hidden'); await visibility('visible');
-  expect(api.getLoops).toHaveBeenCalledTimes(4);
+  expect(getLoops).toHaveBeenCalledTimes(4);
 });
 
 it('renders agent snapshots without API polls and drops an older HTTP response', async () => {
   let finish;
-  api.getAgents.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  getAgents.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   const view = render(<AgentsPage />);
   await flush();
   await flush(() => socket.receive('agent-processes:changed', { agents: [agent] }));
@@ -78,24 +87,24 @@ it('renders agent snapshots without API polls and drops an older HTTP response',
   await flush(() => finish([]));
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
   await act(async () => { await vi.advanceTimersByTimeAsync(65000); });
-  expect(api.getAgents).toHaveBeenCalledTimes(1);
-  api.getAgents.mockRejectedValueOnce(new Error('offline'));
+  expect(getAgents).toHaveBeenCalledTimes(1);
+  getAgents.mockRejectedValueOnce(new Error('offline'));
   await flush(() => socket.receive('connect'));
-  expect(api.getAgents).toHaveBeenCalledTimes(2);
+  expect(getAgents).toHaveBeenCalledTimes(2);
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
   await visibility('hidden'); await visibility('visible');
-  expect(api.getAgents).toHaveBeenCalledTimes(3);
+  expect(getAgents).toHaveBeenCalledTimes(3);
   await visibility('visible');
-  expect(api.getAgents).toHaveBeenCalledTimes(3);
+  expect(getAgents).toHaveBeenCalledTimes(3);
   view.unmount();
   expect(socket.emit).toHaveBeenCalledWith('agent-processes:unsubscribe');
   await flush(() => socket.receive('connect'));
   await visibility('hidden'); await visibility('visible');
-  expect(api.getAgents).toHaveBeenCalledTimes(3);
+  expect(getAgents).toHaveBeenCalledTimes(3);
 });
 
 it('shows a retryable error instead of an empty process list when the first read fails', async () => {
-  api.getAgents.mockRejectedValueOnce(new Error('agents offline'));
+  getAgents.mockRejectedValueOnce(new Error('agents offline'));
   render(<AgentsPage />);
   await flush();
 
@@ -104,7 +113,7 @@ it('shows a retryable error instead of an empty process list when the first read
   expect(screen.queryByText('Processes')).not.toBeInTheDocument();
   expect(screen.queryByText('No AI agents currently running')).not.toBeInTheDocument();
 
-  api.getAgents.mockResolvedValueOnce([]);
+  getAgents.mockResolvedValueOnce([]);
   await flush(() => screen.getByRole('button', { name: 'Retry' }).click());
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByText('Processes')).toBeInTheDocument();
@@ -113,13 +122,13 @@ it('shows a retryable error instead of an empty process list when the first read
 });
 
 it('keeps loaded agent rows visible and offers retry after a refresh fails', async () => {
-  api.getAgents.mockResolvedValueOnce([agent]);
+  getAgents.mockResolvedValueOnce([agent]);
   render(<AgentsPage />);
   await flush();
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
   expect(screen.getAllByRole('button', { name: 'Kill' }).length).toBeGreaterThan(0);
 
-  api.getAgents.mockRejectedValueOnce(new Error('refresh offline'));
+  getAgents.mockRejectedValueOnce(new Error('refresh offline'));
   await flush(() => socket.receive('connect'));
   expect(screen.getByRole('alert')).toHaveTextContent('refresh offline');
   expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);

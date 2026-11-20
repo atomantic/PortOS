@@ -16,7 +16,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { dndTransformToCss } from '../../lib/dndTransform';
-import { WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX } from '../../services/api';
+import { WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX } from '../../services/apiUniverseBuilder.js';
 
 const TONE_CLASS = {
   success: 'bg-port-success/15 text-port-success border-port-success/40',

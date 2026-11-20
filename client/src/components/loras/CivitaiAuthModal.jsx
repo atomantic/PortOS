@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
 import { FormField } from '../ui/FormField';
-import { setCivitaiAuth, clearCivitaiAuth } from '../../services/api';
+import { setCivitaiAuth, clearCivitaiAuth } from '../../services/apiImageVideo.js';
 
 export function CivitaiKeyBadge({ auth, onManage }) {
   if (auth?.hasKey) {

@@ -3,7 +3,7 @@ import { Plus, X } from 'lucide-react';
 import {
   PRE_MUSIC_DEFAULT_DURATION_SEC, PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECTS, PRE_MUSIC_LAYER_LIMIT, normalizePreMusic,
 } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
-import { listTracks } from '../../services/api';
+import { listTracks } from '../../services/apiTracks.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';

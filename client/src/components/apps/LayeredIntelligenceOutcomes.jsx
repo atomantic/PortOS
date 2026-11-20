@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import Banner from '../ui/Banner';
-import * as api from '../../services/api';
+import { getAppLayeredIntelligenceOutcomes } from '../../services/apiApps.js';
 import { formatDurationMs, timeAgo } from '../../utils/formatters';
 import { formatLiRejectionReason } from '../../utils/layeredIntelligenceReasons';
 
@@ -38,7 +38,7 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
     if (!appId) return;
     let active = true;
     setState({ status: 'loading', data: null });
-    api.getAppLayeredIntelligenceOutcomes(appId)
+    getAppLayeredIntelligenceOutcomes(appId)
       .then(res => { if (active) setState({ status: 'ready', data: res }); })
       .catch(() => { if (active) setState({ status: 'error', data: null }); });
     return () => { active = false; };

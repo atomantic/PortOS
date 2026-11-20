@@ -18,7 +18,7 @@
  */
 import { useRef } from 'react';
 import { Sparkles } from 'lucide-react';
-import { updateUniverse } from '../../services/api';
+import { updateUniverse } from '../../services/apiUniverseBuilder.js';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { RENDER_TARGET } from '../../lib/imageGenBackends';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';

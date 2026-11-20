@@ -221,7 +221,7 @@ The mirror ingests chats and messages from Beeper Desktop into PostgreSQL, track
 There is exactly one send path and it is a human one, in two steps and two routes, mirroring the
 email drafts surface: `POST /api/beeper/outbox` records the approved text, `POST /api/beeper/outbox/:id/send`
 performs the POST to Beeper. No scheduler, no agent, no voice tool and no Chief-of-Staff tool
-reaches either — `server/services/beeperOutboxHumanGate.guard.test.js` asserts that structurally rather
+reaches either — `server/test/guards/runtime/beeperOutboxHumanGate.test.js` asserts that structurally rather
 than leaving it to convention. There is no AI drafting and no AI review anywhere on this path.
 
 Send also needs the `write` scope on the stored token. Connect requests both scopes, and Beeper's

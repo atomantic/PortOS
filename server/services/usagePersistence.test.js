@@ -117,6 +117,37 @@ describe('durable usage batches', () => {
     expect(await addDatedUsageBatch([historic])).toEqual([]);
     expect(getUsage().monthlyActivity['2021-03'].tokens).toBe(20);
   });
+
+  it('drains a later usage write before reporting an earlier batch failure', async () => {
+    const writeStarted = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const failure = Object.assign(new Error('synthetic usage write failure'), { code: 'EIO' });
+    failNextLedgerRename(() => {
+      rename.mockImplementation(async (from, to) => {
+        if (to === USAGE_FILE) {
+          writeStarted.resolve();
+          await release.promise;
+        }
+        return actualRename(from, to);
+      });
+      return Promise.reject(failure);
+    });
+    const first = recordSession('codex-cli', 'Codex', run.model).catch((error) => error);
+    const later = recordTokens(0, 7);
+    let flushSettled = false;
+    const flushed = flushPendingUsageWrites().catch((error) => error).finally(() => { flushSettled = true; });
+    try {
+      await writeStarted.promise;
+      expect(await first).toBe(failure);
+      expect(flushSettled).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, later, flushed]);
+      rename.mockImplementation(actualRename);
+    }
+    expect(await flushed).toBe(failure);
+    expect((await disk()).totalTokens.output).toBe(7);
+  });
 });
 
 describe('exact Codex boundary compaction', () => {

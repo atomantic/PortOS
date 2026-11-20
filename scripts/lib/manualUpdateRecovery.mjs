@@ -32,7 +32,7 @@ export async function offerManualUpdateRecovery({ root, directory, id, env = pro
 export async function continueManualUpdateRecovery({ id, root, directory, launch, emit = () => {} }) {
   const request = JSON.parse(await readFile(requestPath(directory, id), 'utf8'));
   if (request.id !== id || typeof request.sourceRoot !== 'string' || !/^[a-f0-9]{40}$/.test(request.sourceHead)
-    || !Array.isArray(request.forceCleanWorkspaces) || request.forceCleanWorkspaces.some(value => !workspaces.has(value))
+    || !Array.isArray(request.forceCleanWorkspaces) || request.forceCleanWorkspaces.some(value => value !== 'autofixer' && !workspaces.has(value))
     || typeof request.acknowledgePersistentMindImageBackup !== 'boolean') throw new Error('Invalid manual update request');
   if (await realpath(root) !== request.sourceRoot) throw new Error('This confirmation belongs to a different PortOS checkout. Return to the original instance.');
   const result = JSON.parse(await readFile(join(directory, 'update-result.json'), 'utf8'));
@@ -43,7 +43,8 @@ export async function continueManualUpdateRecovery({ id, root, directory, launch
   const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const run = launch ?? (await import('../../server/services/updateExecutor.js')).launchUpdate;
   const update = await run(`v${version}`, emit, { acknowledgeInterruption: true, expectedRefusalId: id,
-    forceCleanWorkspaces: request.forceCleanWorkspaces,
+    // Older confirmations could ask to reinstall the retired Autofixer workspace.
+    forceCleanWorkspaces: request.forceCleanWorkspaces.filter(value => workspaces.has(value)),
     acknowledgePersistentMindImageBackup: request.acknowledgePersistentMindImageBackup });
   if (!update.started) throw new Error(update.result?.errorMessage || 'The update launcher refused this request.');
   return update;

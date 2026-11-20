@@ -7,8 +7,9 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 // Proxy answers any named import with a resolved-promise spy; `then` must stay
 // undefined or Vitest's `await` on the factory result treats the namespace as a
 // thenable and hangs waiting for a resolve that never comes.
-vi.mock('../services/api', () => new Proxy({}, {
-  get: (_target, key) => (key === 'then' || key === '__esModule' ? undefined : vi.fn().mockResolvedValue({})),
+vi.mock('../services/apiCore.js', () => ({
+  request: vi.fn().mockResolvedValue({}),
+  default: new Proxy({}, { get: (_target, key) => (key === 'then' || key === '__esModule' ? undefined : vi.fn().mockResolvedValue({})) }),
 }));
 
 const Settings = (await import('./Settings')).default;

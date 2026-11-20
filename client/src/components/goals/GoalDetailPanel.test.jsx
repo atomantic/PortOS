@@ -7,21 +7,25 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 const { getInstanceFeatures } = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [{ id: 'post', enabled: true }] })),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMeatspace.js', () => ({
   getActivities: vi.fn(() => Promise.resolve([])),
+}));
+vi.mock('../../services/apiCalendar.js', () => ({
   getCalendarAccounts: vi.fn(() => Promise.resolve([])),
-  getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),
-  getInstanceFeatures,
+}));
+vi.mock('../../services/apiGoals.js', () => ({
   updateGoal: vi.fn(() => Promise.resolve({})),
 }));
 
-// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
+  getInstanceFeatures,
+  getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),
 }));
 
-import * as api from '../../services/api';
+import { updateGoal } from '../../services/apiGoals.js';
+import { getActivities } from '../../services/apiMeatspace.js';
+import { getCalendarAccounts } from '../../services/apiCalendar.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 
 import GoalDetailPanel from './GoalDetailPanel';
@@ -70,7 +74,7 @@ const openEdit = async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetInstanceFeatureCache();
-  api.getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: true }] });
+  getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: true }] });
 });
 
 describe('GoalDetailPanel badge migration to <Pill>', () => {
@@ -211,7 +215,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       fireEvent.click(screen.getByText('Save'));
       await Promise.resolve();
     });
-    expect(api.updateGoal).toHaveBeenCalledWith(
+    expect(updateGoal).toHaveBeenCalledWith(
       'g-1',
       expect.objectContaining({ featureAreas: ['universes', 'tribe'] })
     );
@@ -226,7 +230,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       fireEvent.click(screen.getByText('Save'));
       await Promise.resolve();
     });
-    expect(api.updateGoal).toHaveBeenCalledWith(
+    expect(updateGoal).toHaveBeenCalledWith(
       'g-1',
       expect.objectContaining({ featureAreas: [] })
     );
@@ -247,7 +251,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       fireEvent.click(screen.getByText('Save'));
       await Promise.resolve();
     });
-    const [, payload] = api.updateGoal.mock.calls[0];
+    const [, payload] = updateGoal.mock.calls[0];
     expect(payload).not.toHaveProperty('featureAreas');
     expect(payload.title).toBe('Master the craft, revised');
   });
@@ -264,7 +268,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       fireEvent.click(screen.getByText('Save'));
       await Promise.resolve();
     });
-    const [, payload] = api.updateGoal.mock.calls[0];
+    const [, payload] = updateGoal.mock.calls[0];
     expect(payload.featureAreas).toEqual(['someFutureAreaFromANewerPeer', 'universes', 'tribe']);
   });
 
@@ -279,7 +283,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
   });
 
   it('hides POST from the picker and falls back to the next enabled default when POST is disabled', async () => {
-    api.getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: false }] });
+    getInstanceFeatures.mockResolvedValue({ features: [{ id: 'post', enabled: false }] });
     await renderPanel();
     await openEdit();
     expect(await screen.findByText(/Default \(Mastery\):/)).toBeTruthy();
@@ -292,18 +296,18 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
 
 describe('GoalDetailPanel link picker load states', () => {
   it('shows an independent retryable error per list, and a distinct empty state on success', async () => {
-    api.getActivities.mockRejectedValueOnce(new Error('activities down'));
-    api.getCalendarAccounts.mockRejectedValueOnce(new Error('calendars down'));
+    getActivities.mockRejectedValueOnce(new Error('activities down'));
+    getCalendarAccounts.mockRejectedValueOnce(new Error('calendars down'));
     await renderPanel();
 
     expect(screen.getByText(/Could not load activities — activities down/)).toBeTruthy();
     expect(screen.getByText(/Could not load calendars — calendars down/)).toBeTruthy();
     expect(screen.queryByText('No activities available to link.')).toBeNull();
-    expect(api.getActivities).toHaveBeenCalledWith({ silent: true });
-    expect(api.getCalendarAccounts).toHaveBeenCalledWith({ silent: true });
+    expect(getActivities).toHaveBeenCalledWith({ silent: true });
+    expect(getCalendarAccounts).toHaveBeenCalledWith({ silent: true });
 
     // Retry only the activities list; calendars stay in error.
-    api.getActivities.mockResolvedValueOnce([{ name: 'Running' }]);
+    getActivities.mockResolvedValueOnce([{ name: 'Running' }]);
     const retries = screen.getAllByRole('button', { name: 'Retry' });
     expect(retries).toHaveLength(2);
     await act(async () => { fireEvent.click(retries[0]); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });

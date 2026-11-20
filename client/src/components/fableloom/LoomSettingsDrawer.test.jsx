@@ -3,9 +3,11 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn(() => Promise.resolve([])),
   listVideoModels: vi.fn(() => Promise.resolve([])),
+}));
+vi.mock('../../services/apiFableLoom.js', () => ({
   reformatLoomEpisode: vi.fn(),
   updateLoom: vi.fn(),
 }));
@@ -13,7 +15,8 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import { listVideoModels, reformatLoomEpisode, updateLoom } from '../../services/api';
+import { listVideoModels } from '../../services/apiImageVideo.js';
+import { reformatLoomEpisode, updateLoom } from '../../services/apiFableLoom.js';
 import toast from '../ui/Toast';
 import LoomSettingsDrawer from './LoomSettingsDrawer';
 

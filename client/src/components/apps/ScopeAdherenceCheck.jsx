@@ -4,7 +4,7 @@ import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
 import { scopeAdherenceReasonLabel } from '../../lib/scopeAdherenceReasons';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
-import { scoreAppScopeAdherence } from '../../services/api';
+import { scoreAppScopeAdherence } from '../../services/apiApps.js';
 
 /**
  * An on-demand, ADVISORY answer to "does this change advance what the product

@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import ConfigTab from './ConfigTab';
-import { deleteCalendarAccount } from '../../services/apiCalendar.js';
 
 const api = vi.hoisted(() => ({
   getGoogleAuthStatus: vi.fn(),
@@ -11,7 +10,11 @@ const api = vi.hoisted(() => ({
   deleteCalendarAccount: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiCalendar.js', () => ({
+  getGoogleAuthStatus: api.getGoogleAuthStatus,
+  clearGoogleAuth: api.clearGoogleAuth,
+  deleteCalendarAccount: api.deleteCalendarAccount,
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const account = { id: 'google-1', name: 'Example Calendar', enabled: true, type: 'google-calendar', syncMethod: 'google-api' };
@@ -89,6 +92,7 @@ describe('calendar account deletion', () => {
   // Catches false success/removal on cleanup failure, a missing visible API
   // error, or bodyless retry success failing to remove the retained account.
   it('shows the API failure, retains the account, and lets deletion succeed on retry', async () => {
+    const { deleteCalendarAccount } = await vi.importActual('../../services/apiCalendar.js');
     api.deleteCalendarAccount.mockImplementation(deleteCalendarAccount);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Filesystem operation failed', code: 'EACCES' }), { status: 500 }))

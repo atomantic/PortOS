@@ -760,7 +760,8 @@ export function withLiveCosRestore(transfer, { snapshotLegacyConfig = null } = {
       });
     }
 
-    const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
+    const { publishArchivePolicyChange } = await import('./cosBranchPolicyArchive.js');
+    const [result] = await Promise.allSettled([publishArchivePolicyChange(AGENTS_DIR, transfer, { restore: true })]);
     restoreGeneration += 1;
     configCache = null;
     dropRuntimeCaches();

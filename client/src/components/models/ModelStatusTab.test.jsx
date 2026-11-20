@@ -20,12 +20,16 @@ import { MemoryRouter } from 'react-router';
 
 const runSystemResourceReport = vi.fn();
 const getTrackedModelInventory = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   runSystemResourceReport: (...a) => runSystemResourceReport(...a),
   getTrackedModelInventory: (...a) => getTrackedModelInventory(...a),
   purgeDataCategory: vi.fn(),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
   deleteCachedModel: vi.fn(),
   deleteLora: vi.fn(),
+}));
+vi.mock('../../services/apiLocalLlm.js', () => ({
   deleteLocalLlmModel: vi.fn(),
 }));
 

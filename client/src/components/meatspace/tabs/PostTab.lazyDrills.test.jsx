@@ -8,7 +8,7 @@ import { MemoryRouter, Route, Routes, useParams } from 'react-router';
 // test passes only when that exact component resolved and mounted, from a cold
 // deep link or after leaving the launcher.
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostConfig: () => Promise.resolve({}),
   getPostRecommendations: () => Promise.resolve({ recommendations: [] }),
   getPostSessions: () => Promise.resolve([]),

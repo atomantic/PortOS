@@ -24,9 +24,13 @@ import useMounted from '../../hooks/useMounted';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { GHOST_BTN, PRIMARY_BTN } from './designerStyles';
 import {
-  cancelSuperColliderRender, getSuperColliderStatus, renderSuperCollider, saveSuperColliderTake,
-  setupSuperCollider, superColliderRenderEventsUrl,
-} from '../../services/api';
+  cancelSuperColliderRender,
+  getSuperColliderStatus,
+  renderSuperCollider,
+  setupSuperCollider,
+  superColliderRenderEventsUrl,
+} from '../../services/apiMusic.js';
+import { saveSuperColliderTake } from '../../services/apiTracks.js';
 
 const LOG_TAIL = 6;
 

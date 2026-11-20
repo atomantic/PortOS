@@ -3,17 +3,17 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import DocumentsTab from './DocumentsTab';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiApps.js', () => ({
   getAppDocuments: vi.fn(),
   getAppDocument: vi.fn(),
-  saveAppDocument: vi.fn()
+  saveAppDocument: vi.fn(),
 }));
 
-import * as api from '../../../services/api';
+import { getAppDocument, getAppDocuments } from '../../../services/apiApps.js';
 
 // Assert on the requested path only — the third arg is the shared request()
 // options bag ({ silent: true }), not part of this component's contract.
-const requestedPaths = () => api.getAppDocument.mock.calls.map(([, filename]) => filename);
+const requestedPaths = () => getAppDocument.mock.calls.map(([, filename]) => filename);
 
 const listing = {
   documents: [
@@ -35,8 +35,8 @@ const renderTab = (initialPath = '/apps/app-1/documents') =>
 describe('DocumentsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getAppDocuments.mockResolvedValue(listing);
-    api.getAppDocument.mockImplementation((_id, filename) =>
+    getAppDocuments.mockResolvedValue(listing);
+    getAppDocument.mockImplementation((_id, filename) =>
       Promise.resolve({ filename, content: `# ${filename}` }));
   });
 
@@ -67,7 +67,7 @@ describe('DocumentsTab', () => {
   });
 
   it('renders an empty document as empty, not as a load failure', async () => {
-    api.getAppDocument.mockResolvedValue({ filename: 'ARCHITECTURE.md', content: '' });
+    getAppDocument.mockResolvedValue({ filename: 'ARCHITECTURE.md', content: '' });
 
     renderTab();
 
@@ -82,16 +82,16 @@ describe('DocumentsTab', () => {
   });
 
   it('shows the empty state only when the root and docs/ are both empty', async () => {
-    api.getAppDocuments.mockResolvedValue({ documents: [], docs: [], hasPlanning: false });
+    getAppDocuments.mockResolvedValue({ documents: [], docs: [], hasPlanning: false });
 
     renderTab();
 
     expect(await screen.findByText('No documents found')).toBeInTheDocument();
-    expect(api.getAppDocument).not.toHaveBeenCalled();
+    expect(getAppDocument).not.toHaveBeenCalled();
   });
 
   it('reports a failed listing instead of claiming the repo has no documents', async () => {
-    api.getAppDocuments.mockRejectedValue(new Error('boom'));
+    getAppDocuments.mockRejectedValue(new Error('boom'));
 
     renderTab();
 

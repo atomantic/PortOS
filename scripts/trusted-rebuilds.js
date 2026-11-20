@@ -50,7 +50,7 @@ export function workspaceDir(label) {
  * at runtime and a missing binding crashes the server. `fatal: false` is
  * best-effort: the dependency degrades rather than breaks.
  *
- * client is absent: it does not need an install script.
+ * client / autofixer are absent: neither needs an install script.
  */
 export const TRUSTED_REBUILDS = {
   server: [

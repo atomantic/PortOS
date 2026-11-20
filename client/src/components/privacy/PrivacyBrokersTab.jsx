@@ -5,11 +5,21 @@ import {
   CheckCircle2, XCircle, ExternalLink, Loader2, Database, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import {
-  getPrivacyScanStatus, getPrivacyBrokerCases, getPrivacyBrokers, getPrivacyOptOutDigest,
-  getPrivacyOptOutSchedule, updatePrivacyOptOutSchedule, runPrivacyScan, runPrivacyOptOut,
-  refreshPrivacyBrokers, recheckPrivacyCase, transitionPrivacyCase, setPrivacyBrokerEnabled,
-  getPrivacyCaseEvidence, erasePrivacyCaseEvidence,
-} from '../../services/api';
+  getPrivacyScanStatus,
+  getPrivacyBrokerCases,
+  getPrivacyBrokers,
+  getPrivacyOptOutDigest,
+  getPrivacyOptOutSchedule,
+  updatePrivacyOptOutSchedule,
+  runPrivacyScan,
+  runPrivacyOptOut,
+  refreshPrivacyBrokers,
+  recheckPrivacyCase,
+  transitionPrivacyCase,
+  setPrivacyBrokerEnabled,
+  getPrivacyCaseEvidence,
+  erasePrivacyCaseEvidence,
+} from '../../services/apiPrivacy.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import toast from '../ui/Toast';
 import { timeAgo, formatDateShort } from '../../utils/formatters';

@@ -2,19 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   listTimeCapsuleSnapshots: vi.fn(),
 }));
 
 import TimeCapsuleTab from './TimeCapsuleTab';
-import * as api from '../../../services/api';
+import { listTimeCapsuleSnapshots } from '../../../services/apiDigitalTwin.js';
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('TimeCapsuleTab failed reads stay distinct from an empty archive (#12783)', () => {
   it('shows a retryable error, not "No snapshots yet", when the list read fails', async () => {
     const user = userEvent.setup();
-    api.listTimeCapsuleSnapshots
+    listTimeCapsuleSnapshots
       .mockRejectedValueOnce(new Error('archive offline'))
       .mockResolvedValueOnce([{ id: 's1', label: 'Example Snapshot', createdAt: '2026-01-01T00:00:00.000Z', sizeBytes: 10, counts: {} }]);
     render(<TimeCapsuleTab />);
@@ -29,7 +29,7 @@ describe('TimeCapsuleTab failed reads stay distinct from an empty archive (#1278
   });
 
   it('keeps the empty copy for a genuinely empty archive', async () => {
-    api.listTimeCapsuleSnapshots.mockResolvedValue([]);
+    listTimeCapsuleSnapshots.mockResolvedValue([]);
     render(<TimeCapsuleTab />);
 
     expect(await screen.findByText('No snapshots yet')).toBeInTheDocument();

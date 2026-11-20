@@ -1,7 +1,12 @@
 import { Suspense, useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Loader } from 'lucide-react';
-import { getPostConfig, getPostRecommendations, getPostSessions, getPostStats } from '../../../services/api';
+import {
+  getPostConfig,
+  getPostRecommendations,
+  getPostSessions,
+  getPostStats,
+} from '../../../services/apiMeatspace.js';
 import { usePostSession } from '../post/usePostSession';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';

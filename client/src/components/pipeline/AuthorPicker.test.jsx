@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import AuthorPicker from './AuthorPicker';
 
 const listAuthors = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAuthors.js', () => ({
   listAuthors: (...args) => listAuthors(...args),
 }));
 

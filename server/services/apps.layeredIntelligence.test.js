@@ -16,7 +16,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/mock/data', root: '/mock/root', cos: '/mock/data/cos' },
   DAY: 24 * 60 * 60 * 1000
 }));
-vi.mock('../lib/ports.js', () => ({ PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, COS: 5556, AUTOFIXER_UI: 5560, CDP: 5559, CDP_HEALTH: 5560 } }));
+vi.mock('../lib/ports.js', () => ({ PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, COS: 5556, AUTOFIXER: 5557, AUTOFIXER_UI: 5558, CDP: 5559, CDP_HEALTH: 5560 } }));
 vi.mock('./taskScheduleRegistry.js', () => ({ SELF_IMPROVEMENT_TASK_TYPES: [] }));
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn().mockResolvedValue([]) }));
 

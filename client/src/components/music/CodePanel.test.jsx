@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import CodePanel from './CodePanel';
-import * as api from '../../services/api';
+import { writeMusicCode, getSuperColliderStatus, renderSuperCollider } from '../../services/apiMusic.js';
+import { renderTrackCode } from '../../services/apiTracks.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMusic.js', () => ({
   writeMusicCode: vi.fn(),
   previewMusicCode: vi.fn(async () => ({ sentPrompt: 'Example prompt', promptAdditions: [] })),
-  renderTrackCode: vi.fn(),
   getSuperColliderStatus: vi.fn(),
   setupSuperCollider: vi.fn(),
   renderSuperCollider: vi.fn(),
   cancelSuperColliderRender: vi.fn(),
-  saveSuperColliderTake: vi.fn(),
   superColliderRenderEventsUrl: (id) => `/events/${id}`,
+}));
+vi.mock('../../services/apiTracks.js', () => ({
+  renderTrackCode: vi.fn(),
+  saveSuperColliderTake: vi.fn(),
 }));
 
 // The real frame documents load Strudel/Tone.js from a CDN; the tests stub
@@ -52,8 +55,8 @@ describe('<CodePanel>', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
-    api.writeMusicCode.mockResolvedValue({ language: 'strudel', code: CODE, llm: { provider: 'provider-a', model: 'model-a' } });
-    api.renderTrackCode.mockResolvedValue({ track: { id: 'track-1' }, filename: 'music-x.wav', durationSec: 4 });
+    writeMusicCode.mockResolvedValue({ language: 'strudel', code: CODE, llm: { provider: 'provider-a', model: 'model-a' } });
+    renderTrackCode.mockResolvedValue({ track: { id: 'track-1' }, filename: 'music-x.wav', durationSec: 4 });
   });
   afterEach(() => { cleanup(); });
 
@@ -64,13 +67,13 @@ describe('<CodePanel>', () => {
   };
 
   it('swaps the browser player for the server-side SuperCollider stage', async () => {
-    api.getSuperColliderStatus.mockResolvedValue({ state: 'ready', ready: true, message: 'ready', action: '' });
+    getSuperColliderStatus.mockResolvedValue({ state: 'ready', ready: true, message: 'ready', action: '' });
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'SuperCollider' }));
     expect(await screen.findByText('Render preview')).toBeTruthy();
     expect(screen.queryByTitle(/player/)).toBeNull(); // no browser frame runs SuperCollider code
     expect(screen.queryByText('Save as take')).toBeNull(); // nothing to save before a preview exists
-    expect(api.renderSuperCollider).not.toHaveBeenCalled();
+    expect(renderSuperCollider).not.toHaveBeenCalled();
   });
 
   it('runs the code only in an opaque-origin sandboxed frame', () => {
@@ -103,9 +106,9 @@ describe('<CodePanel>', () => {
     expect(screen.getByLabelText('Tone.js code')).toHaveValue('');
     expect(screen.getByTitle(/Tone\.js .* player/)).toBeInTheDocument();
 
-    api.writeMusicCode.mockResolvedValueOnce({ language: 'tonejs', code: 'Tone.getTransport().start();', llm: {} });
+    writeMusicCode.mockResolvedValueOnce({ language: 'tonejs', code: 'Tone.getTransport().start();', llm: {} });
     fireEvent.click(screen.getByRole('button', { name: /Write the code/ }));
-    await waitFor(() => expect(api.writeMusicCode).toHaveBeenCalledWith(
+    await waitFor(() => expect(writeMusicCode).toHaveBeenCalledWith(
       expect.objectContaining({ language: 'tonejs' }),
       { silent: true },
     ));
@@ -117,7 +120,7 @@ describe('<CodePanel>', () => {
     fireEvent.click(screen.getByRole('button', { name: /Write the code/ }));
 
     await waitFor(() => expect(screen.getByLabelText('Strudel code')).toHaveValue(CODE));
-    expect(api.writeMusicCode).toHaveBeenCalledWith({
+    expect(writeMusicCode).toHaveBeenCalledWith({
       description: 'neon synthwave drive',
       lyrics: undefined,
       guidance: '124 BPM',
@@ -130,8 +133,8 @@ describe('<CodePanel>', () => {
     const edited = `${CODE}.lpf(800)`;
     fireEvent.change(screen.getByLabelText('Strudel code'), { target: { value: edited } });
     fireEvent.click(screen.getByRole('button', { name: /Revise code/ }));
-    await waitFor(() => expect(api.writeMusicCode).toHaveBeenCalledTimes(2));
-    expect(api.writeMusicCode.mock.calls[1][0].current).toBe(edited);
+    await waitFor(() => expect(writeMusicCode).toHaveBeenCalledTimes(2));
+    expect(writeMusicCode.mock.calls[1][0].current).toBe(edited);
   });
 
   it('plays and stops through the frame, and shows a thrown error inline', async () => {
@@ -163,7 +166,7 @@ describe('<CodePanel>', () => {
 
     await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 4 });
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith({ id: 'track-1' }));
-    const [trackId, form] = api.renderTrackCode.mock.calls[0];
+    const [trackId, form] = renderTrackCode.mock.calls[0];
     expect(trackId).toBe('track-1');
     expect(form.get('track').type).toBe('audio/wav');
     expect(form.get('prompt')).toBe('neon synthwave drive');
@@ -176,15 +179,15 @@ describe('<CodePanel>', () => {
     expect(screen.queryByLabelText('Take length (sec)')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Write the code/ }));
     await waitFor(() => expect(screen.getByLabelText('Strudel code')).toHaveValue(CODE));
-    expect(api.writeMusicCode.mock.calls[0][0]).toMatchObject({ scene: 'Boot sequence', durationSec: 20 });
-    expect(api.writeMusicCode.mock.calls[0][0]).not.toHaveProperty('description');
+    expect(writeMusicCode.mock.calls[0][0]).toMatchObject({ scene: 'Boot sequence', durationSec: 20 });
+    expect(writeMusicCode.mock.calls[0][0]).not.toHaveProperty('description');
 
     fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
     await waitFor(() => expect(posted).toHaveBeenLastCalledWith({ type: 'record', code: CODE, seconds: 20 }, '*'));
     await fromFrame({ type: 'recorded', wav: new ArrayBuffer(64), durationSec: 20 });
-    await waitFor(() => expect(api.renderTrackCode).toHaveBeenCalled());
+    await waitFor(() => expect(renderTrackCode).toHaveBeenCalled());
     expect(resolveTrackId).toHaveBeenCalledTimes(1);
-    expect(api.renderTrackCode.mock.calls[0][0]).toBe('soundtrack-track');
+    expect(renderTrackCode.mock.calls[0][0]).toBe('soundtrack-track');
   });
 
   it('refuses to record a film longer than coded audio can render', async () => {
@@ -212,6 +215,6 @@ describe('<CodePanel>', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
     await fromFrame({ type: 'error', message: 'The code played only silence, so there is nothing to save.' });
     expect(screen.getByRole('button', { name: /Save as take/ })).toBeEnabled();
-    expect(api.renderTrackCode).not.toHaveBeenCalled();
+    expect(renderTrackCode).not.toHaveBeenCalled();
   });
 });

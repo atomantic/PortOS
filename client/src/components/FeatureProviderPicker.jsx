@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from './ui/Toast';
 import ProviderModelSelector from './ProviderModelSelector';
 import ListLoadError from './ui/ListLoadError';
-import { getProviders, getSettings, updateSettings } from '../services/api';
+import { getProviders } from '../services/apiProviders.js';
+import { getSettings, updateSettings } from '../services/apiSystem.js';
 import { filterSelectableModels } from '../utils/providers';
 
 /**

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { LayoutGrid, Download } from 'lucide-react';
 import toast from '../ui/Toast';
-import { composeMoodBoardCollage } from '../../services/api';
+import { composeMoodBoardCollage } from '../../services/apiMoodBoard.js';
 import { moodBoardCollageSrc } from '../../lib/moodBoardItemSrc';
 
 /**

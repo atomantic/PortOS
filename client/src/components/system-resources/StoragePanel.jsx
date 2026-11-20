@@ -6,7 +6,7 @@ import Banner from '../ui/Banner.jsx';
 import CleanupControl from './CleanupControl.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters.js';
-import * as api from '../../services/api.js';
+import { triageSystemResources } from '../../services/apiSystem.js';
 import toast from '../ui/Toast.jsx';
 import ProgressBar from '../ui/ProgressBar.jsx';
 
@@ -198,7 +198,7 @@ function AiTriage({ report, onReport }) {
     }
     const startingReportGeneratedAt = reportGeneratedAtRef.current;
     setRunning(true);
-    const result = await api.triageSystemResources({
+    const result = await triageSystemResources({
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       effort: effort || undefined,

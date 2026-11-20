@@ -8,7 +8,7 @@ const getPipelineSeries = vi.fn();
 const getReverseOutline = vi.fn();
 const getReverseOutlineStatus = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...a) => getPipelineSeries(...a),
   getReverseOutline: (...a) => getReverseOutline(...a),
   generateReverseOutline: vi.fn(),

@@ -6,9 +6,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  getSeriesEditorial, getSeriesEditorialStatus,
-  analyzeSeriesEditorial, cancelSeriesEditorial, pipelineEditorialSseUrl,
-} from '../services/api';
+  getSeriesEditorial,
+  getSeriesEditorialStatus,
+  analyzeSeriesEditorial,
+  cancelSeriesEditorial,
+  pipelineEditorialSseUrl,
+} from '../services/apiPipeline.js';
 import toast from '../components/ui/Toast';
 import { projectAnalyzedPoints } from '../lib/editorialRoadmap';
 import { usePipelineProgress } from './usePipelineProgress';

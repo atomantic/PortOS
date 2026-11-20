@@ -1,19 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   updatePostConfig: vi.fn(),
-  getProviders: vi.fn(),
   getPostAdaptivePreview: vi.fn(),
   getPostMultiplicationProgress: vi.fn(),
   getPostPowersProgress: vi.fn(),
   getPostCognitiveProgress: vi.fn(),
   getMemoryItems: vi.fn(),
 }));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
+import {
+  updatePostConfig,
+  getPostAdaptivePreview,
+  getPostMultiplicationProgress,
+  getPostPowersProgress,
+  getPostCognitiveProgress,
+  getMemoryItems,
+} from '../../../services/apiMeatspace.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { LLM_DRILL_TYPES, DRILL_LABELS, COGNITIVE_DRILL_TYPES, COGNITIVE_LADDER_TYPES } from './constants';
 
 // The generatable LLM drill types + labels, imported from the client constant

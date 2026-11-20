@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { listRounds } from '../services/api';
+import { listRounds } from '../services/apiRounds.js';
 import { PARTNERS_MAX } from '../lib/roundDraft.js';
 
 /**

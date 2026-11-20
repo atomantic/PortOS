@@ -23,7 +23,24 @@ const api = {
   reviewStackerNewsAction: vi.fn(),
   executeStackerNewsAction: vi.fn(),
 };
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiStackerNews.js', () => ({
+  getStackerNewsAccounts: api.getStackerNewsAccounts,
+  getStackerNewsTerritories: api.getStackerNewsTerritories,
+  getStackerNewsItems: api.getStackerNewsItems,
+  getStackerNewsActions: api.getStackerNewsActions,
+  updateStackerNewsAccount: api.updateStackerNewsAccount,
+  createStackerNewsAccount: api.createStackerNewsAccount,
+  createStackerNewsTerritory: api.createStackerNewsTerritory,
+  updateStackerNewsTerritory: api.updateStackerNewsTerritory,
+  deleteStackerNewsTerritory: api.deleteStackerNewsTerritory,
+  verifyStackerNewsAccount: api.verifyStackerNewsAccount,
+  getStackerNewsBrowserIdentity: api.getStackerNewsBrowserIdentity,
+  syncStackerNewsAccount: api.syncStackerNewsAccount,
+  analyzeStackerNewsItem: api.analyzeStackerNewsItem,
+  createStackerNewsAction: api.createStackerNewsAction,
+  reviewStackerNewsAction: api.reviewStackerNewsAction,
+  executeStackerNewsAction: api.executeStackerNewsAction,
+}));
 // Mutable so a test can pose a still-loading capability fetch or a backend with
 // no VLM installed. `futuremodel:9b` is deliberately unrecognizable to the
 // `isVisionModel` id regex — only the server map can vouch for it.

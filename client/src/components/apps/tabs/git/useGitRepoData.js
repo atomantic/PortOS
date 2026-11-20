@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as api from '../../../../services/api';
+import { getGitInfo, getBranches, getRemoteBranches, getBranchComparison } from '../../../../services/apiGit.js';
 
 // The Git tab's repository reads: status/info, local + remote branch lists and
 // the dev→base comparison. Lives above the panels because `loading` swaps the
@@ -35,18 +35,18 @@ export default function useGitRepoData(repoPath) {
     if (includeRemote) setLoadingRemote(true);
 
     const promises = [
-      api.getGitInfo(repoPath).catch(() => null),
-      api.getBranches(repoPath, { silent: true }).catch((error) => ({ error }))
+      getGitInfo(repoPath).catch(() => null),
+      getBranches(repoPath, { silent: true }).catch((error) => ({ error }))
     ];
     if (includeRemote) {
-      promises.push(api.getRemoteBranches(repoPath, { silent: true }).catch((error) => ({ error })));
+      promises.push(getRemoteBranches(repoPath, { silent: true }).catch((error) => ({ error })));
     }
 
     const [info, branchesResult, remoteResult] = await Promise.all(promises);
 
     let comparison = null;
     if (info?.baseBranch && info?.devBranch) {
-      comparison = await api.getBranchComparison(repoPath, info.baseBranch, info.devBranch).catch(() => null);
+      comparison = await getBranchComparison(repoPath, info.baseBranch, info.devBranch).catch(() => null);
     }
 
     setGitInfo(info);
@@ -75,7 +75,7 @@ export default function useGitRepoData(repoPath) {
   const loadRemoteBranches = useCallback(async (opts = {}) => {
     if (!repoPath) return;
     setLoadingRemote(true);
-    const result = await api.getRemoteBranches(repoPath, { silent: true, ...opts }).catch((error) => ({ error }));
+    const result = await getRemoteBranches(repoPath, { silent: true, ...opts }).catch((error) => ({ error }));
     applyRemoteResult(result);
     setLoadingRemote(false);
   }, [repoPath, applyRemoteResult]);

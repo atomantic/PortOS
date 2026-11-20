@@ -14,7 +14,7 @@
 import { CheckCircle2, GraduationCap } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { timeAgo, timeUntil } from '../../utils/formatters';
-import { practiceSong } from '../../services/api';
+import { practiceSong } from '../../services/apiSongbook.js';
 import toast from '../ui/Toast';
 import {
   SONG_PRACTICE_RATINGS, isSongDue, songNextReviewAt, songPracticeSessions,

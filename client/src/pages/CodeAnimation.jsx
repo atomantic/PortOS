@@ -25,10 +25,10 @@ import {
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
-  listTracks,
   startCodeAnimationGeneration,
-  uploadFile,
-} from '../services/api';
+} from '../services/apiCodeAnimation.js';
+import { listTracks } from '../services/apiTracks.js';
+import { uploadFile } from '../services/apiMedia.js';
 import { uuidv4 } from '../lib/uuid';
 import { copyToClipboard } from '../lib/clipboard';
 import { pluralize } from '../lib/textUtils';

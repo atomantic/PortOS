@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { getLayaStatus, installLaya, scoreLaya, updateInstanceFeature } from '../../services/api';
+import { getLayaStatus, installLaya, scoreLaya } from '../../services/apiLocalLlm.js';
+import { updateInstanceFeature } from '../../services/apiSystem.js';
 import { publishInstanceFeatures, useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatCount, formatPercent } from '../../utils/formatters';

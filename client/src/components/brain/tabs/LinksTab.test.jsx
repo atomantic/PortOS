@@ -9,7 +9,7 @@ vi.mock('../../../services/socket', async () => {
 });
 import socket from '../../../services/socket';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiBrain.js', () => ({
   getBrainLinks: vi.fn(),
   getBrainLink: vi.fn(),
   getBrainBuckets: vi.fn(),
@@ -24,8 +24,11 @@ vi.mock('../../../services/api', () => ({
   openBrainLinkFolder: vi.fn(),
   brainScanReportPath: vi.fn(() => '/report'),
   studyBrainLink: vi.fn(),
-  // Read by the shared repo-study form (useRepoStudyConfig).
+}));
+vi.mock('../../../services/apiApps.js', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
@@ -60,7 +63,15 @@ vi.mock('@dnd-kit/core', () => ({
   useSensors: (...sensors) => sensors,
 }));
 
-import { createBrainLink, getBrainLink, getBrainLinks, getBrainBuckets, studyBrainLink, reorderBrainBuckets, reorderBrainLinks } from '../../../services/api';
+import {
+  createBrainLink,
+  getBrainLink,
+  getBrainLinks,
+  getBrainBuckets,
+  studyBrainLink,
+  reorderBrainBuckets,
+  reorderBrainLinks,
+} from '../../../services/apiBrain.js';
 import toast from '../../ui/Toast';
 import { KeyboardSensor } from '@dnd-kit/core';
 import { BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND, linksKeyboardCoordinates } from '../links/bucketDnd';

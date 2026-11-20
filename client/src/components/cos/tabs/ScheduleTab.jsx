@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getCosSchedule, updateCosTaskInterval, triggerCosOnDemandTask } from '../../../services/apiAgents.js';
 import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
@@ -48,7 +48,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const [showLegacy, setShowLegacy] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: schedule, updateData: setSchedule, loading, error, refetch: fetchSchedule } = useSocketResource(
-    () => api.getCosSchedule({ silent: true }),
+    () => getCosSchedule({ silent: true }),
     { namespace: 'cos', events: SCHEDULE_EVENTS }
   );
 
@@ -94,7 +94,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   // never rejects. Stable identity: every card holds it through useTaskModelPins,
   // so a fresh arrow per render would invalidate their memoized handlers.
   const handleUpdateTask = useCallback(async (taskType, settings) => {
-    const result = await api.updateCosTaskInterval(taskType, settings, { silent: true }).catch(err => {
+    const result = await updateCosTaskInterval(taskType, settings, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -110,7 +110,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   }, [setSchedule]);
 
   const handleTriggerTask = useCallback(async (taskType, appId = null) => {
-    const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
+    const result = await triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

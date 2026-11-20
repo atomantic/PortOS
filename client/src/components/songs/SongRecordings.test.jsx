@@ -40,7 +40,7 @@ vi.mock('../../lib/songPlayback', () => ({
 }));
 
 const uploadFile = vi.fn(() => Promise.resolve({ filename: 'vocal-test.wav' }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMedia.js', () => ({
   uploadFile: (...a) => uploadFile(...a),
   getUploadUrl: (f) => `/api/uploads/${f}`,
 }));

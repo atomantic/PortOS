@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
-import * as api from '../services/api';
+import { checkHealth } from '../services/apiSystem.js';
 import { useAutoRefetch } from './useAutoRefetch';
 import useMounted from './useMounted';
 
@@ -85,7 +85,7 @@ export function usePortosRestartWatch({ enabled = true, active = false, onRestar
   useEffect(() => { activeRef.current = active; }, [active]);
 
   const captureBaseline = useCallback(async (currentVersion = null) => {
-    const preHealth = await api.checkHealth().catch(() => null);
+    const preHealth = await checkHealth().catch(() => null);
     preUpdateVersionRef.current = currentVersion || preHealth?.version || null;
     maxUptimeRef.current = typeof preHealth?.uptime === 'number' ? preHealth.uptime : 0;
   }, []);
@@ -152,7 +152,7 @@ export function usePortosRestartWatch({ enabled = true, active = false, onRestar
         // polling"; the generic "Server unreachable" toast would otherwise fire
         // right alongside (and ahead of) the intended "restarting" toast on the
         // exact real-disconnect case this confirmation exists for.
-        const ok = await api.checkHealth({ silent: true }).catch(() => null);
+        const ok = await checkHealth({ silent: true }).catch(() => null);
         if (!ok && activeRef.current && mountedRef.current) arm({ healthDown: true });
       }, DISCONNECT_CONFIRM_MS);
     };
@@ -175,7 +175,7 @@ export function usePortosRestartWatch({ enabled = true, active = false, onRestar
     // of this poll (that's the down→up transition it watches for), not an error;
     // the generic toast would spam "Server unreachable" every 2s throughout the
     // "PortOS is restarting..." loading toast's own lifetime.
-    const ok = await api.checkHealth({ silent: true }).catch(() => null);
+    const ok = await checkHealth({ silent: true }).catch(() => null);
     const preUpdateVersion = preUpdateVersionRef.current;
     if (!ok) {
       // Server is mid-restart (PM2 stopped it) — record the dip so a

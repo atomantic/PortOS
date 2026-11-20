@@ -5,7 +5,22 @@ import useMounted from '../../../hooks/useMounted';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
-import * as api from '../../../services/api';
+import {
+  getPersistentMind,
+  getPersistentMindRuntime,
+  getPersistentMindVisibility,
+  sendPersistentMindMessage,
+  addPersistentMindAnnotation,
+  uploadPersistentMindAttachment,
+  deletePersistentMindAttachment,
+  wakePersistentMind,
+  startPersistentMind,
+  pausePersistentMind,
+  resumePersistentMind,
+  stopPersistentMind,
+  acknowledgePersistentMindEvent,
+  promotePersistentMindEvent,
+} from '../../../services/apiAgents.js';
 import { readFileAsBase64, validateImageFile } from '../../../utils/fileUpload';
 import { findMindThinkingPreset } from '../../../lib/mindThinkingPresets.js';
 import { describeMindTurnProgress } from '../../../lib/mindTurnProgress.js';
@@ -174,7 +189,7 @@ export default function MindTab() {
     let needsMore = false;
     try {
       do {
-        const response = await api.getPersistentMind({ cursor, limit: PAGE_LIMIT }, { silent: true });
+        const response = await getPersistentMind({ cursor, limit: PAGE_LIMIT }, { silent: true });
         if (!runtimeMountedRef.current) return;
         accumulated = mergeEvents(accumulated, response.events || []);
         sawGap ||= response.gap === true;
@@ -220,7 +235,7 @@ export default function MindTab() {
     runtimePendingRef.current = true;
     if (!runtimeLoadedRef.current) setRuntimeLoading(true);
     try {
-      const response = await api.getPersistentMindRuntime({ silent: true });
+      const response = await getPersistentMindRuntime({ silent: true });
       if (!runtimeMountedRef.current) return;
       setRuntime(response);
       runtimeLoadedRef.current = true;
@@ -249,7 +264,7 @@ export default function MindTab() {
     visibilityPendingRef.current = true;
     if (refresh || !visibilityLoadedRef.current) setVisibilityLoading(true);
     try {
-      const response = await api.getPersistentMindVisibility({ refresh, silent: true });
+      const response = await getPersistentMindVisibility({ refresh, silent: true });
       if (!runtimeMountedRef.current) return;
       setVisibility(response);
       visibilityLoadedRef.current = true;
@@ -381,7 +396,7 @@ export default function MindTab() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await api.sendPersistentMindMessage({
+      await sendPersistentMindMessage({
         id,
         text: trimmed,
         ...(images.length > 0 ? { images: images.map((image) => image.attachmentId) } : {}),
@@ -416,7 +431,7 @@ export default function MindTab() {
     setAnnotationSubmitting(true);
     setAnnotationError(null);
     try {
-      await api.addPersistentMindAnnotation({ id, text: trimmed, targetEventId: selectedEventId }, { silent: true });
+      await addPersistentMindAnnotation({ id, text: trimmed, targetEventId: selectedEventId }, { silent: true });
       appendLocalInput({ id, content: trimmed, inputKind: 'annotation', targetEventId: selectedEventId });
       setAnnotationText('');
       annotationDraftIdRef.current = null;
@@ -466,7 +481,7 @@ export default function MindTab() {
       }
       try {
         const data = await readFileAsBase64(file);
-        const attachment = await api.uploadPersistentMindAttachment({ filename: file.name, data }, { silent: true });
+        const attachment = await uploadPersistentMindAttachment({ filename: file.name, data }, { silent: true });
         if (attachment?.attachmentId) accepted.push(attachment);
       } catch (error) {
         setMessageImageError(error?.message || `Could not upload ${file.name}`);
@@ -478,7 +493,7 @@ export default function MindTab() {
 
   const removeMessageImage = async (image) => {
     try {
-      await api.deletePersistentMindAttachment(image.attachmentId, { silent: true });
+      await deletePersistentMindAttachment(image.attachmentId, { silent: true });
       changeMessageImages(messageImages.filter((candidate) => candidate.attachmentId !== image.attachmentId));
       setMessageImageError(null);
     } catch (error) {
@@ -504,11 +519,11 @@ export default function MindTab() {
     setLifecyclePending(action);
     setLifecycleError(null);
     try {
-      if (action === 'wake') await api.wakePersistentMind({ silent: true });
-      if (action === 'start') await api.startPersistentMind({ silent: true });
-      if (action === 'pause') await api.pausePersistentMind('Paused from Mind page', { silent: true });
-      if (action === 'resume') await api.resumePersistentMind({ silent: true });
-      if (action === 'stop') await api.stopPersistentMind({ silent: true });
+      if (action === 'wake') await wakePersistentMind({ silent: true });
+      if (action === 'start') await startPersistentMind({ silent: true });
+      if (action === 'pause') await pausePersistentMind('Paused from Mind page', { silent: true });
+      if (action === 'resume') await resumePersistentMind({ silent: true });
+      if (action === 'stop') await stopPersistentMind({ silent: true });
       await loadHistory();
       void loadRuntime();
     } catch (error) {
@@ -523,7 +538,7 @@ export default function MindTab() {
     setEventActionPending(event.eventId);
     setLifecycleError(null);
     try {
-      await api.acknowledgePersistentMindEvent(event.eventId, `ack-${event.eventId}`, { silent: true });
+      await acknowledgePersistentMindEvent(event.eventId, `ack-${event.eventId}`, { silent: true });
       await loadHistory();
     } catch (error) {
       setLifecycleError(error?.message || 'Could not acknowledge the action');
@@ -538,7 +553,7 @@ export default function MindTab() {
     setEventActionPending(event.eventId);
     setLifecycleError(null);
     try {
-      await api.promotePersistentMindEvent(event.eventId, {
+      await promotePersistentMindEvent(event.eventId, {
         id: `promotion-${event.eventId}`, approved: true, content, summary: content.slice(0, 500), type: 'insight', category: 'other',
       }, { silent: true });
       await loadHistory();

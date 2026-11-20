@@ -24,11 +24,18 @@ import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import AlbumTrackPicker from './AlbumTrackPicker';
 import {
-  listAlbums, createAlbum, updateAlbum, deleteAlbum,
-  listTracks, generateImage,
-  ALBUM_TITLE_MAX, ALBUM_DESCRIPTION_MAX, ALBUM_GENRE_MAX,
-  ALBUM_RELEASE_YEAR_MIN, ALBUM_RELEASE_YEAR_MAX,
-} from '../../services/api';
+  listAlbums,
+  createAlbum,
+  updateAlbum,
+  deleteAlbum,
+  ALBUM_TITLE_MAX,
+  ALBUM_DESCRIPTION_MAX,
+  ALBUM_GENRE_MAX,
+  ALBUM_RELEASE_YEAR_MIN,
+  ALBUM_RELEASE_YEAR_MAX,
+} from '../../services/apiAlbums.js';
+import { listTracks } from '../../services/apiTracks.js';
+import { generateImage } from '../../services/apiSystem.js';
 
 // Cap cover uploads so the base64 round-trip stays small. Enforced by
 // GalleryImagePicker's `maxBytes`.

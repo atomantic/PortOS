@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { appsNeedingStart, autofixerNeedsUpgrade } from './pm2-start.js';
+import { appsNeedingStart } from './pm2-start.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const root = join(repoRoot, 'fixture-root');
@@ -32,6 +32,13 @@ describe('appsNeedingStart', () => {
     ]);
   });
 
+  it('restarts the watchdog under the combined config when the legacy dashboard is registered', () => {
+    const expectedApps = [...apps, 'portos-autofixer'];
+    const processes = [...expectedApps, 'portos-autofixer-ui'].map(name => proc(name));
+    expect(appsNeedingStart({ processes, expectedApps, root }).missing).toEqual(['portos-autofixer']);
+    expect(appsNeedingStart({ processes: processes.slice(0, -1), expectedApps, root }).missing).toEqual([]);
+  });
+
   it('does not treat a sibling directory sharing the root prefix as inside the checkout', () => {
     const { missing } = appsNeedingStart({
       processes: [proc('portos-server', 'online', `${root}-other${join('/server', 'start.js')}`)],
@@ -43,12 +50,6 @@ describe('appsNeedingStart', () => {
 });
 
 describe('npm start wiring', () => {
-  it('identifies only the running legacy Autofixer port for the targeted restart', () => {
-    expect(autofixerNeedsUpgrade({ ...proc('portos-autofixer'), pm2_env: { PORT: '5559' } })).toBe(true);
-    expect(autofixerNeedsUpgrade({ ...proc('portos-autofixer'), pm2_env: { PORT: 5560 } })).toBe(false);
-    expect(autofixerNeedsUpgrade({ ...proc('portos-cos'), pm2_env: { PORT: 5559 } })).toBe(false);
-  });
-
   it('probes before deleting the ecosystem, so a healthy install is never restarted', () => {
     const start = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts.start;
     const probe = start.indexOf('scripts/pm2-start.js');

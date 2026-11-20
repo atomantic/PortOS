@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { ImagePlus, Loader2, Sparkles, Trash2, X } from 'lucide-react';
-import {
-  analyzeUniverseStyleReference,
-  WORLD_STYLE_REFERENCES_MAX,
-} from '../../services/api';
+import { analyzeUniverseStyleReference, WORLD_STYLE_REFERENCES_MAX } from '../../services/apiUniverseBuilder.js';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';

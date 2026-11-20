@@ -81,7 +81,7 @@ describeShared('autofixer/shared — data paths', () => {
   // Both PM2 processes must agree on one data/ directory; resolving from this
   // module's own location is what guarantees that. Spelled as a dirname climb
   // rather than a '..' path literal so the repo-wide test-data isolation guard
-  // (server/lib/testDataIsolation.guard.test.js) doesn't read this string-only
+  // (server/test/guards/repo/testDataIsolation.test.js) doesn't read this string-only
   // comparison as a suite that addresses the live data/ tree — nothing here
   // touches the filesystem.
   it('anchors every path to the package-sibling data/ directory', () => {

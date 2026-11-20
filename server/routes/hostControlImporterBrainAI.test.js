@@ -110,7 +110,7 @@ beforeEach(() => {
 });
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal and every authorized workflow.
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal and every authorized workflow.
 describe('Importer, Brain and analytics AI behind the default-deny gate (#11036, #16114)', () => {
   it('refuses a remote caller before any effect', async () => {
     const [method, path, body, effect] = operations[0];

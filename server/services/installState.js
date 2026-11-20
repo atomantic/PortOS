@@ -41,7 +41,7 @@ import { isWorktreeRoot } from '../lib/dataRoot.js';
 // or when HEAD couldn't be read (tarball install / not a git repo).
 let bootCommit = null;
 
-// Workspaces installed by scripts/update.mjs.
+// Workspaces `update.sh` installs (safe_install . client server).
 // Order is cosmetic; '.' renders as 'root'.
 const DEP_WORKSPACES = ['.', 'client', 'server'];
 

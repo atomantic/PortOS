@@ -2,7 +2,7 @@
  * The pgvector image the CI DB service and the live restore test run, read from
  * docker-compose.yml (the one file Dependabot's docker-compose ecosystem bumps)
  * so a digest refresh is a one-file change. CI obtains it by running this module
- * (`node scripts/lib/dbImage.js`); scripts/dbImageDigestPin.guard.test.js fails if the
+ * (`node scripts/lib/dbImage.js`); server/test/guards/repo/dbImageDigestPin.test.js fails if the
  * digest is ever copied into a second tracked file.
  */
 import { readFileSync } from 'fs';

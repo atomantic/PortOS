@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   getBackupStatus: vi.fn(),
@@ -10,9 +10,8 @@ vi.mock('../../services/api', () => ({
   restoreDatabase: vi.fn(),
   recoverDatabaseRestore: vi.fn(),
   deleteBackupSnapshot: vi.fn(),
-  // FolderPicker imports `* as api` from the same module; it only calls this
-  // when its picker is opened (never in these tests), but the mock defines it
-  // so the import doesn't resolve to undefined if the picker ever mounts eagerly.
+}));
+vi.mock('../../services/apiScaffold.js', () => ({
   getDirectories: vi.fn(),
 }));
 // The real `toast` is a callable function with `.success`/`.error`/`.warning`
@@ -37,7 +36,7 @@ import {
   restoreDatabase,
   recoverDatabaseRestore,
   deleteBackupSnapshot,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 import { BackupTab } from './BackupTab';
 

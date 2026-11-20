@@ -2,13 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn(), updateAiAssignment: vi.fn() }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getAiAssignments: vi.fn(),
+  updateAiAssignment: vi.fn(),
+}));
 vi.mock('../../services/apiCreativeDirector.js', () => ({ updateCreativeDirectorProject: vi.fn() }));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CreativeDirectorModelsDrawer from './CreativeDirectorModelsDrawer.jsx';
-import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import { getVisionModels, getToolUseModels } from '../../services/apiLocalLlm';
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';

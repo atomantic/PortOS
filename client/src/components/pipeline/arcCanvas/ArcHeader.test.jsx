@@ -5,7 +5,16 @@ const api = vi.hoisted(() => ({
   derivePipelineArcFromManuscript: vi.fn(), commitPipelineArcFromManuscript: vi.fn(),
   analyzePipelineManuscriptCompleteness: vi.fn(), listPipelineIssues: vi.fn().mockResolvedValue([]), updatePipelineSeries: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiPipeline.js', () => ({
+  generatePipelineArcOverview: api.generatePipelineArcOverview,
+  verifyPipelineArc: api.verifyPipelineArc,
+  resolvePipelineArcIssues: api.resolvePipelineArcIssues,
+  derivePipelineArcFromManuscript: api.derivePipelineArcFromManuscript,
+  commitPipelineArcFromManuscript: api.commitPipelineArcFromManuscript,
+  analyzePipelineManuscriptCompleteness: api.analyzePipelineManuscriptCompleteness,
+  listPipelineIssues: api.listPipelineIssues,
+  updatePipelineSeries: api.updatePipelineSeries,
+}));
 vi.mock('../SeriesLlmPicker', () => ({ default: () => null }));
 vi.mock('./ArcContent.jsx', () => ({ default: () => null }));
 vi.mock('./DeriveFromManuscriptPreview.jsx', () => ({ default: () => null }));

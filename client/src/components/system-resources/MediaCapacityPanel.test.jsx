@@ -20,7 +20,7 @@ const socket = vi.hoisted(() => {
 vi.mock('../../services/socket', () => ({ default: socket }));
 
 const api = vi.hoisted(() => ({ getInstances: vi.fn() }));
-vi.mock('../../services/api.js', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
 
 const MediaCapacityPanel = (await import('./MediaCapacityPanel.jsx')).default;
 

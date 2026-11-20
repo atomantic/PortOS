@@ -9,7 +9,13 @@ const api = vi.hoisted(() => ({
   updateYoutubeIngestSettings: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiBrain.js', () => ({
+  getYoutubeIngestSettings: api.getYoutubeIngestSettings,
+  getYoutubeIngests: api.getYoutubeIngests,
+  deleteYoutubeIngest: api.deleteYoutubeIngest,
+  updateYoutubeIngestSettings: api.updateYoutubeIngestSettings,
+}));
+vi.mock('../../services/apiNotes.js', () => ({ getNotesVaults: api.getNotesVaults }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }));

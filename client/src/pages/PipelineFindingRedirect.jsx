@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
 import { AlertTriangle } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
-import { locatePipelineFinding } from '../services/api';
+import { locatePipelineFinding } from '../services/apiPipeline.js';
 import { findingManuscriptLink } from '../lib/editorialChecks';
 
 export default function PipelineFindingRedirect() {

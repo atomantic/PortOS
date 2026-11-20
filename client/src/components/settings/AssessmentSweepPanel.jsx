@@ -34,8 +34,10 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import { formatContextTokens, throughputLabel, timeAgo } from '../../utils/formatters';
 import {
-  getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
-} from '../../services/api';
+  getLocalLlmAssessmentSweep,
+  startLocalLlmAssessmentSweep,
+  cancelLocalLlmAssessmentSweep,
+} from '../../services/apiLocalLlm.js';
 
 const SCOPES = [
   { id: 'unmeasured', label: 'Only models never measured', blurb: 'Leaves existing readings alone.' },

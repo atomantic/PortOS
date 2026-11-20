@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Dna, Calendar, Pencil, Check, X, Trash2 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  setMeatspaceBirthDate,
+  getMeatspaceBirthDate,
+  getEpigeneticTests,
+  removeEpigeneticTest,
+} from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import LoadFailureNotice from '../LoadFailureNotice';
@@ -20,7 +25,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
   const handleSave = async () => {
     if (!input) return;
     setSaving(true);
-    const result = await api.setMeatspaceBirthDate(input).catch(() => null);
+    const result = await setMeatspaceBirthDate(input).catch(() => null);
     setSaving(false);
     if (result) {
       onUpdate(input);
@@ -115,8 +120,8 @@ export default function AgeTab() {
 
   const fetchData = useCallback(async () => {
     const [birthResult, epigenetic] = await Promise.all([
-      api.getMeatspaceBirthDate({ silent: true }).catch(() => null),
-      api.getEpigeneticTests({ silent: true }).catch(() => null)
+      getMeatspaceBirthDate({ silent: true }).catch(() => null),
+      getEpigeneticTests({ silent: true }).catch(() => null)
     ]);
     setBirthFailed(birthResult === null);
     setEpigeneticFailed(epigenetic === null);
@@ -237,7 +242,7 @@ export default function AgeTab() {
                           confirmIcon={Trash2}
                           ariaLabel={`Confirm delete epigenetic test ${test.date}`}
                           onConfirm={() => confirmDelete(async () => {
-                            const removed = await api.removeEpigeneticTest(test.id).catch(() => null);
+                            const removed = await removeEpigeneticTest(test.id).catch(() => null);
                             if (removed) setRemovingId(test.id);
                           })}
                           onCancel={cancelDelete}

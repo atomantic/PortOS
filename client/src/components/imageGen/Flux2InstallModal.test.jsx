@@ -6,7 +6,7 @@ import { render, screen } from '@testing-library/react';
 vi.mock('../../hooks/useInstallStream', () => ({
   useInstallStream: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({

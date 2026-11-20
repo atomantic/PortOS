@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import useStoryImportIntake from './useStoryImportIntake';
-import { analyzeImport, commitImport, createStorySession } from '../services/api';
+import { analyzeImport, commitImport } from '../services/apiImporter.js';
+import { createStorySession } from '../services/apiStoryBuilder.js';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImporter.js', () => ({
   analyzeImport: vi.fn(),
   commitImport: vi.fn(),
   retryImporterIssues: vi.fn(),
+}));
+vi.mock('../services/apiStoryBuilder.js', () => ({
   createStorySession: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({

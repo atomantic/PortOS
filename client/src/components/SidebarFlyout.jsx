@@ -16,7 +16,7 @@ export default function SidebarFlyout({ item, anchor, close, scheduleCloseFlyout
     return () => window.removeEventListener('resize', clamp);
   }, [anchor, item]);
   const flyoutChildren = item.groups?.length
-    ? item.groups.flatMap(group => [{ groupLabel: group.label }, ...group.children])
+    ? item.groups.flatMap(group => [...(group.label ? [{ groupLabel: group.label }] : []), ...group.children])
     : item.children;
 
   // A list of navigation links, not a command menu — so <nav> + <ul>/<li>,

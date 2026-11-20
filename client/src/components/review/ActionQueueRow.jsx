@@ -22,7 +22,7 @@ import AgentCard from '../cos/tabs/AgentCard';
 import HarnessUpdateControl from './HarnessUpdateControl';
 import GitHubNotificationCard from '../github/GitHubNotificationCard';
 import { timeAgo, formatCount } from '../../utils/formatters';
-import * as api from '../../services/api';
+import { getCosAgent } from '../../services/apiAgents.js';
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -171,7 +171,7 @@ export function AgentFeedbackReview({ item, onSaved }) {
     let active = true;
     setAgent(null);
     setError(false);
-    api.getCosAgent(item.sourceRef, { lines: 1, silent: true })
+    getCosAgent(item.sourceRef, { lines: 1, silent: true })
       .then((record) => { if (active) setAgent(record); })
       .catch(() => { if (active) setError(true); });
     return () => { active = false; };

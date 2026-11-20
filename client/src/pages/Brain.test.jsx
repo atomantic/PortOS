@@ -16,7 +16,10 @@ vi.mock('../services/socket', async () => {
 });
 import socket from '../services/socket';
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiBrain.js', () => ({
+  getBrainSummary: api.getBrainSummary,
+  getBrainSettings: api.getBrainSettings,
+}));
 
 // Keep this suite scoped to the tab bar itself — each lazy tab body has its
 // own real dependencies (sockets, forms, three.js for the graph) that have no

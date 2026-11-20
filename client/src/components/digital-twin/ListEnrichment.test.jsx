@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiDigitalTwin.js', () => ({
   getEnrichmentListItems: vi.fn(),
   analyzeEnrichmentList: vi.fn(),
   saveEnrichmentList: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import * as api from '../../services/api';
+import { getEnrichmentListItems, analyzeEnrichmentList, saveEnrichmentList } from '../../services/apiDigitalTwin.js';
 import ListEnrichment from './ListEnrichment';
 
 const ANALYSIS = {
@@ -23,8 +23,8 @@ const ANALYSIS = {
 };
 
 const renderAnalyzed = async () => {
-  api.getEnrichmentListItems.mockResolvedValue([{ title: 'Example Book', note: '' }]);
-  api.analyzeEnrichmentList.mockResolvedValue(ANALYSIS);
+  getEnrichmentListItems.mockResolvedValue([{ title: 'Example Book', note: '' }]);
+  analyzeEnrichmentList.mockResolvedValue(ANALYSIS);
   render(
     <ListEnrichment
       categoryId="favorite_books"
@@ -43,8 +43,8 @@ describe('ListEnrichment saved list read', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows a failed read as a retryable error instead of a blank list a save would replace', async () => {
-    api.getEnrichmentListItems.mockRejectedValueOnce(new Error('boom'));
-    api.getEnrichmentListItems.mockResolvedValue([{ title: 'Example Book', note: '' }]);
+    getEnrichmentListItems.mockRejectedValueOnce(new Error('boom'));
+    getEnrichmentListItems.mockResolvedValue([{ title: 'Example Book', note: '' }]);
     render(
       <ListEnrichment
         categoryId="favorite_books"
@@ -61,7 +61,7 @@ describe('ListEnrichment saved list read', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByDisplayValue('Example Book')).toBeInTheDocument();
-    expect(api.getEnrichmentListItems).toHaveBeenCalledWith('favorite_books', { silent: true });
+    expect(getEnrichmentListItems).toHaveBeenCalledWith('favorite_books', { silent: true });
   });
 });
 
@@ -114,7 +114,7 @@ describe('ListEnrichment stored-list load', () => {
   // Saving replaces the stored list, so an editor seeded from a failed read
   // would let the next save overwrite real data with a blank list.
   it('shows an error with Retry instead of a blank editor when the stored list fails to load', async () => {
-    api.getEnrichmentListItems
+    getEnrichmentListItems
       .mockRejectedValueOnce(new Error('offline'))
       .mockResolvedValueOnce([{ title: 'Example Book', note: '' }]);
     renderEditor();
@@ -126,11 +126,11 @@ describe('ListEnrichment stored-list load', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByDisplayValue('Example Book')).toBeInTheDocument());
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(api.saveEnrichmentList).not.toHaveBeenCalled();
+    expect(saveEnrichmentList).not.toHaveBeenCalled();
   });
 
   it('opens a blank editor only when the stored list is genuinely empty', async () => {
-    api.getEnrichmentListItems.mockResolvedValue([]);
+    getEnrichmentListItems.mockResolvedValue([]);
     renderEditor();
     expect(await screen.findByRole('button', { name: /Analyze & Generate/i })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -138,7 +138,7 @@ describe('ListEnrichment stored-list load', () => {
   });
 
   it('surfaces a failed provider list beside the picker instead of an empty picker', async () => {
-    api.getEnrichmentListItems.mockResolvedValue([]);
+    getEnrichmentListItems.mockResolvedValue([]);
     const onRetryProviders = vi.fn();
     render(
       <ListEnrichment

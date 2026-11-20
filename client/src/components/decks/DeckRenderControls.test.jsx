@@ -8,11 +8,13 @@ import DeckRenderControls from './DeckRenderControls';
 vi.mock('./DeckLlmPinPicker', () => ({ default: () => <div /> }));
 // The pin row probes the local catalog + the install's model pin itself, so the
 // deck page threads neither through.
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn().mockResolvedValue([
     { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B' },
     { id: 'qwen-image', name: 'Qwen-Image' },
   ]),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn().mockResolvedValue({ imageGen: { local: { modelId: 'flux2-klein-9b' } } }),
 }));
 // The install modal opens its own SSE stream; this suite is about whether the

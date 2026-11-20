@@ -16,7 +16,7 @@ import {
   applyDiffToLive,
   execGit,
 } from './sandbox.js';
-// Autofixer has no runner of its own — these specs run under the
+// The autofixer package has no runner of its own — these specs run under the
 // server vitest config's '../autofixer/**' glob — and tempPathGuard.js imports
 // nothing but node builtins, so reusing it here keeps ONE definition of "is
 // this really a throwaway dir" rather than a second copy (#4554).

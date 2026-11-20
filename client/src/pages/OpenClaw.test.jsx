@@ -12,7 +12,7 @@ const openClawApi = vi.hoisted(() => ({
 
 vi.mock('../services/apiOpenClaw', () => openClawApi);
 const coreApi = vi.hoisted(() => ({ getApps: vi.fn() }));
-vi.mock('../services/api', () => coreApi);
+vi.mock('../services/apiApps.js', () => ({ getApps: coreApi.getApps }));
 vi.mock('../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ isFeatureEnabled: () => true }),
 }));

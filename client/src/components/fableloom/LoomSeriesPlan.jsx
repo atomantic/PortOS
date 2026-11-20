@@ -20,9 +20,13 @@ import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
 import useProviderModels from '../../hooks/useProviderModels';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import {
-  feedbackLoomSeriesPlan, generateLoomSeriesPlan, reviewLoomSeriesPlan, reviewLoomTeleplay,
-  updateLoom, validateLoomSeriesOutlines,
-} from '../../services/api';
+  feedbackLoomSeriesPlan,
+  generateLoomSeriesPlan,
+  reviewLoomSeriesPlan,
+  reviewLoomTeleplay,
+  updateLoom,
+  validateLoomSeriesOutlines,
+} from '../../services/apiFableLoom.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';

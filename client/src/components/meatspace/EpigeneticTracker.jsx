@@ -7,7 +7,15 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import * as api from '../../services/api';
+import {
+  getEpigeneticInterventions,
+  getEpigeneticCompliance,
+  getEpigeneticRecommendations,
+  addEpigeneticIntervention,
+  logEpigeneticEntry,
+  updateEpigeneticIntervention,
+  deleteEpigeneticIntervention,
+} from '../../services/apiMeatspace.js';
 
 const CATEGORY_ICONS = {
   supplement: Pill,
@@ -39,8 +47,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
 
   const fetchData = useCallback(async () => {
     const [intData, compData] = await Promise.all([
-      api.getEpigeneticInterventions().catch(() => ({ interventions: {} })),
-      api.getEpigeneticCompliance(30).catch(() => null)
+      getEpigeneticInterventions().catch(() => ({ interventions: {} })),
+      getEpigeneticCompliance(30).catch(() => null)
     ]);
     setInterventions(intData.interventions || {});
     setCompliance(compData);
@@ -50,7 +58,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   // Recommendations are read-only suggestions; a failed read gets its own error row
   // instead of reading as "nothing recommended".
   const fetchRecommendations = useCallback(
-    () => api.getEpigeneticRecommendations(markerCategories, { silent: true }).then((data) => data?.recommendations || []),
+    () => getEpigeneticRecommendations(markerCategories, { silent: true }).then((data) => data?.recommendations || []),
     [markerCategories]
   );
   const { items: recommendations, state: recState, error: recError, retry: retryRecs } = useListResource(fetchRecommendations);
@@ -58,7 +66,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleAddCurated = useCallback(async (rec) => {
-    const result = await api.addEpigeneticIntervention({
+    const result = await addEpigeneticIntervention({
       id: rec.id,
       name: rec.name,
       category: rec.category,
@@ -78,7 +86,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
       toast.error('Name is required');
       return;
     }
-    const result = await api.addEpigeneticIntervention(customForm).catch(() => null);
+    const result = await addEpigeneticIntervention(customForm).catch(() => null);
     if (result) {
       toast.success(`Tracking ${customForm.name}`);
       setCustomForm({ name: '', category: 'supplement', dosage: '', frequency: 'daily', trackingUnit: 'mg', notes: '' });
@@ -94,7 +102,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
       return;
     }
     setLoggingId(id);
-    const result = await api.logEpigeneticEntry(id, { amount }).catch(() => null);
+    const result = await logEpigeneticEntry(id, { amount }).catch(() => null);
     if (result) {
       toast.success('Logged');
       setLogAmounts(prev => ({ ...prev, [id]: '' }));
@@ -104,12 +112,12 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   }, [logAmounts, fetchData]);
 
   const handleToggleActive = useCallback(async (id, active) => {
-    await api.updateEpigeneticIntervention(id, { active: !active }).catch(() => null);
+    await updateEpigeneticIntervention(id, { active: !active }).catch(() => null);
     await fetchData();
   }, [fetchData]);
 
   const handleDelete = useCallback(async (id, name) => {
-    await api.deleteEpigeneticIntervention(id).catch(() => null);
+    await deleteEpigeneticIntervention(id).catch(() => null);
     toast.success(`Removed ${name}`);
     await fetchData();
   }, [fetchData]);

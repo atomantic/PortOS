@@ -5,7 +5,7 @@
  */
 
 import { useAsyncAction } from './useAsyncAction';
-import { triggerBackup } from '../services/api';
+import { triggerBackup } from '../services/apiSystem.js';
 import toast from '../components/ui/Toast';
 import { pluralize } from '../lib/textUtils';
 

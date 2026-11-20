@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PeerCatalogControls from './PeerCatalogControls';
-import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/api';
-vi.mock('../../services/api', () => ({
-  getPeerCatalogReview: vi.fn(), getPeerCatalogReviews: vi.fn(), savePeerCatalogReview: vi.fn(),
+import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/apiSystem.js';
+vi.mock('../../services/apiSystem.js', () => ({
+  getPeerCatalogReview: vi.fn(),
+  getPeerCatalogReviews: vi.fn(),
+  savePeerCatalogReview: vi.fn(),
 }));
 const hostInstanceId = '11111111-1111-4111-8111-111111111111';
 const candidates = [{ backend: 'lmstudio', catalogKey: 'example-model', name: 'Example model' },

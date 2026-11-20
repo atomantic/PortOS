@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { AppWindow, Maximize2, Minimize2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getItermStatus } from '../../services/apiShell.js';
 import { readClipboard } from '../../lib/clipboard';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { useItermSession } from './useItermSession';
@@ -40,7 +40,7 @@ export default function ItermShellView() {
   useEffect(() => {
     if (!enabled) return undefined;
     let active = true;
-    api.getItermStatus({ silent: true })
+    getItermStatus({ silent: true })
       .then((res) => { if (active) setFetchedStatus(res?.state ?? null); })
       .catch(() => {});
     return () => { active = false; };

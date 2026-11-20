@@ -6,7 +6,7 @@ import PipelineVoiceFingerprint from './PipelineVoiceFingerprint';
 const getPipelineSeries = vi.fn();
 const getVoiceFingerprint = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...a) => getPipelineSeries(...a),
   getVoiceFingerprint: (...a) => getVoiceFingerprint(...a),
 }));

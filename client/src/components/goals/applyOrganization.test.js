@@ -9,22 +9,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // server's goalMap.has() skip is the defensive net for that case (correct behavior,
 // not a bug). These tests pin both paths so a future refactor of this file can't
 // silently regress the round-trip (see issue #895).
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGoals.js', () => ({
   createGoal: vi.fn(),
   applyGoalOrganization: vi.fn(() => Promise.resolve(true)),
 }));
 
-import * as api from '../../services/api';
+import { applyGoalOrganization, createGoal } from '../../services/apiGoals.js';
 import { applyOrganizationSuggestion } from './applyOrganization';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.applyGoalOrganization.mockResolvedValue(true);
+  applyGoalOrganization.mockResolvedValue(true);
 });
 
 describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
   it('creates a new apex and rewrites __new_apex__ parent refs to its real id before the server call', async () => {
-    api.createGoal.mockResolvedValue({ id: 'apex-real-1' });
+    createGoal.mockResolvedValue({ id: 'apex-real-1' });
 
     const suggestion = {
       apexGoal: { existingId: null, suggestedTitle: 'Live fully', suggestedDescription: 'North star' },
@@ -39,13 +39,13 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
     expect(ok).toBe(true);
 
     // Apex created from the suggestion
-    expect(api.createGoal).toHaveBeenCalledWith(
+    expect(createGoal).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Live fully', goalType: 'apex' }),
       { silent: true }
     );
 
     // The server received the rewritten organization — no raw sentinel survives
-    const sentOrg = api.applyGoalOrganization.mock.calls[0][0];
+    const sentOrg = applyGoalOrganization.mock.calls[0][0];
     expect(sentOrg.find(i => i.id === 'g-1').suggestedParentId).toBe('apex-real-1');
     expect(sentOrg.some(i => i.suggestedParentId === '__new_apex__')).toBe(false);
     // Unrelated parent refs are untouched
@@ -53,7 +53,7 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
   });
 
   it('rewrites unparented sub-apex items (no parent + sub-apex type) to the apex too', async () => {
-    api.createGoal.mockResolvedValue({ id: 'apex-real-2' });
+    createGoal.mockResolvedValue({ id: 'apex-real-2' });
 
     const suggestion = {
       apexGoal: { existingId: null, suggestedTitle: 'Purpose', suggestedDescription: '' },
@@ -64,7 +64,7 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
     };
 
     await applyOrganizationSuggestion(suggestion);
-    const sentOrg = api.applyGoalOrganization.mock.calls[0][0];
+    const sentOrg = applyGoalOrganization.mock.calls[0][0];
     expect(sentOrg[0].suggestedParentId).toBe('apex-real-2');
   });
 
@@ -79,14 +79,14 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
 
     const ok = await applyOrganizationSuggestion(suggestion);
     expect(ok).toBe(true);
-    expect(api.createGoal).not.toHaveBeenCalled();
+    expect(createGoal).not.toHaveBeenCalled();
 
-    const sentOrg = api.applyGoalOrganization.mock.calls[0][0];
+    const sentOrg = applyGoalOrganization.mock.calls[0][0];
     expect(sentOrg[0].suggestedParentId).toBe('existing-apex');
   });
 
   it('creates suggestedSubApex goals parented under the resolved apex', async () => {
-    api.createGoal.mockResolvedValue({ id: 'apex-real-3' });
+    createGoal.mockResolvedValue({ id: 'apex-real-3' });
 
     const suggestion = {
       apexGoal: { existingId: null, suggestedTitle: 'Apex', suggestedDescription: '' },
@@ -99,9 +99,9 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
     await applyOrganizationSuggestion(suggestion);
 
     // The apex is created first (so its id is available to parent the sub-apex)...
-    expect(api.createGoal.mock.calls[0][0]).toMatchObject({ title: 'Apex', goalType: 'apex' });
+    expect(createGoal.mock.calls[0][0]).toMatchObject({ title: 'Apex', goalType: 'apex' });
     // ...then the sub-apex create is parented under the real apex id
-    expect(api.createGoal).toHaveBeenCalledWith(
+    expect(createGoal).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Health', goalType: 'sub-apex', parentId: 'apex-real-3' }),
       { silent: true }
     );
@@ -120,15 +120,15 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
 
     const ok = await applyOrganizationSuggestion(suggestion);
     expect(ok).toBe(true);
-    expect(api.createGoal).not.toHaveBeenCalled();
+    expect(createGoal).not.toHaveBeenCalled();
 
     // No apex resolved → no client-side rewrite → the raw sentinel is still in the payload
-    const sentOrg = api.applyGoalOrganization.mock.calls[0][0];
+    const sentOrg = applyGoalOrganization.mock.calls[0][0];
     expect(sentOrg[0].suggestedParentId).toBe('__new_apex__');
   });
 
   it('does not mutate the caller-provided organization array', async () => {
-    api.createGoal.mockResolvedValue({ id: 'apex-real-4' });
+    createGoal.mockResolvedValue({ id: 'apex-real-4' });
 
     const original = [{ id: 'g-1', goalType: 'sub-apex', suggestedParentId: '__new_apex__' }];
     const suggestion = {
@@ -143,7 +143,7 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
   });
 
   it('aborts (returns false) when apex creation fails', async () => {
-    api.createGoal.mockResolvedValue(null);
+    createGoal.mockResolvedValue(null);
 
     const suggestion = {
       apexGoal: { existingId: null, suggestedTitle: 'Apex', suggestedDescription: '' },
@@ -153,7 +153,7 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
 
     const ok = await applyOrganizationSuggestion(suggestion);
     expect(ok).toBe(false);
-    expect(api.applyGoalOrganization).not.toHaveBeenCalled();
+    expect(applyGoalOrganization).not.toHaveBeenCalled();
   });
 });
 
@@ -162,7 +162,7 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
 // `silent` so that view's toast is the only one the user sees.
 describe('applyOrganizationSuggestion — failure reporting and toast layering', () => {
   it('returns false when a suggested sub-apex goal fails to create', async () => {
-    api.createGoal
+    createGoal
       .mockResolvedValueOnce({ id: 'apex-real-5' })   // apex creates fine...
       .mockRejectedValueOnce(new Error('sub-apex create failed')); // ...sub-apex does not
 
@@ -175,11 +175,11 @@ describe('applyOrganizationSuggestion — failure reporting and toast layering',
     const ok = await applyOrganizationSuggestion(suggestion);
     expect(ok).toBe(false);
     // Aborts before pushing the organization, so the server isn't left half-applied.
-    expect(api.applyGoalOrganization).not.toHaveBeenCalled();
+    expect(applyGoalOrganization).not.toHaveBeenCalled();
   });
 
   it('returns false when the organization apply call rejects', async () => {
-    api.applyGoalOrganization.mockRejectedValue(new Error('apply failed'));
+    applyGoalOrganization.mockRejectedValue(new Error('apply failed'));
 
     const suggestion = {
       apexGoal: { existingId: 'existing-apex', suggestedTitle: null, suggestedDescription: null },
@@ -191,7 +191,7 @@ describe('applyOrganizationSuggestion — failure reporting and toast layering',
   });
 
   it('passes silent:true on every API call so only the caller toasts', async () => {
-    api.createGoal.mockResolvedValue({ id: 'apex-real-6' });
+    createGoal.mockResolvedValue({ id: 'apex-real-6' });
 
     const suggestion = {
       apexGoal: { existingId: null, suggestedTitle: 'Apex', suggestedDescription: '' },
@@ -201,10 +201,10 @@ describe('applyOrganizationSuggestion — failure reporting and toast layering',
 
     expect(await applyOrganizationSuggestion(suggestion)).toBe(true);
 
-    for (const call of api.createGoal.mock.calls) {
+    for (const call of createGoal.mock.calls) {
       expect(call[1]).toEqual({ silent: true });
     }
-    expect(api.applyGoalOrganization).toHaveBeenCalledWith(expect.anything(), { silent: true });
+    expect(applyGoalOrganization).toHaveBeenCalledWith(expect.anything(), { silent: true });
   });
 });
 // @vitest-environment node

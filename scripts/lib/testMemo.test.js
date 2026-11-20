@@ -582,6 +582,7 @@ describe('a read whose variable segment can leave the directory the source names
       'a suffix after a helper parameter': "const read = (stem) => readFileSync(HERE + '/fixtures/' + stem + '.json');\nread('f0'); read('f1');",
       'a helper called by another helper': "const read = (name) => readFileSync(join(FIXTURES, name));\nconst both = (stem) => read(`${stem}.json`);\nboth('f0'); both('f1');",
       'a binding inside the helper': "const read = (name) => { const file = join(FIXTURES, name); return readFileSync(file); };\nread('f0.json'); read('f1.json');",
+      'dynamic scope identifiers only outside the helper': "eval('');\nfunction read(name) { /* eval */ const text = 'arguments'; return readFileSync(join(FIXTURES, name)); }\nread('f0.json'); read('f1.json');\nother.arguments;",
     };
     for (const [label, body] of Object.entries(cases)) {
       expect(keyedOn(body, 'server/lib/fixtures/f0.json'), label).toBe(true);
@@ -689,6 +690,7 @@ describe('a read whose variable segment can leave the directory the source names
       'a call through an escaped identifier': ["const read = (n) => readFileSync(join(FIXTURES, n));\nread('f0.json');\nr\\u0065ad(process.argv[2]);", through('read', 'server/lib/fixtures')],
       'a segment bound by let and assigned again': ["let name = 'f0.json';\nname = process.argv[2];\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'a parameter of a function that touches arguments': ["function read(p) { arguments[0] = pick(); return readFileSync(join(FIXTURES, p)); }\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a parameter of a function with eval in a nested template': ["function read(p) { const value = `outer ${`inner ${eval(code)}`}`; return readFileSync(join(FIXTURES, p)); }\nread('f0.json');\nother.eval;", through('read', 'server/lib/fixtures')],
       'a literal with a method call on it': ["readFileSync(join(FIXTURES, 'F0.JSON'.toLowerCase()));", leaves('server/lib/fixtures')],
       'the same name bound twice, one inside the other': ["const read = (f) => ['f1.json'].map((f) => readFileSync(join(FIXTURES, f)));\nread('f0.json');", leaves('server/lib/fixtures')],
       'a parameter redeclared by an inner pattern': ["const read = (p) => { if (flag) { const { p } = pick(); return readFileSync(join(FIXTURES, p)); } };\nread('f0.json');", through('read', 'server/lib/fixtures')],
@@ -1243,7 +1245,7 @@ describe('recorded key', () => {
       expect(after.recorded.key, label).not.toBe(before.recorded.key);
       expect(after.floor.key, label).not.toBe(before.floor.key);
     }
-    // Assembled so this file does not itself read as a tree scanner to scripts/repo-scan-guards.guard.test.js.
+    // Assembled so this file does not itself read as a tree scanner to server/test/guards/repo-scan-guards.test.js.
     const unresolvable = { ...files, 'server/lib/side.test.js': ["import { it } from 'vitest';", "import { readServerSource } from './testHelper.js';", `it('r', () => ${'readServerSource'}(process.env.TARGET));`].join('\n') };
     expect(withRecord(unresolvable, 'server/lib/side.test.js', ['server/lib/side.test.js']).recorded).toMatchObject({ memoizable: false, reason: expect.stringContaining('readServerSource') });
   });
@@ -1408,7 +1410,7 @@ describe('python sidecars, external tools and machine-local state', () => {
 
   it('fails closed when the test or repository tooling reads the install data tree or the home directory, and ignores a product module doing so', () => {
     // The fixture sources spell the data directory from pieces so this file
-    // does not itself trip lib/testDataIsolation.guard.test.js.
+    // does not itself trip server/test/guards/repo/testDataIsolation.test.js.
     const DATA = ['da', 'ta'].join('');
     const read = (rel) => ["import { it } from 'vitest';", "import { readFileSync } from 'node:fs';", "import { join } from 'node:path';", "import { homedir } from 'node:os';", `it('d', () => readFileSync(${rel}));`].join('\n');
     expect(keyOf({ ...TREE, 'server/lib/a.test.js': read(`join(__dirname, '../../${DATA}/settings.json')`) }).floor).toMatchObject({ memoizable: false, reason: expect.stringContaining('machine-local') });

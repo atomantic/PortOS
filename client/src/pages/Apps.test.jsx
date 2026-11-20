@@ -26,8 +26,10 @@ const launchUrlMock = vi.hoisted(() => ({
 
 vi.mock('../services/appUrls', () => launchUrlMock);
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiCore.js', () => ({
   PORTOS_APP_ID: 'portos-default',
+}));
+vi.mock('../services/apiApps.js', () => ({
   getApps: vi.fn(() => Promise.resolve(APPS)),
   getAppQualitySummaries: vi.fn(() => Promise.resolve([])),
   deleteApp: vi.fn(() => Promise.resolve({})),
@@ -48,7 +50,7 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-import * as api from '../services/api';
+import { getApps, deleteApp, archiveApp, getAppQualitySummaries, unarchiveApp } from '../services/apiApps.js';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import Apps from './Apps';
@@ -67,7 +69,7 @@ const openRowMenu = async (user) => {
 describe('Apps row action hierarchy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getApps.mockResolvedValue(APPS);
+    getApps.mockResolvedValue(APPS);
   });
 
   it('keeps Archive and PortOS removal out of the resting row, leaving Manage as the visible action', async () => {
@@ -89,7 +91,7 @@ describe('Apps row action hierarchy', () => {
   });
 
   it('keeps deep diagnostics out of collection rows and routes management to detail', async () => {
-    api.getApps.mockResolvedValue([{
+    getApps.mockResolvedValue([{
       ...APPS[0],
       startCommands: ['npm run start'],
       pm2Status: { 'example-server': { name: 'example-server', status: 'online' } },
@@ -105,7 +107,7 @@ describe('Apps row action hierarchy', () => {
   });
 
   it('keeps a long non-PM2 repository path wrapping within its collection row', async () => {
-    api.getApps.mockResolvedValue([{
+    getApps.mockResolvedValue([{
       ...APPS[0],
       id: 'app-longpath',
       name: 'Example Long Path App',
@@ -137,7 +139,7 @@ describe('Apps row action hierarchy', () => {
     await openRowMenu(user);
     await user.click(screen.getByRole('menuitem', { name: 'Remove from PortOS' }));
 
-    expect(api.deleteApp).not.toHaveBeenCalled();
+    expect(deleteApp).not.toHaveBeenCalled();
     const confirm = screen.getByLabelText('Confirm removal of Example App from PortOS');
     expect(confirm.textContent).toContain('repository will stay on disk');
 
@@ -146,7 +148,7 @@ describe('Apps row action hierarchy', () => {
     expect(document.activeElement).toBe(confirm);
 
     await user.click(screen.getByRole('button', { name: 'Keep' }));
-    expect(api.deleteApp).not.toHaveBeenCalled();
+    expect(deleteApp).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Confirm removal of Example App from PortOS')).toBeNull();
     // Dismissing hands focus back to the trigger it came from, not to <body>.
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for Example App' }));
@@ -160,7 +162,7 @@ describe('Apps row action hierarchy', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Remove from PortOS' }));
     await user.click(screen.getByRole('button', { name: 'Remove' }));
 
-    await waitFor(() => expect(api.deleteApp).toHaveBeenCalledWith('app-alpha'));
+    await waitFor(() => expect(deleteApp).toHaveBeenCalledWith('app-alpha'));
     expect(toast.success).toHaveBeenCalledWith('Example App removed from PortOS — files kept on disk');
     expect(screen.queryByRole('link', { name: 'Example App' })).toBeNull();
   });
@@ -172,7 +174,7 @@ describe('Apps row action hierarchy', () => {
     await openRowMenu(user);
     await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
 
-    await waitFor(() => expect(api.archiveApp).toHaveBeenCalledWith('app-alpha'));
+    await waitFor(() => expect(archiveApp).toHaveBeenCalledWith('app-alpha'));
   });
 
 });
@@ -183,7 +185,7 @@ describe('Apps collection load states', () => {
   });
 
   it('distinguishes an unavailable collection from empty and retries in place', async () => {
-    api.getApps
+    getApps
       .mockRejectedValueOnce(new Error('Server unreachable'))
       .mockResolvedValueOnce(APPS);
     const user = userEvent.setup();
@@ -195,12 +197,12 @@ describe('Apps collection load states', () => {
 
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByRole('link', { name: 'Example App' });
-    expect(api.getApps).toHaveBeenLastCalledWith({ signal: expect.any(AbortSignal), silent: true });
+    expect(getApps).toHaveBeenLastCalledWith({ signal: expect.any(AbortSignal), silent: true });
   });
 
   it('renders the app controls before quality summaries resolve', async () => {
     let resolveQuality;
-    api.getAppQualitySummaries.mockReturnValueOnce(new Promise(resolve => { resolveQuality = resolve; }));
+    getAppQualitySummaries.mockReturnValueOnce(new Promise(resolve => { resolveQuality = resolve; }));
     await renderApps();
     expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeEnabled();
     expect(screen.getByRole('link', { name: 'Loading quality…' })).toHaveAttribute('href', '/apps/app-alpha/quality');
@@ -212,7 +214,7 @@ describe('Apps collection load states', () => {
   });
 
   it('keeps the app controls usable if quality summaries fail', async () => {
-    api.getAppQualitySummaries.mockRejectedValueOnce(new Error('Quality unavailable'));
+    getAppQualitySummaries.mockRejectedValueOnce(new Error('Quality unavailable'));
     await renderApps();
     expect(await screen.findByRole('link', { name: 'Quality unavailable' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop Example App' })).toBeEnabled();
@@ -220,7 +222,7 @@ describe('Apps collection load states', () => {
   });
 
   it('keeps a real empty collection distinct from an unavailable collection', async () => {
-    api.getApps.mockResolvedValue([]);
+    getApps.mockResolvedValue([]);
     render(<MemoryRouter><Apps /></MemoryRouter>);
 
     expect(await screen.findByText('No apps registered')).toBeTruthy();
@@ -228,7 +230,7 @@ describe('Apps collection load states', () => {
   });
 
   it('keeps the last loaded collection visible when a refresh fails', async () => {
-    api.getApps
+    getApps
       .mockResolvedValueOnce(APPS)
       .mockRejectedValueOnce(new Error('Server unreachable'));
     render(<MemoryRouter><Apps /></MemoryRouter>);
@@ -242,7 +244,7 @@ describe('Apps collection load states', () => {
   });
 
   it('keeps an in-flight operation visible while the initial collection is unavailable', async () => {
-    api.getApps.mockRejectedValueOnce(new Error('Server unreachable'));
+    getApps.mockRejectedValueOnce(new Error('Server unreachable'));
     render(<MemoryRouter><Apps /></MemoryRouter>);
     await screen.findByRole('alert');
 
@@ -260,7 +262,7 @@ describe('Apps collection load states', () => {
 describe('Apps archived filter', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getApps.mockResolvedValue([ARCHIVED_APP]);
+    getApps.mockResolvedValue([ARCHIVED_APP]);
   });
 
   // Fire the `apps:changed` handler the page registered, so the list refreshes
@@ -286,11 +288,11 @@ describe('Apps archived filter', () => {
 
     await user.click(screen.getByRole('button', { name: 'More actions for Example App' }));
     await user.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
-    await waitFor(() => expect(api.unarchiveApp).toHaveBeenCalledWith('app-alpha'));
+    await waitFor(() => expect(unarchiveApp).toHaveBeenCalledWith('app-alpha'));
 
     // The archive is now empty, which used to unmount the toggle and strand the
     // user on a blank "No archived apps" card.
-    api.getApps.mockResolvedValue([{ ...APPS[0], archived: false }]);
+    getApps.mockResolvedValue([{ ...APPS[0], archived: false }]);
     await emitAppsChanged();
 
     expect(screen.getByText('No archived apps')).toBeTruthy();
@@ -307,7 +309,7 @@ describe('Apps in-flight operation banner (#3435)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getApps.mockResolvedValue([APPS[0], SECOND_APP]);
+    getApps.mockResolvedValue([APPS[0], SECOND_APP]);
   });
 
   // Fire a socket event the page subscribed to, the way the server broadcasts it.
@@ -362,7 +364,7 @@ describe('Apps concurrent operations and duplicate dispatch (#3435)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getApps.mockResolvedValue([APPS[0], SECOND_APP]);
+    getApps.mockResolvedValue([APPS[0], SECOND_APP]);
   });
 
   const emitSocket = async (event, payload) => {
@@ -420,17 +422,17 @@ describe('Apps concurrent operations and duplicate dispatch (#3435)', () => {
 describe('Apps archive result reporting (#3436)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getApps.mockResolvedValue(APPS);
+    getApps.mockResolvedValue(APPS);
   });
 
   it('does not claim an app was archived when the request failed', async () => {
-    api.archiveApp.mockRejectedValue(new Error('Server unreachable'));
+    archiveApp.mockRejectedValue(new Error('Server unreachable'));
     const user = userEvent.setup();
     await renderApps();
 
     await openRowMenu(user);
     await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
-    await waitFor(() => expect(api.archiveApp).toHaveBeenCalledWith('app-alpha'));
+    await waitFor(() => expect(archiveApp).toHaveBeenCalledWith('app-alpha'));
 
     // request() already toasted the failure — a green "archived" on top of it
     // told the user CoS would skip the app when nothing changed.
@@ -442,21 +444,21 @@ describe('Apps archive result reporting (#3436)', () => {
   });
 
   it('does not claim an app was unarchived when the request failed', async () => {
-    api.getApps.mockResolvedValue([ARCHIVED_APP]);
-    api.unarchiveApp.mockRejectedValue(new Error('Server unreachable'));
+    getApps.mockResolvedValue([ARCHIVED_APP]);
+    unarchiveApp.mockRejectedValue(new Error('Server unreachable'));
     const user = userEvent.setup();
     render(<MemoryRouter initialEntries={['/apps?view=archived']}><Apps /></MemoryRouter>);
     await screen.findByRole('link', { name: 'Example App' });
 
     await openRowMenu(user);
     await user.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
-    await waitFor(() => expect(api.unarchiveApp).toHaveBeenCalledWith('app-alpha'));
+    await waitFor(() => expect(unarchiveApp).toHaveBeenCalledWith('app-alpha'));
 
     expect(toast.success).not.toHaveBeenCalled();
   });
 
   it('confirms and reflects a successful archive without waiting for a refetch', async () => {
-    api.archiveApp.mockResolvedValue({ ...APPS[0], archived: true });
+    archiveApp.mockResolvedValue({ ...APPS[0], archived: true });
     const user = userEvent.setup();
     await renderApps();
 

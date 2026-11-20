@@ -67,7 +67,7 @@ import { createHash } from 'node:crypto';
 import { builtinModules } from 'node:module';
 import { posix } from 'node:path';
 import { tokenize, staticEdges } from './sourceTokens.js';
-import { getAlwaysRunTests, FIXTURE_OWNERS } from '../ci-test-plan.js';
+import { getAlwaysRunTests, FIXTURE_OWNERS } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 
 export { tokenize } from './sourceTokens.js';
@@ -1612,6 +1612,26 @@ function createScopes(ctx) {
     return null;
   };
 
+  let dynamicScopeOffsets;
+  const hasDynamicScope = (from, to) => {
+    if (dynamicScopeOffsets === undefined) {
+      dynamicScopeOffsets = [];
+      for (const { arr } of arrays) for (const token of arr) {
+        if (isWord(token, 'arguments', 'eval')) dynamicScopeOffsets.push(token.i);
+      }
+      // Template expressions are visited after their containing array, not in source order.
+      dynamicScopeOffsets.sort((a, b) => a - b);
+    }
+    let lo = 0;
+    let hi = dynamicScopeOffsets.length;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (dynamicScopeOffsets[mid] < from) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo < dynamicScopeOffsets.length && dynamicScopeOffsets[lo] < to;
+  };
+
   /** True when the binder holds what it was given wherever its name is used inside its extent. */
   const settled = (binder) => {
     // Two binders of one name where one is inside the other, or a declaration of the name inside
@@ -1621,7 +1641,7 @@ function createScopes(ctx) {
       || (declared.get(binder.name) ?? []).some(inside);
     // `p = other()`, `p++` or `({ p } = other)` in the body: the variable no longer holds what it was given.
     // `arguments[0] = x` rebinds a parameter in a sloppy-mode script, and `eval` can do anything.
-    const rewritten = writtenIn(binder.name, inside, binder.token ?? null) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
+    const rewritten = writtenIn(binder.name, inside, binder.token ?? null) || hasDynamicScope(binder.from, binder.to)
       || hiddenWrite(binder.name);
     return !ambiguous && !rewritten;
   };
@@ -2706,7 +2726,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // fails closed. A library member (`server/lib/testHelper.js` and its
       // source walkers) reads such a tree only when a test calls it, and every
       // test that does is a tree scanner, which carries the guard suffix and is
-      // never memoized (`scripts/repo-scan-guards.guard.test.js` enforces the name).
+      // never memoized (`server/test/guards/repo/repo-scan-guards.test.js` enforces the name).
       // A data-read tree the repository listing can enumerate is keyed instead
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { getFilmStyle, listFilmStyles } from '../../services/api';
+import { getFilmStyle, listFilmStyles } from '../../services/apiCodeAnimation.js';
 
 /**
  * "Film style" select shared by the Code Animation form (#10253), the Launch

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ListOrdered, Plus, Save, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { getProviders, getProviderFallbacks, saveProviderFallbacks } from '../../services/apiProviders.js';
 import ListLoadError from '../ui/ListLoadError';
 import PageSkeleton from '../ui/PageSkeleton';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -28,7 +28,7 @@ export default function ProviderFallbacks() {
   useEffect(() => {
     let active = true;
     setLoadError(null);
-    Promise.all([api.getProviders({ silent: true }), api.getProviderFallbacks({ silent: true })])
+    Promise.all([getProviders({ silent: true }), getProviderFallbacks({ silent: true })])
       .then(([provs, chain]) => {
         if (!active) return;
         setProviders((provs.providers || []).filter((p) => p.enabled !== false));
@@ -55,7 +55,7 @@ export default function ProviderFallbacks() {
 
   const save = async () => {
     setSaving(true);
-    const result = await api.saveProviderFallbacks(entries).catch(() => null);
+    const result = await saveProviderFallbacks(entries).catch(() => null);
     setSaving(false);
     if (!result) return;
     setEntries(result.entries);

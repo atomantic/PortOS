@@ -1,4 +1,5 @@
 import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import useAudioLayerPlayback from './useAudioLayerPlayback.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';
@@ -167,6 +168,8 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   // Whatever source plays here takes turns with any other player on the step that plays the song
   // (the Blender film panel's shot player). Muted media (a shot's clip under the song) has no say.
   const dockRef = useRef(null);
+  // The timeline's audio layers play over the song live; a render already has them mixed in.
+  useAudioLayerPlayback(dockRef, project.audioLayers, !!source && source.kind !== 'video');
   const solo = useSoloPlayback(() => {
     for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
   });

@@ -3,7 +3,13 @@ import { useNavigate } from 'react-router';
 import { Download, Rocket, Upload, ArrowUpDown, RotateCcw, Terminal, Loader2 } from 'lucide-react';
 import toast from '../../../ui/Toast';
 import ConfirmModal from '../../../ui/ConfirmModal';
-import * as api from '../../../../services/api';
+import {
+  updateBranches,
+  pushAllBranches,
+  rebaseAndPushDefaultBranch,
+  resetToDefaultBranch,
+} from '../../../../services/apiGit.js';
+import { createSlashdoTask, forceCosEvaluate } from '../../../../services/apiAgents.js';
 
 // The "Git Status" header: repo-wide actions (rebase & push, push all, PR agent,
 // fetch, terminal, reset to origin) and the reset confirmation. It renders
@@ -32,7 +38,7 @@ export default function GitActionsBar({
   const handleUpdateBranches = async () => {
     if (!repoPath) return;
     setUpdating(true);
-    const result = await api.updateBranches(repoPath).catch(() => null);
+    const result = await updateBranches(repoPath).catch(() => null);
     setUpdating(false);
     if (result) {
       const parts = [];
@@ -55,7 +61,7 @@ export default function GitActionsBar({
   const handlePushAll = async () => {
     if (!repoPath || pushingAll) return;
     setPushingAll(true);
-    const result = await api.pushAllBranches(repoPath).catch(() => null);
+    const result = await pushAllBranches(repoPath).catch(() => null);
     setPushingAll(false);
     if (result?.success) {
       toast.success(`Pushed ${result.pushed} branch${result.pushed === 1 ? '' : 'es'}`);
@@ -71,7 +77,7 @@ export default function GitActionsBar({
   const handleRebaseAndPush = async () => {
     if (!repoPath || rebasingAndPushing) return;
     setRebasingAndPushing(true);
-    const result = await api.rebaseAndPushDefaultBranch(repoPath, { silent: true }).catch(error => {
+    const result = await rebaseAndPushDefaultBranch(repoPath, { silent: true }).catch(error => {
       toast.error(error.message || 'Rebase & push failed');
       return null;
     });
@@ -84,7 +90,7 @@ export default function GitActionsBar({
   const handleOpenPullRequest = async () => {
     if (!appId || !repoPath || openingPullRequest) return;
     setOpeningPullRequest(true);
-    const result = await api.createSlashdoTask('push', appId, {
+    const result = await createSlashdoTask('push', appId, {
       prCompletion: 'review-then-merge',
       overrideContext: `Work on the managed app repository at ${repoPath}. Reconcile all current work before delivery: include uncommitted changes, local commits not merged into the default branch, and commits not yet pushed. Preserve the app's existing intent, create or update a pull request against the default branch, then run the configured review process and merge it when review and CI are green. Do not discard work or push directly to the protected default branch.`,
     }, { silent: true }).catch((err) => {
@@ -94,7 +100,7 @@ export default function GitActionsBar({
     setOpeningPullRequest(false);
     if (result) {
       toast.success(`Pull request agent queued for ${appName} — check CoS Agents`);
-      await api.forceCosEvaluate().catch(() => null);
+      await forceCosEvaluate().catch(() => null);
     }
   };
 
@@ -105,7 +111,7 @@ export default function GitActionsBar({
     if (!repoPath || resetting) return;
     setResetting(true);
     setResetConfirm(false);
-    const result = await api.resetToDefaultBranch(repoPath, { silent: true }).catch((err) => {
+    const result = await resetToDefaultBranch(repoPath, { silent: true }).catch((err) => {
       toast.error(`Reset failed: ${err.message}`);
       return null;
     });

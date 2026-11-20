@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import StoryboardFitPanel from './StoryboardFitPanel';
 
 const api = vi.hoisted(() => ({ fitMusicVideoToStoryboard: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiStoryboards.js', () => ({ fitMusicVideoToStoryboard: api.fitMusicVideoToStoryboard }));
 
 const board = {
   id: 'sb-1', name: 'Example Story',

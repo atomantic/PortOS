@@ -12,7 +12,7 @@
  * prices tokens when it is built.
  */
 
-import { copyFile, mkdir, readdir, readFile, stat } from 'fs/promises';
+import { readdir, readFile, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
@@ -26,7 +26,7 @@ import {
   summarizeGrokRepairAdditions,
   videoHistoryUsageEvents,
 } from './grokUsageRepair.js';
-import { addDatedUsageBatch, getUsage, loadUsage } from './usage.js';
+import { addDatedUsageBatch, backupUsageRepairLedger, loadUsage, readUsageRepairLedger } from './usage.js';
 
 const yieldToEventLoop = () => new Promise((done) => setImmediate(done));
 
@@ -49,12 +49,11 @@ const oneLine = (value) => String(value ?? '').replace(/[\r\n]+/g, ' ');
  * `usage.json` stays strict so a corrupt ledger is not planned as an empty
  * repair-id list.
  */
-async function readJson(path, fallback, { strict = false, label = 'file' } = {}) {
+async function readJson(path, fallback, { label = 'file' } = {}) {
   try {
     return JSON.parse(await readFile(path, 'utf8'));
   } catch (err) {
     if (err.code === 'ENOENT') return fallback;
-    if (strict) throw err;
     console.warn(`⚠️ Grok usage repair skipped unreadable ${label} (${faultLabel(err)})`);
     return fallback;
   }
@@ -184,8 +183,9 @@ export async function planGrokUsageRepairFromDisk({
   dataDir = PATHS.data,
   repairIds = null,
   providerId = null,
+  ledger = null,
 } = {}) {
-  const ledger = await readJson(join(dataDir, 'usage.json'), {}, { strict: true });
+  ledger ??= await readUsageRepairLedger(dataDir);
   // The watermark lives in the ledger; an install that has not scanned since the
   // move still has it only in the legacy file.
   const scan = ledger?.interactiveScan ?? await readJson(join(dataDir, 'usage-interactive-scan.json'), { watermarks: {} }, {
@@ -208,24 +208,8 @@ export async function planGrokUsageRepairFromDisk({
   });
 }
 
-async function backupLedger(dataDir) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = join(dataDir, 'backups', `grok-usage-${stamp}`);
-  await mkdir(dest, { recursive: true });
-  for (const name of ['usage.json', 'usage-interactive-scan.json']) {
-    const source = join(dataDir, name);
-    try {
-      await copyFile(source, join(dest, name));
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-    }
-  }
-  return dest;
-}
-
 /**
- * Plan against the in-memory repair ids and add any missing rows there.
- * Writes only PATHS.data, which is the file the running server will save.
+ * Plan against committed repair ids and add missing rows to the local ledger.
  * @returns {Promise<{ added: number, turns: number, images: number, videos: number,
  *   backedUp: boolean, note: string|null, backupDir: string|null }>}
  */
@@ -236,22 +220,22 @@ export async function applyGrokUsageRepair({
   providerId = null,
 } = {}) {
   if (resolve(dataDir) !== resolve(PATHS.data)) {
-    throw new Error(`Grok usage repair writes ${PATHS.data}/usage.json`);
+    throw new Error('Grok usage repair writes only the active install ledger');
   }
-  await loadUsage();
+  const ledger = await loadUsage({ includeRepairEvidence: true });
   const resolvedProviderId = providerId
     || (providers ? grokUsageProviderIdFromList(providers) : await providerIdFromFile(dataDir));
   const plan = await planGrokUsageRepairFromDisk({
     home,
     dataDir,
-    repairIds: getUsage().grokRepairIds || [],
+    ledger,
     providerId: resolvedProviderId,
   });
   const note = plan.notes[0] || null;
   if (plan.additions.length === 0) {
     return { ...summarizeGrokRepairAdditions([]), backedUp: false, note, backupDir: null };
   }
-  const backupDir = await backupLedger(dataDir);
+  const backupDir = await backupUsageRepairLedger(dataDir, 'grok-usage', { includeWatermark: true });
   const written = await addDatedUsageBatch(plan.additions);
   return { ...summarizeGrokRepairAdditions(written), backedUp: true, note, backupDir };
 }

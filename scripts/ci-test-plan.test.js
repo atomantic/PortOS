@@ -734,7 +734,9 @@ it('keeps PostgreSQL tests out of ordinary server runner selection and routes th
 
 it('runs the whole-tree import-cycle guard on a PR that touches one server/services file (#14327)', () => {
   const plan = buildCiTestPlan(['server/services/auth.js'], realTree());
-  expect(plan.server.files).toContain('server/services/serviceImportCycles.guard.test.js');
+  // The cycle check is a module the structural guard runner loads (#16996).
+  expect(existsSync(join(REPO_ROOT, 'server/test/guards/modules/serviceImportCycles.test.js'))).toBe(true);
+  expect(plan.server.files).toContain('server/test/guards/modules.guard.test.js');
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
@@ -802,7 +804,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
 
 describe('CI test impact planner', () => {
   it('selects executable documentation tests, including contracts outside the always-run list', () => {
-    const paths = ['docs/features/product-surfaces.test.js', 'docs/example.test.js'];
+    const paths = ['docs/features/example-contract.test.js', 'docs/example.test.js'];
     const plan = buildCiTestPlan(paths, { trackedFiles: [...TRACKED, ...paths] });
 
     expect(plan.full).toBe(false);
@@ -812,7 +814,8 @@ describe('CI test impact planner', () => {
   });
 
   it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
-    const contract = 'docs/features/product-surfaces.test.js';
+    // The product-surfaces doc-parity check runs inside the structural guard runner (#16996).
+    const contract = 'server/test/guards/repo.guard.test.js';
     const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
       trackedFiles: [...TRACKED, contract],
     });
@@ -901,10 +904,10 @@ describe('CI test impact planner', () => {
   it('routes always-run selectors to the runner that globs them', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
-      'scripts/agent-instructions-files.guard.test.js',
+      'scripts/node-version-drift.guard.test.js',
       'client/src/a11y/overlays.conventions.test.js',
     ])).toEqual({
-      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.guard.test.js'],
+      server: ['server/services/taskPromptDefaults.test.js', 'scripts/node-version-drift.guard.test.js'],
       client: ['client/src/a11y/overlays.conventions.test.js'],
     });
   });
@@ -943,7 +946,8 @@ describe('CI test impact planner', () => {
   });
 
   it('runs the shipped prompt-hash guard on every plan', () => {
-    expect(getAlwaysRunTests()).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
+    expect(existsSync(join(REPO_ROOT, 'server/test/guards/repo/shippedPromptHashes.test.js'))).toBe(true);
+    expect(getAlwaysRunTests()).toContain('server/test/guards/repo.guard.test.js');
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {
@@ -1040,7 +1044,7 @@ describe('CI test impact planner', () => {
     { changed: 'server/lib/catalog/catalogValidation.js', runner: 'server', guards: ['server/lib/catalog/moduleSummaries.test.js'] },
     { changed: 'server/lib/persistent/persistentMindCapabilities.js', runner: 'server', guards: ['server/lib/persistent/moduleSummaries.test.js'] },
     { changed: 'server/lib/provider/providerModels.js', runner: 'server', guards: ['server/lib/provider/moduleSummaries.test.js'] },
-    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/test/guards/modules.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
@@ -1529,7 +1533,7 @@ describe('CI test impact planner', () => {
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
-      'server/lib/apiRouteGraph.guard.test.js',
+      'server/test/guards/modules.guard.test.js',
       'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];
@@ -1749,6 +1753,10 @@ describe('CI test impact planner', () => {
       'scripts/ci-base-sha.test.js',
       'scripts/lib/githubOutput.js',
       'scripts/ci-test-plan.js',
+      'scripts/lib/ciPlanRules.js',
+      'scripts/lib/ciPlanOutput.js',
+      'scripts/lib/moduleGraph.test.js',
+      'scripts/lib/moduleGraph.js',
       'scripts/run-ci-tests.js',
       'scripts/run-ci-lint.js',
       'scripts/verify-ci-status.js',
@@ -1771,6 +1779,9 @@ describe('CI test impact planner', () => {
       'scripts/run-ci-tests.test.js',
       'scripts/ci-test-plan.js',
       'scripts/ci-test-plan.test.js',
+      // run-ci-tests.js loads the planner's rules on windows-latest.
+      'scripts/lib/ciPlanRules.js',
+      'scripts/lib/ciPlanDependencies.js',
     ]) expect(windowsModeOf(path), path).toBe('files');
     // Still a full Linux plan, but nothing on windows-latest loads them: the
     // unrelated scripts leave Windows skipped.
@@ -2509,6 +2520,9 @@ describe('path-gated single-purpose jobs', () => {
       write('server/lib/superColliderRuntime.js', "import './brandNewHelper.js';\n");
       write('server/lib/brandNewHelper.js', 'export const x = 1;\n');
       write('server/lib/unrelated.js', 'export const y = 1;\n');
+      // The planner's module graph covers tracked files, as in CI.
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      execFileSync('git', ['add', '.'], { cwd: root });
       const inputs = collectSuperColliderLiveInputs(root);
       expect(inputs).toContain('server/lib/brandNewHelper.js');
       expect(inputs).not.toContain('server/lib/unrelated.js');
@@ -2516,6 +2530,9 @@ describe('path-gated single-purpose jobs', () => {
       for (const entry of SUPERCOLLIDER_LIVE_ENTRIES) expect(inputs).toContain(entry);
       expect(buildCiTestPlan(['server/lib/brandNewHelper.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(true);
       expect(buildCiTestPlan(['server/lib/unrelated.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(false);
+      // An entry on disk the tracked graph cannot see has unknown edges: the job runs.
+      write('scripts/setup-supercollider.js', "import '../server/lib/brandNewHelper.js';\n");
+      expect(collectSuperColliderLiveInputs(root)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2699,7 +2716,7 @@ describe('path-gated single-purpose jobs', () => {
   });
 
   it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
-    for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'client/package-lock.json', '.nvmrc',
+    for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', '.nvmrc',
       'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.guard.test.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
     for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {

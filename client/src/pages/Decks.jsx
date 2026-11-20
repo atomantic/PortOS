@@ -21,7 +21,8 @@ import { timeAgo } from '../utils/formatters';
 import { DECK_KIND, DECK_KINDS, DECK_KIND_LABELS } from '../lib/decks';
 import useListResource from '../hooks/useListResource';
 import Pill from '../components/ui/Pill';
-import { createDeck, deleteDeck, listDecks, listUniverseSummaries } from '../services/api';
+import { createDeck, deleteDeck, listDecks } from '../services/apiDecks.js';
+import { listUniverseSummaries } from '../services/apiUniverseBuilder.js';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 

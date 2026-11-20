@@ -8,9 +8,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
-import {
-  analyzeImport, commitImport, retryImporterIssues, createStorySession,
-} from '../services/api';
+import { analyzeImport, commitImport, retryImporterIssues } from '../services/apiImporter.js';
+import { createStorySession } from '../services/apiStoryBuilder.js';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];

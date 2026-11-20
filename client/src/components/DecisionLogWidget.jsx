@@ -13,7 +13,7 @@ import {
   Pause,
   Moon
 } from 'lucide-react';
-import * as api from '../services/api';
+import { getCosDecisionSummary } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo } from '../utils/formatters';
@@ -45,7 +45,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
   // transient failures instead of dropping the widget back to its loading
   // state on every blip.
   const { data: summary, loading } = useSocketResource(
-    () => api.getCosDecisionSummary({ silent: true }),
+    () => getCosDecisionSummary({ silent: true }),
     {
       namespace: 'cos', events: RESOURCE_EVENTS,
       // Decision stream is append-only; same 24h totals + same per-decision

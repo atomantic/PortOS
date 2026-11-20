@@ -7,9 +7,20 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
-vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
 const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), cancelImagePendingDelete: vi.fn(), getInstances: vi.fn() }));
-vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, stitchVideos, ...deleteApi }));
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: fetchPage,
+  getGalleryImages,
+  getVideoHistoryItem,
+  listImageVariants,
+  deleteImage,
+  stitchVideos,
+  deleteVideoHistoryItem: deleteApi.deleteVideoHistoryItem,
+  cancelVideoPendingDelete: deleteApi.cancelVideoPendingDelete,
+  cancelImagePendingDelete: deleteApi.cancelImagePendingDelete,
+}));
+vi.mock('../services/apiSystem.js', () => ({ getInstances: deleteApi.getInstances }));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
 vi.mock('../services/socket', () => ({ default: { on: (event, fn) => socketHandlers.set(event, fn), off: (event) => socketHandlers.delete(event) } }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));

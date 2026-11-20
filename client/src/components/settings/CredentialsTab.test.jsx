@@ -7,7 +7,10 @@ const mock = vi.hoisted(() => ({
   saveCredential: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => mock);
+vi.mock('../../services/apiSystem.js', () => ({
+  getCredentialInventory: mock.getCredentialInventory,
+  saveCredential: mock.saveCredential,
+}));
 
 import CredentialsTab from './CredentialsTab';
 

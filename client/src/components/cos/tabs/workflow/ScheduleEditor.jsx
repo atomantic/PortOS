@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, GitBranch, Loader2, Plus, Save, X } from 'lucide-react';
 import toast from '../../../ui/Toast';
-import * as api from '../../../../services/api';
+import { updateCosTaskInterval, updateCosJob } from '../../../../services/apiAgents.js';
 import { DEFAULT_CRON, buildCronFromRecurrence, parseCronToRecurrence, scheduleAnchorKindForInterval } from '../../../../utils/cronHelpers';
 import CronSchedulePicker from '../../../CronSchedulePicker';
 import ScheduleAnchorSelect from '../../ScheduleAnchorSelect';
@@ -104,7 +104,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         recheckCron: form.recheckCron.trim() || null,
         runAfter: form.runAfter
       };
-      result = await api.updateCosTaskInterval(node.id.slice(5), payload, { silent: true }).catch(error => {
+      result = await updateCosTaskInterval(node.id.slice(5), payload, { silent: true }).catch(error => {
         toast.error(error.message);
         return null;
       });
@@ -118,7 +118,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         scheduleAnchor: form.mode === 'interval' && form.scheduledTime ? form.scheduleAnchor : null
       };
       if (form.mode === 'interval') payload.interval = form.interval;
-      result = await api.updateCosJob(node.id.slice(4), payload, { silent: true }).catch(error => {
+      result = await updateCosJob(node.id.slice(4), payload, { silent: true }).catch(error => {
         toast.error(error.message);
         return null;
       });

@@ -68,7 +68,7 @@ const SERVER_MAX_MEMORY = process.env.PORTOS_SERVER_MAX_MEMORY || envServerMaxMe
 // CoS's default 2048 MiB per-process memory warning threshold.
 const UI_MAX_MEMORY = '1536M';
 
-// The support daemons (autofixer, the browser bridge) idle around 45 MB.
+// The support daemons (autofixer and the browser bridge) idle around 45 MB.
 // A ceiling an order of magnitude above that never fires in normal operation and
 // still catches a runaway.
 const HELPER_MAX_MEMORY = '512M';
@@ -360,10 +360,11 @@ module.exports = {
       watch: false,
       autorestart: true,
       max_restarts: 10,
+      // Finish one in-flight patch transaction before PM2 escalates to SIGKILL.
+      // It can run two bounded git apply calls, a PM2 restart and a rollback.
+      kill_timeout: 250000,
       min_uptime: '10s',
       restart_delay: 5000,
-      // Allow an in-flight patch apply, PM2 restart and rollback to settle.
-      kill_timeout: 190000,
       ...memoryLimits(HELPER_MAX_MEMORY)
     },
     {

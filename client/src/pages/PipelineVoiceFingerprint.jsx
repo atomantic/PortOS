@@ -21,7 +21,7 @@ import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft, Fingerprint, BookOpen, Info } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import { getPipelineSeries, getVoiceFingerprint } from '../services/api';
+import { getPipelineSeries, getVoiceFingerprint } from '../services/apiPipeline.js';
 
 // A cell is an outlier when the (issue, metricKey) pair is in the drift set.
 // Keyed on `issue:metricKey` so a lookup is O(1) while rendering the grid.

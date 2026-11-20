@@ -9,7 +9,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   listEidoverseControllers: vi.fn(),
   getEidoverseControllerInstall: vi.fn(),
   installEidoverseController: vi.fn(),
@@ -25,7 +25,7 @@ import {
   retireEidoverseController,
   setEidoverseControllerArmed,
   updateEidoverseControllerConfig,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
 import EidoverseControllersPanel from './EidoverseControllersPanel';
 
 const definition = (overrides = {}) => ({

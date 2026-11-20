@@ -30,7 +30,7 @@ import { createSketchSynthesizer } from '../../lib/waveSketchSynth.js';
 import { safeRemoveStorage } from '../../lib/safeStorage.js';
 import { clamp, formatTimecode } from '../../utils/formatters';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
-import { drawTrackWaveform, getTrack, renderTrackWaveform } from '../../services/api';
+import { drawTrackWaveform, getTrack, renderTrackWaveform } from '../../services/apiTracks.js';
 import { isPaintedCanvas, normalizeWaveSketch } from '../../../../server/lib/waveSketch.js';
 import { PAINTED_CANVAS_LIMITS, paintedCanvasStats } from '../../../../server/lib/paintedCanvas.js';
 

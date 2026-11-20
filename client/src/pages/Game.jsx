@@ -18,24 +18,22 @@ import {
   bindGameSprite,
   compileGameAssets,
   createGame,
-  getApps,
   getGame,
   getGameIntegrity,
   listGames,
-  getGalleryImages,
-  listSpriteRecords,
-  listTracks,
-  launchNativeApp,
   publishGameArtwork,
   publishGameMusic,
   requestGameFeedback,
-  startApp,
   unbindGameArtwork,
   unbindGameMusic,
   unbindGameSprite,
   updateGameArtwork,
   updateGameMusic,
-} from '../services/api.js';
+} from '../services/apiGames.js';
+import { getApps, launchNativeApp, startApp } from '../services/apiApps.js';
+import { getGalleryImages } from '../services/apiImageVideo.js';
+import { listSpriteRecords } from '../services/apiSprites.js';
+import { listTracks } from '../services/apiTracks.js';
 import { timeAgo } from '../utils/formatters.js';
 
 const silent = { silent: true };

@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getGoogleAuthStatus } from '../services/api';
+import { getGoogleAuthStatus } from '../services/apiCalendar.js';
 
 /**
  * Google OAuth status shared by the Calendar and Messages config tabs.

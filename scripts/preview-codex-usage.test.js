@@ -9,7 +9,7 @@ import { assertCodexInventoryComplete, previewCodexUsage, readCodexAccountingSou
 import { parseCodexRollout } from '../server/lib/provider/providerTranscriptUsage.js';
 
 const exec = promisify(execFile);
-const script = resolve(import.meta.dirname, 'preview-codex-usage.js');
+const script = resolve(import.meta.dirname, 'ops', 'preview-codex-usage.js');
 const range = { from: '2026-07-01', to: '2026-07-02' };
 const meta = (id = 'synthetic-session', model = 'gpt-test') => ({ type: 'session_meta', payload: { id, model, cwd: '/private/example-project' } });
 const count = (timestamp, input, cached = 0, output = 10) => ({ timestamp, type: 'event_msg', payload: {

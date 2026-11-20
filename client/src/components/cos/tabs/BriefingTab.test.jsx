@@ -26,7 +26,12 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosBriefings: api.getCosBriefings,
+  getCosLatestBriefing: api.getCosLatestBriefing,
+  getCosBriefing: api.getCosBriefing,
+  triggerCosJob: api.triggerCosJob,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const renderTab = () => render(

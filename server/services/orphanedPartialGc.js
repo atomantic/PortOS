@@ -22,7 +22,7 @@ import { getModelsDir as getLmStudioModelsDir } from './lmStudioManager.js';
 import { slotstreamCacheDir } from '../lib/slotstreamModels.js';
 // Side-effect imports: constructing a module is what registers its download
 // slot with `isAnyDownloadInFlight`, and an unregistered slot's live shards are
-// unprotected from the sweep below. `orphanedPartialGc.guard.test.js` fails if a
+// unprotected from the sweep below. `server/test/guards/modules/orphanedPartialGc.test.js` fails if a
 // module calling `createDownloadSlot` stops being reachable from here.
 import './slotstreamModelManager.js';
 import './loras.js';

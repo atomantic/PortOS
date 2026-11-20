@@ -5,9 +5,11 @@ import { MemoryRouter } from 'react-router';
 const listUniverseNames = vi.fn();
 const listUniverseStyles = vi.fn();
 const listMoodBoardNames = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: (...a) => listUniverseNames(...a),
   listUniverseStyles: (...a) => listUniverseStyles(...a),
+}));
+vi.mock('../../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: (...a) => listMoodBoardNames(...a),
 }));
 

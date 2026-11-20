@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   listTimelineProjects: vi.fn(),
   listVideoHistory: vi.fn(),
   createTimelineProject: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../services/api', () => ({
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import VideoTimeline from './VideoTimeline.jsx';
-import { listTimelineProjects, listVideoHistory } from '../services/api';
+import { listTimelineProjects, listVideoHistory } from '../services/apiImageVideo.js';
 
 describe('VideoTimeline page', () => {
   beforeEach(() => {

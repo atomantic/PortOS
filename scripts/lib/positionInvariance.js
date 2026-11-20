@@ -3,7 +3,7 @@
  *
  * A `*.generated.json` is kept honest by a drift test that regenerates and compares, which only works if the file changes when what it describes changes and *only* then. A manifest recording `foo.js:412` is rewritten by any edit above line 412, so the drift test fires on unrelated commits and every parallel branch conflicts.
  * Prove a generator is clean by testing the property: shift every position in the inputs without touching anything described and demand byte-identical output. That catches a `line`, `at`, `span`, `row`, `loc: [412, 8]` tuple or `foo.js#L412` anchor, including spellings nobody thought to deny-list.
- * `server/lib/generatedManifests.guard.test.js` is the cheap tree-wide net for a manifest whose generator never adopted this; this module is how a generator proves it directly. Use both.
+ * `server/test/guards/repo/generatedManifests.test.js` is the cheap tree-wide net for a manifest whose generator never adopted this; this module is how a generator proves it directly. Use both.
  */
 
 /**

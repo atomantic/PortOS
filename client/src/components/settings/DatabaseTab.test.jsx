@@ -12,7 +12,7 @@ const fireSocketEvent = (event) => {
   for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({});
 };
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiDatabase.js', () => ({
   getDatabaseStatus: vi.fn(),
   getDatabaseMaintenanceStatus: vi.fn(),
   cutoverDatabase: vi.fn(),
@@ -43,9 +43,12 @@ vi.mock('../../lib/safeStorage', () => ({
 }));
 
 import {
-  getDatabaseStatus, getDatabaseMaintenanceStatus, cutoverDatabase, recoverDatabaseCutover,
+  getDatabaseStatus,
+  getDatabaseMaintenanceStatus,
+  cutoverDatabase,
+  recoverDatabaseCutover,
   destroyDatabase,
-} from '../../services/api';
+} from '../../services/apiDatabase.js';
 import toast from '../ui/Toast';
 import { safeReadJsonSession } from '../../lib/safeStorage';
 import { DatabaseTab } from './DatabaseTab';
@@ -225,7 +228,7 @@ describe('DatabaseTab sync and replacement', () => {
       mode: 'docker',
     };
     getDatabaseStatus.mockResolvedValue(nativeRunningStatus);
-    const { syncDatabase: syncDatabaseMock } = await import('../../services/api');
+    const { syncDatabase: syncDatabaseMock } = await import('../../services/apiDatabase.js');
 
     render(<DatabaseTab />);
     await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());

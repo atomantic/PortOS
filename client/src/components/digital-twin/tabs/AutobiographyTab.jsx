@@ -21,7 +21,22 @@ import {BookOpen,
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import StoryCraftPanel from '../StoryCraftPanel';
-import * as api from '../../../services/api';
+import {
+  getAutobiographyThemes,
+  getAutobiographySuggestions,
+  getAutobiographyStories,
+  getAutobiographyStats,
+  getAutobiographyConfig,
+  getAutobiographyPromptById,
+  getAutobiographyPrompt,
+  saveAutobiographyStory,
+  generateAutobiographyFollowUps,
+  evaluateAutobiographyStory,
+  weaveAutobiographyNarrative,
+  updateAutobiographyStory,
+  deleteAutobiographyStory,
+  updateAutobiographyConfig,
+} from '../../../services/apiDigitalTwin.js';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { countWords } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
@@ -39,17 +54,17 @@ const DEFAULT_REMINDER_TIME = '09:00';
 // story written against the user's own question is saved under.
 const CUSTOM_PROMPT_ID = 'custom';
 
-const fetchThemes = () => api.getAutobiographyThemes({ silent: true });
+const fetchThemes = () => getAutobiographyThemes({ silent: true });
 // Suggestions come from the prompt bank and what's already been written —
 // never from the theme filter.
-const fetchSuggestions = () => api.getAutobiographySuggestions({ silent: true });
+const fetchSuggestions = () => getAutobiographySuggestions({ silent: true });
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filterTheme, setFilterTheme] = useState(null);
-  const fetchStories = useCallback(() => api.getAutobiographyStories(filterTheme, { silent: true }), [filterTheme]);
+  const fetchStories = useCallback(() => getAutobiographyStories(filterTheme, { silent: true }), [filterTheme]);
   const { items: stories, setItems: setStories, state: storiesState, error: storiesError, retry: retryStories } = useListResource(fetchStories);
   const { items: themes, state: themesState, error: themesError, retry: retryThemes } = useListResource(fetchThemes);
 
@@ -92,13 +107,13 @@ export default function AutobiographyTab({ onRefresh }) {
   // Stats and config are single objects, not lists: a failed read stays `null`
   // (absent), which hides their panels rather than rendering a wrong value.
   const refreshStats = useCallback(async () => {
-    setStats(await api.getAutobiographyStats().catch(() => null));
+    setStats(await getAutobiographyStats().catch(() => null));
   }, []);
 
   const loadMeta = useCallback(async () => {
     const [statsData, configData] = await Promise.all([
-      api.getAutobiographyStats().catch(() => null),
-      api.getAutobiographyConfig().catch(() => null)
+      getAutobiographyStats().catch(() => null),
+      getAutobiographyConfig().catch(() => null)
     ]);
     setStats(statsData);
     setConfig(configData);
@@ -132,12 +147,12 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const loadPromptById = async (promptId) => {
-    const prompt = await api.getAutobiographyPromptById(promptId).catch(() => null);
+    const prompt = await getAutobiographyPromptById(promptId).catch(() => null);
     if (prompt) beginWriting(prompt);
   };
 
   const startWriting = async () => {
-    const prompt = await api.getAutobiographyPrompt(undefined, { silent: true }).catch((err) => {
+    const prompt = await getAutobiographyPrompt(undefined, { silent: true }).catch((err) => {
       toast.error(err.message);
       return null;
     });
@@ -162,7 +177,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const skipPrompt = async () => {
-    const prompt = await api.getAutobiographyPrompt(currentPrompt?.id).catch(() => null);
+    const prompt = await getAutobiographyPrompt(currentPrompt?.id).catch(() => null);
     if (prompt && prompt.id !== currentPrompt?.id) {
       setCurrentPrompt(prompt);
       setStoryContent('');
@@ -182,7 +197,7 @@ export default function AutobiographyTab({ onRefresh }) {
     const opts = (parentStoryId || currentPrompt.id === CUSTOM_PROMPT_ID)
       ? { parentStoryId: parentStoryId || undefined, customPromptText: currentPrompt.text }
       : {};
-    const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts, { silent: true })
+    const result = await saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
 
     if (result) {
@@ -206,7 +221,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const handleGenerateFollowUps = async (storyId) => {
     setGeneratingFollowUps(true);
-    const result = await api.generateAutobiographyFollowUps(storyId, undefined, { silent: true })
+    const result = await generateAutobiographyFollowUps(storyId, undefined, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
 
     if (result?.followUps) {
@@ -222,7 +237,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const handleEvaluateStory = async (storyId) => {
     setEvaluatingStoryId(storyId);
-    const result = await api.evaluateAutobiographyStory(storyId, undefined, { silent: true })
+    const result = await evaluateAutobiographyStory(storyId, undefined, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result?.evaluation) {
       setStories(prev => prev.map(s => (s.id === storyId ? { ...s, evaluation: result.evaluation } : s)));
@@ -235,7 +250,7 @@ export default function AutobiographyTab({ onRefresh }) {
     setWeavingStoryId(storyId);
     // request() already toasts on failure; the catch only swallows so the
     // loading state still resets (avoids the double-toast in AGENTS.md).
-    const result = await api.weaveAutobiographyNarrative(storyId).catch(() => null);
+    const result = await weaveAutobiographyNarrative(storyId).catch(() => null);
     if (result?.narrative) {
       setNarrative({ storyId, text: result.narrative, storyCount: result.storyCount });
     }
@@ -258,7 +273,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const handleUpdateStory = async (storyId) => {
     if (!editContent.trim()) return;
-    const result = await api.updateAutobiographyStory(storyId, editContent.trim(), { silent: true })
+    const result = await updateAutobiographyStory(storyId, editContent.trim(), { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       toast.success('Story updated');
@@ -270,7 +285,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const handleDeleteStory = async (storyId) => {
-    const result = await api.deleteAutobiographyStory(storyId, { silent: true })
+    const result = await deleteAutobiographyStory(storyId, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       toast.success('Story deleted');
@@ -300,7 +315,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const handleConfigUpdate = async (updates) => {
-    const result = await api.updateAutobiographyConfig(updates, { silent: true })
+    const result = await updateAutobiographyConfig(updates, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       setConfig(result);

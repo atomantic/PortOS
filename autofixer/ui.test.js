@@ -3,29 +3,42 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { fileURLToPath } from 'node:url';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
-const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn((_port, _host, ready) => ready()), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn() }));
+const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn(), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
 vi.mock('child_process', () => ({ spawn: harness.spawn }));
-const mockExpress = () => {
+vi.mock('node:module', async (original) => {
+  const actual = await original();
   const express = () => ({
     use: (handler) => harness.gates.push(handler),
     get: (path, ...handlers) => harness.routes.set(path, handlers),
     post: (path, ...handlers) => harness.routes.set(path, handlers),
   });
   express.json = () => (_req, _res, next) => next();
-  return express;
-};
+  return { ...actual, createRequire: (from) => {
+    const require = actual.createRequire(from);
+    return name => name === 'express' ? express : require(name);
+  } };
+});
 vi.mock('../lib/sidecarAuthGate.js', async (original) => ({
   ...await original(), createSidecarAuthGate: () => harness.auth,
 }));
 vi.mock('../lib/tailscale-https.js', () => ({
-  createTailscaleServers: () => ({ server: Object.assign(new EventEmitter(), { listen: harness.listen, address: () => ({ port: 5560 }) }), httpsEnabled: false }),
+  createTailscaleServers: () => {
+    const server = new EventEmitter();
+    server.listen = (...args) => {
+      harness.listen(...args);
+      server.emit('listening');
+    };
+    server.address = () => ({ port: 5560 });
+    return { server, httpsEnabled: false };
+  },
   watchCertReload: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
   PM2_BIN: 'example-pm2', DATA_DIR: 'unused', AUTOFIXER_DIR: 'unused', INDEX_FILE: 'unused',
-  execPm2: harness.execPm2, listProcessesStrict: vi.fn(),
+  execPm2: harness.execPm2, listProcessesStrict: harness.listProcessesStrict,
   loadApps: harness.loadApps,
 }));
 
@@ -38,17 +51,21 @@ beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'autofixer-authority-'));
   harness.spawn.mockReset();
   harness.listen.mockClear();
+  harness.listProcessesStrict.mockReset().mockResolvedValue([]);
   harness.execPm2.mockReset().mockResolvedValue({ stdout: 'ok', stderr: '' });
   harness.loadApps.mockReset().mockResolvedValue([{ pm2ProcessNames: ['example-process'] }]);
   harness.gates.length = 0;
   harness.routes.clear();
 });
-afterEach(async () => { vi.useRealTimers(); vi.unstubAllEnvs(); await rm(dataDir, { recursive: true, force: true }); });
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  await rm(dataDir, { recursive: true, force: true });
+});
 
-const loadUi = async (enabled = false) => {
-  await writeFile(join(dataDir, 'settings.json'), JSON.stringify({ secrets: { auth: {
-    enabled, passwordHash, salt: SALT,
-  } } }));
+const loadUi = async (enabled = false, { corrupt = false } = {}) => {
+  const settings = { secrets: { auth: { enabled, passwordHash, salt: SALT } } };
+  await writeFile(join(dataDir, 'settings.json'), corrupt ? '{broken' : JSON.stringify(settings));
   await writeFile(join(dataDir, 'auth-sessions.json'), JSON.stringify({ tokens: [
     { tokenHash: hashToken('example-session'), expiresAt: Date.now() + 60_000 },
   ] }));
@@ -56,7 +73,8 @@ const loadUi = async (enabled = false) => {
   harness.auth = createSidecarAuthGate({ dataDir, cookieName: 'portos_autofixer_auth' });
   vi.resetModules();
   const { startAutofixerUi } = await import('./ui.js');
-  await startAutofixerUi({ express: mockExpress() });
+  const { createStagedFixStore } = await import('./stagedFixes.js');
+  await startAutofixerUi(createStagedFixStore({ root: dataDir, loadApps: harness.loadApps, execPm2: harness.execPm2 }));
 };
 
 const response = () => {
@@ -66,8 +84,8 @@ const response = () => {
   res.setHeader = (name, value) => { res.headers[name] = value; };
   return res;
 };
-const mutate = async (action, address = '192.0.2.10', headers = {}) => {
-  const req = { path: `/api/${action}/example-process`, params: { process: 'example-process' },
+const mutate = async (action, address = '192.0.2.10', headers = {}, process = 'example-process') => {
+  const req = { path: `/api/${action}/${process}`, params: { process },
     headers, socket: { remoteAddress: address } };
   const res = response();
   for (const handler of [...harness.gates.filter(handler => handler.length !== 4), ...harness.routes.get(`/api/${action}/:process`)]) {
@@ -79,10 +97,23 @@ const mutate = async (action, address = '192.0.2.10', headers = {}) => {
 };
 
 describe('Autofixer process-control authority', () => {
-  it('moves a retained legacy PM2 port to the dashboard port on boot', async () => {
-    vi.stubEnv('PORT', '5559');
+  it.each([
+    ['5559', 5560],
+    [undefined, 5560],
+    ['4560', '4560'],
+  ])('binds the dashboard for PORT=%s', async (port, expected) => {
+    vi.stubEnv('PORT', port);
     await loadUi();
-    expect(harness.listen).toHaveBeenCalledWith(5560, '0.0.0.0', expect.any(Function));
+    expect(harness.listen).toHaveBeenCalledWith(expected, '0.0.0.0');
+  });
+
+  it('retires only the legacy dashboard from this checkout during startup', async () => {
+    harness.listProcessesStrict.mockResolvedValue([
+      { name: 'portos-autofixer-ui', pm_id: 8, pm2_env: { pm_exec_path: '/example/other-install/autofixer/ui.js' } },
+      { name: 'portos-autofixer-ui', pm_id: 9, pm2_env: { pm_exec_path: fileURLToPath(new URL('./ui.js', import.meta.url)) } },
+    ]);
+    await loadUi();
+    expect(harness.execPm2.mock.calls).toEqual([[['delete', '9']], [['save']]]);
   });
 
   it('returns sanitized unavailability for app reads and blocks controls before PM2', async () => {
@@ -129,6 +160,17 @@ describe('Autofixer process-control authority', () => {
     expect(harness.execPm2).not.toHaveBeenCalled();
   });
 
+  it('acknowledges self-control before the dashboard goes down', async () => {
+    await loadUi();
+    harness.loadApps.mockResolvedValue([{ pm2ProcessNames: ['portos-autofixer'] }]);
+    for (const action of ['restart', 'stop']) {
+      const res = await mutate(action, '127.0.0.1', {}, 'portos-autofixer');
+      expect(res.statusCode).toBe(202);
+      expect(res.body.success).toBe(true);
+      expect(harness.execPm2).toHaveBeenLastCalledWith([action, 'portos-autofixer']);
+    }
+  });
+
   it('preserves password-free genuine loopback controls', async () => {
     await loadUi();
     expect((await mutate('restart', '::1')).body).toEqual({ success: true });
@@ -155,10 +197,8 @@ describe('Autofixer process-control authority', () => {
   }, 30_000);
 
   it('keeps corrupt config and cross-origin requests closed without PM2 effects', async () => {
-    await loadUi();
+    await loadUi(false, { corrupt: true });
     expect((await mutate('restart', '127.0.0.1', { origin: 'https://attacker.example', host: 'localhost:5560' })).body.code).toBe('CROSS_ORIGIN_BLOCKED');
-    await writeFile(join(dataDir, 'settings.json'), '{broken');
-    vi.setSystemTime(Date.now() + 5001); // Let the previously read auth settings expire.
     expect((await mutate('stop', '127.0.0.1')).body.code).toBe('AUTH_REQUIRED');
     const { createSidecarAuthGate } = await vi.importActual('../lib/sidecarAuthGate.js');
     harness.auth = createSidecarAuthGate({ dataDir, cookieName: 'portos_autofixer_auth' });

@@ -4,6 +4,7 @@ import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getMessageSelectors: vi.fn(),
+  updateMessageSelectors: vi.fn(),
   syncMessageAccount: vi.fn(),
   testMessageSelectors: vi.fn(),
   addCosTask: vi.fn(),
@@ -15,7 +16,13 @@ const toast = vi.hoisted(() => Object.assign(vi.fn(), {
 }));
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMessages.js', () => ({
+  getMessageSelectors: api.getMessageSelectors,
+  updateMessageSelectors: api.updateMessageSelectors,
+  syncMessageAccount: api.syncMessageAccount,
+  testMessageSelectors: api.testMessageSelectors,
+}));
+vi.mock('../../services/apiAgents.js', () => ({ addCosTask: api.addCosTask }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: socket }));
 
@@ -182,7 +189,7 @@ describe('SyncTab saved selectors read', () => {
 describe('SyncTab selector save followed by a failed refresh', () => {
   it('keeps the saved values and editing after the post-save reload fails', async () => {
     api.getMessageSelectors.mockResolvedValueOnce({ outlook: { inbox: '.old-inbox' } });
-    api.updateMessageSelectors = vi.fn().mockResolvedValue({ inbox: '.new-inbox' });
+    api.updateMessageSelectors.mockResolvedValue({ inbox: '.new-inbox' });
     renderTab();
     expect(await screen.findByText('.old-inbox')).toBeTruthy();
 

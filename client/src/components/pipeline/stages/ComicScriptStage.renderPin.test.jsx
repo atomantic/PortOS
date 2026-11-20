@@ -14,7 +14,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   PIPELINE_STAGE_LABELS: { comicScript: 'Comic Script' },
   PIPELINE_STAGE_STATUS_LABEL: { empty: 'Empty', ready: 'Ready' },
   PIPELINE_STAGE_STATUS_COLOR: {},
@@ -38,7 +38,7 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import ComicScriptStage from './ComicScriptStage';
-import { generatePipelineComicCover } from '../../../services/api';
+import { generatePipelineComicCover } from '../../../services/apiPipeline.js';
 import { getSettings } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 

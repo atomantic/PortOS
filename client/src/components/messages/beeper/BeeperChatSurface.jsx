@@ -15,7 +15,27 @@ import useBeeperOutbox from './useBeeperOutbox';
 import { messagePreviewText } from '../../../lib/beeperMessageBody';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../../lib/safeStorage';
 import { formatClockTime } from '../../../utils/formatters';
-import * as api from '../../../services/api';
+import {
+  getBeeperScopes,
+  getBeeperNetworks,
+  getBeeperConversations,
+  syncBeeperNow,
+  markBeeperConversationSeen,
+  getBeeperConversation,
+  getBeeperMessages,
+  purgeBeeperConversation,
+  updateBeeperScope,
+  createBeeperScope,
+  deleteBeeperScope,
+  setBeeperConversationArchived,
+  setBeeperConversationLowPriority,
+} from '../../../services/apiBeeper.js';
+import {
+  getTribePeople,
+  linkBeeperParticipant,
+  createTribePersonFromBeeper,
+  unlinkBeeperParticipant,
+} from '../../../services/apiTribe.js';
 
 /**
  * The Beeper chat surface (#35): rail, pinned grid, conversation rows, thread
@@ -371,7 +391,7 @@ export default function BeeperChatSurface({
   const scopeParam = searchParams.get('scope') || 'inbox';
 
   const scopesResource = useSocketResource(async () => {
-    const data = await api.getBeeperScopes({ silent: true });
+    const data = await getBeeperScopes({ silent: true });
     if (!Array.isArray(data?.scopes)) throw new Error('Invalid saved scopes response');
     return data.scopes;
   }, { events: SCOPE_EVENTS, matchesEvent: (payload) => payload?.kind === 'scopes' });
@@ -453,7 +473,7 @@ export default function BeeperChatSurface({
   }, [setSearchParams]);
 
   const loadNetworks = useCallback(async () => {
-    const data = await api.getBeeperNetworks({ silent: true }).catch(() => null);
+    const data = await getBeeperNetworks({ silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     setNetworks(Array.isArray(data?.networks) ? data.networks : []);
   }, [mountedRef]);
@@ -463,7 +483,7 @@ export default function BeeperChatSurface({
     if (scopePending) return;
     const generation = ++listGenRef.current;
     setListLoading(true);
-    const [data, error] = await api.getBeeperConversations(filters, { silent: true })
+    const [data, error] = await getBeeperConversations(filters, { silent: true })
       .then((value) => [value, null])
       .catch((err) => [null, err]);
     if (!mountedRef.current || generation !== listGenRef.current) return;
@@ -487,7 +507,7 @@ export default function BeeperChatSurface({
   const [syncing, setSyncing] = useState(false);
   const syncNow = useCallback(async () => {
     setSyncing(true);
-    const result = await api.syncBeeperNow({ silent: true }).catch((err) => {
+    const result = await syncBeeperNow({ silent: true }).catch((err) => {
       toast.error(err?.message || 'Beeper sync failed');
       return null;
     });
@@ -509,7 +529,7 @@ export default function BeeperChatSurface({
   // here already has.
   const markSeen = useCallback((id) => {
     if (!id) return;
-    api.markBeeperConversationSeen(id, { silent: true }).catch(() => {});
+    markBeeperConversationSeen(id, { silent: true }).catch(() => {});
     setConversations((prev) => (
       prev.some((row) => row.id === id && row.unreadCount > 0)
         ? prev.map((row) => (row.id === id ? { ...row, unreadCount: 0 } : row))
@@ -538,8 +558,8 @@ export default function BeeperChatSurface({
     setThreadLoading(true);
     setThreadError(null);
     const [result, error] = await Promise.all([
-      api.getBeeperConversation(id, { silent: true }),
-      api.getBeeperMessages(id, {}, { silent: true }),
+      getBeeperConversation(id, { silent: true }),
+      getBeeperMessages(id, {}, { silent: true }),
     ]).then((value) => [value, null]).catch((err) => [null, err]);
     if (!mountedRef.current || generation !== threadGenRef.current) return;
     if (error) {
@@ -583,7 +603,7 @@ export default function BeeperChatSurface({
   const refreshThreadHead = useCallback(async (id) => {
     if (!id) return;
     const generation = threadGenRef.current;
-    const page = await api.getBeeperMessages(id, {}, { silent: true }).catch(() => null);
+    const page = await getBeeperMessages(id, {}, { silent: true }).catch(() => null);
     if (!mountedRef.current || generation !== threadGenRef.current || !page) return;
     const incoming = Array.isArray(page.messages) ? page.messages : [];
     if (incoming.length === 0) return;
@@ -621,7 +641,7 @@ export default function BeeperChatSurface({
   useEffect(() => { loadList(); }, [loadList]);
   useEffect(() => { loadThread(conversationId); }, [conversationId, loadThread]);
   useEffect(() => {
-    api.getTribePeople({ silent: true })
+    getTribePeople({ silent: true })
       .then((data) => { if (mountedRef.current) setPeople(Array.isArray(data) ? data : (data?.people || [])); })
       .catch(() => {});
   }, [mountedRef]);
@@ -741,7 +761,7 @@ export default function BeeperChatSurface({
     const generation = threadGenRef.current;
     setLoadingMore(true);
     try {
-      const page = await api.getBeeperMessages(conversationId, { cursor: messageCursor }, { silent: true }).catch(() => null);
+      const page = await getBeeperMessages(conversationId, { cursor: messageCursor }, { silent: true }).catch(() => null);
       // A conversation switch mid-load bumps `threadGenRef` (via `loadThread`),
       // and this response belongs to the conversation the reader left — it
       // must not land, but `loadingMore` still has to come back down, or
@@ -769,7 +789,7 @@ export default function BeeperChatSurface({
     loadingListRef.current = true;
     const generation = listGenRef.current;
     try {
-      const page = await api.getBeeperConversations({ ...filters, cursor: listCursor }, { silent: true }).catch(() => null);
+      const page = await getBeeperConversations({ ...filters, cursor: listCursor }, { silent: true }).catch(() => null);
       if (!mountedRef.current || generation !== listGenRef.current) return;
       if (page) {
         setConversations((prev) => [...prev, ...(Array.isArray(page.conversations) ? page.conversations : [])]);
@@ -809,7 +829,7 @@ export default function BeeperChatSurface({
     const id = conversationId;
     if (!id) return;
     setPurgingIds((pending) => withId(pending, id));
-    const result = await api.purgeBeeperConversation(id, { silent: true }).catch((err) => {
+    const result = await purgeBeeperConversation(id, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not purge this conversation');
       return null;
     });
@@ -846,7 +866,7 @@ export default function BeeperChatSurface({
 
   const linkParticipant = useCallback(async (participant, personId) => {
     setLinkingId(participant.sourceUserId);
-    const result = await api.linkBeeperParticipant({
+    const result = await linkBeeperParticipant({
       conversationId, sourceUserId: participant.sourceUserId, personId,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not link this participant');
@@ -865,7 +885,7 @@ export default function BeeperChatSurface({
   // the one the user confirmed or corrected, not whatever Beeper reported.
   const createAndLinkParticipant = useCallback(async (participant, { name, ring, relationship } = {}) => {
     setLinkingId(participant.sourceUserId);
-    const result = await api.createTribePersonFromBeeper({
+    const result = await createTribePersonFromBeeper({
       conversationId,
       sourceUserId: participant.sourceUserId,
       name: name || participant.displayName || participant.handle || undefined,
@@ -880,7 +900,7 @@ export default function BeeperChatSurface({
     if (!result) return;
     toast.success('Linked to a new Tribe person');
     if (threadIdRef.current === conversationId) loadThread(conversationId);
-    api.getTribePeople({ silent: true })
+    getTribePeople({ silent: true })
       .then((data) => { if (mountedRef.current) setPeople(Array.isArray(data) ? data : (data?.people || [])); })
       .catch(() => {});
   }, [conversationId, loadThread, mountedRef]);
@@ -900,7 +920,7 @@ export default function BeeperChatSurface({
           : row
       )),
     } : prev));
-    await api.unlinkBeeperParticipant({
+    await unlinkBeeperParticipant({
       conversationId, sourceUserId: participant.sourceUserId,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Could not unlink this participant');
@@ -1029,8 +1049,8 @@ export default function BeeperChatSurface({
             setScopeSaving(true);
             const input = { name: scopeName.trim(), filters: scopeEditor.filters };
             const result = await (scopeEditor.id
-              ? api.updateBeeperScope(scopeEditor.id, input, { silent: true })
-              : api.createBeeperScope(input, { silent: true })).catch((err) => {
+              ? updateBeeperScope(scopeEditor.id, input, { silent: true })
+              : createBeeperScope(input, { silent: true })).catch((err) => {
                 toast.error(err?.message || 'Could not save scope'); return null;
               });
             scopeWriteRef.current = false;
@@ -1059,7 +1079,7 @@ export default function BeeperChatSurface({
                   if (scopeWriteRef.current) return;
                   scopeWriteRef.current = true; setScopeSaving(true);
                   const id = scopeEditor.id;
-                  const result = await api.deleteBeeperScope(id, { silent: true }).catch((err) => {
+                  const result = await deleteBeeperScope(id, { silent: true }).catch((err) => {
                     toast.error(err?.message || 'Could not delete scope'); return null;
                   });
                   scopeWriteRef.current = false;
@@ -1238,8 +1258,8 @@ export default function BeeperChatSurface({
             onBack={clearSelection}
             onRetry={conversationId ? () => loadThread(conversationId) : null}
             writePending={writePendingIds.has(conversationId)}
-            onArchive={(value) => applyFlag(api.setBeeperConversationArchived, value, 'archive')}
-            onLowPriority={(value) => applyFlag(api.setBeeperConversationLowPriority, value, 'update')}
+            onArchive={(value) => applyFlag(setBeeperConversationArchived, value, 'archive')}
+            onLowPriority={(value) => applyFlag(setBeeperConversationLowPriority, value, 'update')}
             onPurge={purgeMirror}
             purging={purgingIds.has(conversationId)}
             onAttachmentUpdated={applyAttachmentUpdate}

@@ -58,12 +58,40 @@ vi.mock('../services/apiCore.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, request: (url, options) => url.includes('/execution-options') ? Promise.resolve({ options: [] }) : actual.request(url, options) };
 });
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiLocalLlm.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getLocalPersistentMindSetup: vi.fn(async () => null),
+}));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
+vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
+vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
+vi.mock('../services/apiHarnesses.js', () => ({ getHarnesses: api.getHarnesses }));
 vi.mock('../services/apiProviders', () => ({
   getFleetLlmHost: vi.fn(() => new Promise(() => {})),
   getFleetPeerHosts: vi.fn(() => new Promise(() => {})),
   revealFleetLlmHostKey: vi.fn(),
   revealFleetPeerHostKey: vi.fn(),
+  getProviders: api.getProviders,
+  getProviderStatuses: api.getProviderStatuses,
+  getProviderRuntimes: api.getProviderRuntimes,
+  getProviderReadiness: api.getProviderReadiness,
+  getCodexAccount: api.getCodexAccount,
+  getCodexModels: api.getCodexModels,
+  startCodexLogin: api.startCodexLogin,
+  cancelCodexLogin: api.cancelCodexLogin,
+  codexLogout: api.codexLogout,
+  getSampleProviders: api.getSampleProviders,
+  createProvider: api.createProvider,
+  updateProvider: api.updateProvider,
+  refreshProviderModels: api.refreshProviderModels,
+  getModelPinWarnings: api.getModelPinWarnings,
+  clearModelPin: api.clearModelPin,
+  setActiveProvider: api.setActiveProvider,
+  getProviderCatalog: api.getProviderCatalog,
+  getProviderBootstraps: api.getProviderBootstraps,
+  createProviderPreset: api.createProviderPreset,
+  getProviderServices: api.getProviderServices,
 }));
 vi.mock('../components/ui/Toast', () => ({
   default: toast,

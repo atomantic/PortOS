@@ -3,7 +3,7 @@ import Modal from '../ui/Modal';
 import ModelInputPreview from '../media/ModelInputPreview';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
-import { previewImagePrompt } from '../../services/api';
+import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import { buildFableLoomImageRequest } from './sceneMediaRequests';
 import { fieldClass, labelClass } from './fieldStyles';
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { listMoodBoardNames, listUniverseNames, listUniverseStyles } from '../../services/api';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
+import { listUniverseNames, listUniverseStyles } from '../../services/apiUniverseBuilder.js';
 import ListLoadError from '../ui/ListLoadError';
 import { BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../../lib/styleSourceChoice.js';
 

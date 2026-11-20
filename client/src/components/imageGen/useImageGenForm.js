@@ -31,13 +31,8 @@ import { isHardwareCompatible } from '../../utils/systemCapabilities';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import useMounted from '../../hooks/useMounted';
 import toast from '../ui/Toast';
-import {
-  getGalleryImages,
-  getImageGenStatus,
-  getSettings,
-  listImageModels,
-  listLorasFull,
-} from '../../services/api';
+import { getGalleryImages, listImageModels, listLorasFull } from '../../services/apiImageVideo.js';
+import { getImageGenStatus, getSettings } from '../../services/apiSystem.js';
 
 const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };

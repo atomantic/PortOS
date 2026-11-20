@@ -11,16 +11,18 @@ vi.mock('../../../services/voiceClient', () => ({
 }));
 // Exercise the real GET/PUT wrappers and request error handling. Other regions
 // are inert so no request can reach a live journal, provider, or database.
-vi.mock('../../../services/api', async () => {
-  const { getDailyLog, updateDailyLog } = await import('../../../services/apiBrain');
+vi.mock('../../../services/apiBrain.js', async (importOriginal) => {
+  const actual = await importOriginal();
   return {
-    getDailyLog, updateDailyLog,
+    ...actual,
     listDailyLogs: async () => ({ records: [] }),
     getDailyLogSettings: async () => ({}),
     getActivityDigestSettings: async () => ({}),
-    getProviders: async () => ({ providers: [] }),
   };
 });
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: async () => ({ providers: [] }),
+}));
 vi.mock('../../../services/apiNotes', () => ({ getNotesVaults: async () => [] }));
 const DailyLogTab = (await import('./DailyLogTab')).default;
 const DAY = '2000-01-02';

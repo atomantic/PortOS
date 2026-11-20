@@ -15,7 +15,7 @@ import {
   enrichTribeFromContacts,
   suggestTribeFromContacts,
   importContactToTribe,
-} from '../../services/api';
+} from '../../services/apiContacts.js';
 
 // Comms → Contacts (#2415). Opt-in read of macOS AddressBook → local cache
 // for iMessage name resolution + Tribe phone/email fill. Never writes Contacts.

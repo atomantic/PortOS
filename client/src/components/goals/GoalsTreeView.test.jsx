@@ -30,7 +30,7 @@ const { toastError, organizeGoals, createGoal, providerState } = vi.hoisted(() =
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(() => {}, { error: toastError, success: () => {} }),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiGoals.js', () => ({
   createGoal,
   organizeGoals,
 }));

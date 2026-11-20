@@ -335,7 +335,7 @@ describe('prerequisitesMetForRouting', () => {
 
     // A skipped fallback is a deliberate refusal, so it belongs on stderr where
     // a stderr-based monitor sees it — not on stdout with progress chatter
-    // (#7945, enforced tree-wide by server/logLevelConventions.guard.test.js).
+    // (#7945, enforced tree-wide by server/test/guards/runtime/logLevelConventions.test.js).
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
   });

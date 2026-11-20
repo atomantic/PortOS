@@ -1,11 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent, within } from '@testing-library/react';
 
-vi.mock('../../services/api', async (importOriginal) => ({
-  ...await importOriginal(),
-  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
-}));
-// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),

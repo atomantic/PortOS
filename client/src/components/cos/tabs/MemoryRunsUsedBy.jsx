@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Link } from 'react-router';
-import * as api from '../../../services/api';
+import { getMemoryRuns } from '../../../services/apiMemory.js';
 import { formatDateTime } from '../../../utils/formatters';
 import useListResource from '../../../hooks/useListResource';
 import ListLoadError from '../../ui/ListLoadError';
@@ -11,7 +11,7 @@ import ListLoadError from '../../ui/ListLoadError';
  */
 export default function MemoryRunsUsedBy({ memoryId }) {
   const fetchRuns = useCallback(
-    () => api.getMemoryRuns(memoryId, { silent: true }).then(res => res?.runs || []),
+    () => getMemoryRuns(memoryId, { silent: true }).then(res => res?.runs || []),
     [memoryId],
   );
   const { items: runs, state, error, retry } = useListResource(fetchRuns);

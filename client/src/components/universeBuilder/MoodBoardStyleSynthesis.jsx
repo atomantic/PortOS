@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, Wand2, X } from 'lucide-react';
-import { synthesizeMoodBoardStyle } from '../../services/api';
+import { synthesizeMoodBoardStyle } from '../../services/apiMoodBoard.js';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';

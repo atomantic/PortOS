@@ -289,6 +289,17 @@ export const musicVideoVocalSeparationEventsUrl = (jobId) =>
 export const cancelMusicVideoVocalSeparation = (jobId, options = {}) =>
   request(`/music-video/vocal-stem/separate/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 
+// ---- Timeline audio layers ----
+// An audio file placed over the song at `startSec` → { project, layer }.
+// Moving, re-levelling, muting or removing layers is a project PATCH of
+// `audioLayers: [{ id, startSec?, volume?, muted?, label? }]` (one left out is removed).
+export const uploadMusicVideoAudioLayer = (id, file, { startSec = 0, ...options } = {}) => {
+  const body = new FormData();
+  body.append('file', file, file.name || 'audio');
+  const at = Math.max(0, Math.round((Number(startSec) || 0) * 1000) / 1000);
+  return request(`/music-video/${encodeURIComponent(id)}/audio-layers?startSec=${at}`, { method: 'POST', body, ...options });
+};
+
 // ---- Scene takes (#8965) ----
 // Every render/import for a scene slot is an immutable take; the scene's
 // referenceImageId / videoHistoryId is the explicit selection among them.

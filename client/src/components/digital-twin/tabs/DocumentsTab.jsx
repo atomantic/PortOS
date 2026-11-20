@@ -11,7 +11,13 @@ import {
   Scale,
   ArrowLeft
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinDocuments,
+  getDigitalTwinDocument,
+  updateSoulDocument,
+  createSoulDocument,
+  deleteSoulDocument,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -23,7 +29,7 @@ import useListResource from '../../../hooks/useListResource';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 
-const fetchDocuments = () => api.getDigitalTwinDocuments({ silent: true });
+const fetchDocuments = () => getDigitalTwinDocuments({ silent: true });
 
 export default function DocumentsTab({ onRefresh }) {
   const { items: documents, state: documentsState, error: documentsError, retry: loadDocuments, setItems: setDocuments } = useListResource(fetchDocuments);
@@ -45,7 +51,7 @@ export default function DocumentsTab({ onRefresh }) {
     setConfirmingDelete(false);
     if (!docId) { setSelectedDoc(null); return undefined; }
     let active = true;
-    api.getDigitalTwinDocument(docId, { silent: true })
+    getDigitalTwinDocument(docId, { silent: true })
       .then((doc) => {
         if (!active) return;
         setSelectedDoc(doc);
@@ -71,7 +77,7 @@ export default function DocumentsTab({ onRefresh }) {
     setSaving(true);
     // request() already toasted a failure; release Save either way so the unsaved
     // edit can be retried instead of stranding the editor behind a disabled button.
-    const saved = await api.updateSoulDocument(selectedDoc.id, { content: editContent }).then((doc) => doc || {}, () => null);
+    const saved = await updateSoulDocument(selectedDoc.id, { content: editContent }).then((doc) => doc || {}, () => null);
     setSaving(false);
     if (!saved) return;
     toast.success('Document saved');
@@ -82,14 +88,14 @@ export default function DocumentsTab({ onRefresh }) {
   };
 
   const handleToggleEnabled = async (doc, enabled) => {
-    const saved = await api.updateSoulDocument(doc.id, { enabled });
+    const saved = await updateSoulDocument(doc.id, { enabled });
     toast.success(enabled ? 'Document enabled' : 'Document disabled');
     applyUpdated(doc, saved?.id ? saved : { enabled });
     onRefresh();
   };
 
   const handleWeightChange = async (doc, weight) => {
-    const saved = await api.updateSoulDocument(doc.id, { weight });
+    const saved = await updateSoulDocument(doc.id, { weight });
     toast.success(`Weight set to ${weight}`);
     applyUpdated(doc, saved?.id ? saved : { weight });
     onRefresh();
@@ -104,7 +110,7 @@ export default function DocumentsTab({ onRefresh }) {
     const filename = newDoc.filename.endsWith('.md') ? newDoc.filename : `${newDoc.filename}.md`;
 
     setSaving(true);
-    const created = await api.createSoulDocument({
+    const created = await createSoulDocument({
       ...newDoc,
       filename
     }).then(() => true, () => false);
@@ -118,7 +124,7 @@ export default function DocumentsTab({ onRefresh }) {
   };
 
   const handleDelete = async (id) => {
-    await api.deleteSoulDocument(id);
+    await deleteSoulDocument(id);
     toast.success('Document deleted');
     setConfirmingDelete(false);
     setRemovingId(id);

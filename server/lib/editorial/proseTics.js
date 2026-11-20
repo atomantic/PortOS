@@ -198,7 +198,7 @@ function toWordSet(words) {
  * and `tokenizeWords(text).length` is the prose word count every density rate,
  * rhythm metric and slop score shares. It differs on purpose from
  * `lib/textUtils.js#countWords`, the whitespace count the rest of the app shows
- * readers. `proseTics.guard.test.js` fails the suite when the character class is
+ * readers. `server/test/guards/modules/proseTics.test.js` fails the suite when the character class is
  * re-spelled anywhere else under server/.
  *
  * @param {string} text

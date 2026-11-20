@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import BulkTargetPicker from './BulkTargetPicker.jsx';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn(),
   createMediaCollection: vi.fn(),
 }));

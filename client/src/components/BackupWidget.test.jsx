@@ -18,7 +18,7 @@ const {
   mockToast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getBackupStatus: (...args) => mockGetBackupStatus(...args),
   getBackupSnapshots: (...args) => mockGetBackupSnapshots(...args),
   downloadBackupSnapshot: (...args) => mockDownloadBackupSnapshot(...args),

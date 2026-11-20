@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { createVaultRecord, updateVaultRecord } from '../../services/api';
+import { createVaultRecord, updateVaultRecord } from '../../services/apiPrivacy.js';
 import toast from '../ui/Toast';
 import { VAULT_TYPES, VAULT_STATUSES, SENSITIVE_TYPES, INPUT_CLS } from './constants';
 

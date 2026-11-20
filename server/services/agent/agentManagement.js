@@ -120,7 +120,7 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
 // pause bookkeeping whenever a task leaves `blocked`, but the resumed run also has
 // to be POINTED at the branch/worktree the paused run left behind — and resolving
 // that needs the paused agent's record. `cosTaskStore.js` cannot import this module
-// (static cycle, see `serviceImportCycles.guard.test.js`), so it reaches these two steps
+// (static cycle, see `server/test/guards/modules/serviceImportCycles.test.js`), so it reaches these two steps
 // through the registration below, the way `sharing/recordEvents.js` registers its
 // subscription adapter. That is what makes the Tasks-tab status toggle and
 // `reviveBlockedTask` resume in place instead of spawning clean, not just the

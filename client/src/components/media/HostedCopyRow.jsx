@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CloudOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
-import { deleteImageHostedCopy, deleteVideoHostedCopy } from '../../services/api';
+import { deleteImageHostedCopy, deleteVideoHostedCopy } from '../../services/apiImageVideo.js';
 import { formatDateTime } from '../../utils/formatters';
 
 // The provider-side id a render was made under. Runway and fal.ai have a delete call (`deletable`); the server

@@ -50,7 +50,7 @@ export const REPO_ROOT = resolve(HERE, '..');
 
 /**
  * `@babel/parser` is a devDependency of the `server` workspace, not of the
- * repo root — CI installs `server/` and `client/` and never the
+ * repo root — CI installs `server/`, `client/`, and `autofixer/` and never the
  * root, so a bare `import '@babel/parser'` from `scripts/` would resolve
  * against the (pm2-only) root tree and fail. Anchoring the resolver at
  * `server/package.json` finds it under both plain Node and Vitest.

@@ -2,17 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostSessions: vi.fn(),
   getPostStats: vi.fn(),
-  // useUserTimezone (via the range-floor day key) reads getSettings; pin to UTC.
+}));
+vi.mock('../../../services/apiSystem.js', () => ({
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 // recharts ResponsiveContainer renders nothing at 0-width in jsdom; the
 // assertions below target the non-chart DOM (stat cards + drill breakdown).
 import PostHistory from './PostHistory';
-import { getPostSessions, getPostStats } from '../../../services/api';
+import { getPostSessions, getPostStats } from '../../../services/apiMeatspace.js';
 
 // Surfaces the current router path so navigation-on-row-click can be asserted —
 // rows now open the deep-linkable /post/session/:id detail (issue #2098) rather

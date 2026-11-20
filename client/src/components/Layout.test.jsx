@@ -113,7 +113,6 @@ import { PaddedMain } from './PageShell';
 import { RECONNECTING_PILL_DELAY_MS } from './SocketReconnectingPill.jsx';
 import {
   NAV_PRESENTATION,
-  NAV_DESTINATION_PRESENTATION,
   SECTIONS_BEFORE_GOALS,
   SECTIONS_AFTER_GOALS,
   SECTIONS_BELOW_MORE,
@@ -189,7 +188,6 @@ describe('Layout — manifest-derived sidebar structure', () => {
   });
 
   it('keeps NAV_PRESENTATION presentation-only and keyed to live manifest paths', () => {
-    expect(Object.keys(NAV_PRESENTATION).length).toBeLessThanOrEqual(80);
     const manifestPaths = new Set(NAV_COMMANDS.map((command) => command.path));
     expect(Object.keys(NAV_PRESENTATION).filter((path) => !manifestPaths.has(path))).toEqual([]);
     for (const presentation of Object.values(NAV_PRESENTATION)) {
@@ -198,6 +196,26 @@ describe('Layout — manifest-derived sidebar structure', () => {
       expect(presentation).not.toHaveProperty('section');
       expect(presentation).not.toHaveProperty('feature');
       expect(presentation.icon).toBeTruthy();
+    }
+  });
+
+  // Regression guard: a presentation-layer filter once hid whole groups of
+  // destinations (Chief of Staff, Comms and Settings tabs) from the sidebar
+  // while their routes and icons still existed. Every destination with an
+  // icon must render as a sidebar link once its sections are expanded.
+  it('renders a sidebar link for every destination in NAV_PRESENTATION', async () => {
+    await renderLayout('/');
+    let expand;
+    while ((expand = screen.queryAllByRole('button', { name: /^Expand / })).length > 0) {
+      expand.forEach((button) => fireEvent.click(button));
+      await act(async () => {});
+    }
+    const hrefs = new Set(screen.getAllByRole('link').map((link) => link.getAttribute('href')));
+    expect(Object.keys(NAV_PRESENTATION).filter((path) => !hrefs.has(path))).toEqual([]);
+    // Hub tab pages stay in the sidebar too, even though their hub also shows
+    // them as in-page tabs.
+    for (const path of ['/cos/tasks', '/cos/agents', '/messages/inbox', '/settings/features', '/brain/inbox']) {
+      expect(hrefs.has(path), `sidebar is missing ${path}`).toBe(true);
     }
   });
 
@@ -210,7 +228,7 @@ describe('Layout — manifest-derived sidebar structure', () => {
       '/openclaw', '/prompts', '/ai/presets', '/ai/harnesses', '/ai/services'
     ];
     for (const p of settingsPaths) {
-      expect(NAV_DESTINATION_PRESENTATION[p], `missing destination icon for settings path ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for settings path ${p}`).toBeDefined();
     }
 
     const digitalTwinTabs = [
@@ -221,13 +239,13 @@ describe('Layout — manifest-derived sidebar structure', () => {
     ];
     for (const tab of digitalTwinTabs) {
       const p = `/digital-twin/${tab}`;
-      expect(NAV_DESTINATION_PRESENTATION[p], `missing destination icon for digital twin tab ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for digital twin tab ${p}`).toBeDefined();
     }
 
     const messageTabs = ['inbox', 'drafts', 'imessage', 'signal', 'beeper', 'contacts', 'sync', 'config'];
     for (const tab of messageTabs) {
       const p = `/messages/${tab}`;
-      expect(NAV_DESTINATION_PRESENTATION[p], `missing destination icon for message tab ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for message tab ${p}`).toBeDefined();
     }
   });
 });
@@ -376,14 +394,11 @@ describe('Layout — instance feature gating', () => {
     expect(screen.getByRole('button', { name: 'POST' })).toBeTruthy();
   });
 
-  it('uses the Settings hub for its local tabs and opens General from that row', async () => {
+  it('shows Settings > Features in the primary navigation', async () => {
     await renderLayout('/settings/features');
 
-    const settings = screen.getByRole('button', { name: 'Settings', exact: true });
-    expect(settings).toHaveAttribute('aria-current', 'true');
-    expect(screen.queryByRole('link', { name: 'Features' })).toBeNull();
-    fireEvent.click(settings);
-    expect(screen.getByTestId('current-path')).toHaveTextContent('/settings/general');
+    expect(screen.getByRole('button', { name: 'Settings', exact: true })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('link', { name: 'Features' })).toHaveAttribute('href', '/settings/features');
   });
 
   it('shows and hides Eidoverse with its instance feature flag', async () => {
@@ -440,16 +455,27 @@ describe('Layout — instance feature gating', () => {
   });
 });
 
-describe('Layout — Comms hub', () => {
-  it('highlights Comms on a message tab and keeps standalone destinations in the sidebar', async () => {
+describe('Layout — Comms section', () => {
+  it('lists every messaging tab alongside the standalone Comms destinations', async () => {
     await renderLayout('/messages/beeper');
 
     expect(screen.getByRole('button', { name: 'Comms', exact: true })).toHaveAttribute('aria-current', 'true');
-    for (const label of ['Beeper', 'Signal', 'iMessage', 'Inbox']) {
-      expect(screen.queryByRole('link', { name: label })).toBeNull();
+    for (const [label, href] of [['Beeper', '/messages/beeper'], ['Signal', '/messages/signal'], ['iMessage', '/messages/imessage'], ['Inbox', '/messages/inbox']]) {
+      expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', href);
     }
     expect(screen.getByRole('link', { name: 'Stacker News' })).toHaveAttribute('href', '/stacker-news');
     expect(screen.getByRole('link', { name: 'X', exact: true })).toHaveAttribute('href', '/x');
+  });
+
+  it('drops only the Beeper row when the beeper feature is off, keeping the rest of Comms', async () => {
+    featureMock.features = allFeaturesOn()
+      .map((f) => (f.id === 'beeper' ? { ...f, enabled: false } : f));
+
+    await renderLayout('/messages/inbox');
+
+    expect(screen.queryByRole('link', { name: 'Beeper' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Signal' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Inbox' })).toBeTruthy();
   });
 });
 
@@ -683,16 +709,20 @@ describe('Layout — dynamic third-level navigation', () => {
     expect(screen.queryByRole('link', { name: 'Example Video' })).toBeNull();
   });
 
-  it('opens Create on a catalog record and shows the studios without repeating Catalog views', async () => {
+  it('opens Create on a catalog record and nests hub pages under their hub', async () => {
     await renderLayout('/casting/example-cast-member');
 
     expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catalog' })).toHaveClass('text-port-accent');
     expect(screen.getByRole('link', { name: 'Media Studio' })).toHaveAttribute('href', '/create/media');
     expect(screen.getByRole('link', { name: 'Story Studio' })).toHaveAttribute('href', '/create/story');
-    for (const label of ['Casting', 'Environments', 'Objects']) {
-      expect(screen.queryByRole('link', { name: label })).toBeNull();
-    }
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
+    expect(screen.getByRole('link', { name: 'Writers Room' })).toHaveAttribute('href', '/writers-room');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Catalog' }));
+    expect(screen.queryByRole('link', { name: 'Casting' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Catalog' }));
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
   });
 
   it('updates dynamic apps navigation when apps:changed is emitted', async () => {
@@ -746,7 +776,7 @@ describe('Layout — sidebar section grouping', () => {
     const UNGROUPED_SECTIONS = new Set(['Main', 'Goals']);
     const sectionByPath = new Map(NAV_COMMANDS.map((command) => [command.path, command.section]));
     const presented = new Set(
-      Object.keys(NAV_DESTINATION_PRESENTATION)
+      Object.keys(NAV_PRESENTATION)
         .map((path) => sectionByPath.get(path))
         .filter((section) => section && !UNGROUPED_SECTIONS.has(section)),
     );

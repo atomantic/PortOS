@@ -1,6 +1,6 @@
 import { Network, Edit3, Check, X, Database, Brain, CheckCircle2, Clock, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
-import { updateSelfInstance } from '../../services/api';
+import { updateSelfInstance } from '../../services/apiSystem.js';
 import { SNAPSHOT_CATEGORIES } from './syncCategoryMeta';
 
 export default function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, editing, setEditing, name, setName }) {

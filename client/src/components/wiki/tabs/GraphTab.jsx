@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import * as api from '../../../services/api';
+import { getNotesVaultGraph } from '../../../services/apiNotes.js';
 import { RefreshCw, Network, ZoomIn, ZoomOut } from 'lucide-react';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -27,7 +27,7 @@ export default function GraphTab({ vaultId }) {
   const loadGraph = useCallback(async () => {
     const isCurrent = beginLoad();
     setLoading(true);
-    const data = await api.getNotesVaultGraph(vaultId).catch(() => null);
+    const data = await getNotesVaultGraph(vaultId).catch(() => null);
     if (!isCurrent()) return;
     if (data && !data.error) {
       setGraphData(data);

@@ -7,9 +7,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  getReaderPanel, getReaderPanelStatus,
-  runReaderPanel, cancelReaderPanel, readerPanelSseUrl,
-} from '../services/api';
+  getReaderPanel,
+  getReaderPanelStatus,
+  runReaderPanel,
+  cancelReaderPanel,
+  readerPanelSseUrl,
+} from '../services/apiPipeline.js';
 import toast from '../components/ui/Toast';
 import { usePipelineProgress } from './usePipelineProgress';
 

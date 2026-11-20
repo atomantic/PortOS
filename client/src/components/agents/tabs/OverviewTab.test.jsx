@@ -2,16 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAccounts.js', () => ({
   getPlatformAccounts: vi.fn(),
-  getProviders: vi.fn(),
-  getAgentActivityStats: vi.fn(),
   getAgentRateLimits: vi.fn(),
   testPlatformAccount: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
+  getAgentActivityStats: vi.fn(),
+}));
+vi.mock('../../../services/apiPersonalities.js', () => ({
   updateAgentPersonality: vi.fn(),
 }));
 
-import { getPlatformAccounts, getProviders, getAgentActivityStats, getAgentRateLimits, testPlatformAccount } from '../../../services/api';
+import { getPlatformAccounts, getAgentRateLimits, testPlatformAccount } from '../../../services/apiAccounts.js';
+import { getProviders } from '../../../services/apiProviders.js';
+import { getAgentActivityStats } from '../../../services/apiAgents.js';
 import OverviewTab from './OverviewTab';
 
 const providers = [

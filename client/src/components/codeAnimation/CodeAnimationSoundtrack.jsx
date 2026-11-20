@@ -7,7 +7,8 @@ import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
-import { generateCodeAnimationSoundtrack, listMusicEngines, previewMusicPrompt } from '../../services/api';
+import { generateCodeAnimationSoundtrack } from '../../services/apiCodeAnimation.js';
+import { listMusicEngines, previewMusicPrompt } from '../../services/apiMusic.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 
 // The last mode (music model or coding model) and each mode's picks, reused for

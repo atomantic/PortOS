@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPrivacy.js', () => ({
   createPrivacyOrg: vi.fn(),
   updatePrivacyOrg: vi.fn(),
   getOrgHoldings: vi.fn(),
   setOrgHoldings: vi.fn(),
+}));
+vi.mock('../../services/apiDigitalTwin.js', () => ({
   getSocialAccounts: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+import { getSocialAccounts } from '../../services/apiDigitalTwin.js';
+import { updatePrivacyOrg, setOrgHoldings, getOrgHoldings } from '../../services/apiPrivacy.js';
 import OrgDrawer from './OrgDrawer';
 
 const ORG = { id: 'org-1', name: 'Acme Bank', category: 'bank' };
@@ -22,9 +25,9 @@ const renderDrawer = () => {
 };
 
 beforeEach(() => {
-  api.getSocialAccounts.mockResolvedValue({ accounts: [] });
-  api.updatePrivacyOrg.mockImplementation(async (id, payload) => ({ id, ...payload }));
-  api.setOrgHoldings.mockResolvedValue([]);
+  getSocialAccounts.mockResolvedValue({ accounts: [] });
+  updatePrivacyOrg.mockImplementation(async (id, payload) => ({ id, ...payload }));
+  setOrgHoldings.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -34,20 +37,20 @@ afterEach(() => {
 
 describe('OrgDrawer holdings (replace-set)', () => {
   it('never erases stored holdings when their read failed', async () => {
-    api.getOrgHoldings.mockRejectedValueOnce(new Error('boom'));
+    getOrgHoldings.mockRejectedValueOnce(new Error('boom'));
     const { onSaved } = renderDrawer();
 
     expect(await screen.findByText(/Could not load this organization's holdings/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(api.updatePrivacyOrg).toHaveBeenCalledWith('org-1', expect.objectContaining({ name: 'Acme Bank' }), { silent: true });
-    expect(api.setOrgHoldings).not.toHaveBeenCalled();
+    expect(updatePrivacyOrg).toHaveBeenCalledWith('org-1', expect.objectContaining({ name: 'Acme Bank' }), { silent: true });
+    expect(setOrgHoldings).not.toHaveBeenCalled();
   });
 
   it('writes the loaded holdings once a retry succeeds', async () => {
-    api.getOrgHoldings.mockRejectedValueOnce(new Error('boom'));
-    api.getOrgHoldings.mockResolvedValue([{ vaultRecordId: 'v1' }]);
+    getOrgHoldings.mockRejectedValueOnce(new Error('boom'));
+    getOrgHoldings.mockResolvedValue([{ vaultRecordId: 'v1' }]);
     const { onSaved } = renderDrawer();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
@@ -55,15 +58,15 @@ describe('OrgDrawer holdings (replace-set)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(api.setOrgHoldings).toHaveBeenCalledWith('org-1', [{ vaultRecordId: 'v1' }], { silent: true });
+    expect(setOrgHoldings).toHaveBeenCalledWith('org-1', [{ vaultRecordId: 'v1' }], { silent: true });
   });
 });
 
 describe('OrgDrawer linked social account picker', () => {
   it('shows a retryable error, not an unavailable link, when the account read failed', async () => {
-    api.getOrgHoldings.mockResolvedValue([]);
-    api.getSocialAccounts.mockRejectedValueOnce(new Error('twin down'));
-    api.getSocialAccounts.mockResolvedValue({ accounts: [{ id: 'acct-1', platform: 'github', username: 'alice' }] });
+    getOrgHoldings.mockResolvedValue([]);
+    getSocialAccounts.mockRejectedValueOnce(new Error('twin down'));
+    getSocialAccounts.mockResolvedValue({ accounts: [{ id: 'acct-1', platform: 'github', username: 'alice' }] });
     render(<OrgDrawer open org={{ ...ORG, socialAccountId: 'acct-1' }} vaultRecords={VAULT} onClose={() => {}} onSaved={() => {}} />);
 
     expect(await screen.findByText(/Could not load Digital Twin social accounts/)).toBeInTheDocument();

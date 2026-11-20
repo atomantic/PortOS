@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Check, ArrowLeftRight, CheckCircle2, AlertCircle, Clock, RefreshCcw, ChevronDown, ChevronRight, Lock, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
-import { updatePeer, reciprocatePeer, getPeerFullSyncCoverage } from '../../services/api';
+import { updatePeer, reciprocatePeer, getPeerFullSyncCoverage } from '../../services/apiSystem.js';
 import { pluralize } from '../../lib/textUtils';
 import { MEDIA_COLLECTION_KEYS, MEDIA_SYNC_MODE_OPTIONS, SYNC_CATEGORY_META, isCategoryOn } from './syncCategoryMeta';
 

@@ -32,7 +32,7 @@ import {
   measureClosures,
   measureWorkingTree,
 } from '../../scripts/lib/importGrowth.js';
-import { importSpecifiersFromSource } from '../../scripts/lib/importReach.js';
+import { moduleSpecifiers } from '../../scripts/lib/moduleGraph.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -136,7 +136,7 @@ const SELECTION_CUTS = [
 ];
 
 const importTargets = (entry) => {
-  const { static: eager, dynamic: lazy } = importSpecifiersFromSource(readFileSync(abs(entry), 'utf-8'));
+  const { statics: eager, deferred: lazy } = moduleSpecifiers(readFileSync(abs(entry), 'utf-8'), entry);
   return [...eager, ...lazy].filter((spec) => spec.startsWith('.'))
     .map((spec) => posix.normalize(posix.join(posix.dirname(entry), spec)));
 };

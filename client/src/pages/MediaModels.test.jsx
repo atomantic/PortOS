@@ -18,7 +18,7 @@ import {
   listMediaModelRegistry,
   deleteCachedModel,
   removeCustomMediaModel,
-} from '../services/api';
+} from '../services/apiImageVideo.js';
 
 const { textEncoderDownloadId, textEncoderDownloads } = vi.hoisted(() => {
   const prefix = '__text_encoder_option__:';
@@ -35,7 +35,7 @@ const { textEncoderDownloadId, textEncoderDownloads } = vi.hoisted(() => {
   };
 });
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   setMediaModelEnabled: vi.fn(),
   requestMediaModelSupport: vi.fn(),
   listCachedModels: vi.fn(),

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import Modal from '../../ui/Modal';
 import { Maximize2, X } from 'lucide-react';
-import { applyProcessAction } from '../../../services/api';
+import { applyProcessAction } from '../../../services/apiCommands.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import ProcessLogLines, { LogStreamBadge } from '../../ui/ProcessLogLines';

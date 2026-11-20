@@ -46,7 +46,6 @@ execFileSync(process.execPath, [join(__dirname, 'setup-db.js')], {
 // Stop and delete existing PortOS processes (ignore errors if none exist)
 try { pm2('stop', ECO); } catch {}
 try { pm2('delete', ECO); } catch {}
-
 try { pm2('delete', 'portos-autofixer-ui', '--silent'); } catch {}
 
 // Brief pause for port release

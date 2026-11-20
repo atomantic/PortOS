@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiBrain.js', () => ({
   createBrainBucket: vi.fn(),
   updateBrainBucket: vi.fn(),
   deleteBrainBucket: vi.fn(),
-  reorderBrainBuckets: vi.fn()
+  reorderBrainBuckets: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
-import * as api from '../../../services/api';
+import { createBrainBucket } from '../../../services/apiBrain.js';
 import BucketBoard from './BucketBoard';
 
 const buckets = [
@@ -65,7 +65,7 @@ describe('BucketBoard', () => {
   });
 
   it('creates a new bucket through the inline form', async () => {
-    api.createBrainBucket.mockResolvedValue({ id: 'b3', name: 'Reading', color: 'accent', order: 2 });
+    createBrainBucket.mockResolvedValue({ id: 'b3', name: 'Reading', color: 'accent', order: 2 });
     const setBuckets = vi.fn();
     render(
       <BucketBoard
@@ -81,7 +81,7 @@ describe('BucketBoard', () => {
     fireEvent.change(screen.getByLabelText('New bucket name'), { target: { value: 'Reading' } });
     fireEvent.click(screen.getByText('Create'));
 
-    await waitFor(() => expect(api.createBrainBucket).toHaveBeenCalledWith({ name: 'Reading' }, { silent: true }));
+    await waitFor(() => expect(createBrainBucket).toHaveBeenCalledWith({ name: 'Reading' }, { silent: true }));
     expect(setBuckets).toHaveBeenCalled();
   });
 });

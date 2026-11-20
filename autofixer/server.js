@@ -1,7 +1,5 @@
 import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createMutex } from '../server/lib/asyncMutex.js';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -25,8 +23,9 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { createStagedFixStore } from './stagedFixes.js';
 import { startAutofixerUi } from './ui.js';
+import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
 // fix agent runs restricted (claude without Bash, or codex's sandbox) in an
@@ -35,7 +34,9 @@ import { startAutofixerUi } from './ui.js';
 // preserves this guarded PATH into the agent's env.
 Object.assign(process.env, agentGuardEnv());
 
-// Paths not shared with ui.js
+const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm2 });
+
+// Monitor paths
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
@@ -48,13 +49,10 @@ const MAX_DIFF_BYTES = 200 * 1024;
 const recentlyFixed = new Map();
 const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
-// Session publication and index updates may overlap shutdown. Patch promotion
-// and rollback share a separate lock with the dashboard's staged fix actions.
-const withHistoryWrite = createMutex();
-const withFixMutation = createMutex();
-let stopUi;
 let checkTimer = null;
 let shuttingDown = false;
+let stopUi;
+let historyTail = Promise.resolve();
 // The repair in flight, so a shutdown can record it as interrupted.
 let activeRepair = null;
 
@@ -166,7 +164,9 @@ async function saveIndex(index) {
 }
 
 function saveSession(sessionId, prompt, output, metadata, patch) {
-  return withHistoryWrite(() => writeSession(sessionId, prompt, output, metadata, patch));
+  const write = historyTail.then(() => writeSession(sessionId, prompt, output, metadata, patch));
+  historyTail = write.catch(() => {});
+  return write;
 }
 
 async function writeSession(sessionId, prompt, output, metadata, patch) {
@@ -182,7 +182,7 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
     await writeFile(join(sessionDir, 'fix.patch'), patch);
   }
 
-  // Publish staged metadata only after all of its artifacts are readable.
+  // Publish metadata only once the patch is readable.
   const metadataPath = join(sessionDir, 'metadata.json');
   await writeFile(`${metadataPath}.tmp`, JSON.stringify(metadata, null, 2));
   await rename(`${metadataPath}.tmp`, metadataPath);
@@ -270,8 +270,8 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const verifyCommand = typeof autofixerCfg.verifyCommand === 'string' ? autofixerCfg.verifyCommand.trim() : '';
 
   // Single completion path — write the session record + return the result.
-  const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }, { settledPromotion = false } = {}) => {
-    if (shuttingDown && !settledPromotion) return;
+  const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }, promotionStarted = false) => {
+    if (shuttingDown && !promotionStarted) return { success: false, sessionId };
     const endTime = new Date().toISOString();
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
@@ -330,10 +330,10 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     console.error(`🛑 [Autofixer] Could not isolate ${processName}: ${wt.error}`);
     return finalize({ success: false, exitCode: -1, error: `worktree isolation failed: ${wt.error}`, extra: { isolated: false } });
   }
-  if (shuttingDown) return;
   const worktreePath = wt.path;
   activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
   const workspaceHold = await repairWorkspaceHold(picked.mode, app.repoPath, worktreePath);
+  if (shuttingDown) return;
   if (workspaceHold) {
     console.warn(`🛑 [Autofixer] ${workspaceHold}`);
     await removeWorktree(app.repoPath, worktreePath);
@@ -345,7 +345,6 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
 
   console.log(`🤖 [Autofixer] Repairing ${processName} in isolated worktree via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''} [${picked.mode}]`);
 
-  if (shuttingDown) return;
   const result = await runCliProviderPrompt({
     provider: picked.provider,
     model: picked.model,
@@ -367,6 +366,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // Collect the agent's edits as a diff BEFORE tearing down the worktree. A
   // spawn failure / timeout can leave a partial edit — don't promote or stage
   // work from an agent that didn't finish cleanly.
+  if (shuttingDown) return;
   const diff = await collectWorktreeDiff(worktreePath);
   const agentOk = !result.error && result.partial === false && result.exitCode === 0;
   // The live env's provider-auth values (incl. runner-injected provider.envVars
@@ -393,10 +393,13 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   }
   const verifyOk = !verifyCommand || verify?.ok;
 
+  // The worktree is disposable once its diff and verification result are in memory.
+  await removeWorktree(app.repoPath, worktreePath);
+  if (shuttingDown) return;
+
   const producedFix = validation.ok && verifyOk;
-  const staged = producedFix && !autoPromote;
-  const finish = ({ promoted = false, promotionError = null, settledPromotion = false } = {}) => finalize({
-    success: producedFix && (staged || promoted),
+  const completeRepair = (promoted, staged, promotionError, promotionStarted = false) => finalize({
+    success: producedFix && (autoPromote ? promoted : true),
     cooldown: producedFix,
     exitCode: result.exitCode ?? -1,
     error: result.error || promotionError || (!validation.ok ? validation.reason : null) || null,
@@ -410,38 +413,33 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       ...(validation.ok ? {} : { diffRejectedReason: validation.reason }),
       ...(verify ? { verify: { ran: true, ok: verify.ok, exitCode: verify.code, contained: verify.contained } } : { verify: { ran: false } }),
     },
-  }, { settledPromotion });
+  }, promotionStarted);
 
-  try {
-    // Keep the final session write inside the promotion lock so shutdown cannot
-    // replace an already-applied fix with an interrupted record.
-    if (producedFix && autoPromote) {
-      return await withFixMutation(async () => {
-        if (shuttingDown) return;
-        const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
-        if (!applied.ok) {
-          console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
-          return finish({ promotionError: applied.error, settledPromotion: true });
-        }
-        const restart = await execPm2(['restart', processName]).catch(error => ({ error: error.message }));
-        if (restart.error) {
-          const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
-          console.error(`❌ [Autofixer] Restart failed for ${processName}: ${restart.error}${reverted.error ? `; rollback failed: ${reverted.error}` : '; patch rolled back'}`);
-          return finish({ promotionError: restart.error, settledPromotion: true });
-        }
-        console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
-        return finish({ promoted: true, settledPromotion: true });
-      });
-    }
-    if (staged) {
-      console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
-    } else {
-      console.warn(`⚠️ [Autofixer] Fix not promotable: ${validation.reason || (verify && `verify exit ${verify.code}`) || 'unknown'}`);
-    }
-    return await finish();
-  } finally {
-    await removeWorktree(app.repoPath, worktreePath);
+  if (!producedFix) {
+    console.warn(`⚠️ [Autofixer] Fix not promotable: ${validation.reason || (verify && `verify exit ${verify.code}`) || 'unknown'}`);
+    return completeRepair(false, false, null);
   }
+  if (!autoPromote) {
+    console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
+    return completeRepair(false, true, null);
+  }
+
+  return stagedFixes.serialize(async () => {
+    const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
+    if (!applied.ok) {
+      console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
+      return completeRepair(false, false, applied.error, true);
+    }
+    const restart = await execPm2(['restart', processName]).catch(error => ({ error: error.message }));
+    if (restart.error) {
+      const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
+      const error = `${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`;
+      console.error(`❌ [Autofixer] Restart failed for ${processName}: ${error}`);
+      return completeRepair(false, false, error, true);
+    }
+    console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+    return completeRepair(true, false, null, true);
+  });
 }
 
 // Main check function
@@ -474,7 +472,9 @@ async function checkAndFixProcesses() {
 
   const crashedProcesses = pm2List.filter(proc => {
     const status = proc.pm2_env?.status;
-    return status === 'errored' && monitoredProcesses.includes(proc.name);
+    // The combined process is the watchdog. It cannot repair itself, and
+    // awaiting its own PM2 restart would block the shutdown drain.
+    return proc.name !== 'portos-autofixer' && status === 'errored' && monitoredProcesses.includes(proc.name);
   });
 
   if (crashedProcesses.length === 0) {
@@ -502,7 +502,7 @@ async function checkAndFixProcesses() {
     console.log(`🔧 [Autofixer] Attempting to fix ${processName} (${app.name})...`);
 
     const { errLogs, outLogs } = await getProcessLogs(processName);
-    await fixProcess(processName, app, errLogs, outLogs);
+    if (!shuttingDown) await fixProcess(processName, app, errLogs, outLogs);
   }
 }
 
@@ -520,55 +520,41 @@ function scheduleNextCheck() {
 // loop runs outside a request lifecycle and must keep retrying autonomously.
 async function runCheckCycle() {
   try {
-    if (!stopUi) await startDashboard();
-    if (!shuttingDown) await checkAndFixProcesses();
+    if (!stopUi) {
+      // Keep monitoring when the dashboard port is busy. The next cycle also
+      // retries the listener, so resolving the port conflict needs no restart.
+      stopUi = await startAutofixerUi(stagedFixes).catch(error => {
+        console.error(`❌ [Autofixer] Dashboard startup failed: ${error.message}`);
+        return null;
+      });
+      if (shuttingDown) {
+        stopUi?.();
+        return;
+      }
+    }
+    await checkAndFixProcesses();
   } catch (error) {
-    console.error(`❌ [Autofixer] Process check failed: ${error?.message || String(error)}`);
+    if (!shuttingDown) console.error(`❌ [Autofixer] Process check failed: ${error?.message || String(error)}`);
   } finally {
     scheduleNextCheck();
   }
 }
 
-// An updater already running at the previous revision can pull this code
-// before deleting the old ecosystem. Retire its leftover sibling before binding.
-async function retireLegacyUi() {
-  if (process.env.pm_id == null) return;
-  const legacyScript = fileURLToPath(new URL('./ui.js', import.meta.url));
-  const processes = await listProcessesStrict();
-  const legacyUi = processes?.find(proc => proc.name === 'portos-autofixer-ui'
-    && Number.isInteger(proc.pm_id) && proc.pm2_env?.pm_exec_path === legacyScript);
-  if (!legacyUi) return;
-  await execPm2(['delete', String(legacyUi.pm_id)]);
-  await execPm2(['save']);
-}
-
-async function startDashboard() {
-  try {
-    await retireLegacyUi();
-    if (shuttingDown) return;
-    stopUi = await startAutofixerUi({
-      withFixMutation: (mutate) => withFixMutation(() => shuttingDown
-        ? { status: 503, error: 'Autofixer is shutting down' }
-        : mutate()),
-    });
-    if (shuttingDown) stopUi();
-  } catch (error) {
-    console.error(`❌ [Autofixer UI] Could not start dashboard: ${error.message}. Retrying on the next monitor cycle.`);
-  }
-}
-
+// Main loop
 async function main() {
   console.log(`🚀 [Autofixer] Starting PortOS Autofixer daemon`);
   console.log(`⏱️ [Autofixer] Check interval: ${CHECK_INTERVAL / 60000} minutes`);
   console.log(`⏳ [Autofixer] Fix cooldown: ${FIX_COOLDOWN / 60000} minutes per process`);
 
   await ensureHistoryDir();
+  if (shuttingDown) return;
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
   });
 
+  if (shuttingDown) return;
   // Run immediately, then wait a full interval after each pass completes.
-  if (!shuttingDown) await runCheckCycle();
+  await runCheckCycle();
 }
 
 // Graceful shutdown
@@ -585,16 +571,14 @@ async function shutdown() {
   // Stop the in-flight provider (its detached group) and record the attempt.
   // Worktree removal is left to the next startup's sweep, the guarantee.
   signalDetachedGroups('SIGTERM');
-  // An accepted staged apply can still be between patch, restart, and final
-  // disposition. Drain it while the dashboard refuses new mutations.
-  await withFixMutation(() => {});
+  await stagedFixes.stopMutations();
   if (activeRepair) {
     const { outputBuffer, ...repair } = activeRepair;
     await recordInterrupted({ ...repair, output: outputBuffer.join('') }).catch((err) => {
       console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
     });
   }
-  await withHistoryWrite(() => {});
+  await historyTail;
   process.exit(0);
 }
 

@@ -20,7 +20,19 @@ const api = vi.hoisted(() => ({
   deleteNote: vi.fn(),
   searchNotes: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiNotes.js', () => ({
+  getNotesVaults: api.getNotesVaults,
+  detectNotesVaults: api.detectNotesVaults,
+  scanNotesVault: api.scanNotesVault,
+  getNotesVaultFolders: api.getNotesVaultFolders,
+  getNotesVaultTags: api.getNotesVaultTags,
+  addNotesVault: api.addNotesVault,
+  getNote: api.getNote,
+  updateNote: api.updateNote,
+  createNote: api.createNote,
+  deleteNote: api.deleteNote,
+  searchNotes: api.searchNotes,
+}));
 
 const NotesTab = (await import('./NotesTab')).default;
 

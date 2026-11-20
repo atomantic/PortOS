@@ -1,24 +1,24 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiGoals.js', () => ({
   getGoals: vi.fn(),
   getLongevity: vi.fn(),
   deriveLongevity: vi.fn(),
 }));
 
-import * as api from '../../../services/api';
+import { getGoals, getLongevity, deriveLongevity } from '../../../services/apiGoals.js';
 import GoalsTab from './GoalsTab.jsx';
 
 describe('GoalsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getGoals.mockResolvedValue({ birthDate: '1990-01-01', goals: [] });
-    api.getLongevity.mockResolvedValue(null);
+    getGoals.mockResolvedValue({ birthDate: '1990-01-01', goals: [] });
+    getLongevity.mockResolvedValue(null);
   });
 
   it('re-enables longevity derivation after the request fails', async () => {
-    api.deriveLongevity.mockRejectedValueOnce(new Error('derive unavailable'));
+    deriveLongevity.mockRejectedValueOnce(new Error('derive unavailable'));
 
     render(<GoalsTab />);
     const derive = await screen.findByRole('button', { name: 'Re-derive' });
@@ -30,7 +30,7 @@ describe('GoalsTab', () => {
   });
 
   it('distinguishes a failed goals read from a successful empty response', async () => {
-    api.getGoals.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ goals: [] });
+    getGoals.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ goals: [] });
     render(<GoalsTab />);
 
     expect(await screen.findByText('Could not load goals.')).toBeInTheDocument();

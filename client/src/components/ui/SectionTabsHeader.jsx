@@ -2,7 +2,7 @@ import { useLocation } from 'react-router';
 import { getNavSectionForPath, getSectionNavTabs } from '../../../../server/lib/navManifest.js';
 import RouteTabsHeader from './RouteTabsHeader';
 import { buildSectionNavTabs } from '../../lib/pageNavTabs.js';
-import { NAV_DESTINATION_PRESENTATION } from '../../lib/navPresentation.js';
+import { NAV_PRESENTATION } from '../../lib/navPresentation.js';
 
 /**
  * Shared section child navigation.
@@ -22,7 +22,7 @@ export default function SectionTabsHeader({ activeTab, fallbackSection, tabs }) 
 
   return (
     <RouteTabsHeader
-      tabs={buildSectionNavTabs(sectionTabs, NAV_DESTINATION_PRESENTATION, section)}
+      tabs={buildSectionNavTabs(sectionTabs, NAV_PRESENTATION, section)}
       activeTab={activeTab}
       ariaLabel={`${section} sections`}
     />

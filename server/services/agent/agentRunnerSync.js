@@ -9,7 +9,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * the lifecycle orchestrator dragged that whole module graph into a cycle.
  *
  * Leaf with respect to the agent cluster — must not import `agentLifecycle.js`
- * or `agentManagement.js` (enforced by `serviceImportCycles.guard.test.js`).
+ * or `agentManagement.js` (enforced by `server/test/guards/modules/serviceImportCycles.test.js`).
  */
 
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cos/cosRunnerClient.js';

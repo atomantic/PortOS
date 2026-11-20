@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Compass } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getGsdProjects } from '../../../services/apiGSD.js';
 import LoadFailedState from '../../ui/LoadFailedState';
 import GsdProjectCard from './GsdProjectCard';
 
@@ -12,7 +12,7 @@ export default function GsdTab() {
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const projectsData = await api.getGsdProjects().catch(() => null);
+    const projectsData = await getGsdProjects().catch(() => null);
     const succeeded = projectsData !== null;
     setFailed(!succeeded);
     if (projectsData) setProjects(projectsData.projects || projectsData || []);

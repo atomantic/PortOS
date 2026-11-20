@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Telescope, RefreshCw, Sparkles, Music, Tv, Clock, AlertTriangle, CheckCircle } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTwinEvidence, recomputeTwinEvidence, interpretTwinConsumption } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import useProviderList from '../../hooks/useProviderList';
@@ -93,7 +93,7 @@ export default function ObservedTasteEvidence() {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    const ev = await api.getTwinEvidence({ silent: true }).catch((err) => { setLoadError(err); return null; });
+    const ev = await getTwinEvidence({ silent: true }).catch((err) => { setLoadError(err); return null; });
     if (ev) setEvidence(ev);
     setLoading(false);
   }, []);
@@ -103,7 +103,7 @@ export default function ObservedTasteEvidence() {
   const handleRecompute = async () => {
     setRecomputing(true);
     // silent: this handler owns its own failure toast (avoid a double toast).
-    const res = await api.recomputeTwinEvidence({ silent: true }).catch(() => null);
+    const res = await recomputeTwinEvidence({ silent: true }).catch(() => null);
     setRecomputing(false);
     if (!res) { toast('Recompute failed', { icon: '⚠️' }); return; }
     setEvidence(res.evidence);
@@ -115,7 +115,7 @@ export default function ObservedTasteEvidence() {
     if (!selected?.providerId) { toast('Select an AI provider first', { icon: '⚠️' }); return; }
     setInterpreting(true);
     // silent: this handler surfaces the error message itself (avoid a double toast).
-    const res = await api.interpretTwinConsumption(selected.providerId, selected.model || undefined, { silent: true })
+    const res = await interpretTwinConsumption(selected.providerId, selected.model || undefined, { silent: true })
       .catch((err) => { toast(err?.message || 'Interpretation failed', { icon: '⚠️' }); return null; });
     setInterpreting(false);
     if (!res?.interpretation) return;

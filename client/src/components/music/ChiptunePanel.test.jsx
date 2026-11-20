@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import ChiptunePanel from './ChiptunePanel';
-import * as api from '../../services/api';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
+import { getApps } from '../../services/apiApps.js';
+import { renderTrackChiptune, generateTrackChiptune, publishTrackChiptune } from '../../services/apiTracks.js';
 
 // The panel drives the real chiptune player, which needs WebAudio (absent in
 // jsdom). Stub only the PLAYER — the pure schedule build stays real, since the
@@ -19,11 +21,15 @@ vi.mock('../../lib/chiptunePlayback.js', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiTracks.js', () => ({
   generateTrackChiptune: vi.fn(),
   renderTrackChiptune: vi.fn(),
   publishTrackChiptune: vi.fn(),
+}));
+vi.mock('../../services/apiApps.js', () => ({
   getApps: vi.fn(),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   patchSettingsSlice: vi.fn(),
 }));
@@ -63,9 +69,9 @@ describe('ChiptunePanel', () => {
     audio.playing = false;
     audio.position = 0;
     audio.loopSec = 0;
-    api.getSettings.mockResolvedValue({ music: {} });
-    api.getApps.mockResolvedValue([GAME_APP]);
-    api.patchSettingsSlice.mockResolvedValue({});
+    getSettings.mockResolvedValue({ music: {} });
+    getApps.mockResolvedValue([GAME_APP]);
+    patchSettingsSlice.mockResolvedValue({});
   });
 
   it('baseline: enables Generate, Render, and Publish when nothing is in flight', async () => {
@@ -81,7 +87,7 @@ describe('ChiptunePanel', () => {
   });
 
   it('disables Generate and Publish while a render is in flight', async () => {
-    api.renderTrackChiptune.mockReturnValue(pending());
+    renderTrackChiptune.mockReturnValue(pending());
     render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
 
     const renderBtn = await screen.findByRole('button', { name: /render take/i });
@@ -93,7 +99,7 @@ describe('ChiptunePanel', () => {
   });
 
   it('disables Render while a generate is in flight', async () => {
-    api.generateTrackChiptune.mockReturnValue(pending());
+    generateTrackChiptune.mockReturnValue(pending());
     render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
 
     const generateBtn = await screen.findByRole('button', { name: /revise score/i });
@@ -104,7 +110,7 @@ describe('ChiptunePanel', () => {
   });
 
   it('shows a load error with Retry — not the "no managed apps" copy — when the publish targets cannot be read', async () => {
-    api.getApps.mockRejectedValueOnce(new Error('Server unavailable'));
+    getApps.mockRejectedValueOnce(new Error('Server unavailable'));
     render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
 
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /publish to app/i })); });
@@ -120,31 +126,31 @@ describe('ChiptunePanel', () => {
     it('clears a saved publish target that no longer appears in the fresh apps list', async () => {
       // The saved prefs point at an app that has since been deleted/archived —
       // getApps() no longer returns it.
-      api.getSettings.mockResolvedValue({ music: { chiptune: { publishAppId: 'ghost-app' } } });
+      getSettings.mockResolvedValue({ music: { chiptune: { publishAppId: 'ghost-app' } } });
       render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
 
       const publishToggle = await screen.findByRole('button', { name: /publish to app/i });
       await act(async () => { fireEvent.click(publishToggle); });
 
-      await waitFor(() => expect(api.getApps).toHaveBeenCalled());
+      await waitFor(() => expect(getApps).toHaveBeenCalled());
       const select = await screen.findByLabelText(/target app/i);
       // The stale id is gone; the select falls back to the empty placeholder.
       expect(select).toHaveValue('');
       expect(screen.getByRole('button', { name: /^publish loop$/i })).toBeDisabled();
 
       fireEvent.click(screen.getByRole('button', { name: /^publish loop$/i }));
-      expect(api.publishTrackChiptune).not.toHaveBeenCalled();
+      expect(publishTrackChiptune).not.toHaveBeenCalled();
     });
 
     it('keeps a saved publish target that is still valid and publishes with it', async () => {
-      api.getSettings.mockResolvedValue({ music: { chiptune: { publishAppId: 'game-app', publishSubdir: 'game/assets/music' } } });
-      api.publishTrackChiptune.mockResolvedValue({ appName: 'Game App', files: ['loop.ogg'], note: 'done' });
+      getSettings.mockResolvedValue({ music: { chiptune: { publishAppId: 'game-app', publishSubdir: 'game/assets/music' } } });
+      publishTrackChiptune.mockResolvedValue({ appName: 'Game App', files: ['loop.ogg'], note: 'done' });
       render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
 
       const publishToggle = await screen.findByRole('button', { name: /publish to app/i });
       await act(async () => { fireEvent.click(publishToggle); });
 
-      await waitFor(() => expect(api.getApps).toHaveBeenCalled());
+      await waitFor(() => expect(getApps).toHaveBeenCalled());
       const select = await screen.findByLabelText(/target app/i);
       expect(select).toHaveValue('game-app');
 
@@ -152,14 +158,14 @@ describe('ChiptunePanel', () => {
       expect(publishBtn).not.toBeDisabled();
       fireEvent.click(publishBtn);
 
-      await waitFor(() => expect(api.publishTrackChiptune).toHaveBeenCalledTimes(1));
-      expect(api.publishTrackChiptune).toHaveBeenCalledWith(
+      await waitFor(() => expect(publishTrackChiptune).toHaveBeenCalledTimes(1));
+      expect(publishTrackChiptune).toHaveBeenCalledWith(
         'track-1',
         { appId: 'game-app', subdir: 'game/assets/music', slug: 'my-test-song' },
         { silent: true },
       );
       // Only the panel's own sub-slice is sent; the server merges it.
-      await waitFor(() => expect(api.patchSettingsSlice).toHaveBeenCalledWith(
+      await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
         'music.chiptune', { publishAppId: 'game-app', publishSubdir: 'game/assets/music' }, { silent: true },
       ));
     });

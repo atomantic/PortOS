@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 const { getPostSessions } = vi.hoisted(() => ({ getPostSessions: vi.fn() }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostConfig: () => Promise.resolve(null),
   getPostRecommendations: () => Promise.resolve({ recommendations: [] }),
   getPostSessions,
