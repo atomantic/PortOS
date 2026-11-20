@@ -328,6 +328,8 @@ export const vfrSyncArgs = async (bin) => {
  *
  * - `returnStderr`: when true a successful result also carries the captured
  *   stderr tail as `stderr` (loudness measurement reads its JSON from there).
+ * - `onLifecycle`: synchronous observer of fixed process phases and the
+ *   owned child PID. A signal attempt is reported before delivery.
  *
  * - `timeoutMs`: optional wall-clock ceiling for a stalled ffmpeg (unreadable
  *   input, evicted cloud file, dead network mount). On expiry the child gets
@@ -346,16 +348,18 @@ export const FFMPEG_KILL_GRACE_MS = 5000;
 export const FFMPEG_FRAME_TIMEOUT_MS = 2 * 60 * 1000;
 export const FFMPEG_SCAN_TIMEOUT_MS = 15 * 60 * 1000;
 
-export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout } = {}) {
+export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes = 2000, returnStderr = false, env, onStdout, onLifecycle } = {}) {
   if (!bin || typeof bin !== 'string') {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
   }
   if (!Array.isArray(args)) {
     return Promise.resolve({ ok: false, reason: 'invalid ffmpeg args' });
   }
+  if (signal?.aborted) return Promise.resolve({ ok: false, reason: 'cancelled' });
   return new Promise((resolve) => {
     const stdio = ['ignore', onStdout ? 'pipe' : 'ignore', stderrTailBytes > 0 ? 'pipe' : 'ignore'];
     const proc = spawn(bin, args, safeChildProcessOptions({ stdio, ...(env ? { env } : {}) }));
+    const report = phase => onLifecycle?.({ phase, pid: proc.pid ?? null });
     if (onStdout) proc.stdout.on('data', onStdout);
     let stderrTail = '';
     if (stderrTailBytes > 0 && proc.stderr) {
@@ -372,57 +376,69 @@ export function runFfmpegProcess({ bin, args, signal, timeoutMs, stderrTailBytes
     // listeners — the leak the audioMux audit flagged.
     let closed = false;
     let timedOut = false;
+    let processError = null;
     let timeoutTimer = null;
     let killTimer = null;
+    const sendSignal = (signal, phase) => {
+      report(phase);
+      try { proc.kill(signal); }
+      catch (error) { recordError(error); }
+    };
     // SIGTERM first; a child wedged in uninterruptible IO may ignore it, so
     // follow with SIGKILL unless it has closed by then.
     const terminate = () => {
-      proc.kill('SIGTERM');
-      if (killTimer) return;
-      killTimer = setTimeout(() => { if (!closed) proc.kill('SIGKILL'); }, FFMPEG_KILL_GRACE_MS);
+      if (closed || killTimer) return;
+      killTimer = setTimeout(() => {
+        if (!closed && proc.exitCode == null && proc.signalCode == null) sendSignal('SIGKILL', 'kill');
+      }, FFMPEG_KILL_GRACE_MS);
       killTimer.unref?.();
+      sendSignal('SIGTERM', 'term');
     };
-    const clearTimers = () => {
+    const settle = result => {
+      if (closed) return;
       closed = true;
       clearTimeout(timeoutTimer);
       clearTimeout(killTimer);
+      signal?.removeEventListener('abort', terminate);
+      resolve(result);
     };
-    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-      timeoutTimer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
-      timeoutTimer.unref?.();
-    }
-    let onAbort = null;
-    if (signal) {
-      onAbort = terminate;
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) terminate();
-    }
-    const cleanupSignal = () => {
-      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    const recordError = error => {
+      const started = Boolean(proc.pid);
+      report(started ? 'child-error' : 'spawn-error');
+      // A signal refusal is an error from a live child. Keep the escalation
+      // timer and leave its file owned until the close event.
+      if (started) processError ??= error;
+      else settle({ ok: false, reason: `spawn failed: ${error.message}` });
     };
-    proc.on('error', (err) => {
-      clearTimers();
-      cleanupSignal();
-      resolve({ ok: false, reason: `spawn failed: ${err.message}` });
-    });
+    proc.on('error', recordError);
     proc.on('close', (code, sig) => {
-      clearTimers();
-      cleanupSignal();
+      report('closed');
       if (timedOut) {
-        resolve({ ok: false, reason: `timed out after ${Math.round(timeoutMs / 1000)}s` });
+        settle({ ok: false, reason: `timed out after ${Math.round(timeoutMs / 1000)}s` });
         return;
       }
       if (sig === 'SIGTERM' || sig === 'SIGKILL') {
-        resolve({ ok: false, reason: `cancelled (${sig})` });
+        settle({ ok: false, reason: `cancelled (${sig})` });
+        return;
+      }
+      if (processError || signal?.aborted) {
+        settle({ ok: false, reason: processError ? `ffmpeg process error: ${processError.message}` : 'cancelled' });
         return;
       }
       if (code !== 0) {
         const tail = stderrTail.split(/\r?\n/).slice(-4).join(' | ');
-        resolve({ ok: false, reason: tail ? `ffmpeg exit ${code}: ${tail}` : `ffmpeg exit ${code}` });
+        settle({ ok: false, reason: tail ? `ffmpeg exit ${code}: ${tail}` : `ffmpeg exit ${code}` });
         return;
       }
-      resolve(returnStderr ? { ok: true, stderr: stderrTail } : { ok: true });
+      settle(returnStderr ? { ok: true, stderr: stderrTail } : { ok: true });
     });
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+      timeoutTimer.unref?.();
+    }
+    signal?.addEventListener('abort', terminate, { once: true });
+    report('running');
+    if (signal?.aborted) terminate();
   });
 }
 
@@ -463,16 +479,22 @@ const runFfprobe = async (args, timeout = 5000) => {
 // input on this probe. Returns false when ffprobe is unavailable so callers
 // default to the safe "no clip audio" path rather than emitting a graph that
 // can't build.
-export const hasAudioStream = async (videoPath) => {
+export const hasAudioStream = async (videoPath, { signal, onLifecycle } = {}) => {
   if (typeof videoPath !== 'string' || !videoPath) return false;
-  const stdout = await runFfprobe([
+  const args = [
     '-v', 'error',
     '-select_streams', 'a',
     '-show_entries', 'stream=index',
     '-of', 'default=nokey=1:noprint_wrappers=1',
     videoPath,
-  ]);
-  return stdout.length > 0;
+  ];
+  if (!signal && !onLifecycle) return (await runFfprobe(args)).length > 0;
+  const bin = await findFfprobe();
+  if (!bin) return false;
+  let hasOutput = false;
+  const result = await runFfmpegProcess({ bin, args, signal, timeoutMs: 5000, onLifecycle,
+    onStdout: chunk => { hasOutput ||= chunk.toString().trim().length > 0; } });
+  return result.ok && hasOutput;
 };
 
 // Unlike the permissive helper above, distinguish a silent video from a
