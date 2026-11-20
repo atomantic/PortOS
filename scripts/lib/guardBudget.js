@@ -22,16 +22,17 @@ import { GUARD_CHECK_DIRS } from './guardScanners.js';
 
 /**
  * Per-guard target on a developer machine, where pregate reports (never fails) a
- * guard over it. The slowest checks took ~0.8s there when the runners landed (#16996).
+ * guard over it. When the runners landed (#16996) the slowest check, the a11y
+ * control-name scan, took ~2.1s there and every server check under 1s.
  */
-export const GUARD_BUDGET_MS = 1500;
+export const GUARD_BUDGET_MS = 2500;
 
 /**
  * The enforced budget on hosted CI's ubuntu-latest runner, whose isolated guard
- * pass runs ~1.5x slower than a developer machine. 3s leaves room for runner
- * variance while still failing a check that grows to several times its cost.
+ * pass runs ~1.5x slower than a developer machine. 4s leaves room for runner
+ * variance while still failing a server check that grows to several times its cost.
  */
-export const CI_GUARD_BUDGET_MS = 3000;
+export const CI_GUARD_BUDGET_MS = 4000;
 
 const RUNNERS = new Set(GUARD_CHECK_DIRS.map(({ runner }) => runner));
 

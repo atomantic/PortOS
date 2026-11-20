@@ -572,7 +572,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         'const slow = process.env.FAKE_SLOW_GUARD;',
         'const testResults = selection.include.map(rel => rel.endsWith("repo.guard.test.js")',
         '  ? { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0, endTime: 9000, assertionResults: [',
-        '    { status: "passed", ancestorTitles: ["slowCheck", "case"], duration: slow === "no-such-file" ? 5 : 3500 },',
+        '    { status: "passed", ancestorTitles: ["slowCheck", "case"], duration: slow === "no-such-file" ? 5 : 4500 },',
         '    { status: "passed", ancestorTitles: ["fastCheck", "case"], duration: 5 }] }',
         '  : { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
         '    endTime: rel.endsWith(slow) ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
@@ -589,7 +589,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
-      const over = `${guard} 6.5s; ${runner} > slowCheck 3.5s over the 3.0s per-guard budget.`;
+      const over = `${guard} 6.5s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
       const ranSets = (stdout) => (stdout.match(/^RAN .*$/gm) ?? []).map((line) => JSON.parse(line.slice(4)).sort());
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
@@ -610,7 +610,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > slowCheck 0.0s; ${runner} > fastCheck 0.0s (budget 3.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > slowCheck 0.0s; ${runner} > fastCheck 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

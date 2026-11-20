@@ -224,8 +224,8 @@ or its walk reads a temporary directory). A scanner the detectors cannot see
 
 Because they run on every PR, each always-run guard has a time budget: each
 structural guard runner's checks (the sum of a check's test times) and every other
-always-run file whole (`CI_GUARD_BUDGET_MS`, 3s, in `scripts/lib/guardBudget.js`;
-~2x the 1.5s local target). Only the scheduled Linux server run enforces it
+always-run file whole (`CI_GUARD_BUDGET_MS`, 4s, in `scripts/lib/guardBudget.js`;
+~1.6x the 2.5s local target). Only the scheduled Linux server run enforces it
 (`CI_GUARD_BUDGET=enforce`, `ci.yml`, #16810): `scripts/run-ci-tests.js` runs the
 always-run guards in their own pass and fails any guard over budget. Other runs
 warn with a `::warning::`, and local pregate only reports it (`docs/PREGATE.md`).

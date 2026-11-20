@@ -22,7 +22,7 @@ import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib
 import { buildCiTestPlan, getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
 import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
 import { toRepoPath } from './lib/workspaceTests.js';
-import { isGuardTest } from './lib/guardScanners.js';
+import { guardRunnerFor, isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -556,8 +556,11 @@ export async function focusedLocalPlan(plan, trackedFiles, changedFiles, readTex
     const found = await textReaders(changedData, candidates, readWithTestMemo);
     for (const [source, tests] of found) addCapped(source, tests, 'text');
   }
+  // A structural guard check runs only inside its runner (#16996): the Vitest configs
+  // exclude its directory, so a changed or source-reading check selects the runner.
+  const runnable = [...focused].map(path => guardRunnerFor(path) ?? path).filter(path => tracked.has(path));
   for (const scope of ['server', 'client']) {
-    const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
+    const files = [...new Set([...local[scope].files, ...runnable.filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
     local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
   }
   local.relatedOverflow = relatedOverflow;
