@@ -71,6 +71,18 @@ export function isOrdinaryAgentRecord(operation, record, task = null) {
   return userTask?.taskType === 'user' && typeof userTask.description === 'string' && Boolean(userTask.description.trim());
 }
 
+export async function getTerminalRunnerOwner(agentId) {
+  const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
+  const agent = await getAgentRecord(agentId);
+  if (agent?.status !== 'completed' || !Number.isFinite(Date.parse(agent.completedAt))) return null;
+  const task = agent.taskId ? await import('./cos/cosTaskStore.js').then(({ getTaskById }) => getTaskById(agent.taskId)) : null;
+  if (!isOrdinaryAgentRecord({ resource: agentId }, agent, task)) return null;
+  if (agent.pid != null && (!Number.isSafeInteger(agent.pid) || agent.pid <= 0)) return null;
+  return { id: agentId, completedAt: agent.completedAt, pid: agent.pid ?? null,
+    workspacePath: agent.workspacePath ?? agent.metadata?.workspacePath,
+    metadata: { providerId: agent.metadata?.providerId } };
+}
+
 // An operator-controlled evidence path must never block the journal on a FIFO
 // or follow a substituted link. Missing files are distinct from unreadable ones.
 function readEvidence(path, io, maxBytes = 1024 * 1024, includeMtime = false, allowMalformed = false) {
@@ -188,6 +200,7 @@ export async function inspectLiveActivity({ hold, apiOrigin, runnerOrigin, token
   const runnerAgents = await read(`${runner}/agents`, false);
   assertInactiveActivity(activity, runnerAgents);
   if (!sameHold(await read(`${api}/api/system/maintenance`, true))) refuse('The maintenance hold changed during the activity check.');
+  return activity;
 }
 
 export async function inspectInactiveReservations({ gate, operator, reason, checkActivity, isDead = dead }) {
@@ -195,13 +208,13 @@ export async function inspectInactiveReservations({ gate, operator, reason, chec
   if (!status.hold || status.state === 'unavailable' || !['Local operator', 'Operator session'].includes(status.hold.owner))
     refuse('Begin a normal operator maintenance hold before inspection.');
   const hold = { id: status.hold.id, revision: status.hold.revision };
-  const observed = await checkActivity(hold);
+  const candidates = gate.operations().filter(isOperatorDisposableReservation);
+  const observed = await checkActivity(hold, candidates);
   const processes = Array.isArray(observed?.processes) ? observed.processes : [];
+  const ordinaryOwnerIds = new Set(observed?.ordinaryOwnerIds ?? []);
   const current = gate.status();
   if (current.revision !== status.revision) refuse('Work changed during the activity check. Inspect it again.');
-  // Runner ownership may carry release authority in the DB-backed agent/task
-  // store. The offline operator command cannot classify it from files alone.
-  const operations = gate.operations().filter(op => op.kind !== 'runner' && isOperatorDisposableReservation(op)
+  const operations = candidates.filter(op => (op.kind !== 'runner' || ordinaryOwnerIds.has(op.id))
     && inactiveOwner(op, isDead, processes, gate)).slice(0, 500);
   if (!operations.length) refuse('No supported inactive reservations were found.');
   const request = { version: 1, requestId: randomUUID(), hold, operator, reason: reason.trim(), operations };
@@ -229,8 +242,8 @@ export async function disposeInactiveReservations(input, { gate, operator, check
   const processes = Array.isArray(observed?.processes) ? observed.processes : [];
   const ordinaryOwnerIds = Array.isArray(observed?.ordinaryOwnerIds) ? observed.ordinaryOwnerIds : [];
   const limitations = Array.isArray(observed?.limitations) ? observed.limitations.filter(item => typeof item === 'string') : [];
-  if (request.operations.some(op => ['agent', 'runner'].includes(op.kind) && automatic && !ordinaryOwnerIds.includes(op.id))
-    || request.operations.some(op => ['agent', 'runner'].includes(op.kind) && !automatic))
+  if (request.operations.some(op => (op.kind === 'runner' && !ordinaryOwnerIds.includes(op.id))
+    || (op.kind === 'agent' && (!automatic || !ordinaryOwnerIds.includes(op.id)))))
     refuse('An agent owner needs its own recovery path.');
   if (!Array.isArray(checkedPids) || checkedPids.some(item => {
     const pid = typeof item === 'number' ? item : item?.pid;

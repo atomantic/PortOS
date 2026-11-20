@@ -11,10 +11,12 @@ import { useSocket } from './useSocket.js';
 import { getMaintenanceStatus } from '../services/apiSystem.js';
 
 // mode 'banner' follows only the coarse `maintenance:readiness` projection
-// ({ state, blockerCount }) after the bootstrap/reconnect read, so detailed
+// ({ state, blockerCount, agentDiskPressure }) after the bootstrap/reconnect read, so detailed
 // operation-journal invalidations never refetch for the always-mounted banner.
 // The default 'detailed' mode refetches the full status (hold identity/revision).
-const toBanner = ({ state, blockers, blockerCount }) => ({ state, blockerCount: blockerCount ?? blockers?.length ?? 0 });
+const toBanner = ({ state, blockers, blockerCount, agentDiskPressure }) => ({
+  state, blockerCount: blockerCount ?? blockers?.length ?? 0, ...(agentDiskPressure && { agentDiskPressure }),
+});
 
 export function useMaintenance({ mode = 'detailed' } = {}) {
   const banner = mode === 'banner';

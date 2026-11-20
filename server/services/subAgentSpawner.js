@@ -181,7 +181,7 @@ async function handleTaskReady(task) {
     try {
       await spawnAgentForTask(task);
     } catch (err) {
-      if (isMaintenanceHold(err)) return holdTask(task, 'maintenance is holding new work');
+      if (isMaintenanceHold(err)) return holdTask(task, err.message);
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {

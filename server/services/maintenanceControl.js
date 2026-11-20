@@ -6,25 +6,47 @@ let watcher;
 let timer;
 let boundIo;
 let lastReadiness = null;
+let diskTimer;
+
+export function getMaintenanceStatus() {
+  const agentDiskPressure = maintenance.agentDiskPressure();
+  return { ...maintenance.status(), ...(agentDiskPressure && { agentDiskPressure }) };
+}
 
 // Coarse banner projection: state, plus the blocker count only while draining
 // (the one state that displays it). Operation-list/revision churn in a stable
 // state leaves it unchanged. Carries no hold capability, resource, owner or PID.
-function readinessProjection(status = maintenance.status()) {
-  return { state: status.state, blockerCount: status.state === 'draining' ? status.blockers.length : 0 };
+function readinessProjection(status = getMaintenanceStatus()) {
+  const { state, agentDiskPressure } = status;
+  return { state, blockerCount: state === 'draining' ? status.blockers.length : 0,
+    ...(agentDiskPressure && { agentDiskPressure }) };
+}
+
+function emitReadiness(next) {
+  if (lastReadiness?.state === next.state && lastReadiness.blockerCount === next.blockerCount
+    && lastReadiness.agentDiskPressure === next.agentDiskPressure) return;
+  const recoveredDisk = lastReadiness?.agentDiskPressure && !next.agentDiskPressure && next.state === 'normal';
+  lastReadiness = next;
+  boundIo?.emit('maintenance:readiness', next);
+  if (recoveredDisk) {
+    import('./cos/cos.js').then(({ dequeueNextTask }) => dequeueNextTask())
+      .catch(error => console.error(`❌ CoS dequeue after disk recovery failed: ${error.message}`));
+  }
 }
 
 function emitChanges() {
   boundIo?.emit('maintenance:changed');
-  const next = readinessProjection();
+  emitReadiness(readinessProjection());
   if (!watcher && boundIo) bindMaintenanceIo(boundIo);
-  if (lastReadiness && lastReadiness.state === next.state && lastReadiness.blockerCount === next.blockerCount) return;
-  lastReadiness = next;
-  boundIo?.emit('maintenance:readiness', next);
 }
 
 export function bindMaintenanceIo(io) {
   boundIo = io;
+  if (!diskTimer) {
+    // Free space can change without a journal write, including while intake is paused.
+    diskTimer = setInterval(() => emitReadiness(readinessProjection()), 15_000);
+    diskTimer.unref?.();
+  }
   if (watcher) return;
   lastReadiness = readinessProjection();
   assertNotRealDataWrite(maintenance.directory, 'maintenance notifications');

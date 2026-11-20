@@ -19,6 +19,22 @@ const gate = (options = {}) => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('holds new agents on low or unreadable journal volume space and lets existing work settle', async () => {
+    const statfsSync = vi.fn(() => ({ bsize: 4096, bavail: 262144 }));
+    const { admission } = gate({ io: { ...fs, statfsSync } });
+    const agent = admission.admit('agent', 'already-running');
+    const before = admission.status();
+    statfsSync.mockReturnValue({ bsize: 4096, bavail: 262143 });
+    expect(statfsSync).toHaveBeenCalledWith(admission.directory);
+    expect(() => admission.admit('agent', 'queued')).toThrow(/at least 1 GiB free/);
+    expect(() => agent.run(() => admission.admit('runner', 'queued-runner', { continuation: true }))).toThrow(/at least 1 GiB free/);
+    expect(admission.status()).toEqual(before);
+    expect(await agent.finish()).toBe(true);
+    statfsSync.mockImplementationOnce(() => { throw Object.assign(new Error('read failed'), { code: 'EIO' }); });
+    expect(() => admission.admit('runner', 'queued-runner')).toThrow(/free space could not be checked/);
+    statfsSync.mockReturnValue({ bsize: 4096, bavail: 262144 });
+    expect(await admission.admit('runner', 'queued-runner').finish()).toBe(true);
+  });
   it('keeps a waiting update readable by strict legacy journals so release children can start', async () => {
     const { root, admission } = gate();
     const release = admission.admit('agent', 'release-example');

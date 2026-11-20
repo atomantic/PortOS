@@ -110,12 +110,24 @@ directory under a unique sibling name, then repeat the confirmed command. Never
 remove the runtime `transaction/` evidence. Starting both apps clears their in-memory uncertainty, but does
 not clear the hold or certify that unresolved work finished.
 
-After restarting, refresh maintenance status, inspect/reconcile any remaining
-blockers through their owning workflows, and choose **Resume previous policies**
-deliberately. With no unresolved operations the status is Ready; otherwise it is
-Draining. Recovery archives stay in the same backed-up, machine-local subtree:
+After restarting, refresh maintenance status. A **Transaction recovery** hold
+keeps new work fenced while you review the remaining blockers. To use the
+operator disposition command, choose **Resume previous policies**, immediately
+begin a normal operator hold, and wait for any work admitted during the hand-off
+to finish. Inspect and reconcile under the new hold, then resume again when
+ready. If recovery preserved a normal operator hold, use that hold directly.
+With no unresolved operations the hold is Ready. Otherwise it is Draining.
+Recovery archives stay in the same backed-up, machine-local subtree:
 snapshots retain them as evidence and restores preserve the current subtree
 byte-for-byte, including archives, rather than installing a snapshot's authority.
+
+When the maintenance journal volume has less than 1 GiB available to PortOS,
+the banner warns about low disk space and admission pauses new agent starts.
+An unreadable free-space check also pauses starts and displays its own warning.
+Existing agents remain eligible to finish and settle. The banner updates as the volume recovers
+and PortOS rechecks its queue under the existing policies. The free-space check
+checks headroom at admission time, so a separate writer can still fill the
+volume afterward.
 
 ### Inactive reservations while updating
 
@@ -185,11 +197,13 @@ pass its configured origin with `--runner-origin`. Credentials follow
 `scripts/portos-api.js`; they are sent only to the local API, not the runner.
 
 The journal retains a durable receipt containing each original reservation, the
-local operator and reason. This is an acknowledgement of uncertainty, not proof
-that a detached historical child or an output was complete. It does not clear
-agent, runner, update, harness, exclusive-maintenance or release ownership records.
-Unrecognized reservations stay in place. After reviewing the remaining blockers,
-resume the hold and retry the update; do not delete journal files by hand.
+local operator and reason. This acknowledges uncertain output and detached child
+status. A dead-owner `runner` reservation is eligible when the running install
+can identify its completed agent as ordinary work and process checks find no
+survivor. Live, missing, unclassifiable and release-related owners stay in place,
+as do separate agent, update, harness, exclusive-maintenance and release ownership
+records. After reviewing the remaining blockers, resume the hold and retry the
+update. Leave the journal files in place.
 
 ### Unsettled generic output publications
 
