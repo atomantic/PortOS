@@ -5,9 +5,9 @@
 - **Supersedes:** the implicit "JSON files in `./data/` are primary" assumption that
   held through early development.
 - **Related:** [`docs/STORAGE.md`](../STORAGE.md) (storage-classification contract),
-  [`docs/plans/2026-06-06-create-postgres-storage-inventory.md`](../plans/2026-06-06-create-postgres-storage-inventory.md)
+  [`docs/plans/archive/2026-06-06-create-postgres-storage-inventory.md`](../plans/archive/2026-06-06-create-postgres-storage-inventory.md)
   (inventory + phase roadmap),
-  [`docs/plans/2026-06-07-create-relational-schema-design.md`](../plans/2026-06-07-create-relational-schema-design.md)
+  [`docs/plans/archive/2026-06-07-create-relational-schema-design.md`](../plans/archive/2026-06-07-create-relational-schema-design.md)
   (Create-domain schema design).
 
 ## Context

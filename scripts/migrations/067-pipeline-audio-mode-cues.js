@@ -1,7 +1,7 @@
 /**
  * Stamp `stages.audio.audioMode` + initialize `stages.audio.cues[]` on existing
  * pipeline issues (whole-episode audio — issue #863, design doc
- * docs/plans/2026-06-03-whole-episode-audio-strategy.md).
+ * docs/plans/archive/2026-06-03-whole-episode-audio-strategy.md).
  *
  * Back-compat derivation (preserve today's behavior — never let "absent"
  * collapse into a wrong mode):

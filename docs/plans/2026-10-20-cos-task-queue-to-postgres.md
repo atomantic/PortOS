@@ -1,5 +1,7 @@
 # CoS task queue to PostgreSQL
 
+Status: Active
+
 Approved 2026-10-20. Supersedes the "file-primary because direct editing and
 watchers are supported inputs" position in `docs/STORAGE.md`.
 

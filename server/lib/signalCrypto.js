@@ -11,7 +11,7 @@
  *
  * Two independent crypto schemes live here, both implemented against Node's
  * built-in `node:crypto` (zero new dependencies, per the PortOS dependency
- * policy — see docs/plans/2026-07-04-human-activity-tracking.md):
+ * policy — see docs/plans/archive/2026-07-04-human-activity-tracking.md):
  *
  *  1. **SQLCipher 4 page decryption.** Signal stores its chat DB as a
  *     SQLCipher-4 file (`sql/db.sqlite`). `node:sqlite` cannot open it (no

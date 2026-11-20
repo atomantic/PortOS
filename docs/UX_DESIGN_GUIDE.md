@@ -198,7 +198,7 @@ Adoption is incremental. CoS uses the shared request and footer primitives; Medi
 
 ## Config drawers
 
-Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.jsx`, never a hand-rolled `fixed inset-y-0 right-0` clone (design record: `docs/plans/2026-07-01-drawer-ux-redesign.md`).
+Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.jsx`, never a hand-rolled `fixed inset-y-0 right-0` clone (design record: `docs/plans/archive/2026-07-01-drawer-ux-redesign.md`).
 
 - **Size**: `size` is `sm` 520px, `md` 640px, `lg` 720→880px, `xl` up to 1100px; widen large forms so they lay out in columns, keep small dialogs `sm`. Mobile is always full-width. `widthClass` is a back-compat override.
 - **Tabs**: a large surface (many fields or groups, e.g. Edit App) uses `tabs={[{ id, label, icon?, count? }]}` + `activeTab`/`onTabChange` and renders only the active tab. A medium form that should stay fully visible uses labeled sections instead (`ImageGenSettingsForm`'s `grouped` prop).

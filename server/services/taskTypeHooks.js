@@ -14,7 +14,7 @@
  *
  * `HOOK_MODULES` is the single registration point (lazy imports); `input: false`
  * marks input owned by an earlier coordinator phase. See
- * docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md.
+ * docs/plans/archive/2026-07-09-programmatic-io-scheduled-tasks.md.
  */
 
 import { isFalsyMeta, isTruthyMeta } from './agent/agentState.js';

@@ -89,7 +89,7 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
 
   it('filters historical documents and migrations out of the live reference corpus', () => {
     expect(HISTORICAL.test('docs/decisions/2026-09-19-federation.md')).toBe(true);
-    expect(HISTORICAL.test('docs/plans/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
+    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
     expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/444-minimax-h3-cuda-lightx2v.js')).toBe(true);
     expect(HISTORICAL.test('docs/SCRIPTS.md')).toBe(false);
@@ -101,7 +101,7 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     expect(isSiblingTest('scripts/orphan.js', 'scripts/orphan.test.js')).toBe(true);
     expect(isSiblingTest('scripts/orphan.py', 'scripts/orphan_test.py')).toBe(true);
     // Historical paths and migrations are rejected by the corpus filter
-    expect(HISTORICAL.test('docs/plans/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
+    expect(HISTORICAL.test('docs/plans/archive/2026-07-18-synthid-adversarial-jamming-experiment.md')).toBe(true);
     expect(HISTORICAL.test('docs/research/minimax-h3-continuity.md')).toBe(true);
     expect(HISTORICAL.test('scripts/migrations/001-init.js')).toBe(true);
     // Candidate pattern covers subdirectories fixtures and experiments
