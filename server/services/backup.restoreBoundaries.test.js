@@ -137,6 +137,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
@@ -176,6 +177,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
+        '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
