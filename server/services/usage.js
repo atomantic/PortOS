@@ -142,7 +142,9 @@ export async function flushPendingUsageWrites() {
   closeRunBatch();
   // Queue a barrier as well as checking the live batches' outcomes. A backup
   // or shutdown must also wait for a maintenance edit already in the queue.
-  await Promise.all([...activeRunBatches, queueUsageWrite(() => undefined)]);
+  const outcomes = await Promise.allSettled([...activeRunBatches, queueUsageWrite(() => undefined)]);
+  const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+  if (failure) throw failure.reason;
 }
 
 // All ledger writers share one queue and roll back the in-memory copy on failure.
