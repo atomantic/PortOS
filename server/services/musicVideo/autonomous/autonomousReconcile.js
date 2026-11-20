@@ -13,12 +13,12 @@ import {
   short,
   deps,
   projectAutonomousRun,
-  latestRun,
   patchRun,
   stagePatch,
   RENDER_STEP,
   CAST_STEP,
   park,
+  logParkedRun,
 } from './autonomousRunStore.js';
 import {
   rendersFromCode,
@@ -199,10 +199,17 @@ async function completeFinalRender(projectId, run) {
     let next;
     try { next = await review; } finally { finalReviews.delete(projectId); }
     // Stopped or canceled while the orchestrator watched: leave that state alone.
-    if ((await latestRun(projectId))?.status !== 'running') return;
-    // A revision: the re-rendered film comes back here for the next review.
+    const project = await getProject(projectId);
+    const current = runInFinalDelivery(project);
+    if (current?.id !== run.id) return;
+    // A footage revision can finish before its id or the final verdict was saved.
+    // Settle after releasing finalReviews so an immediate rerender gets its own review.
+    if (next === 'wait') {
+      const reviewId = current.output.finalAutoReviewId;
+      const review = project.autoReviews?.find((child) => child.id === reviewId);
+      return settleFinalRevision(projectId, current, reviewId, review);
+    }
     if (next === 'rerender') return startFinalRender(projectId, run);
-    if (next === 'wait') return;
   }
   await patchRun(projectId, (r) => ({
     status: 'completed',
@@ -275,22 +282,36 @@ export async function startFinalRender(projectId, run) {
  * for the next final review; a run it left resumable (stopped or
  * limit-reached) is closed first so it does not hold the revision slot.
  */
-export async function onAutoReviewEvent({ projectId, runId, run: review }) {
-  if (!projectId || !runId || !review || review.status === 'running') return;
-  const project = await getProject(projectId).catch(() => null);
-  const run = runInFinalDelivery(project);
-  if (!run || run.output.finalAutoReviewId !== runId || run.stages.produce?.step !== FINAL_REVISION_STEP) return;
-  if (['needs-human', 'failed'].includes(review.status)) {
-    const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
-    await park(projectId, 'needs-human', { error: trimTo(`The revision of the final video was left for a director: ${reason}`, 500), errorCode: 'FINAL_REVISION_NEEDS_HUMAN' });
+async function settleFinalRevision(projectId, run, runId, review) {
+  const ownsRevision = (r) => r?.status === 'running' && r.output.finalAutoReviewId === runId && r.stages.produce?.step === FINAL_REVISION_STEP;
+  if (!review?.status || review.status === 'running' || !ownsRevision(run)) return;
+  const needsHuman = ['needs-human', 'failed'].includes(review.status);
+  const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
+  let settled = false;
+  const out = await patchRun(projectId, (current) => {
+    // The event and checkpoint reconciliation can both observe the same child.
+    if (current.id !== run.id || !ownsRevision(current)) return {};
+    settled = true;
+    return needsHuman
+      ? { status: 'needs-human', error: trimTo(`The revision of the final video was left for a director: ${reason}`, 500), errorCode: 'FINAL_REVISION_NEEDS_HUMAN' }
+      : { output: { finalAutoReviewId: null } };
+  });
+  if (!settled) return;
+  if (needsHuman) {
+    logParkedRun(out.run, out.run.status, out.run.error);
     return;
   }
-  await patchRun(projectId, () => ({ output: { finalAutoReviewId: null } }));
   if (['stopped', 'limit-reached'].includes(review.status)) {
     await deps.cancelAutoReview(projectId, runId).catch((err) => console.warn(`⚠️ Autonomous music video ${short(run.id)} could not close its revision: ${trimTo(err.message, 200)}`));
   }
   console.log(`🎬 Autonomous music video ${short(run.id)} revision ${review.status}; rendering the film again`);
   await startFinalRender(projectId, run);
+}
+
+export async function onAutoReviewEvent({ projectId, runId, run: review }) {
+  if (!projectId || !runId || !review || review.status === 'running' || finalReviews.has(projectId)) return;
+  const project = await getProject(projectId).catch(() => null);
+  return settleFinalRevision(projectId, runInFinalDelivery(project), runId, review);
 }
 
 export async function onRenderEvent({ projectId, jobId, status, error, abandoned }) {
