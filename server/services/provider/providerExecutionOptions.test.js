@@ -84,12 +84,31 @@ describe('execution options at dispatch', () => {
     expect(probeCodexModelsViaAppServer).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['launch', 'Check the configured Codex executable'],
+    ['timeout', 'Retry capability inspection'],
+    ['required_rpc', 'Update Codex to a compatible version'],
+    ['toString', 'Refresh capabilities or update Codex'],
+  ])('returns a safe capability response and refuses dispatch after a %s probe failure', async (probeFailure, action) => {
+    const raw = 'synthetic private command, path and process output';
+    probeCodexModelsViaAppServer.mockRejectedValue(Object.assign(new Error(raw), { probeFailure }));
+    const expectedCategory = probeFailure === 'toString' ? 'unknown' : probeFailure;
+    const capabilities = await getExecutionOptionCapabilities(provider, model, { fresh: true });
+    expect(capabilities).toMatchObject({ probeFailure: expectedCategory, reason: expect.stringContaining(action), options: [{ values: [] }] });
+    expect(JSON.stringify(capabilities)).not.toContain(raw);
+    await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toMatchObject({
+      code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure: expectedCategory, message: capabilities.reason,
+    });
+  });
+
   it('does not treat an old runtime or unadvertised model as Fast capable', async () => {
     probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, models: [{ id: model }] });
     await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toThrow('did not advertise');
     probeCodexModelsViaAppServer.mockResolvedValue({ accountType: 'chatgpt', config: {}, models: [{ id: model, serviceTiers: [] }] });
     await expect(prepareExecutionOptions(provider, model, { serviceTier: 'fast' })).rejects.toThrow('unsupported');
-    expect((await getExecutionOptionCapabilities(provider, model)).options[0].values).toEqual(['standard']);
+    const capabilities = await getExecutionOptionCapabilities(provider, model);
+    expect(capabilities.options[0].values).toEqual(['standard']);
+    expect(capabilities).not.toHaveProperty('probeFailure');
   });
 });
 

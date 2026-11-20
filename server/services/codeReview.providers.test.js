@@ -177,6 +177,20 @@ describe('configured provider reviewers', () => {
     expect(result).not.toHaveProperty('findings');
   });
 
+  it.each([
+    ['launch', 'Check the configured Codex executable'],
+    ['timeout', 'Retry capability inspection'],
+    ['required_rpc', 'Update Codex to a compatible version'],
+  ])('reports a failed %s speed probe without returning a review verdict', async (probeFailure, action) => {
+    const raw = 'synthetic private process output';
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'codex', executionOptions: { serviceTier: 'fast' } });
+    runCliProviderPrompt.mockRejectedValueOnce(Object.assign(new Error(raw), { code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure }));
+    const result = await runLocalCodeReview({ backend, kind: 'claim-review', toolFree: true, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure, error: expect.stringContaining(action) });
+    expect(result).not.toHaveProperty('verdict');
+    expect(JSON.stringify(result)).not.toContain(raw);
+  });
+
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {
     callProviderAISimple.mockResolvedValue({ error: 'Selected model is unavailable' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, error: 'Selected model is unavailable' });

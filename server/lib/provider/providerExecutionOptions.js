@@ -7,7 +7,7 @@ import { buildCodexAuthModeArgs, isCodexCommand } from '../codex.js';
 import { isGrokCommand, grokSpeedArgsConflict, grokSpeedTarget } from '../grok.js';
 import { probeGrokModelCatalog } from '../grokModelCatalog.js';
 import { codexOssLocalProvider, extractBakedModel } from './providerModels.js';
-import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError } from '../executionOptions.js';
+import { EXECUTION_OPTION_DEFINITIONS, resolveExecutionOptions, executionOptionsError, codexSpeedProbeFailureMessage } from '../executionOptions.js';
 import { probeCodexModelsViaAppServer } from '../aiToolkit/internal/codexModelListProbe.js';
 import { prepareCliSpawn } from '../bufferedSpawn.js';
 
@@ -32,12 +32,17 @@ async function inspectExecutionOptionCapabilities(provider, model, context = {})
       if (typeof provider.args[index + 1] === 'string') configArgs.push(arg, provider.args[++index]);
     } else if (arg.startsWith('--config=')) configArgs.push(arg);
   }
-  const invocation = prepareCliSpawn(provider.command, [
-    ...(provider.ignoreUserConfig === true ? ['--ignore-user-config'] : []),
-    ...configArgs, ...buildCodexAuthModeArgs(provider), 'app-server',
-  ], { ...process.env, ...provider.envVars });
-  const details = await probeCodexModelsViaAppServer(invocation.command, invocation.args, provider, { includeDetails: true, cwd: context.cwd, ...(Number.isFinite(context.timeoutMs) ? { timeoutMs: Math.max(1, Math.min(15000, context.timeoutMs)) } : {}) }).catch(() => null);
-  if (!details) return { ...descriptor, reason: 'This runtime could not verify speed capabilities. Refresh capabilities or update Codex.' };
+  let details;
+  try {
+    const invocation = prepareCliSpawn(provider.command, [
+      ...(provider.ignoreUserConfig === true ? ['--ignore-user-config'] : []),
+      ...configArgs, ...buildCodexAuthModeArgs(provider), 'app-server',
+    ], { ...process.env, ...provider.envVars });
+    details = await probeCodexModelsViaAppServer(invocation.command, invocation.args, provider, { includeDetails: true, cwd: context.cwd, ...(Number.isFinite(context.timeoutMs) ? { timeoutMs: Math.max(1, Math.min(15000, context.timeoutMs)) } : {}) });
+  } catch (error) {
+    const reason = codexSpeedProbeFailureMessage(error?.probeFailure);
+    return { ...descriptor, probeFailure: reason ? error.probeFailure : 'unknown', reason: reason ?? codexSpeedProbeFailureMessage('unknown') };
+  }
   if (!['chatgpt', 'chatgptAuthTokens'].includes(details.accountType)
       || (details.config?.model_provider && details.config.model_provider !== 'openai')
       || details.config?.forced_login_method === 'api') {
@@ -117,7 +122,7 @@ export async function prepareExecutionOptions(provider, model, options, source =
     .catch(() => { throw executionOptionsError('Execution speed capabilities could not be verified; retry capability inspection before dispatch.'); });
   for (const [key, value] of Object.entries(attribution.requested)) {
     if (!capabilities.options.find((option) => option.key === key)?.values.includes(value)) {
-      throw executionOptionsError(capabilities.reason || `Execution option ${key}=${value} is unsupported by this route and model`);
+      throw executionOptionsError(capabilities.reason || `Execution option ${key}=${value} is unsupported by this route and model`, capabilities.probeFailure);
     }
   }
   attribution.model = capabilities.model;

@@ -282,7 +282,7 @@ export default function CodeReviewersTab({ view } = {}) {
         <>
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
-              {reviewer}: the last review attempt failed ({fault.code}). {CONFIG_FAULT_REMEDIES[fault.code] || 'Enable or configure the reviewer in Settings → Code Reviewers.'} The next successful review clears this warning.
+              {reviewer}: the last review attempt failed ({fault.code}). {fault.message || CONFIG_FAULT_REMEDIES[fault.code] || 'Enable or configure the reviewer in Settings → Code Reviewers.'} The next successful review clears this warning.
             </Banner>
           ))}
           {reviewerIdentities.filter((entry) => entry.status === 'missing').map((entry) => (

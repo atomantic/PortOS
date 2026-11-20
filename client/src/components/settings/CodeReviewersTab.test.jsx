@@ -207,6 +207,17 @@ describe('CodeReviewersTab', () => {
     expect(screen.getByText(/Select a model on Review chain/)).toBeInTheDocument();
   });
 
+  it('displays the approved speed probe guidance from reviewer health', async () => {
+    const reviewer = 'provider:example-cli';
+    const message = 'The Codex speed probe could not start. Check the configured Codex executable and its permissions, then refresh capabilities.';
+    getCodeReviewDefaults.mockResolvedValue({
+      reviewers: [reviewer],
+      reviewerConfigFaults: { [reviewer]: { code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure: 'launch', message, lastFailureAt: 123 } },
+    });
+    renderTab(<CodeReviewersTab />);
+    expect(await screen.findByText(/provider:example-cli: the last review attempt failed/)).toHaveTextContent(message);
+  });
+
   it('identifies a provider access refusal and its configuration remedy', async () => {
     getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['opencode', 'codex'],

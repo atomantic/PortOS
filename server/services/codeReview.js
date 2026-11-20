@@ -1,4 +1,4 @@
-import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
+import { EXECUTION_OPTIONS_ERROR, codexSpeedProbeFailureMessage } from '../lib/executionOptions.js';
 /**
  * Local-LLM code review backend for the Review Loop's `lmstudio` / `ollama` / `mtplx`
  * reviewer kinds. The follow-up agent (a CLI like Claude / Antigravity / Codex)
@@ -146,7 +146,9 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
         diagnostics: reviewFailureDiagnostics(result.diagnostics),
       }
     } else if (isConfigFault) {
-      entry = { code, reason: 'configuration', failureCount, lastFailureAt: now }
+      entry = { code, reason: 'configuration', failureCount, lastFailureAt: now,
+        ...(code === EXECUTION_OPTIONS_ERROR && codexSpeedProbeFailureMessage(result.probeFailure) ? { probeFailure: result.probeFailure } : {}),
+      }
     } else if (shouldPause) {
       entry = {
         pausedUntil: Number(existing.pausedUntil) > now ? existing.pausedUntil : now + REVIEWER_PAUSE_MS,
@@ -221,6 +223,9 @@ export function reviewerConfigFaultsFromHealth(raw) {
     .map(([reviewer, entry]) => [reviewer, {
       code: entry.code,
       lastFailureAt: entry.lastFailureAt || null,
+      ...(entry.code === EXECUTION_OPTIONS_ERROR && codexSpeedProbeFailureMessage(entry.probeFailure) ? {
+        probeFailure: entry.probeFailure, message: codexSpeedProbeFailureMessage(entry.probeFailure),
+      } : {}),
     }]))
 }
 
@@ -945,7 +950,10 @@ async function loadReviewProvider(backend) {
 // refusal keeps its own message; any other rejection is replaced with `message`
 // so vendor/setup detail (paths, credentials) cannot leak into the review.
 function reviewerCallRejection(error, message, reviewBudget) {
-  if (error.code === EXECUTION_OPTIONS_ERROR) return { error: error.message, code: error.code }
+  if (error.code === EXECUTION_OPTIONS_ERROR) {
+    const probeMessage = codexSpeedProbeFailureMessage(error.probeFailure)
+    return { error: probeMessage ?? error.message, code: error.code, ...(probeMessage ? { probeFailure: error.probeFailure } : {}) }
+  }
   return { error: message, code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }
 }
 
@@ -1050,7 +1058,9 @@ async function settleStreamJsonReply(result) {
 }
 
 function reviewReplyFailure(result, timeoutMs) {
-  return { ok: false, timeoutMs, error: result.error || result.stderr || result.text || 'Reviewer returned no content.', ...pickReviewFailureDetail(result) }
+  const probeMessage = result.code === EXECUTION_OPTIONS_ERROR && codexSpeedProbeFailureMessage(result.probeFailure)
+  return { ok: false, timeoutMs, error: probeMessage || result.error || result.stderr || result.text || 'Reviewer returned no content.',
+    ...(probeMessage ? { probeFailure: result.probeFailure } : {}), ...pickReviewFailureDetail(result) }
 }
 
 // Resolve the exact record the user selected. Never fall back to the active
