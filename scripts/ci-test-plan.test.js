@@ -2509,6 +2509,9 @@ describe('path-gated single-purpose jobs', () => {
       write('server/lib/superColliderRuntime.js', "import './brandNewHelper.js';\n");
       write('server/lib/brandNewHelper.js', 'export const x = 1;\n');
       write('server/lib/unrelated.js', 'export const y = 1;\n');
+      // The planner's module graph covers tracked files, as in CI.
+      execFileSync('git', ['init', '-q'], { cwd: root });
+      execFileSync('git', ['add', '.'], { cwd: root });
       const inputs = collectSuperColliderLiveInputs(root);
       expect(inputs).toContain('server/lib/brandNewHelper.js');
       expect(inputs).not.toContain('server/lib/unrelated.js');

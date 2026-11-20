@@ -689,6 +689,9 @@ suites, and a Windows run (#11871). A server `related` plan also fans out
 when its measured import reach (`serverReach.selected`, the suites the related
 walk will select) exceeds the same cap, even with few explicit selectors: one
 runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+The reach, the DB, browser and client consumer closures and the gated-job
+closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
+the same extractor and resolver pregate's local selection uses.
 The summary names that reach-based fan-out. Every other scoped plan stays on one
 runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
 each selected suite runs. The runner slices the selection itself and never hands Vitest

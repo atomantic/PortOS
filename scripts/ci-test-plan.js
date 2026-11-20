@@ -2,11 +2,10 @@
 
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { dirname, join, posix, relative } from 'path';
+import { dirname, join, posix } from 'path';
 import { fileURLToPath } from 'url';
-import { staticImportClosure, toModuleKey } from '../server/lib/staticImportGraph.js';
 import { escapeRegExp } from '../server/lib/textUtils.js';
-import { moduleImports } from './lib/sourceTokens.js';
+import { MODULE_SOURCE_RE, createModuleGraph } from './lib/moduleGraph.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
@@ -18,7 +17,6 @@ import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
-const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 // `git grep` pathspecs matching every extension TEST_FILE_RE recognizes. A
 // hardcoded `*.test.js`/`.jsx` pair would silently stop finding a `.test.ts(x)`
 // or `.spec.*` contract test added later, reopening the exact under-selection
@@ -664,32 +662,29 @@ export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]
 export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /**
- * Repository-relative static import closure of `entries` in `cwd`, or null
- * when a module cannot be read — the caller then runs the gated job rather
- * than trusting a partial walk. Every entry is an input even when absent, so
- * deleting or renaming one still runs the job that names it.
+ * Repository-relative static import closure of `entries` over `graph`, or
+ * null when a member cannot be read or a relative edge resolves to no file —
+ * the caller then runs the gated job rather than trusting a partial walk.
+ * Every entry is an input even when absent, so deleting or renaming one still
+ * runs the job that names it.
  */
-const staticClosureOf = (entries, cwd) => {
-  try {
-    const files = new Set(entries);
-    for (const entry of entries) {
-      if (!existsSync(join(cwd, entry))) continue;
-      for (const file of staticImportClosure(join(cwd, entry)).files) files.add(toModuleKey(relative(cwd, file)));
-    }
-    return uniqueSorted([...files]);
-  } catch {
-    return null;
-  }
+const staticClosureOf = (entries, graph) => {
+  const closure = graph.closure(entries.filter((entry) => graph.known.has(entry)), graph.staticDependencies);
+  return closure && uniqueSorted([...entries, ...closure]);
 };
 
+/** The module graph over the tracked files of `cwd`. */
+const trackedModuleGraph = (cwd) => createModuleGraph(gitPaths(['ls-files', '-z'], cwd),
+  (path) => readFileSync(join(cwd, path), 'utf8'));
+
 /** Static closure of the linux-containment tests and their Vitest harness. */
-export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
+export const collectLinuxContainmentInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, graph);
 
 /** Static closure of the SuperCollider live suite, its setup script and their Vitest harness. */
-export const collectSuperColliderLiveInputs = (cwd) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, cwd);
+export const collectSuperColliderLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, graph);
 
 /** Static closure of the Docker containment live suite and its Vitest harness. */
-export const collectDockerContainmentLiveInputs = (cwd) => staticClosureOf(DOCKER_CONTAINMENT_LIVE_ENTRIES, cwd);
+export const collectDockerContainmentLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(DOCKER_CONTAINMENT_LIVE_ENTRIES, graph);
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 const touchesJobInputs = (changed, inputs, pattern) => inputs === null
@@ -1567,99 +1562,6 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
-// Computed `import(expr)` sites whose target set is fixed and enumerable. The
-// directory sites contribute every tracked module under the directory as edges;
-// `external` sites load a package or untracked submodule, which no tracked-file
-// edge can represent. A file with any other computed import stays inconclusive
-// only if it is not listed here, so adding a new unbounded site to a listed
-// file means extending this table deliberately.
-// Numbered migrations only: `_helpers`, fixtures and guard tests share the
-// directories but are never loaded by the runners.
-const MIGRATION_FILE_RE = /\/\d+-[^/]*\.js$/;
-const BOUNDED_DYNAMIC_IMPORTS = {
-  'scripts/run-migrations.js': { directory: 'scripts/migrations/', pattern: MIGRATION_FILE_RE },
-  'server/scripts/run-db-migrations.js': { directory: 'server/scripts/db-migrations/', pattern: MIGRATION_FILE_RE },
-  'server/services/eidoverseControllerRegistry.js': {
-    directory: 'server/services/eidoverseControllerDefinitions/', pattern: /\.controller\.js$/,
-  },
-  'server/lib/slashdoLoader.js': { external: true },
-  'server/services/greyboxCapturePage.js': { external: true },
-};
-
-// Browser suites resolve vite and its plugins through resolveClientBundler or
-// the client's require, i.e. packages outside the tracked-file graph.
-const CLIENT_BUNDLER_IMPORT_RE = /\bresolveClientBundler\b|\brequireClient\.resolve\(/;
-
-// A collection owns its snapshot: each source is read and each prerequisite
-// edge is resolved once, even when many browser suites reach the same module.
-// Never retain this across collections: local pregate must see the next edit.
-function createDependencySnapshot(files, cwd) {
-  const known = new Set(files);
-  const sources = new Map();
-  const imports = new Map();
-  const staticEdges = new Map();
-  const testEdges = new Map();
-  const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.json'];
-  const readText = (file) => {
-    if (!sources.has(file)) {
-      try {
-        sources.set(file, { text: readFileSync(join(cwd, file), 'utf8') });
-      } catch (error) {
-        sources.set(file, { error });
-      }
-    }
-    const source = sources.get(file);
-    if (source.error) throw source.error;
-    return source.text;
-  };
-  const resolve = (file, specifiers) => {
-    const dependencies = [];
-    let inconclusive = false;
-    for (const specifier of specifiers) {
-      if (!specifier.startsWith('.')) continue;
-      const path = posix.normalize(posix.join(posix.dirname(file), specifier.split(/[?#]/)[0]));
-      // Preserve all candidates when extensions collide, not a guessed bundler precedence.
-      const candidates = [path, ...extensions.map((extension) => `${path}${extension}`),
-        ...extensions.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
-      if (candidates.length === 0) inconclusive = true;
-      dependencies.push(...candidates);
-    }
-    return { dependencies, inconclusive };
-  };
-  const importsFor = (file) => {
-    if (!imports.has(file)) imports.set(file, moduleImports(readText(file), { jsx: !/\.[cm]?ts$/.test(file) }));
-    return imports.get(file);
-  };
-  const staticDependencies = (file) => {
-    if (!staticEdges.has(file)) {
-      staticEdges.set(file, resolve(file, importsFor(file).statics));
-    }
-    return staticEdges.get(file);
-  };
-  const testDependencies = (file) => {
-    if (!testEdges.has(file)) {
-      const { deferred, computed } = importsFor(file);
-      const statics = staticDependencies(file);
-      const dynamic = resolve(file, deferred);
-      const bounded = computed ? boundedComputedImports(file) : null;
-      testEdges.set(file, {
-        dependencies: [...statics.dependencies, ...dynamic.dependencies, ...(bounded?.dependencies ?? [])],
-        inconclusive: (computed && !bounded) || statics.inconclusive || dynamic.inconclusive,
-      });
-    }
-    return testEdges.get(file);
-  };
-  const boundedComputedImports = (file) => {
-    const site = BOUNDED_DYNAMIC_IMPORTS[file];
-    if (site?.directory) {
-      return { dependencies: files.filter((path) => path.startsWith(site.directory) && site.pattern.test(path)) };
-    }
-    if (site?.external || CLIENT_BUNDLER_IMPORT_RE.test(readText(file))) return { dependencies: [] };
-    return null;
-  };
-  return { readText, staticDependencies, testDependencies };
-}
-
 function isSharedClientDependency(path) {
   return path.startsWith('server/lib/') || path.startsWith('scripts/lib/');
 }
@@ -1667,35 +1569,16 @@ function isSharedClientDependency(path) {
 // Start from every browser source, including lazy-loaded pages, then follow
 // relative static imports and re-exports across directory boundaries. Unresolved
 // edges must widen CI rather than disappearing from a negative graph walk.
-function collectClientDependencies(files, snapshot) {
-  const entries = files.filter((path) => path.startsWith('client/src/')
+function collectClientDependencies(graph) {
+  const entries = graph.files.filter((path) => path.startsWith('client/src/')
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
-  const closure = collectTestDependencies(entries, snapshot.staticDependencies);
-  return closure?.filter((path) => path.startsWith('server/lib/')) ?? null;
+  return graph.closure(entries, graph.staticDependencies)?.filter((path) => path.startsWith('server/lib/')) ?? null;
 }
 
 // Project DB and browser consumers without importing test code or Vitest (the
 // planner runs before npm installation). Deferred literals participate; unreadable,
 // unresolved and computed imports retain conservative prerequisite coverage.
-function collectTestDependencies(entries, dependenciesFor) {
-  const pending = [...entries];
-  const seen = new Set();
-  let inconclusive = false;
-  try {
-    for (let index = 0; index < pending.length; index++) {
-      const file = pending[index];
-      if (seen.has(file)) continue;
-      seen.add(file);
-      if (!MODULE_SOURCE_RE.test(file)) continue;
-      const edges = dependenciesFor(file);
-      if (edges.inconclusive) inconclusive = true;
-      pending.push(...edges.dependencies);
-    }
-  } catch {
-    return null;
-  }
-  return inconclusive ? null : uniqueSorted([...seen]);
-}
+const collectTestDependencies = (graph, entries) => graph.closure(entries, graph.testDependencies);
 
 /**
  * Collect the repository-derived inputs that surround the pure plan builder.
@@ -1764,10 +1647,10 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   }));
 
   const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;
-  const snapshot = createDependencySnapshot(dependencyFiles, cwd);
+  const graph = createModuleGraph(dependencyFiles, (path) => readFileSync(join(cwd, path), 'utf8'));
   const clientDependencies = collectedChangedFiles.some((path) => path.startsWith('server/lib/')
     && isExecutable(path) && !isTestFile(path))
-    ? collectClientDependencies(dependencyFiles, snapshot)
+    ? collectClientDependencies(graph)
     : [];
 
   // Include test fixtures and literal deferred imports, unlike the production
@@ -1777,17 +1660,17 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
     && isExecutable(path) && !isTestFile(path))
     ? Object.fromEntries(dependencyFiles.filter((path) => path.startsWith('client/src/')
       && isTestFile(path)).map((test) => [test,
-      collectTestDependencies([test], snapshot.testDependencies)?.filter(isSharedClientDependency) ?? null]))
+      collectTestDependencies(graph, [test])?.filter(isSharedClientDependency) ?? null]))
     : {};
 
   const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
   const dbDependencies = hasRelatedServerSource
-    ? collectTestDependencies(resolveDbTestFiles(dependencyFiles), snapshot.testDependencies)
+    ? collectTestDependencies(graph, resolveDbTestFiles(dependencyFiles))
     : [];
   const browserDependencies = hasRelatedServerSource
     ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
-      collectTestDependencies([suite], snapshot.testDependencies)]))
+      collectTestDependencies(graph, [suite])]))
     : {};
 
   // Each changed manifest at the diff base vs the tree under test (the working
@@ -1820,9 +1703,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   if (hasRelatedServerSource) {
     try {
       serverReach = measureRepoImportReach({
-        cwd,
-        files: dependencyFiles,
-        readText: snapshot.readText,
+        graph,
         sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
           && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
       });
@@ -1850,9 +1731,9 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
 
   // A forced-full run with no gated diff runs every gated job, so it skips the walks.
   const walkGates = !forceFull || gatedChangedFiles !== null;
-  const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd) : null;
-  const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd) : null;
-  const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd) : null;
+  const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd, graph) : null;
+  const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd, graph) : null;
+  const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd, graph) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,

@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildImportGraph, formatReachSummary, importReachReport } from './importReach.js';
+import { formatReachSummary, importEdges, importReachReport } from './importReach.js';
+import { createModuleGraph } from './moduleGraph.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 
 const SOURCES = new Map([
@@ -30,7 +31,7 @@ const SOURCES = new Map([
   ['svc/core.test.js', "import { core } from './core';\n"],
 ]);
 const isTest = (rel) => rel.endsWith('.test.js');
-const graph = buildImportGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null);
+const graph = importEdges(createModuleGraph([...SOURCES.keys()], (rel) => SOURCES.get(rel) ?? null));
 
 describe('importReachReport', () => {
   it('counts a dynamic edge for selection while the static view stops at it', () => {

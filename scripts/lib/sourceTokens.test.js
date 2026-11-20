@@ -13,7 +13,7 @@ describe('no-install module import extraction', () => {
       'if (ready) /import(unknown)/.test(text);',
       'object.import(unknown); object?.import(unknown);',
     ].join('\n');
-    expect(moduleImports(source)).toEqual({ statics: [], deferred: [], computed: false });
+    expect(moduleImports(source)).toEqual({ statics: [], deferred: [], mocked: [], computed: false });
   });
 
   it('finds real declarations, re-exports, deferred literals and template expressions', () => {
@@ -26,7 +26,20 @@ describe('no-install module import extraction', () => {
     ].join('\n');
     expect(moduleImports(source)).toEqual({
       statics: ['./side.js', './static.js', './bridge.js', './all.js'],
-      deferred: ['./lazy.js', './template.js', './expression.js'], computed: false,
+      deferred: ['./lazy.js', './template.js', './expression.js'], mocked: [], computed: false,
+    });
+  });
+
+  it('lists literal vi.mock-family targets without counting them as loads', () => {
+    const source = [
+      'vi.mock("./mocked.js", () => ({})); vi.doMock(`./doMocked.js`); vi.unmock("./unmocked.js");',
+      'const real = await vi.importActual("./actual.js"); const fake = await vi.importMock("./fake.js");',
+      'vi.mock(modulePath); vi.spyOn(module, "mock"); other.vi.mock("./member.js"); // vi.mock("./comment.js")',
+      `const fixture = "vi.mock('./quoted.js')";`,
+    ].join('\n');
+    expect(moduleImports(source)).toEqual({
+      statics: [], deferred: [], computed: false,
+      mocked: ['./mocked.js', './doMocked.js', './unmocked.js', './actual.js', './fake.js'],
     });
   });
 
@@ -43,16 +56,16 @@ describe('no-install module import extraction', () => {
       <Other value={import('./attribute.js')} />
     }</div>`;
     expect(moduleImports(source)).toEqual({ statics: [],
-      deferred: ['./child.js', './nested.js', './attribute.js'], computed: false });
+      deferred: ['./child.js', './nested.js', './attribute.js'], mocked: [], computed: false });
     expect(moduleImports('const view = <>"{import(modulePath)}"</>').computed).toBe(true);
     expect(() => moduleImports('const view = <Unknown>')).toThrow(/JSX/);
   });
 
   it('distinguishes TypeScript assertions and TSX generic arrows from JSX', () => {
     const ts = 'const identity = <T>(value: T) => value; const asserted = <Thing>value; import("./typed.js");';
-    expect(moduleImports(ts, { jsx: false })).toEqual({ statics: [], deferred: ['./typed.js'], computed: false });
+    expect(moduleImports(ts, { jsx: false })).toEqual({ statics: [], deferred: ['./typed.js'], mocked: [], computed: false });
     const tsx = 'const identity = <T,>(value: T) => import("./generic.js"); const view = <div>{import("./jsx.js")}</div>;';
-    expect(moduleImports(tsx)).toEqual({ statics: [], deferred: ['./generic.js', './jsx.js'], computed: false });
+    expect(moduleImports(tsx)).toEqual({ statics: [], deferred: ['./generic.js', './jsx.js'], mocked: [], computed: false });
   });
 
   it('does not treat division as a regex and hide an executable import', () => {
