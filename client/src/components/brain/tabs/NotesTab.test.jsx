@@ -39,7 +39,7 @@ const NotesTab = (await import('./NotesTab')).default;
 // jsdom has no layout engine and Tailwind is never compiled for the test run,
 // so touch-target size is asserted from the utility tokens the element renders
 // with rather than from measured geometry — the same approach as the repo-wide
-// guard in src/a11y/*.conventions.test.js and Layout.test.jsx. Reverting
+// guard in src/test/guards/a11y/ and Layout.test.jsx. Reverting
 // NotesTab.jsx to its pre-fix state fails every case in this file.
 //
 // Tailwind `min-h-`/`min-w-`/`h-`/`w-` token → px, for both the arbitrary value

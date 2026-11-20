@@ -14,8 +14,9 @@
  * cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
@@ -69,18 +70,36 @@ export const guardCheckModules = (dir) => readdirSync(dir).filter((name) => /\.t
  * failure reads `<runner> > <check> > …` and `-t <check>` runs one check. A check
  * that throws while loading fails as its own `loads` test, so one broken module
  * cannot hide the others' results.
+ *
+ * Loading a check runs its imports and module-scope work, which no test duration
+ * covers. When `PORTOS_GUARD_LOAD_LOG` names a file (scripts/run-ci-tests.js sets
+ * it), each load appends `{ runner, check, ms }` there, so the guard budget charges
+ * that time to the check (guardBudget.js).
  */
-export function registerGuardChecks(dir, { describe, it, load }) {
+export function registerGuardChecks(dir, { describe, it, load, env = process.env }) {
+  const runner = runnerOfDir(fileURLToPath(dir));
   for (const name of guardCheckModules(dir)) {
-    describe(name.replace(/\.test\.jsx?$/, ''), async () => {
+    const check = name.replace(/\.test\.jsx?$/, '');
+    describe(check, async () => {
+      const started = performance.now();
       try {
         await load(name);
       } catch (error) {
         it('loads', () => { throw error; });
       }
+      if (env.PORTOS_GUARD_LOAD_LOG && runner) {
+        appendFileSync(env.PORTOS_GUARD_LOAD_LOG, `${JSON.stringify({ runner, check, ms: performance.now() - started })}\n`);
+      }
     });
   }
 }
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** The runner (repo-relative) whose check directory is `absDir`, or null. */
+const runnerOfDir = (absDir) => {
+  const rel = relative(REPO_ROOT, absDir).split(sep).join('/').replace(/\/$/, '');
+  return GUARD_CHECK_DIRS.find(({ dir }) => dir === rel)?.runner ?? null;
+};
 
 /** Tracked guard tests (relative paths), by suffix alone: no source is read. */
 export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();

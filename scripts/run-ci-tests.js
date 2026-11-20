@@ -21,7 +21,7 @@ import {
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards } from './lib/guardBudget.js';
+import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
 import { getAlwaysRunTests } from './lib/ciPlanRules.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -448,9 +448,9 @@ export async function spawnNpm(scope, script, extraArgs, label, {
  * with no reading (it crashed, or ran nothing) is left to the test status,
  * which already fails that run.
  */
-function guardBudgetStatus(files, results, { enforce }) {
+function guardBudgetStatus(files, results, loads, { enforce }) {
   const watched = new Set(files);
-  const timed = guardDurations(results.filter(({ file }) => watched.has(file)));
+  const timed = guardDurations(results.filter(({ file }) => watched.has(file)), loads);
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
   if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
@@ -575,6 +575,8 @@ async function main() {
   }
   const passed = [];
   const results = [];
+  // Each structural guard runner logs its checks' load times here (registerGuardChecks).
+  const loads = [];
   let interrupted = false;
   const onResult = (result) => {
     if (result.interrupted) interrupted = true;
@@ -591,15 +593,19 @@ async function main() {
       if (interrupted) break;
       const selection = writeSelectionFile({ scope, include, exclude: [] });
       process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+      const loadLog = join(selection.dir, 'guard-loads.jsonl');
+      process.env.PORTOS_GUARD_LOAD_LOG = loadLog;
       try {
         status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult })) || status;
       } finally {
+        loads.push(...readGuardLoads(loadLog));
         rmSync(selection.dir, { recursive: true, force: true });
       }
-      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, { enforce: enforceGuardBudget }) || status;
+      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, loads, { enforce: enforceGuardBudget }) || status;
     }
   } finally {
-    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results)));
+    delete process.env.PORTOS_GUARD_LOAD_LOG;
+    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
   process.exitCode = status;
   if (!memoDir || passed.length === 0) return;

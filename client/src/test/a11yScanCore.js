@@ -46,7 +46,7 @@
  * can't fail the suite.
  *
  * The scanner behind these guards is split across `src/test/a11yScan*.js`; the rules
- * live one family per file in `src/a11y/*.conventions.test.js`.
+ * live one family per file in `src/test/guards/a11y/`.
  */
 
 import { join, dirname } from 'path';

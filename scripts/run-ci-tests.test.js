@@ -563,7 +563,8 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
     const fixture = mkdtempSync(join(tmpdir(), 'portos-guard-budget-'));
     try {
       // Every selected file passes. The standalone guard reports a wall time over the CI
-      // budget; the runner's total is long, but only its one slow check is over.
+      // budget; the runner's total is long, but only its slow check is over, and one more
+      // check is over only by the load time the runner logs for it.
       installFakeNpm(fixture, [
         'const fs = require("fs");',
         'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
@@ -576,6 +577,9 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
         '    { status: "passed", ancestorTitles: ["fastCheck", "case"], duration: 5 }] }',
         '  : { name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
         '    endTime: rel.endsWith(slow) ? 6500 : 10, assertionResults: [{ status: "passed" }] });',
+        'if (selection.include.some(rel => rel.endsWith("repo.guard.test.js")) && process.env.PORTOS_GUARD_LOAD_LOG) {',
+        '  fs.appendFileSync(process.env.PORTOS_GUARD_LOAD_LOG, JSON.stringify({ runner: "server/test/guards/repo.guard.test.js", check: "fastCheck", ms: slow === "no-such-file" ? 1 : 4600 }) + "\\n");',
+        '}',
         'fs.writeFileSync(out, JSON.stringify({ testResults }));',
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
@@ -589,7 +593,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
-      const over = `${guard} 6.5s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
+      const over = `${guard} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
       const ranSets = (stdout) => (stdout.match(/^RAN .*$/gm) ?? []).map((line) => JSON.parse(line.slice(4)).sort());
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
@@ -610,7 +614,7 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > slowCheck 0.0s; ${runner} > fastCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }

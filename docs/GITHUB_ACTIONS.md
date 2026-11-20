@@ -223,7 +223,7 @@ or its walk reads a temporary directory). A scanner the detectors cannot see
 (one that scans through an imported helper) is still selected by its name.
 
 Because they run on every PR, each always-run guard has a time budget: each
-structural guard runner's checks (the sum of a check's test times) and every other
+structural guard runner's checks (a check's load plus its test times) and every other
 always-run file whole (`CI_GUARD_BUDGET_MS`, 4s, in `scripts/lib/guardBudget.js`;
 ~1.6x the 2.5s local target). Only the scheduled Linux server run enforces it
 (`CI_GUARD_BUDGET=enforce`, `ci.yml`, #16810): `scripts/run-ci-tests.js` runs the
