@@ -1749,6 +1749,10 @@ describe('CI test impact planner', () => {
       'scripts/ci-base-sha.test.js',
       'scripts/lib/githubOutput.js',
       'scripts/ci-test-plan.js',
+      'scripts/lib/ciPlanRules.js',
+      'scripts/lib/ciPlanOutput.js',
+      'scripts/lib/moduleGraph.test.js',
+      'scripts/lib/moduleGraph.js',
       'scripts/run-ci-tests.js',
       'scripts/run-ci-lint.js',
       'scripts/verify-ci-status.js',
@@ -1771,6 +1775,9 @@ describe('CI test impact planner', () => {
       'scripts/run-ci-tests.test.js',
       'scripts/ci-test-plan.js',
       'scripts/ci-test-plan.test.js',
+      // run-ci-tests.js loads the planner's rules on windows-latest.
+      'scripts/lib/ciPlanRules.js',
+      'scripts/lib/ciPlanDependencies.js',
     ]) expect(windowsModeOf(path), path).toBe('files');
     // Still a full Linux plan, but nothing on windows-latest loads them: the
     // unrelated scripts leave Windows skipped.

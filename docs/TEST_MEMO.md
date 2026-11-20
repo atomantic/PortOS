@@ -401,7 +401,7 @@ miss is caught by the next completed run.
 
 The gate-tooling suites are the exception (#16798). They spawn git or carry
 `test-memo: never`, so none can ever earn a record, and the rule above would
-select them on nearly every diff. `TOOLING_TESTS` (`scripts/ci-test-plan.js`)
+select them on nearly every diff. `TOOLING_TESTS` (`scripts/lib/ciPlanRules.js`)
 names them: `planTestMemo` drops one from the related walk's result unless a
 changed source is a member of its closure or one of its tracked inputs. The
 planner supplies the rest through `TOOLING_OWNER_RE` (`scripts/**`, `.github/**`,

@@ -1,6 +1,6 @@
 // Real-tree half of the run-ci-tests contract: it plans over this repository's own client
 // test dependency graph, so a client edit can break it with no import edge into the runner.
-// It stays out of TOOLING_TESTS (scripts/ci-test-plan.js) and is selected by the memo walk as
+// It stays out of TOOLING_TESTS (scripts/lib/ciPlanRules.js) and is selected by the memo walk as
 // before; run-ci-tests.test.js keeps the fixture-only cases.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'fs';

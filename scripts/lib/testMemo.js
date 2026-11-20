@@ -67,7 +67,7 @@ import { createHash } from 'node:crypto';
 import { builtinModules } from 'node:module';
 import { posix } from 'node:path';
 import { tokenize, staticEdges } from './sourceTokens.js';
-import { getAlwaysRunTests, FIXTURE_OWNERS } from '../ci-test-plan.js';
+import { getAlwaysRunTests, FIXTURE_OWNERS } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 
 export { tokenize } from './sourceTokens.js';
