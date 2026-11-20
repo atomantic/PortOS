@@ -440,6 +440,7 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
 
   it('shows parked skip causes while leaving unattributed parks unchanged', () => {
     renderControls({
+      openSections: false,
       config: {
         type: 'on-demand',
         perpetual: true,
@@ -456,10 +457,11 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
         }
       }
     });
-    expect(screen.getByText('1 app(s) parked (no-actionable-issues) — 49 needs-input, 17 blocked')).toBeInTheDocument();
+    expect(screen.getByText('1 app(s) parked (no-actionable-issues) — 49 needs-input, 17 blocked')).toBeVisible();
 
     cleanup();
     renderControls({
+      openSections: false,
       config: {
         type: 'on-demand',
         perpetual: true,
@@ -474,7 +476,7 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
         }
       }
     });
-    expect(screen.getByText('1 app(s) parked (branch-reconcile)')).toBeInTheDocument();
+    expect(screen.getByText('1 app(s) parked (branch-reconcile)')).toBeVisible();
   });
 });
 
@@ -542,6 +544,7 @@ describe('GlobalConfigControls — failed saves', () => {
 describe('GlobalConfigControls — perpetual probe-failure stall', () => {
   it('renders the redacted probe-failure diagnostic alongside a still-draining status', () => {
     renderControls({
+      openSections: false,
       config: {
         type: 'on-demand',
         cronExpression: null,
@@ -557,12 +560,12 @@ describe('GlobalConfigControls — perpetual probe-failure stall', () => {
         }
       }
     });
-    expect(screen.getByText(/Probe failing/)).toBeInTheDocument();
-    expect(screen.getByText(/gh-list-failed/)).toBeInTheDocument();
-    expect(screen.getByText(/authentication failed/)).toBeInTheDocument();
-    expect(screen.getByText(/3 consecutive/)).toBeInTheDocument();
+    expect(screen.getByText(/Probe failing/)).toBeVisible();
+    expect(screen.getByText(/gh-list-failed/)).toBeVisible();
+    expect(screen.getByText(/authentication failed/)).toBeVisible();
+    expect(screen.getByText(/3 consecutive/)).toBeVisible();
     // Still reports the drain as healthy — a stall does not imply a park.
-    expect(screen.getByText(/Draining — actionable work available/)).toBeInTheDocument();
+    expect(screen.getByText(/Draining — actionable work available/)).toBeVisible();
   });
 
   it('renders nothing extra when the probe is healthy (no stall)', () => {
