@@ -10,7 +10,8 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, readFileSync, mkdtempSync, rmSync, writeSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeSync } from 'fs';
+import { readFile } from 'node:fs/promises';
 import { constants, homedir, tmpdir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
@@ -363,6 +364,21 @@ const MODULE_FILE = /\.[cm]?[jt]sx?$/;
 const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const baseName = path => path.slice(path.lastIndexOf('/') + 1).replace(MODULE_FILE, '');
 
+// Overlap file reads without queuing an open for every file in the checkout.
+const FOCUSED_READ_LIMIT = 32;
+
+async function scanTexts(files, readText, visit) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(files.length, FOCUSED_READ_LIMIT) }, async () => {
+    while (next < files.length) {
+      const file = files[next++];
+      const text = await readText(file);
+      if (text != null) visit(file, text);
+    }
+  });
+  await Promise.all(workers);
+}
+
 /**
  * Text a file must contain to import `target`: its base name, or for a directory
  * index (`dir/index.js`) the directory name or a bare `'.'`/`'..'` specifier,
@@ -381,20 +397,19 @@ function importNeedles(target) {
  *
  * @returns {Map<string, string[]>} target -> sorted, de-duplicated referrers
  */
-function referrersOf(targets, files, readText) {
+async function referrersOf(targets, files, readText) {
   if (!targets.length) return new Map();
   const referrers = new Map(targets.map(target => [target, new Set()]));
   const known = new Set(targets);
   // Cheap prefilter: a resolved specifier always spells one of the target's needles.
   const spelled = new RegExp([...new Set(targets.flatMap(importNeedles))].join('|'));
-  for (const file of files) {
-    const text = readText(file);
-    if (text == null || !spelled.test(text)) continue;
+  await scanTexts(files, readText, (file, text) => {
+    if (!spelled.test(text)) return;
     for (const spec of testReferenceSpecifiers(text)) {
       const target = resolveSpecifier(file, spec, known);
       if (target && target !== file) referrers.get(target).add(file);
     }
-  }
+  });
   return new Map([...referrers].map(([target, set]) => [target, [...set].sort()]));
 }
 
@@ -409,7 +424,7 @@ function referrersOf(targets, files, readText) {
  *
  * @returns {Map<string, string[]>} changed file -> ranked, de-duplicated readers
  */
-function textReaders(changed, files, readText) {
+async function textReaders(changed, files, readText) {
   const quoted = name => new RegExp(`['"\`](?:\\.{0,2}/)?${escapeRegExp(name)}['"\`]`);
   const spells = new Map();
   for (const path of changed) {
@@ -417,14 +432,12 @@ function textReaders(changed, files, readText) {
     const byName = quoted(path.slice(path.lastIndexOf('/') + 1));
     spells.set(path, { byPath, byName, root: !path.includes('/'), full: new Set(), name: new Set() });
   }
-  for (const file of files) {
-    const text = readText(file);
-    if (text == null) continue;
+  await scanTexts(files, readText, (file, text) => {
     for (const entry of spells.values()) {
       if (entry.byPath.test(text)) entry.full.add(file);
       else if (entry.byName.test(text)) entry.name.add(file);
     }
-  }
+  });
   const weight = new Map();
   for (const { full, name } of spells.values()) for (const file of [...full, ...name]) weight.set(file, (weight.get(file) ?? 0) + 1);
   const order = (a, b) => (weight.get(b) - weight.get(a)) || (a < b ? -1 : a > b ? 1 : 0);
@@ -452,7 +465,7 @@ function textReaders(changed, files, readText) {
  * member. Whatever a cap leaves out is recorded in `relatedOverflow` and
  * reported as skipped.
  */
-export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
+export async function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = readRepoText) {
   const local = downgradeFullPlan(plan, trackedFiles, changedFiles);
   const tracked = new Set(trackedFiles);
   const tests = trackedFiles.filter(path => /\.test\.[cm]?[jt]sx?$/.test(path));
@@ -476,10 +489,12 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
     }
   }
   const relatedOverflow = [];
-  const texts = new Map();
-  const memoRead = path => {
-    if (!texts.has(path)) texts.set(path, readText(path));
-    return texts.get(path);
+  const testTexts = new Map();
+  const readWithTestMemo = path => {
+    // Only test files are scanned again by later passes.
+    if (!unitTests.has(path)) return readText(path);
+    if (!testTexts.has(path)) testTexts.set(path, readText(path));
+    return testTexts.get(path);
   };
   const addCapped = (source, tests, hop, budget = RELATED_SUITE_CAP) => {
     const fresh = tests.filter(test => !focused.has(test));
@@ -490,18 +505,22 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
   };
   const candidateTests = () => [...unitTests].filter(path => !focused.has(path));
   if (changedSources.length) {
-    const hopOne = referrersOf(changedSources, candidateTests(), memoRead);
-    for (const [source, tests] of hopOne) addCapped(source, tests, 1, RELATED_SUITE_CAP);
-
-    // Hop two: tests that reference a non-test module importing a changed source.
+    // Direct test references and intermediary modules share one read pass.
     const changed = new Set(changedSources);
     const modules = trackedFiles.filter(path => MODULE_FILE.test(path) && !/\.test\./.test(path) && !changed.has(path));
-    const importersOf = referrersOf(changedSources, modules, memoRead);
+    const firstHop = await referrersOf(changedSources, [...candidateTests(), ...modules], readWithTestMemo);
     const importerSources = new Map();
-    for (const [source, importers] of importersOf) {
-      for (const importer of importers) importerSources.set(importer, [...(importerSources.get(importer) ?? []), source]);
+    for (const [source, referrers] of firstHop) {
+      const tests = [];
+      for (const file of referrers) {
+        if (unitTests.has(file)) tests.push(file);
+        else importerSources.set(file, [...(importerSources.get(file) ?? []), source]);
+      }
+      addCapped(source, tests, 1);
     }
-    const viaImporter = referrersOf([...importerSources.keys()].sort(), candidateTests().filter(test => !HEAVY_SUITES.has(test)), memoRead);
+
+    // Hop two: tests that reference a non-test module importing a changed source.
+    const viaImporter = await referrersOf([...importerSources.keys()].sort(), candidateTests().filter(test => !HEAVY_SUITES.has(test)), readWithTestMemo);
     // An importer's own suite (same stem) is its owner, so it outranks the rest when a cap bites.
     const secondHop = new Map(changedSources.map(source => [source, new Map()]));
     for (const [importer, tests] of viaImporter) {
@@ -521,7 +540,7 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
   // suite selected for an import never counts against it.
   if (changedData.length) {
     const candidates = candidateTests().filter(test => !HEAVY_SUITES.has(test));
-    const found = textReaders(changedData, candidates, memoRead);
+    const found = await textReaders(changedData, candidates, readWithTestMemo);
     for (const [source, tests] of found) addCapped(source, tests, 'text');
   }
   for (const scope of ['server', 'client']) {
@@ -532,9 +551,9 @@ export function focusedLocalPlan(plan, trackedFiles, changedFiles, readText = re
   return local;
 }
 
-function readRepoText(path) {
+async function readRepoText(path) {
   try {
-    return readFileSync(join(REPO_ROOT, path), 'utf8');
+    return await readFile(join(REPO_ROOT, path), 'utf8');
   } catch {
     return null;
   }
@@ -1006,6 +1025,21 @@ async function main() {
   if (workingTreeFiles.length > 0) {
     console.log(`📝 Included ${workingTreeFiles.length} uncommitted changed file(s) in this plan.`);
   }
+  // A clean status already proves the committed tree. Snapshot dirty input
+  // before selection reads so a mid-plan edit also invalidates the receipt.
+  const initiallyClean = workingTreeFiles.length === 0;
+  let tree = initiallyClean ? repo.tree : null;
+  let initialHashError;
+  if (!initiallyClean && !options.planOnly) {
+    try {
+      tree = validatedTreeHash(REPO_ROOT, { indexPath });
+    } catch (error) {
+      // Let the hidden-content scan give the more specific diagnostic for
+      // unreadable input, such as a nested repo with no checked-out HEAD.
+      initialHashError = error.message;
+    }
+  }
+
   const changedOnDisk = new Set(workingTreeFiles);
   const trackedFiles = gitPaths(['ls-files', '-z'])
     .filter(path => !changedOnDisk.has(path) || existsSync(join(REPO_ROOT, path)));
@@ -1032,7 +1066,7 @@ async function main() {
   const guardPlan = downgradeFullPlan(plan, trackedFiles, changedFiles);
   if (options.guardsOnly) plan = { ...guardPlan, lint: { mode: 'skip', files: [] } };
   if (downgraded) {
-    plan = focusedLocalPlan(plan, presentFiles, changedFiles);
+    plan = await focusedLocalPlan(plan, presentFiles, changedFiles);
     console.log('ℹ️ Local validation: lint, structural guards and focused tests only. Hosted CI owns broad coverage; pass --full for the complete CI plan locally.');
   }
 
@@ -1074,19 +1108,7 @@ async function main() {
 
   const startedAt = new Date().toISOString();
   const owner = installOwnerCancellation();
-  // A clean status already proves the committed tree. Dirty trees use a
-  // temporary index, preserving the live index and Git's filters and modes.
-  const initiallyClean = status.files.length === 0;
-  let tree = null;
-  let initialHashError;
-  try {
-    tree = initiallyClean ? repo.tree : validatedTreeHash(REPO_ROOT, { indexPath });
-    console.log(`🌳 Validating working tree ${tree.slice(0, 12)} at HEAD ${headSha.slice(0, 9)}.`);
-  } catch (error) {
-    // Let the first stage give the more specific diagnostic for unreadable
-    // input, e.g. an untracked nested Git repository with no checked-out HEAD.
-    initialHashError = error.message;
-  }
+  if (tree !== null) console.log(`🌳 Validating working tree ${tree.slice(0, 12)} at HEAD ${headSha.slice(0, 9)}.`);
 
   const stageResult = (stage) => ({ ...stage, command: describeStageCommand(stage), status: 'not-run', durationMs: 0 });
   const results = stages.map(stageResult);

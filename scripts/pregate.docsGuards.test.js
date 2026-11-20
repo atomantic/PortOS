@@ -12,15 +12,15 @@ describe('focused local policy: size and index guards (#16475)', () => {
   const tracked = ['docs/docs-index.test.js', 'scripts/agent-instructions-files.guard.test.js', 'docs/GITHUB_ACTIONS.md', 'ETHOS.md', 'AGENTS.md', 'server/AGENTS.md'];
   // The planner's plan lacks the local-only stages pregate adds; give them their idle defaults.
   const local = { browser: { files: [] }, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false, macosNative: false };
-  const focusedFor = (changed) => focusedLocalPlan({ ...local, ...buildCiTestPlan(changed, { trackedFiles: tracked }) }, tracked, changed, () => null).server.files;
+  const focusedFor = async (changed) => (await focusedLocalPlan({ ...local, ...buildCiTestPlan(changed, { trackedFiles: tracked }) }, tracked, changed, () => null)).server.files;
 
-  it('runs the docs size ratchet for a docs or root markdown edit', () => {
-    expect(focusedFor(['docs/GITHUB_ACTIONS.md'])).toContain('docs/docs-index.test.js');
-    expect(focusedFor(['ETHOS.md'])).toContain('docs/docs-index.test.js');
+  it('runs the docs size ratchet for a docs or root markdown edit', async () => {
+    expect(await focusedFor(['docs/GITHUB_ACTIONS.md'])).toContain('docs/docs-index.test.js');
+    expect(await focusedFor(['ETHOS.md'])).toContain('docs/docs-index.test.js');
   });
 
-  it('runs the instruction-file byte caps for an AGENTS.md edit', () => {
-    expect(focusedFor(['AGENTS.md'])).toContain('scripts/agent-instructions-files.guard.test.js');
-    expect(focusedFor(['server/AGENTS.md'])).toContain('scripts/agent-instructions-files.guard.test.js');
+  it('runs the instruction-file byte caps for an AGENTS.md edit', async () => {
+    expect(await focusedFor(['AGENTS.md'])).toContain('scripts/agent-instructions-files.guard.test.js');
+    expect(await focusedFor(['server/AGENTS.md'])).toContain('scripts/agent-instructions-files.guard.test.js');
   });
 });
