@@ -92,7 +92,7 @@ describe('issue-create paths mention dispatch + contributor labels (#4351)', () 
     const rels = hits.map(({ file }) => relative(ROOT, file));
     expect(rels.some((r) => r.includes('workTracker.js'))).toBe(true);
     expect(rels.some((r) => r.includes('quotaBurnPresets.js'))).toBe(true);
-    expect(rels.some((r) => r.includes('prompts.js'))).toBe(true);
+    expect(rels).toContain(join('server', 'services', 'taskPromptDefaults', 'catalog', 'maintenance.js'));
     expect(rels.some((r) => r.includes('selfDiagnostics.js'))).toBe(false);
   });
 
