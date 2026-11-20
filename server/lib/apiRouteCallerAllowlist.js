@@ -170,7 +170,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music-video/:id/spend',
     '/api/ports/allocate',
     '/api/ports/scan',
-    // scripts/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
+    // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',
     '/api/video-gen/models/:modelId/download',
