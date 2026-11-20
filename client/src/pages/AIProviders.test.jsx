@@ -2191,7 +2191,9 @@ describe('compatibility matrix', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New preset: Claude Code on Ollama' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Compose a new preset' });
-    expect(within(dialog).getByLabelText('Harness')).toHaveValue('claude');
+    // The popover is a lazy chunk that mounts already open, so its catalog loads
+    // after the dialog shell appears; the seeded pair is selectable only once it has.
+    await waitFor(() => expect(within(dialog).getByLabelText('Harness')).toHaveValue('claude'));
     expect(within(dialog).getByLabelText('Method')).toHaveValue('cli');
     expect(within(dialog).getByLabelText('Service')).toHaveValue('ollama');
     expect(within(dialog).queryByRole('button', { name: 'Use once' })).not.toBeInTheDocument();
