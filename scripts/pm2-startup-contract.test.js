@@ -23,7 +23,9 @@ describe('PM2 startup app sets', () => {
     expect(devApps).toContain('portos-ui');
     expect(devStart).toContain("pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));");
 
-    for (const command of ['start', 'pm2:start', 'pm2:restart']) {
+    const productionSelection = packageScripts.start.match(/pm2-start\.js ([\w,-]+)$/);
+    expect(productionSelection?.[1].split(',')).toEqual(productionApps);
+    for (const command of ['pm2:start', 'pm2:restart']) {
       const selection = packageScripts[command].match(/--only "([^"]+)"/);
       expect(selection?.[1].split(','), command).toEqual(productionApps);
     }
@@ -31,8 +33,8 @@ describe('PM2 startup app sets', () => {
 
   it('removes a stale Vite entry before production startup', () => {
     const start = packageScripts.start;
-    expect(start.indexOf('pm2 delete ecosystem.config.cjs')).toBeGreaterThan(-1);
-    expect(start.indexOf('pm2 delete ecosystem.config.cjs')).toBeLessThan(start.indexOf('pm2 start ecosystem.config.cjs'));
+    expect(start.indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);
+    expect(start.indexOf('pm2 delete portos-ui')).toBeLessThan(start.indexOf('node scripts/pm2-start.js'));
 
     for (const command of ['pm2:start', 'pm2:restart']) {
       expect(packageScripts[command].indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);
