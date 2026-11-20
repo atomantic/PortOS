@@ -22,7 +22,7 @@ import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
-import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge } from '../cos/constants';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../cos/constants';
 import {
   APP_FEATURES,
   APP_FEATURE_IDS,
@@ -88,6 +88,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     // Unset means ON for PortOS itself and OFF for every other app.
     useAutoMerge: resolveUseAutoMerge(app),
+    // Both default off for every app, PortOS included.
+    autoApprovePR: resolveAutoApprovePR(app),
+    adminMerge: resolveAdminMerge(app),
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     // Unset means ON server-side, so an app that has never been saved shows checked.
     verifyRepoStateOnCompletion: app.verifyRepoStateOnCompletion !== false,
@@ -293,6 +296,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
       useAutoMerge: formData.useAutoMerge,
+      autoApprovePR: formData.autoApprovePR,
+      adminMerge: formData.adminMerge,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
       publishQualitySnapshot: formData.publishQualitySnapshot,
       // Empty string clears it, so audits fall back to the repository's docs.
@@ -748,6 +753,34 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               <p className="ml-6 text-xs text-gray-500">
                 Agents turn on GitHub auto-merge once review requirements pass, so the PR merges as soon as CI finishes. They still watch CI and fix failures. Leave-open and draft PRs are never auto-merged.
                 {!prCompletionMerges(formData.defaultPrCompletion) && formData.useAutoMerge ? ' The default PR completion above leaves PRs open, so this applies only to runs that choose a merging completion.' : ''}
+              </p>
+              <label htmlFor="edit-app-auto-approve-pr" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-auto-approve-pr"
+                  type="checkbox"
+                  checked={formData.autoApprovePR}
+                  onChange={e => setFormData(prev => ({ ...prev, autoApprovePR: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <ShieldCheck size={14} className="text-green-400" />
+                <span className="text-sm text-white">Auto-approve PRs blocked on a code-owner review</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                Agents approve the PR with their GitHub account when a required review is the only blocker. GitHub refuses this if that account opened the PR or is not a code owner, and the PR then stays open.
+              </p>
+              <label htmlFor="edit-app-admin-merge" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-admin-merge"
+                  type="checkbox"
+                  checked={formData.adminMerge}
+                  onChange={e => setFormData(prev => ({ ...prev, adminMerge: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <ShieldCheck size={14} className="text-amber-400" />
+                <span className="text-sm text-white">Admin merge when only a review blocks</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                After required CI is green on the verified head, agents merge with <code>gh pr merge --admin</code> when a review requirement is the only blocker. This bypasses branch protection for that rule; it never applies to failing or pending checks. The task form can change both options per run.
               </p>
               <label htmlFor="edit-app-verify-repo-state" className="flex items-center gap-2 cursor-pointer">
                 <input

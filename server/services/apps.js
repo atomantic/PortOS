@@ -335,6 +335,8 @@ async function createAppUnlocked(appData) {
     ...(Number.isSafeInteger(appData.mergeHandoffMinQueuedRuns) && appData.mergeHandoffMinQueuedRuns > 0
       ? { mergeHandoffMinQueuedRuns: appData.mergeHandoffMinQueuedRuns } : {}),
     ...(typeof appData.useAutoMerge === 'boolean' ? { useAutoMerge: appData.useAutoMerge } : {}),
+    ...(typeof appData.autoApprovePR === 'boolean' ? { autoApprovePR: appData.autoApprovePR } : {}),
+    ...(typeof appData.adminMerge === 'boolean' ? { adminMerge: appData.adminMerge } : {}),
     ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
       ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
       : {}),

@@ -1582,9 +1582,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopFollowUp: true,
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
-      // A per-task auto-merge choice outlives the PR-opening run; unset re-reads the app.
-      ...(isTruthyMeta(originalTask?.metadata?.useAutoMerge) || isFalsyMeta(originalTask?.metadata?.useAutoMerge)
-        ? { useAutoMerge: isTruthyMeta(originalTask.metadata.useAutoMerge) } : {}),
+      // Per-task merge choices (auto-merge, auto-approve, admin merge) outlive the PR-opening run; unset re-reads the app.
+      ...Object.fromEntries(['useAutoMerge', 'autoApprovePR', 'adminMerge']
+        .filter((key) => isTruthyMeta(originalTask?.metadata?.[key]) || isFalsyMeta(originalTask?.metadata?.[key]))
+        .map((key) => [key, isTruthyMeta(originalTask.metadata[key])])),
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
       // …and, on that same path, whether the agent owes the change its OWN
