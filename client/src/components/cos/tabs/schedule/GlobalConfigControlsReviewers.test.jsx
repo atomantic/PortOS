@@ -45,6 +45,7 @@ function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskTy
       allTaskTypes={['claim-work']}
     />
   );
+  fireEvent.click(screen.getByRole('button', { name: /^PR policy & reviewer overrides/ }));
   return onUpdate;
 }
 

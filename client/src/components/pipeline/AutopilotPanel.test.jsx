@@ -91,10 +91,36 @@ describe('AutopilotPanel', () => {
     ));
   });
 
+  it('summarizes saved non-default limits and paused stage routes before opening the editors', async () => {
+    getSettings.mockResolvedValue({ pipelineEditorialChecks: { maxArcVerifyRounds: 6 } });
+    const series = {
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: {
+        status: 'paused',
+        resumeOptions: { stageLlm: { foundationGate: { creative: { modelOverride: 'example-model' } } } },
+      },
+    };
+    renderPanel(series);
+
+    const stages = await screen.findByRole('button', { name: 'Stage model overrides 1 custom' });
+    const quality = await screen.findByRole('button', { name: 'Quality gates & round limits 1 custom' });
+    expect(stages).toHaveAttribute('aria-expanded', 'false');
+    expect(quality).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Arc verify rounds')).toBeNull();
+    expect(screen.queryByLabelText('Stage override')).toBeNull();
+
+    fireEvent.click(quality);
+    expect(screen.getByLabelText('Arc verify rounds')).toHaveValue(6);
+    fireEvent.click(stages);
+    expect(screen.getByLabelText('Stage override')).toBeVisible();
+  });
+
   it('shows shared option defaults when saved pipeline settings are absent', async () => {
     getSettings.mockResolvedValueOnce({});
     renderPanel({ id: 's1', targetFormat: 'comic' });
     fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
 
     expect(await screen.findByLabelText('Arc verify rounds')).toHaveValue(3);
     expect(screen.getByLabelText('Beat continuity rounds')).toHaveValue(2);
@@ -193,7 +219,7 @@ describe('AutopilotPanel', () => {
     getSettings.mockResolvedValue({ pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxEditorialRounds: 4 } });
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
     // Wait for the persisted setting to populate the input, then edit only arc.
     await waitFor(() => expect(screen.getByLabelText('Arc verify rounds')).toHaveValue(6));
     fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
@@ -222,7 +248,7 @@ describe('AutopilotPanel', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server refused the save' }) }));
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
     fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
     fireEvent.blur(screen.getByLabelText('Arc verify rounds'));
 
@@ -336,7 +362,7 @@ describe('AutopilotPanel', () => {
   it('sends a chosen readiness gate as a per-run override without persisting it (#1580)', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
     fireEvent.change(screen.getByLabelText('Readiness gate'), { target: { value: 'none' } });
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
@@ -354,7 +380,7 @@ describe('AutopilotPanel', () => {
     getSettings.mockResolvedValue({ pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } });
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
     // The saved default is surfaced in the "use saved default" option label.
     await waitFor(() => expect(screen.getByLabelText('Readiness gate')).toHaveValue(''));
     expect(screen.getByText(/Use saved default \(No open high or medium findings/)).toBeInTheDocument();
@@ -477,6 +503,7 @@ describe('AutopilotPanel', () => {
     renderPanel({ id: 's1', targetFormat: 'comic', llm: { provider: 'codex-tui', model: 'gpt-5.6-luna' } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Stage model overrides/ }));
     fireEvent.click(screen.getByLabelText(/override a specific stage and role/i));
     expect(screen.getByLabelText('Stage override')).toHaveValue('foundationGate');
     expect(screen.getByLabelText('Role')).toHaveValue('creative');
@@ -562,7 +589,7 @@ describe('AutopilotPanel', () => {
   it('clears to the default (not 0) when a round input is emptied', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Quality gates & round limits/ }));
     const input = screen.getByLabelText('Arc verify rounds');
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.blur(input);

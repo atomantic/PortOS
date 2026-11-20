@@ -13,9 +13,9 @@ import { isDesignRole } from '../../../server/lib/catalog/catalogDesign.js';
 
 export const CATALOG_NAV_TABS = Object.freeze([
   Object.freeze({ id: 'catalog', label: 'Catalog', to: '/catalog', icon: Sparkles }),
-  Object.freeze({ id: 'casting', label: 'Casting', to: '/casting', icon: Drama }),
-  Object.freeze({ id: 'environments', label: 'Environments', to: '/environments', icon: Mountain }),
-  Object.freeze({ id: 'objects', label: 'Objects', to: '/objects', icon: Package }),
+  Object.freeze({ id: 'casting', label: 'Casting', to: '/catalog/casting', icon: Drama }),
+  Object.freeze({ id: 'environments', label: 'Environments', to: '/catalog/environments', icon: Mountain }),
+  Object.freeze({ id: 'objects', label: 'Objects', to: '/catalog/objects', icon: Package }),
 ]);
 
 // `detailTabs` are the record page's sections (`/casting/:id/:tab`); the

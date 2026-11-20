@@ -50,6 +50,12 @@ describe('page shells', () => {
     expect(page.closest('main')?.dataset.shell).toBe(shell);
   });
 
+  it('opens General from the Settings root', () => {
+    const page = renderAt('/settings');
+    expect(page.dataset.page).toBe('Settings');
+    expect(page.textContent).toBe('/settings/general');
+  });
+
   it('renders an unknown path as NotFound in the padded shell', () => {
     const page = renderAt('/no-such-page/at/all');
     expect(page.dataset.page).toBe('NotFound');
@@ -59,6 +65,19 @@ describe('page shells', () => {
 
 describe('previous-path redirects', () => {
   const redirects = previousPathRedirects(NAV_COMMANDS);
+
+  it.each([
+    ['/cos/run-events?run=example#events', '/cos/runs/events?run=example#events', 'ChiefOfStaff'],
+    ['/cos/workflow?hours=24', '/cos/schedule/timeline?hours=24', 'ChiefOfStaff'],
+    ['/cos/digest', '/cos/briefing/digest', 'ChiefOfStaff'],
+    ['/casting?scope=example', '/catalog/casting?scope=example', 'CreativeLibrary'],
+    ['/environments', '/catalog/environments', 'CreativeLibrary'],
+    ['/objects', '/catalog/objects', 'CreativeLibrary'],
+  ])('keeps %s on its original feature', (from, to, pageName) => {
+    const page = renderAt(from);
+    expect(page.dataset.page).toBe(pageName);
+    expect(page.textContent).toBe(to);
+  });
 
   it('declares each previous path once, and never as a live destination', () => {
     const froms = redirects.map((r) => r.from);

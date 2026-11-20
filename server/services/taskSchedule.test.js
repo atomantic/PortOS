@@ -2535,6 +2535,28 @@ describe('taskSchedule', () => {
       expect(status.tasks['music-video-autopilot']).toMatchObject({ displayName: 'Autonomous run' })
     })
 
+    it('distinguishes task-local settings from the task’s shipped defaults', async () => {
+      mockSchedule({ tasks: {
+        'claim-issue': {
+          type: 'on-demand',
+          enabled: true,
+          taskMetadata: { issueAuthorFilter: 'self', issueExcludeLabels: ['manual-review'], simplify: false },
+        },
+        'module-hygiene': {
+          type: 'on-demand',
+          enabled: true,
+          suggestedAfter: [],
+        },
+      } });
+
+      const { tasks } = await getScheduleStatus();
+      expect(tasks['claim-issue'].globalOverrideFields).toEqual(expect.arrayContaining([
+        'taskMetadata.issueExcludeLabels', 'taskMetadata.simplify',
+      ]));
+      expect(tasks['claim-issue'].globalOverrideFields).not.toContain('taskMetadata.issueAuthorFilter');
+      expect(tasks['module-hygiene'].globalOverrideFields).toContain('suggestedAfter');
+    });
+
     it('projects task summaries and explains hook-owned prompts', async () => {
       mockSchedule()
 

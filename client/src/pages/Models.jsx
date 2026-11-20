@@ -5,7 +5,7 @@ import { getSectionNavTabForPath } from '../../../server/lib/navManifest.js';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ModelsTabsHeader, { ModelsSectionLayout, TABS } from '../components/models/ModelsTabsHeader';
-import { NAV_PRESENTATION } from '../lib/navPresentation.js';
+import { NAV_DESTINATION_PRESENTATION } from '../lib/navPresentation.js';
 import { lazyWithReload } from '../utils/lazyWithReload';
 
 // The media-model panels moved in from the Media Gen tabs were each their own route
@@ -86,7 +86,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   // own task row names the view.
   const destination = getSectionNavTabForPath('Models', pathname)
     || TABS.find((item) => item.id === activeTab);
-  const DestinationIcon = NAV_PRESENTATION[destination?.to]?.icon || Cpu;
+  const DestinationIcon = NAV_DESTINATION_PRESENTATION[destination?.to]?.icon || Cpu;
 
   return (
     <ModelsSectionLayout activeTab={activeTab}>

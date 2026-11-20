@@ -65,6 +65,7 @@ const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Music = lazyWithReload(() => import('./pages/Music'));
+const CreativeStudio = lazyWithReload(() => import('./pages/CreativeStudio'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
 const SongBook = lazyWithReload(() => import('./pages/SongBook'));
@@ -491,15 +492,17 @@ export default function App() {
             <Route path="songbook" element={<SongBook />} />
             <Route path="songbook/import" element={<SongBookImport />} />
             <Route path="songbook/:id" element={<SongBookViewer />} />
+            <Route path="create/media" element={<CreativeStudio studio="media" />} />
+            <Route path="create/story" element={<CreativeStudio studio="story" />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/ingest" element={<CatalogIngest />} />
             <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
-            <Route path="casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
+            <Route path="catalog/casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
             <Route path="casting/import" element={<CreativeCastImport />} />
             <Route path="casting/:id/:tab?" element={<CatalogIngredient />} />
-            <Route path="environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
+            <Route path="catalog/environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
             <Route path="environments/:id/:tab?" element={<CatalogIngredient />} />
-            <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
+            <Route path="catalog/objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
             <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
             <Route path="code-animation" element={<CodeAnimation />} />
             <Route path="code-animation/gallery" element={<CodeAnimation />} />
@@ -578,7 +581,7 @@ export default function App() {
           <Route path="privacy" element={<Navigate to="/privacy/overview" replace />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
           <Route path="feature-agents/:id" element={<Navigate to="overview" replace />} />
-          <Route path="settings" element={<Navigate to="/settings/backup" replace />} />
+          <Route path="settings" element={<Navigate to="/settings/general" replace />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="models" element={<Navigate to="/models/llms" replace />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />

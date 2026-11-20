@@ -12,7 +12,7 @@ import InlineConfirmRow from './ui/InlineConfirmRow';
  * the picker can't represent. Calls onSave with the validated expression, and
  * confirms before onCancel can discard an edited schedule.
  */
-export default function CronInput({ value, onSave, onCancel, className = '' }) {
+export default function CronInput({ value, onSave, onCancel, onDirtyChange, className = '' }) {
   const savedExpression = String(value || DEFAULT_CRON);
   const [expr, setExpr] = useState(savedExpression);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -24,6 +24,11 @@ export default function CronInput({ value, onSave, onCancel, className = '' }) {
 
   const trimmed = expr.trim();
   const isDirty = trimmed !== savedExpression.trim();
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
   // Field ranges too, not just the 5-token shape: the save routes reject an
   // out-of-range expression with a 400, and the scheduler would never fire it.
   const validationError = findCronExpressionError(trimmed);

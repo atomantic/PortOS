@@ -10,11 +10,9 @@
 // Adding a feature:
 //   1. add a descriptor here;
 //   2. tag its pages in navManifest.js (`feature: '<id>'`, or a SECTION_FEATURE
-//      entry when a whole sidebar section belongs to it) — a sidebar row also
-//      needs its own NAV_PRESENTATION entry in client/src/lib/navPresentation.js
-//      (path → icon): feature, section and label are inherited from
-//      NAV_COMMANDS, so the path is the one thing declared twice — the icon
-//      lives only in NAV_PRESENTATION;
+//      entry when a whole sidebar section belongs to it). Destination icons
+//      live in NAV_DESTINATION_PRESENTATION in client/src/lib/navPresentation.js.
+//      Layout inherits the feature, section, and label from NAV_COMMANDS;
 //   3. add a `detect` hook in services/instanceFeatures.js when a fresh install
 //      should infer the default from whether the integration is configured.
 // The validation schemas and the install-wide Features tab pick it up with no

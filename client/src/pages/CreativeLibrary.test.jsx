@@ -260,6 +260,6 @@ describe('CreativeLibrary', () => {
     expect(screen.getByRole('tab', { name: 'Objects' })).toHaveAttribute('aria-selected', 'false');
 
     fireEvent.click(screen.getByRole('tab', { name: 'Objects' }));
-    expect(navigateMock).toHaveBeenCalledWith('/objects');
+    expect(navigateMock).toHaveBeenCalledWith('/catalog/objects');
   });
 });

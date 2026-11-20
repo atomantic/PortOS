@@ -3,11 +3,11 @@ import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 import RouteTabsHeader from './RouteTabsHeader';
-import { NAV_PRESENTATION } from '../../lib/navPresentation.js';
+import { NAV_DESTINATION_PRESENTATION } from '../../lib/navPresentation.js';
 import { buildSectionNavTabs } from '../../lib/pageNavTabs.js';
 import { getSectionNavTabs } from '../../../../server/lib/navManifest.js';
 
-const settingsTabs = buildSectionNavTabs(getSectionNavTabs('Settings'), NAV_PRESENTATION, 'Settings');
+const settingsTabs = buildSectionNavTabs(getSectionNavTabs('Settings'), NAV_DESTINATION_PRESENTATION, 'Settings');
 
 const renderAt = (tabs, activeTab) => render(
   <MemoryRouter>
