@@ -132,6 +132,11 @@ async function planCodexSpeedRepair({
   if (inventory?.coverage?.issues?.indexing_pending) {
     notes.push('Codex speed repair read only part of the session archive. Unread sessions were left for the next reconcile.');
   }
+  // An unverified coarse-timestamp file could be a conflicting copy of any
+  // resolved session. A dated repair id would prevent revisiting that charge.
+  if (inventory?.unverifiedCoarseSources) {
+    return { additions, notes: ['Codex speed repair deferred while some coarse-timestamp sources could not be verified.'] };
+  }
   for (const session of inventory?.sessions || []) {
     // A first full bill records this id once it has priced the whole session.
     if (known.has(`codex-speed:v1:${session.id}`)) continue;

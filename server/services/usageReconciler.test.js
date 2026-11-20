@@ -1,11 +1,34 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { writeFileSync } from 'node:fs';
+import { lstat, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { constants as zstdConstants, createZstdDecompress, zstdCompressSync } from 'node:zlib';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup: cleanupDataRoot } = mockPathsDataRoot({ prefix: 'portos-usage-reconciler-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const archiveStats = vi.hoisted(() => ({ path: null, timestamp: 0, opens: 0 }));
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original();
+  const withFixtureTimestamps = (stat) => Object.assign(stat, { mtimeMs: archiveStats.timestamp, ctimeMs: archiveStats.timestamp });
+  return {
+    ...fs,
+    lstat: async (path, ...args) => {
+      const stat = await fs.lstat(path, ...args);
+      return path === archiveStats.path ? withFixtureTimestamps(stat) : stat;
+    },
+    open: async (path, ...args) => {
+      const handle = await fs.open(path, ...args);
+      if (path === archiveStats.path) {
+        archiveStats.opens++;
+        const stat = handle.stat.bind(handle);
+        handle.stat = async (...args) => withFixtureTimestamps(await stat(...args));
+      }
+      return handle;
+    },
+  };
+});
 const inventoryStore = vi.hoisted(() => ({ reads: [] }));
 vi.mock('./codexInventoryCache.js', async (original) => {
   const actual = await original();
@@ -17,12 +40,15 @@ vi.mock('./codexInventoryCache.js', async (original) => {
 afterAll(cleanupDataRoot);
 
 vi.mock('./usage.js', () => ({
+  addDatedUsageBatch: vi.fn(async rows => rows),
+  getUsage: vi.fn(),
+  loadUsage: vi.fn(),
   getRecentCodexUsageClaims: vi.fn().mockResolvedValue([]),
   markUsageRunReconciled: vi.fn().mockResolvedValue(undefined),
   recordRunUsage: vi.fn().mockResolvedValue(undefined)
 }));
 
-const { getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
+const { addDatedUsageBatch, getUsage, getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
 const {
   transcriptFamily,
   isOpencodeRun,
@@ -137,6 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  archiveStats.path = null;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -1798,6 +1825,110 @@ describe('nested sibling-family attribution', () => {
 });
 
 describe('Codex source inventory accounting', () => {
+  async function sameSizeArchive() {
+    const text = output => {
+      const [meta, count] = codexRollout({ timestamp: '2026-07-01T10:01:00Z', input: 100, cached: 20, output }).split('\n');
+      const tier = JSON.stringify({ timestamp: '2026-07-01T10:00:59Z', type: 'event_msg',
+        payload: { type: 'thread_settings_applied', service_tier: 'priority' } });
+      return [meta, tier, count].join('\n');
+    };
+    // Fast negative compression level stores this tiny fixture in a literal
+    // block, keeping the extent constant even when token digits change.
+    const encode = output => zstdCompressSync(text(output), { params: { [zstdConstants.ZSTD_c_compressionLevel]: -100 } });
+    const before = encode(50);
+    const after = encode(60);
+    expect(before.length).toBe(after.length);
+    expect(before.equals(after)).toBe(false);
+    const path = join(home, '.codex', 'archived_sessions', 'same-size.jsonl.zst');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, before);
+    Object.assign(archiveStats, { path, timestamp: Date.parse('2026-07-02T00:00:00Z'), opens: 0 });
+    const metadata = async () => {
+      const { dev, ino, size, mtimeMs, ctimeMs } = await lstat(path);
+      return [dev, ino, size, mtimeMs, ctimeMs];
+    };
+    const original = await metadata();
+    return { path, before, after, text, rewrite: async (bytes = after) => {
+      await writeFile(path, bytes);
+      expect(await metadata()).toEqual(original);
+    } };
+  }
+
+  it('records current compressed counts and advances the live boundary after a same-metadata rewrite', async () => {
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const fixture = await sameSizeArchive();
+    const run = { providerId: 'codex-tui', model: 'gpt-5.3-codex', workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' };
+    const original = await readCodexAccountingSources({ home });
+    expect(original.coverage.complete).toBe(true);
+    await recordCompletedRunUsage(run, '', { home, providers: [] });
+    const claims = recordRunUsage.mock.calls.at(-1)[1].codexHighWater;
+    expect(claims).toHaveLength(1);
+    expect(claims[0][1].tokensOut).toBe(50);
+
+    await fixture.rewrite();
+    await recordCompletedRunUsage(run, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({ source: 'measured', tokensOut: 10 })]);
+    const updated = recordRunUsage.mock.calls.at(-1)[1].codexHighWater;
+    expect(updated).toEqual([[claims[0][0], expect.objectContaining({ tokensOut: 60 })]]);
+    expect((await readCodexAccountingSources({ home })).revision).not.toBe(original.revision);
+  });
+
+  it('uses current archive counts for speed repair and holds a possibly conflicting unread copy', async () => {
+    const { readCodexAccountingSources, codexSessionClaimKey } = await import('./codexUsageSources.js');
+    const { applyCodexSpeedRepair } = await import('./codexSpeedRepair.js');
+    const fixture = await sameSizeArchive();
+    const original = await readCodexAccountingSources({ home });
+    const [session] = original.sessions;
+    getUsage.mockReturnValue({
+      reconciledRuns: { run: { codexHighWater: [[codexSessionClaimKey(session.id), {
+        tokensIn: 80, cacheReadTokens: 20, tokensOut: 60,
+      }]] } },
+    });
+    await writeCodexRollout([], 'alias.jsonl', fixture.text(50));
+    await fixture.rewrite(Buffer.alloc(fixture.before.length));
+    const held = await applyCodexSpeedRepair({ home });
+    expect(held).toMatchObject({ added: 0, backedUp: false, note: expect.stringContaining('could not be verified') });
+    expect(addDatedUsageBatch).not.toHaveBeenCalled();
+
+    await rm(join(home, '.codex', 'sessions', 'alias.jsonl'));
+    await fixture.rewrite();
+    expect(await applyCodexSpeedRepair({ home })).toMatchObject({ added: 1, sessions: 1, backedUp: true });
+    expect(addDatedUsageBatch).toHaveBeenCalledWith([expect.objectContaining({ record: expect.objectContaining({ fastTokensOut: 60 }) })]);
+  });
+
+  it('charges a coarse cache hit to the byte budgets and keeps precise cache hits free of source reads', async () => {
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const { before } = await sameSizeArchive();
+    const decompress = vi.fn(() => createZstdDecompress());
+    const read = limits => readCodexAccountingSources({ home, decompress, limits });
+    const cold = await read();
+    expect(cold.coverage.complete).toBe(true);
+    expect((await read({ coldBytes: before.length })).coverage).toMatchObject({ complete: true, filesCached: 1, decodedBytes: 0 });
+    expect(decompress).toHaveBeenCalledTimes(1);
+    expect((await read({ coldBytes: before.length - 1 })).coverage).toMatchObject({ complete: false, issues: { indexing_pending: 1 } });
+    expect((await read({ decodedBytes: before.length - 1 })).coverage).toMatchObject({ complete: false, issues: { decoded_byte_limit: 1 } });
+
+    archiveStats.timestamp += 0.5;
+    expect((await read()).coverage).toMatchObject({ complete: true, filesCached: 0 });
+    const opens = archiveStats.opens;
+    expect((await read({ coldBytes: 1 })).coverage).toMatchObject({ complete: true, filesCached: 1, decodedBytes: 0 });
+    expect(archiveStats.opens).toBe(opens);
+  });
+
+  it('rejects a same-metadata rewrite between hashing and decoding', async () => {
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const { path, after } = await sameSizeArchive();
+    const inventory = await readCodexAccountingSources({ home, decompress: () => {
+      writeFileSync(path, after);
+      return createZstdDecompress();
+    } });
+    expect(inventory.coverage).toMatchObject({ complete: false, issues: { source_changed: 1 } });
+    expect(inventory.sessions).toEqual([]);
+    const recovered = await readCodexAccountingSources({ home });
+    expect(recovered.coverage).toMatchObject({ complete: true, filesCached: 0 });
+  });
+
   it('bills duplicate raw/archive/compressed copies once and preserves claims after move/reload', async () => {
     const { zstdCompressSync } = await import('node:zlib');
     const { rename } = await import('node:fs/promises');
