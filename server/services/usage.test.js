@@ -1010,7 +1010,7 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
       reconciledRunId: 'run-example-1', siblings: true
     });
     expect(atomicWrite).toHaveBeenCalledTimes(1);
-    expect(atomicWrite.mock.calls[0][1]).toMatchObject({
+    expect(JSON.parse(atomicWrite.mock.calls[0][1])).toMatchObject({
       reconciledRuns: { 'run-example-1': expect.any(String) },
       siblingReconciledRuns: { 'run-example-1': expect.any(String) }
     });
@@ -1019,7 +1019,7 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
     const scan = { watermarks: { claude: 123 }, sidechainRepairedAt: null };
     await applyHistoricalUsageCorrections([], { interactiveScan: scan });
     expect(atomicWrite).toHaveBeenCalledTimes(1);
-    expect(atomicWrite.mock.calls[0][1].interactiveScan).toEqual(scan);
+    expect(JSON.parse(atomicWrite.mock.calls[0][1]).interactiveScan).toEqual(scan);
     expect(buildUsageDigest(getUsage())).not.toHaveProperty('interactiveScan');
   });
 
@@ -1835,7 +1835,7 @@ describe('durable Codex boundaries', () => {
     await recordRunUsage({ providerId: 'example-cli', tokensOut: 3, source: 'estimate' }, {
       reconciledRunId: 'estimated-example', codexHighWater: []
     });
-    const saved = atomicWrite.mock.calls.at(-1)[1];
+    const saved = JSON.parse(atomicWrite.mock.calls.at(-1)[1]);
     expect(saved.totalTokens.output).toBe(13);
     expect(saved.reconciledRuns['measured-example']).toMatchObject({ codexHighWater: claims });
     expect(saved.reconciledRuns.legacy).toBe('2026-07-01T10:00:00.000Z');

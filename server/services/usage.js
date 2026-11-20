@@ -6,6 +6,7 @@
  * scanner may remain and is no longer written.
  */
 import { join } from 'path';
+import { clearTimeout as cancelBatchTimer, setTimeout as scheduleBatchTimer } from 'node:timers';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, SPEED_LEDGER_FIELDS, PRICING_AS_OF } from '../lib/modelPricing.js';
@@ -27,26 +28,108 @@ const ROLLUP_RETENTION_DAYS = 400;
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 const SUMMARY_CACHE_LIMIT = 20;
+const RUN_WRITE_BATCH_MS = 50;
 
 let usageData = null;
 let committedUsage = null;
+let grokRepairIndex = new Set();
+let addedRepairIds;
+let ownedRunDraftObjects;
+let pendingRunBatch = null;
+const activeRunBatches = new Set();
 const queueUsageWrite = createFileWriteQueue();
 
 // Readers continue seeing committed state while a private draft is being
 // persisted, including when a historical correction yields to the event loop.
-async function transactUsage(fn) {
+async function transactUsage(fn, { copyOnWrite = false } = {}) {
   const previous = usageData;
-  usageData = previous && structuredClone(previous);
+  const previousCommitted = committedUsage;
+  const previousRepairIndex = grokRepairIndex;
+  addedRepairIds = [];
+  ownedRunDraftObjects = copyOnWrite ? new WeakSet() : null;
   try {
+    usageData = previous && (copyOnWrite ? { ...previous } : structuredClone(previous));
     return await fn();
   } catch (error) {
-    usageData = previous;
+    if (committedUsage !== previousCommitted) {
+      // A reload can publish a new base before a subsequent correction fails.
+      usageData = committedUsage;
+      grokRepairIndex = new Set(committedUsage.grokRepairIds);
+    } else {
+      usageData = previous;
+      if (grokRepairIndex === previousRepairIndex) {
+        for (const id of addedRepairIds) grokRepairIndex.delete(id);
+      }
+      grokRepairIndex = previousRepairIndex;
+    }
     throw error;
+  } finally {
+    addedRepairIds = undefined;
+    ownedRunDraftObjects = undefined;
   }
+}
+
+// Shallow-copy only containers on paths that a live write touches. Historical
+// edits still own a whole private draft, so they reuse the same bucket writers.
+function mutableUsageChild(parent, key, makeEmpty = () => ({})) {
+  const existing = Object.hasOwn(parent, key) ? parent[key] : undefined;
+  if (existing && (!ownedRunDraftObjects || ownedRunDraftObjects.has(existing))) return existing;
+  const copy = !existing ? makeEmpty() : Array.isArray(existing) ? [...existing] : { ...existing };
+  parent[key] = copy;
+  ownedRunDraftObjects?.add(copy);
+  return copy;
+}
+
+function closeRunBatch() {
+  if (!pendingRunBatch) return;
+  const { timer, ready } = pendingRunBatch;
+  pendingRunBatch = null;
+  cancelBatchTimer(timer);
+  ready();
+}
+
+function queueRunWrite(apply, args) {
+  if (!pendingRunBatch) {
+    const actions = [];
+    const gate = Promise.withResolvers();
+    // Reserve the queue position on the first call, so an intervening reset
+    // or historical edit can't overtake these writes.
+    const saved = queueUsageWrite(async () => {
+      await gate.promise;
+      if (!usageData) await transactUsage(loadUsageDraft);
+      await refreshDayKeyTimezone();
+      return transactUsage(async () => {
+        const results = [];
+        let changed = false;
+        for (const run of actions) {
+          const result = run();
+          results.push(result);
+          changed ||= result !== undefined;
+        }
+        if (changed) await saveUsage();
+        return results;
+      }, { copyOnWrite: true });
+    });
+    activeRunBatches.add(saved);
+    const settled = () => activeRunBatches.delete(saved);
+    saved.then(settled, settled);
+    pendingRunBatch = { actions, saved, ready: gate.resolve, timer: scheduleBatchTimer(closeRunBatch, RUN_WRITE_BATCH_MS) };
+  }
+  const { actions, saved } = pendingRunBatch;
+  const index = actions.push(() => apply(...args)) - 1;
+  return saved.then(results => results[index]);
+}
+
+// Wait for all admitted run writes before taking a backup cut or exiting.
+// An awaited run write always settles only after the shared durable save.
+export async function flushPendingUsageWrites() {
+  closeRunBatch();
+  await Promise.all(activeRunBatches);
 }
 
 // All ledger writers share one queue and roll back the in-memory copy on failure.
 function mutateUsage(draft, args) {
+  closeRunBatch();
   return queueUsageWrite(() => transactUsage(() => draft(...args)));
 }
 const summaryCache = new Map();
@@ -238,6 +321,7 @@ async function loadUsageDraft() {
   // In memory only until the next real save. Forcing a write here would
   // rewrite every install's usage.json just to add an empty id list.
   if (!Array.isArray(usageData.grokRepairIds)) usageData.grokRepairIds = [];
+  grokRepairIndex = new Set(usageData.grokRepairIds);
   if ((missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks)) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
@@ -256,8 +340,9 @@ async function loadUsageDraft() {
 async function saveUsage() {
   const previous = Date.parse(usageData.lastUpdated);
   usageData.lastUpdated = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
-  await atomicWrite(USAGE_FILE, usageData);
+  await atomicWrite(USAGE_FILE, JSON.stringify(usageData));
   committedUsage = usageData;
+  if (addedRepairIds) addedRepairIds.length = 0;
   summaryCache.clear();
 }
 
@@ -290,43 +375,33 @@ export function getFirstActivityDay() {
  */
 function providerDayBucket(day, providerId, providerName) {
   const provider = normalizeProvider(providerId, providerName);
-  if (!day.byProvider) day.byProvider = {};
-  if (!day.byProvider[provider.id]) {
-    day.byProvider[provider.id] = {
-      name: provider.name,
-      sessions: 0,
-      messages: 0,
-      tokensIn: 0,
-      tokensOut: 0,
-      // Prompt-cache tiers, captured only for providers whose CLI writes a
-      // transcript we can read (see services/usageReconciler.js). Additive:
-      // absent on every bucket written before #3124 and read as 0.
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      // How this bucket's counts were obtained. `measured` = summed from the
-      // provider's own transcript; `estimate` = derived from prompt length and
-      // captured stdout. A bucket that accumulated both is `mixed`, so the
-      // report never claims a partially-estimated row is measured.
-      source: null,
-      byModel: {}
-    };
-  }
-  return day.byProvider[provider.id];
+  const byProvider = mutableUsageChild(day, 'byProvider');
+  return mutableUsageChild(byProvider, provider.id, () => ({
+    name: provider.name,
+    sessions: 0,
+    messages: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    // Additive prompt-cache tiers are absent on buckets written before #3124.
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    // Mixing transcript measurements and estimates yields `mixed`.
+    source: null,
+    byModel: {}
+  }));
 }
 
 function modelDayBucket(providerDay, model) {
-  if (!providerDay.byModel[model]) {
-    providerDay.byModel[model] = {
-      sessions: 0,
-      messages: 0,
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      source: null
-    };
-  }
-  return providerDay.byModel[model];
+  const byModel = mutableUsageChild(providerDay, 'byModel');
+  return mutableUsageChild(byModel, model, () => ({
+    sessions: 0,
+    messages: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    source: null
+  }));
 }
 
 // `long*` is a subset of the base token fields (already included there), priced
@@ -374,17 +449,16 @@ const adjustCounts = (bucket, counts, direction) => {
  */
 const adjustEstimated = (bucket, counts, direction) => {
   if (!bucket) return;
-  bucket.estimated ??= {};
-  adjustCounts(bucket.estimated, counts, direction);
+  adjustCounts(mutableUsageChild(bucket, 'estimated'), counts, direction);
 };
 
 function rememberRepairIds(ids) {
   if (!Array.isArray(ids) || !usageData) return;
-  usageData.grokRepairIds ??= [];
   for (const id of ids) {
-    if (typeof id !== 'string' || id.length === 0 || id.length > 400) continue;
-    if (usageData.grokRepairIds.includes(id)) continue;
-    usageData.grokRepairIds.push(id);
+    if (typeof id !== 'string' || id.length === 0 || id.length > 400 || grokRepairIndex.has(id)) continue;
+    mutableUsageChild(usageData, 'grokRepairIds', () => []).push(id);
+    grokRepairIndex.add(id);
+    addedRepairIds.push(id);
   }
 }
 
@@ -459,11 +533,11 @@ function setReconciledMarkers(runId, siblings) {
   const now = new Date().toISOString();
   let changed = false;
   if (!usageData.reconciledRuns[runId]) {
-    usageData.reconciledRuns[runId] = now;
+    mutableUsageChild(usageData, 'reconciledRuns')[runId] = now;
     changed = true;
   }
   if (siblings && !usageData.siblingReconciledRuns[runId]) {
-    usageData.siblingReconciledRuns[runId] = now;
+    mutableUsageChild(usageData, 'siblingReconciledRuns')[runId] = now;
     changed = true;
   }
   return changed;
@@ -742,23 +816,18 @@ async function refreshDayKeyTimezone() {
   dayKeyTimezone = await getUserTimezone();
 }
 
-function todayBucket() {
-  const today = todayInTimezone(dayKeyTimezone);
-  if (!usageData.dailyActivity[today]) {
-    usageData.dailyActivity[today] = { sessions: 0, messages: 0, tokens: 0 };
-    cacheActivityDay(today);
-  }
-  return usageData.dailyActivity[today];
+function todayBucket(at) {
+  const today = todayInTimezone(dayKeyTimezone, at);
+  const dailyActivity = mutableUsageChild(usageData, 'dailyActivity');
+  if (!dailyActivity[today]) cacheActivityDay(today);
+  return mutableUsageChild(dailyActivity, today, () => ({ sessions: 0, messages: 0, tokens: 0 }));
 }
 
 /**
  * Record a new session
  */
-async function recordSessionDraft(providerId, providerName, rawModel) {
-  if (!usageData) await loadUsageDraft();
-  await refreshDayKeyTimezone();
-  applySessionCounts(providerId, providerName, rawModel, todayBucket(), new Date());
-  await saveUsage();
+function recordSessionDraft(providerId, providerName, rawModel, at) {
+  applySessionCounts(providerId, providerName, rawModel, todayBucket(at), at);
   return usageData.totalSessions;
 }
 
@@ -768,18 +837,11 @@ function applySessionCounts(providerId, providerName, rawModel, day, at) {
 
   usageData.totalSessions++;
 
-  // Track by provider
-  if (!usageData.byProvider[provider.id]) {
-    usageData.byProvider[provider.id] = { name: provider.name, sessions: 0, messages: 0, tokens: 0 };
-  }
-  usageData.byProvider[provider.id].sessions++;
-
-  // Track by model
+  const byProvider = mutableUsageChild(usageData, 'byProvider');
+  mutableUsageChild(byProvider, provider.id, () => ({ name: provider.name, sessions: 0, messages: 0, tokens: 0 })).sessions++;
   if (model) {
-    if (!usageData.byModel[model]) {
-      usageData.byModel[model] = { sessions: 0, messages: 0, tokens: 0 };
-    }
-    usageData.byModel[model].sessions++;
+    const byModel = mutableUsageChild(usageData, 'byModel');
+    mutableUsageChild(byModel, model, () => ({ sessions: 0, messages: 0, tokens: 0 })).sessions++;
   }
 
   // Track daily activity (with the per-provider/per-model split)
@@ -791,11 +853,11 @@ function applySessionCounts(providerId, providerName, rawModel, day, at) {
   // Track hourly activity in the user's configured timezone. The server runs with TZ=UTC,
   // so the host clock would bucket every session by UTC hour.
   const hour = getLocalParts(at, dayKeyTimezone).hour;
-  usageData.hourlyActivity[hour]++;
+  mutableUsageChild(usageData, 'hourlyActivity')[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
   if (!Array.isArray(day.hourlyActivity)) day.hourlyActivity = Array(24).fill(0);
-  day.hourlyActivity[hour]++;
+  mutableUsageChild(day, 'hourlyActivity')[hour]++;
 }
 
 /**
@@ -808,7 +870,7 @@ function applySessionCounts(providerId, providerName, rawModel, day, at) {
  * tokens, estimated" so every existing caller — and the
  * `POST /api/usage/messages` route — keeps its current behavior.
  */
-function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
+function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0, inputTokens = 0, extra = {}, at) {
   const provider = normalizeProvider(providerId);
   const model = usageModelKey(rawModel);
   const cacheReadTokens = Math.max(0, extra?.cacheReadTokens || 0);
@@ -822,28 +884,25 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
 
   usageData.totalMessages += messageCount;
 
-  if (outputTokens > 0) {
-    usageData.totalTokens.output += outputTokens;
-  }
-  // All-time input counts every billable input tier — a cache read is an input
-  // token the user was charged for, so omitting it from the headline "Tokens"
-  // figure would reproduce the #3124 understatement one level up.
-  const totalInputTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-  if (totalInputTokens > 0) {
-    usageData.totalTokens.input += totalInputTokens;
-  }
+  const totalTokens = mutableUsageChild(usageData, 'totalTokens');
+  if (outputTokens > 0) totalTokens.output += outputTokens;
 
-  // Track by provider / by model (the legacy all-time entries keep their
-  // output-only `tokens` field for old readers — the in/out split lives only
-  // in the day buckets, which is what the cost report aggregates)
-  if (!usageData.byProvider[provider.id]) {
-    usageData.byProvider[provider.id] = { name: provider.name, sessions: 0, messages: 0, tokens: 0 };
-  }
-  usageData.byProvider[provider.id].messages += messageCount;
-  usageData.byProvider[provider.id].tokens = (usageData.byProvider[provider.id].tokens || 0) + outputTokens;
-  if (model && usageData.byModel[model]) {
-    usageData.byModel[model].messages += messageCount;
-    usageData.byModel[model].tokens = (usageData.byModel[model].tokens || 0) + outputTokens;
+  // Include every billable input tier in the headline token count.
+  const totalInputTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+  if (totalInputTokens > 0) totalTokens.input += totalInputTokens;
+
+  // Legacy all-time entries keep their output-only `tokens` field for old readers.
+  const byProvider = mutableUsageChild(usageData, 'byProvider');
+  const providerTotal = mutableUsageChild(byProvider, provider.id, () => ({
+    name: provider.name, sessions: 0, messages: 0, tokens: 0
+  }));
+  providerTotal.messages += messageCount;
+  providerTotal.tokens = (providerTotal.tokens || 0) + outputTokens;
+  if (model && Object.hasOwn(usageData.byModel, model)) {
+    const byModel = mutableUsageChild(usageData, 'byModel');
+    const modelTotal = mutableUsageChild(byModel, model);
+    modelTotal.messages += messageCount;
+    modelTotal.tokens = (modelTotal.tokens || 0) + outputTokens;
   }
 
   // Track daily (a run can finish on a different day than it started — create
@@ -874,17 +933,15 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
       };
       if (source === 'estimate') adjustEstimated(bucket, counts, 1);
       else {
-        bucket.unpersisted ??= {};
-        adjustCounts(bucket.unpersisted, counts, 1);
+        adjustCounts(mutableUsageChild(bucket, 'unpersisted'), counts, 1);
       }
     }
     bucket.source = mergeSource(bucket.source, source);
   };
-  const day = todayBucket();
+  const day = todayBucket(at);
   day.messages = (day.messages || 0) + messageCount;
   day.tokens = (day.tokens || 0) + outputTokens;
-  const providerName = usageData.byProvider[provider.id]?.name;
-  const providerDay = providerDayBucket(day, provider.id, providerName);
+  const providerDay = providerDayBucket(day, provider.id, providerTotal.name);
   bumpDayBucket(providerDay);
   if (model) bumpDayBucket(modelDayBucket(providerDay, model));
 }
@@ -916,15 +973,13 @@ async function recordMessagesDraft(providerId, model, messageCount, outputTokens
  *   cacheWriteTokens?: number, source?: 'measured'|'estimate' }
  *   | Array<object>} record
  */
-async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = false, codexHighWater = null } = {}) {
+function recordRunUsageDraft(record, { reconciledRunId = null, siblings = false, codexHighWater = null } = {}, at) {
   // A single run can produce several records when its session switched models
   // mid-flight (see usageReconciler.reconcileRunUsage). Apply the full batch
   // in memory before saving so every model is priced independently without
   // rewriting the complete usage file once per entry.
   const records = Array.isArray(record) ? record.flat(Infinity) : [record];
   if (records.length === 0 && !reconciledRunId) return;
-  if (!usageData) await loadUsageDraft();
-  await refreshDayKeyTimezone();
 
   for (const entry of records) {
     const {
@@ -954,7 +1009,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       longCacheWriteTokens,
       ...speedCounts,
       source, nativeUsageUnpersisted,
-    });
+    }, at);
   }
 
   // Marker and counts share one write: a crash between two saves would leave
@@ -970,7 +1025,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       };
     }
   }
-  await saveUsage();
+  return true;
 }
 
 /**
@@ -982,8 +1037,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
 async function addDatedUsageDraft(dayKey, record, { repairId = null, flush = true } = {}) {
   if (!DAY_KEY_RE.test(dayKey || '') || !record) return false;
   if (!usageData) await loadUsageDraft();
-  usageData.grokRepairIds ??= [];
-  if (repairId && usageData.grokRepairIds.includes(repairId)) return false;
+  if (repairId && grokRepairIndex.has(repairId)) return false;
   if (!usageData.dailyActivity[dayKey]) {
     usageData.dailyActivity[dayKey] = { sessions: 0, messages: 0, tokens: 0, byProvider: {} };
     cacheActivityDay(dayKey);
@@ -1567,6 +1621,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
  */
 async function resetUsageDraft() {
   usageData = getEmptyUsage();
+  grokRepairIndex = new Set();
   await saveUsage();
   return true;
 }
@@ -1629,6 +1684,7 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
 }
 
 export async function loadUsage() {
+  closeRunBatch();
   return queueUsageWrite(async () => {
     return transactUsage(async () => {
       await loadUsageDraft();
@@ -1672,16 +1728,16 @@ export async function applyHistoricalUsageCorrections(...args) {
   return mutateUsage(applyHistoricalUsageCorrectionsDraft, args);
 }
 
-export async function recordSession(...args) {
-  return mutateUsage(recordSessionDraft, args);
+export async function recordSession(providerId, providerName, rawModel) {
+  return queueRunWrite(recordSessionDraft, [providerId, providerName, rawModel, new Date()]);
 }
 
 export async function recordMessages(...args) {
   return mutateUsage(recordMessagesDraft, args);
 }
 
-export async function recordRunUsage(...args) {
-  return mutateUsage(recordRunUsageDraft, args);
+export async function recordRunUsage(record, options) {
+  await queueRunWrite(recordRunUsageDraft, [record, options, new Date()]);
 }
 
 export async function addDatedUsage(...args) {

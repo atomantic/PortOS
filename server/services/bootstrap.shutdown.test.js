@@ -33,7 +33,7 @@ const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n
 
 // Execute the signal boundary without importing the live service graph. Module
 // loading is injected so a suspended teardown uses fake time, never a real disk.
-const loadShutdown = (loadModule) => {
+const loadShutdown = (loadModule, flushPendingUsageWrites = async () => {}) => {
   const signals = new Map();
   const exit = vi.fn();
   const marker = vi.fn(async () => {});
@@ -63,6 +63,7 @@ const loadShutdown = (loadModule) => {
     activeAgents: new Map([['example-agent', {}]]), dispatchingAgentIds: new Set(),
     writeHostShutdownMarker: marker, signalDetachedGroups: noop, stopCodexAppServer: async () => {},
     flushIdeaLoomAutoSync: async () => {}, flushCatalogUniverseFiling: async () => {}, flushMediaJobQueue: flush,
+    flushPendingUsageWrites,
     quiesceSharingForExit: noop, drainPeerSyncOperations: async () => {},
     logBootstrapFailure: noop,
     loadModule: (path) => path === '../lib/db.js' ? Promise.resolve({ close }) : loadModule(path),
@@ -91,6 +92,24 @@ describe('shutdown signal deadline and recovery', () => {
       release({ stopAllForwards: () => {}, stopServeProcess: () => {}, stopFleetLlmHost: async () => {}, stopTailcatIngress: () => {} });
       await stopping;
     }
+  });
+
+  it('waits for an admitted usage batch before exiting', async () => {
+    const gate = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    const lifecycle = loadShutdown(async () => ({
+      stopAllForwards: () => {}, stopServeProcess: () => {},
+      stopFleetLlmHost: async () => {}, stopTailcatIngress: () => {},
+    }), () => {
+      entered.resolve();
+      return gate.promise;
+    });
+    const stopping = lifecycle.stop();
+    await entered.promise;
+    expect(lifecycle.exit).not.toHaveBeenCalled();
+    gate.resolve();
+    await stopping;
+    expect(lifecycle.exit).toHaveBeenCalledWith(0);
   });
 
   it('preserves agent recovery and flushes the queue and DB when model-host usage cannot flush', async () => {

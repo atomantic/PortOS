@@ -65,7 +65,7 @@ import {
 import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
 import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
-import { loadUsage, recordSession } from './usage.js';
+import { flushPendingUsageWrites, loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './provider/providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './provider/providerStatus.js';
@@ -1437,6 +1437,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await markerWritten;
     await mediaQueueFlushed;
     await ideaLoomFlushed;
+    await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
     clearTimeout(forceExitTimer);
     reportIfSlow();
     process.exit(0);
