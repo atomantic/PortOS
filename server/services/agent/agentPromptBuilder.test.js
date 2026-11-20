@@ -4035,11 +4035,16 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     const { buildQueuedTask } = await import('../cos/cosTaskIntake.js');
     const source = await readFile(join(PATHS.root, 'client/src/components/apps/tabs/GitRecoveryAction.jsx'), 'utf8');
     const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
+    const apiImport = ast.program.body.find(node => node.type === 'ImportDeclaration'
+      && node.source.value.endsWith('/services/apiAgents.js'));
+    const taskBinding = apiImport?.specifiers.find(specifier => specifier.type === 'ImportSpecifier'
+      && specifier.imported.name === 'addCosTask')?.local.name;
+    expect(taskBinding).toBeDefined();
     let request;
     const walk = node => {
       if (!node || typeof node !== 'object') return;
-      if (node.type === 'CallExpression' && node.callee?.object?.name === 'api'
-        && node.callee?.property?.name === 'addCosTask') request = node.arguments[0];
+      if (node.type === 'CallExpression' && node.callee.type === 'Identifier'
+        && node.callee.name === taskBinding) request = node.arguments[0];
       Object.values(node).forEach(value => {
         if (Array.isArray(value)) value.forEach(walk);
         else if (value && typeof value === 'object') walk(value);
