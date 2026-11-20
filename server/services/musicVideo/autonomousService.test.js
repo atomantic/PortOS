@@ -2337,7 +2337,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       service.__setAutonomousDepsForTests(doubles);
     });
     // Runs a footage film to its first final review, which flags 0:04 (and later 0:12).
-    const reachFinalReview = async (production = PRODUCTION) => {
+    const reachFinalReview = async (production = PRODUCTION, beforeFinalReview = () => {}) => {
       doubles.analyzeSong.mockImplementation(async () => {
         Object.assign(store.get('mv-auto'), { scenes: [{ sceneId: 'a', startSec: 0, endSec: 10 }, { sceneId: 'b', startSec: 10, endSec: 20 }] });
       });
@@ -2351,6 +2351,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
       // A finished render is the project's latest, as the render service records it.
       store.get('mv-auto').renderHistoryId = 'render-1';
+      beforeFinalReview();
       await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
     };
     const rendersAgain = async () => {
@@ -2373,6 +2374,60 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(doubles.startAutoReview).toHaveBeenCalledOnce();
       expect(reviews().slice(-2)).toEqual(['final:revise', 'final:noted']);
       expect(runOf().orchestration.reviews.at(-1).notes).toMatch(/Revision limit reached/);
+    });
+
+    it('ignores a duplicate render completion while its footage revision is running', async () => {
+      let staleProject;
+      await reachFinalReview(PRODUCTION, () => { staleProject = clone(store.get('mv-auto')); });
+      const completion = { projectId: 'mv-auto', jobId: 'render-1', status: 'completed' };
+      await service.__testing.onRenderEvent(completion);
+      const projects = await import('./projects.js');
+      const read = vi.spyOn(projects, 'getProject').mockResolvedValueOnce(staleProject);
+      try {
+        // A delivery that read before the revision must also lose the serialized write.
+        await service.__testing.onRenderEvent(completion);
+      } finally {
+        read.mockRestore();
+      }
+      expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-1', finalAutoReviewId: 'mvar-fix' },
+        stages: { produce: { step: 'final-revision' } } });
+
+      await rendersAgain();
+      await service.__testing.onAutoReviewEvent({ projectId: 'mv-auto', runId: 'mvar-fix', run: { status: 'passed' } });
+      expect(runOf()).toMatchObject({ status: 'running', output: { renderJobId: 'render-2', finalAutoReviewId: null } });
+      await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-2', status: 'completed' });
+      await settled('completed');
+      expect(doubles.finalReviewFrames.mock.calls.map(([id]) => id)).toEqual(['render-1', 'render-2']);
+    });
+
+    it('ignores delayed render completion across the revision handoff and reviews an immediately finished rerender', async () => {
+      await reachFinalReview();
+      answers.final = [{ verdict: 'approve', notes: 'The revised film is ready.' }];
+      const rerenderStarted = Promise.withResolvers();
+      const finishRerender = Promise.withResolvers();
+      doubles.activeRenderJobId.mockResolvedValue(null);
+      doubles.renderVideo.mockImplementationOnce(async (projectId) => {
+        rerenderStarted.resolve();
+        await finishRerender.promise;
+        store.get(projectId).renderHistoryId = 'render-2';
+        return { jobId: 'render-2' };
+      });
+
+      const rerender = service.__testing.onAutoReviewEvent({ projectId: 'mv-auto', runId: 'mvar-fix', run: { status: 'passed' } });
+      await rerenderStarted.promise;
+      try {
+        // The child has settled, and the next render has no saved id yet.
+        expect(runOf().output).toMatchObject({ renderJobId: 'render-1', finalAutoReviewId: null });
+        await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed' });
+        expect(runOf().status).toBe('running');
+      } finally {
+        finishRerender.resolve();
+        await rerender;
+      }
+      await settled('completed');
+      expect(runOf().output).toMatchObject({ renderJobId: 'render-2', finalReviewedJobId: 'render-2' });
+      expect(doubles.finalReviewFrames.mock.calls.map(([id]) => id)).toEqual(['render-1', 'render-2']);
+      expect(reviews().filter((entry) => entry.startsWith('final:'))).toEqual(['final:revise', 'final:approve']);
     });
 
     it.each(['failed', 'needs-human'])('parks when the child emits %s before its id is saved', async (status) => {

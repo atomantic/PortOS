@@ -173,50 +173,86 @@ export async function reconcileCastAndSets(projectId, advanceInBackground) {
 
 // ---- final render completion -----------------------------------------------------
 
+const matchesFinalRender = (current, run) => current?.id === run.id && current.status === 'running'
+  && current.stage === 'produce' && current.output.renderJobId === run.output.renderJobId;
+
+// The revision step outlives the child ID while the replacement render starts.
+const ownsFinalRender = (current, run) => matchesFinalRender(current, run)
+  && !current.output.finalAutoReviewId && current.stages.produce?.step !== FINAL_REVISION_STEP;
+
 /** Park the run as failed on its final render, with the stage marked failed so Retry re-renders only. */
-async function failFinalRender(projectId, message, errorCode = 'FINAL_RENDER_FAILED') {
-  // A cancel/stop that landed while the render prepared is not a failure.
-  if (projectAutonomousRun(await getProject(projectId))?.status !== 'running') return;
+async function failFinalRender(projectId, message, ownsCheckpoint, errorCode = 'FINAL_RENDER_FAILED') {
   const error = trimTo(message, 500);
-  await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'failed', error, step: null }));
-  await park(projectId, 'failed', { error, errorCode });
+  let failed = false;
+  const out = await patchRun(projectId, (current) => {
+    failed = ownsCheckpoint(current);
+    return failed ? { status: 'failed', error, errorCode,
+      ...stagePatch(current, 'produce', { status: 'failed', error, step: null }) } : {};
+  });
+  if (failed) logParkedRun(out.run, out.run.status, out.run.error);
 }
 
-// projectId -> the final review in flight, so a render event and a reconcile
-// that both see the finished render share one look instead of reviewing twice.
-const finalReviews = new Map();
+function acceptedRenderPatch(run) {
+  return {
+    status: 'completed',
+    ...stagePatch(run, 'produce', { status: 'done', finishedAt: new Date().toISOString(), error: null, step: null }),
+    error: null, errorCode: null,
+  };
+}
+
+// Event and reconciliation share one settlement per render. The next film can
+// finish before its job ID is stored, so it needs a separate settlement.
+const finalRenderSettlements = new Map();
+const finalRenderKey = (projectId, run) => JSON.stringify([projectId, run.id, run.output.renderJobId]);
+
+async function settleRenderedFilm(projectId, run) {
+  const jobId = run.output.renderJobId;
+  let review = false;
+  let accepted = false;
+  await patchRun(projectId, (current) => {
+    if (!ownsFinalRender(current, run)) return {};
+    review = isOrchestratedRun(current) && current.output.finalReviewedJobId !== jobId;
+    if (review) return stagePatch(current, 'produce', { status: 'running', step: 'final-review' });
+    accepted = true;
+    return acceptedRenderPatch(current);
+  });
+  if (accepted) return null;
+  if (!review) return;
+
+  const next = await orchestrateFinal(projectId, run);
+  let settled = false;
+  await patchRun(projectId, (current) => {
+    if (!matchesFinalRender(current, run)) return {};
+    settled = true;
+    const checkpoint = { output: { finalReviewedJobId: jobId } };
+    // Only this review can accept its film if a revision was attempted and failed to start.
+    return next ? checkpoint : { ...checkpoint, ...acceptedRenderPatch(current) };
+  });
+  return settled ? next : undefined;
+}
 
 async function completeFinalRender(projectId, run) {
-  if (isOrchestratedRun(run) && run.output.finalReviewedJobId !== run.output.renderJobId) {
-    if (finalReviews.has(projectId)) return finalReviews.get(projectId);
-    const review = (async () => {
-      await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: 'final-review' }));
-      const next = await orchestrateFinal(projectId, run);
-      await patchRun(projectId, () => ({ output: { finalReviewedJobId: run.output.renderJobId || null } }));
-      return next;
-    })();
-    finalReviews.set(projectId, review);
-    let next;
-    try { next = await review; } finally { finalReviews.delete(projectId); }
-    // Stopped or canceled while the orchestrator watched: leave that state alone.
-    const project = await getProject(projectId);
-    const current = runInFinalDelivery(project);
-    if (current?.id !== run.id) return;
-    // A footage revision can finish before its id or the final verdict was saved.
-    // Settle after releasing finalReviews so an immediate rerender gets its own review.
-    if (next === 'wait') {
-      const reviewId = current.output.finalAutoReviewId;
-      const review = project.autoReviews?.find((child) => child.id === reviewId);
-      return settleFinalRevision(projectId, current, reviewId, review);
-    }
-    if (next === 'rerender') return startFinalRender(projectId, run);
+  const key = finalRenderKey(projectId, run);
+  if (finalRenderSettlements.has(key)) return finalRenderSettlements.get(key);
+  const settlement = settleRenderedFilm(projectId, run);
+  finalRenderSettlements.set(key, settlement);
+  let next;
+  try { next = await settlement; } finally { finalRenderSettlements.delete(key); }
+  if (next === undefined) return;
+  if (next === null) {
+    console.log(`✅ Autonomous music video ${short(run.id)} finished — final video rendered`);
+    return;
   }
-  await patchRun(projectId, (r) => ({
-    status: 'completed',
-    ...stagePatch(r, 'produce', { status: 'done', finishedAt: new Date().toISOString(), error: null, step: null }),
-    error: null, errorCode: null,
-  }));
-  console.log(`✅ Autonomous music video ${short(run.id)} finished — final video rendered`);
+  const project = await getProject(projectId);
+  const current = runInFinalDelivery(project);
+  if (!matchesFinalRender(current, run)) return;
+  // A footage revision can finish before its id or the final verdict was saved.
+  if (next === 'wait') {
+    const reviewId = current.output.finalAutoReviewId;
+    const review = project.autoReviews?.find((child) => child.id === reviewId);
+    return settleFinalRevision(projectId, current, reviewId, review);
+  }
+  return startFinalRender(projectId, current);
 }
 
 /**
@@ -242,13 +278,19 @@ export async function reconcileFinalRender(projectId, { restart = false } = {}) 
   const project = await getProject(projectId).catch(() => null);
   const run = runInFinalDelivery(project);
   if (!run) return;
+  if (!ownsFinalRender(run, run)) {
+    // An explicit Resume may find a revision that handed off before the next render was saved.
+    if (restart && !run.output.finalAutoReviewId) return startFinalRender(projectId, run);
+    return;
+  }
   const jobId = run.output.renderJobId || null;
   if (jobId && (project.status === 'rendering' || (await deps.activeRenderJobId(projectId)) === jobId)) {
-    await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: RENDER_STEP }));
+    await patchRun(projectId, (current) => ownsFinalRender(current, run) && current.stages.produce?.step !== 'final-review'
+      ? stagePatch(current, 'produce', { status: 'running', step: RENDER_STEP }) : {});
     return;
   }
   if (jobId && project.renderHistoryId === jobId) return completeFinalRender(projectId, run);
-  if (!restart) return failFinalRender(projectId, project.renderError || 'The final render did not finish');
+  if (!restart) return failFinalRender(projectId, project.renderError || 'The final render did not finish', (current) => ownsFinalRender(current, run));
   return startFinalRender(projectId, run);
 }
 
@@ -258,7 +300,8 @@ export async function startFinalRender(projectId, run) {
   if (!await settleOverlayText(projectId, run)) return;
   if (!rendersFromCode(await getProject(projectId), run)) await ensureFootageComposition(projectId);
   const render = await deps.renderVideo(projectId).catch((err) => ({ error: err }));
-  if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`, render.error.code || 'FINAL_RENDER_FAILED');
+  if (render.error) return failFinalRender(projectId, `The final render did not start: ${render.error.message}`,
+    (current) => matchesFinalRender(current, run), render.error.code || 'FINAL_RENDER_FAILED');
   let stopped = false;
   await patchRun(projectId, (r) => {
     stopped = r.status !== 'running';
@@ -285,6 +328,8 @@ export async function startFinalRender(projectId, run) {
 async function settleFinalRevision(projectId, run, runId, review) {
   const ownsRevision = (r) => r?.status === 'running' && r.output.finalAutoReviewId === runId && r.stages.produce?.step === FINAL_REVISION_STEP;
   if (!review?.status || review.status === 'running' || !ownsRevision(run)) return;
+  // The in-flight review reconciles the child after recording its verdict.
+  if (run.output.finalReviewedJobId !== run.output.renderJobId && finalRenderSettlements.has(finalRenderKey(projectId, run))) return;
   const needsHuman = ['needs-human', 'failed'].includes(review.status);
   const reason = [review.stopReason, review.error].find((v) => typeof v === 'string' && v.trim()) || `the revision ${review.status === 'failed' ? 'failed' : 'needs a director'}`;
   let settled = false;
@@ -309,7 +354,7 @@ async function settleFinalRevision(projectId, run, runId, review) {
 }
 
 export async function onAutoReviewEvent({ projectId, runId, run: review }) {
-  if (!projectId || !runId || !review || review.status === 'running' || finalReviews.has(projectId)) return;
+  if (!projectId || !runId || !review || review.status === 'running') return;
   const project = await getProject(projectId).catch(() => null);
   return settleFinalRevision(projectId, runInFinalDelivery(project), runId, review);
 }
@@ -318,11 +363,12 @@ export async function onRenderEvent({ projectId, jobId, status, error, abandoned
   if (!projectId || !jobId) return;
   const project = await getProject(projectId).catch(() => null);
   const run = runInFinalDelivery(project);
-  if (!run || run.output.renderJobId !== jobId) return;
+  if (!run || run.output.renderJobId !== jobId || !ownsFinalRender(run, run)) return;
   // The file exists but the project does not name it: the song changed while it rendered (#15158).
-  if (status === 'completed' && abandoned) return failFinalRender(projectId, SONG_CHANGED_DURING_RENDER);
+  if (status === 'completed' && abandoned) return failFinalRender(projectId, SONG_CHANGED_DURING_RENDER, (current) => ownsFinalRender(current, run));
   if (status === 'completed') return completeFinalRender(projectId, run);
-  return failFinalRender(projectId, error || (status === 'canceled' ? 'The final render was cancelled' : 'The final render failed'));
+  return failFinalRender(projectId, error || (status === 'canceled' ? 'The final render was cancelled' : 'The final render failed'),
+    (current) => ownsFinalRender(current, run));
 }
 
 export function registerReconciliation(advanceInBackground) {
