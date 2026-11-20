@@ -1,10 +1,10 @@
-import { existsSync, realpathSync } from 'fs';
+import { existsSync } from 'fs';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { mkdtemp } from 'fs/promises';
+import { mkdtemp, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
-import { safeJSONParse, sleep, rmGuarded } from '../lib/fileUtils.js';
+import { safeJSONParse, sleep, rmGuarded, pathExists } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -48,30 +48,45 @@ export {
 const checkoutMutations = new Map();
 const checkoutMutationContext = new AsyncLocalStorage();
 
-// Existing writers register so an exclusive rebase/push cannot overlap them.
-// Nested calls retain their own publication lifetime, even if they outlive a parent.
-async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
+// Key resolution (realpath + ancestor walk) is async so it never blocks the event
+// loop, but admission must still happen in call order: a caller that starts one
+// mutation and immediately starts another has to see the first registered. Each
+// call therefore joins this chain; resolving its key and registering it is one
+// step, and the next call's resolution only begins after that registration.
+let admissionTail = Promise.resolve();
+
+async function resolveCheckoutKey(dir) {
   let key;
-  try { key = realpathSync(dir); }
+  try { key = await realpath(dir); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     key = resolve(dir);
   }
   // API paths may name a subdirectory or a symlink into the same checkout.
   for (let root = key; ; root = dirname(root)) {
-    if (existsSync(join(root, '.git'))) { key = root; break; }
-    if (dirname(root) === root) break;
+    if (await pathExists(join(root, '.git'))) return root;
+    if (dirname(root) === root) return key;
   }
-  const active = checkoutMutations.get(key);
+}
+
+// Existing writers register so an exclusive rebase/push cannot overlap them.
+// Nested calls retain their own publication lifetime, even if they outlive a parent.
+async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
   const parent = checkoutMutationContext.getStore();
-  const inherited = parent?.active && parent.key === key && parent.state === active;
-  if (!inherited && (active?.exclusive || (exclusive && active))) {
-    throw new ServerError('A Git operation is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
-  }
-  const state = active || { count: 0, exclusive };
-  state.count++;
-  checkoutMutations.set(key, state);
-  const context = { key, state, active: true };
+  const admission = admissionTail.then(async () => {
+    const key = await resolveCheckoutKey(dir);
+    const active = checkoutMutations.get(key);
+    const inherited = parent?.active && parent.key === key && parent.state === active;
+    if (!inherited && (active?.exclusive || (exclusive && active))) {
+      throw new ServerError('A Git operation is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
+    }
+    const state = active || { count: 0, exclusive };
+    state.count++;
+    checkoutMutations.set(key, state);
+    return { key, state, context: { key, state, active: true } };
+  });
+  admissionTail = admission.catch(() => {});
+  const { key, state, context } = await admission;
   try {
     return await withGitMutationLifetime(() => checkoutMutationContext.run(context, work));
   } finally {
