@@ -68,6 +68,29 @@ describe('bounded media history', () => {
     await waitFor(() => expect(saveAnnotation).toHaveBeenCalledWith('image:0.png', { starred: true }));
   });
 
+  it('filters the whole history to this machine and restores all media when toggled off', async () => {
+    const listAll = fetchPage.getMockImplementation();
+    fetchPage.mockImplementation(async filters => {
+      if (!filters.localOnly) return listAll(filters);
+      return { items: [rows[60]], total: 1, limit: 60, offset: filters.offset, counts: { all: 1, image: 1, video: 0 } };
+    });
+    open();
+    await screen.findByText('Picture 0');
+    const toggle = screen.getByRole('button', { name: 'On this machine' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(await screen.findByText('Picture 60')).toBeInTheDocument();
+    expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ localOnly: true, offset: 0 }), { silent: true });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Images 1' })).toBeInTheDocument();
+    expect(screen.queryByText('Picture 0')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show more/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(await screen.findByText('Picture 0')).toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Images 61' })).toBeInTheDocument();
+  });
+
   it('keeps the previously unseen last item reachable after deletion shifts offsets', async () => {
     open();
     await screen.findByText('Picture 0');

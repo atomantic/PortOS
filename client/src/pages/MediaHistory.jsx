@@ -58,6 +58,7 @@ export default function MediaHistory() {
   const stitchJobsRef = useRef(new Set());
   const mounted = useMounted();
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [localOnly, setLocalOnly] = useState(false);
   const [ratingFilter, setRatingFilter] = useState(null);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
   const [annotationSaves, setAnnotationSaves] = useState(0);
@@ -71,7 +72,10 @@ export default function MediaHistory() {
   // negative prompt, settings — is read when a card is opened or handed to a
   // generator, never for the whole page. Search and counts stay server-side
   // over the full metadata.
-  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, rating: ratingFilter || undefined, summary: true, hidden: false, compact: true }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: (favoritesOnly || !!ratingFilter) && annotationSaves > 0 });
+  const page = useGalleryPage({
+    kind: filter, q: query, starred: favoritesOnly, localOnly: localOnly || undefined,
+    rating: ratingFilter || undefined, summary: true, hidden: false, compact: true,
+  }, { media: true, preserveLoadedOnRefresh: true, revision: annotationRevision, paused: (favoritesOnly || !!ratingFilter) && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
   const setItems = useCallback(updater => page.setItems(previous => {
@@ -79,9 +83,8 @@ export default function MediaHistory() {
     const next = typeof updater === 'function' ? updater(normalized) : updater;
     return next.map(item => ({ kind: item.kind, data: { ...item.raw, prompt: item.prompt } }));
   }), [page.setItems]);
-  const filtered = items;
   const [preview, setPreview] = useHydratedPreviewRoute(items);
-  useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh });
+  useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh, refreshOnHolderChange: localOnly });
 
   const toggleSelect = useCallback((videoId) => {
     setSelected((s) => s.includes(videoId) ? s.filter((x) => x !== videoId) : [...s, videoId]);
@@ -348,6 +351,22 @@ export default function MediaHistory() {
             </button>
           ))}
           <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} size="md" />
+          <button
+            type="button"
+            aria-pressed={localOnly}
+            onClick={() => {
+              setLocalOnly(value => !value);
+              setSelected([]);
+              setSelectedVerify([]);
+            }}
+            className={`min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1 rounded-full border ${
+              localOnly
+                ? 'bg-port-accent/20 border-port-accent text-port-accent'
+                : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'
+            }`}
+          >
+            On this machine
+          </button>
           <RatingFilterChips value={ratingFilter} onChange={setRatingFilter} />
         </div>
         <div className="flex items-center gap-1">
@@ -423,11 +442,13 @@ export default function MediaHistory() {
       {page.error && items.length === 0 && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
       {loading && items.length === 0 ? (
         <PageSkeleton header="none" label="Loading media history" layout="grid" cards={10} gridColsClass="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" />
-      ) : filtered.length === 0 ? (
+      ) : items.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
           {query.trim()
             ? <>No matches for <span className="text-gray-300">"{query}"</span>. <button type="button" onClick={() => setQuery('')} className="text-port-accent hover:underline">Clear search</button></>
-            : filter === 'video'
+            : localOnly
+              ? 'No matching media on this machine.'
+              : filter === 'video'
               ? <>No videos yet. <Link to="/media/video" className="text-port-accent hover:underline">Generate one →</Link></>
               : filter === 'image'
                 ? <>No images yet. <Link to="/media/image" className="text-port-accent hover:underline">Generate one →</Link></>
@@ -490,7 +511,7 @@ export default function MediaHistory() {
       <MediaPreview
         preview={preview}
         setPreview={setPreview}
-        items={filtered}
+        items={items}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onPromptSaved={handlePromptSaved}
