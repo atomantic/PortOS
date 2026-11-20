@@ -819,8 +819,8 @@ export async function getDefaultBranch(dir, { allowRemote = true, strict = false
   }
 
   // Fall back to local branch detection
-  const branches = knownBranches ?? (await execGitSafe(['branch', '--list'], dir)).stdout
-    ?.trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean) ?? [];
+  const result = await execGitSafe(['branch', '--list'], dir);
+  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
   if (branches.includes('main')) return 'main';
   if (branches.includes('master')) return 'master';
 
