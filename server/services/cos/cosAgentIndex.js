@@ -15,7 +15,7 @@ import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises'
 import { existsSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { AGENTS_DIR, withStateLock } from './cosState.js';
-import { atomicWrite, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, tryReadFileStrict } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { repairCodexTaskSummary } from '../codexSummaryRepair.js';
 import {
@@ -465,8 +465,8 @@ export async function getAgentIdsForDates(dates) {
 // written before `status` was persisted reads as completed.
 async function readArchivedAgentMetadata(date, agentDirName, { repairSummaries = true } = {}) {
   const agentDir = join(AGENTS_DIR, date, agentDirName);
-  const content = await tryReadFile(join(agentDir, 'metadata.json'));
-  if (!content) return null;
+  const { ok, value: content } = await tryReadFileStrict(join(agentDir, 'metadata.json'));
+  if (!ok || !content) return null;
   const raw = safeJSONParse(content, null);
   if (!raw) return null;
   const { output, ...rest } = raw;
