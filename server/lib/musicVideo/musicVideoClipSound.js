@@ -5,7 +5,9 @@
  * A director (or an autonomous run) may opt one shot in: its clip is then
  * generated with sound, and the final render plays that sound over the song
  * at `volume`, dipping the song to `musicLevel` for the shot's span so a line
- * stays intelligible. Absent or null is off. A cold-open shot (before the
+ * stays intelligible. `fadeInSec` / `fadeOutSec` (optional, kept only when
+ * above 0) ramp the clip sound in and out, and the song's dip with it; without
+ * them the edges get only a click-free few milliseconds. Absent or null is off. A cold-open shot (before the
  * song) has its own sound settings (musicVideoColdOpen.js) and ignores this.
  *
  * Peer sync: an additive optional field on the scene; an older peer keeps it
@@ -17,6 +19,8 @@ import { isPreMusicShot, preMusicClipSound } from './musicVideoColdOpen.js';
 export const CLIP_SOUND_VOLUME_RANGE = Object.freeze({ min: 0.05, max: 2 });
 export const CLIP_SOUND_MUSIC_RANGE = Object.freeze({ min: 0, max: 1 });
 export const CLIP_SOUND_DEFAULTS = Object.freeze({ volume: 1, musicLevel: 0.5 });
+// Seconds the clip sound takes to rise from silence and to fall back to it; the song's dip follows the same ramps.
+export const CLIP_SOUND_FADE_RANGE = Object.freeze({ min: 0, max: 10 });
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const clamp = (v, { min, max }, fallback) => (typeof v === 'number' && Number.isFinite(v) ? round2(Math.min(max, Math.max(min, v))) : fallback);
@@ -24,9 +28,14 @@ const clamp = (v, { min, max }, fallback) => (typeof v === 'number' && Number.is
 /** A shot's clip-sound settings, or null when its clip plays silent under the song. */
 export function normalizeClipSound(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const fadeInSec = clamp(value.fadeInSec, CLIP_SOUND_FADE_RANGE, 0);
+  const fadeOutSec = clamp(value.fadeOutSec, CLIP_SOUND_FADE_RANGE, 0);
   return {
     volume: clamp(value.volume, CLIP_SOUND_VOLUME_RANGE, CLIP_SOUND_DEFAULTS.volume),
     musicLevel: clamp(value.musicLevel, CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_DEFAULTS.musicLevel),
+    // Only a real fade is stored, so a shot saved before fades existed keeps its exact record (and render evidence).
+    ...(fadeInSec > 0 ? { fadeInSec } : {}),
+    ...(fadeOutSec > 0 ? { fadeOutSec } : {}),
   };
 }
 
@@ -40,8 +49,10 @@ export const songClipSound = (scene) => (isPreMusicShot(scene) ? null : normaliz
  */
 export const shotWantsClipSound = (scene) => preMusicClipSound(scene) || !!songClipSound(scene);
 
-/** "Clip sound 100% · music 50%", or null when off. */
+/** "Clip sound 100% · music 50% · fade 0.5s in, 1s out", or null when off. */
 export function clipSoundSummary(scene) {
   const sound = songClipSound(scene);
-  return sound ? `Clip sound ${Math.round(sound.volume * 100)}% · music ${Math.round(sound.musicLevel * 100)}%` : null;
+  if (!sound) return null;
+  const fades = [sound.fadeInSec && `${sound.fadeInSec}s in`, sound.fadeOutSec && `${sound.fadeOutSec}s out`].filter(Boolean);
+  return `Clip sound ${Math.round(sound.volume * 100)}% · music ${Math.round(sound.musicLevel * 100)}%${fades.length ? ` · fade ${fades.join(', ')}` : ''}`;
 }

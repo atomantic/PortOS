@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, Crosshair, Trash2, Volume2, VolumeX, X } from 'lucide-react';
 import { formatTimecode } from '../../utils/formatters.js';
+import { clipSoundSummary, songClipSound } from '../../../../server/lib/musicVideo/musicVideoClipSound.js';
+import { clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 
 // A dragged layer is pulled onto a beat, lyric line or the song's start within this many pixels.
 const SNAP_PX = 6;
@@ -168,4 +170,48 @@ export function TimelineAudioLayerPanel({ layer, playheadSec, onChange, onRemove
       </button>
     </section>
   );
+}
+
+/**
+ * The shots whose own clip sound plays over the music (musicVideoClipSound.js)
+ * and can be heard as the render hears it: a selected video clip, timed on
+ * the song, at its normal speed and forwards. A reversed or re-timed clip
+ * renders silent (clipSoundMix.js), so it previews and draws silent too.
+ */
+export function clipSoundShots(scenes) {
+  return (scenes || []).filter((scene) => scene?.videoHistoryId && songClipSound(scene)
+    && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
+    && !clipReversed(scene) && clipSpeedRate(scene) === 1);
+}
+
+/**
+ * The shots whose clip sound plays over the music, on one row: each a block
+ * over the shot's span, its level drawn as a ramp over its fades. A tap opens
+ * the shot (`onOpen(scene)`), whose Sound settings hold the level and fades.
+ */
+export function TimelineClipSoundRow({ shots, pxPerSec, shotName, activeSceneId, onOpen }) {
+  return shots.map((scene) => {
+    const sound = songClipSound(scene);
+    const span = scene.endSec - scene.startSec;
+    const fadeIn = Math.min(sound.fadeInSec || 0, span / 2);
+    const fadeOut = Math.min(sound.fadeOutSec || 0, span / 2);
+    const width = Math.max(LAYER_MIN_PX, span * pxPerSec);
+    const name = shotName ? shotName(scene) : 'Shot';
+    const active = scene.sceneId === activeSceneId;
+    return (
+      <button key={scene.sceneId} type="button" onClick={() => onOpen?.(scene)} aria-pressed={active}
+        aria-label={`Open ${name}: ${clipSoundSummary(scene)}`} title={clipSoundSummary(scene)}
+        className={`absolute inset-y-0.5 overflow-hidden rounded-sm border text-left focus-visible:outline-2 focus-visible:outline-port-accent ${active ? 'border-port-accent bg-port-accent/25' : 'border-port-success/50 bg-port-success/10 hover:border-port-success'}`}
+        style={{ left: scene.startSec * pxPerSec, width }}>
+        <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full text-port-success/40" viewBox={`0 0 ${span} 1`} preserveAspectRatio="none">
+          <polygon points={`0,1 ${fadeIn},0 ${span - fadeOut},0 ${span},1`} fill="currentColor" />
+        </svg>
+        {width >= LABEL_MIN_PX && (
+          <span className="pointer-events-none relative flex items-center gap-1 truncate px-1 text-[10px] leading-7 text-port-text pointer-coarse:leading-[2.75rem]">
+            <Volume2 size={11} aria-hidden="true" className="shrink-0" />{name}
+          </span>
+        )}
+      </button>
+    );
+  });
 }
