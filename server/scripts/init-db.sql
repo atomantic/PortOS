@@ -556,6 +556,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_route_bindings_binding_mode
 CREATE INDEX IF NOT EXISTS idx_ai_route_bindings_binding
       ON ai_route_bindings (binding_id);
 
+CREATE TABLE IF NOT EXISTS usage_ledger_buckets (
+    bucket text NOT NULL,
+    key_hash text NOT NULL,
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    PRIMARY KEY (bucket, key_hash)
+  );
+
+CREATE TABLE IF NOT EXISTS usage_ledger_markers (
+    kind text NOT NULL,
+    id text NOT NULL,
+    value jsonb NOT NULL,
+    claim_at bigint,
+    PRIMARY KEY (kind, id)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_usage_ledger_claim_at ON usage_ledger_markers (kind, claim_at)
+    WHERE claim_at IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS peer_execution_operations (
     operation_id UUID PRIMARY KEY,
     host_instance_id UUID NOT NULL,
@@ -2518,26 +2537,6 @@ CREATE TABLE IF NOT EXISTS github_notification_rules (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (account_id, repo_full_name, reason, actor)
   );
-
--- Usage counters and exact replay markers share a transaction. The partial
--- index serves nearby Codex completions without loading historical run IDs.
-CREATE TABLE IF NOT EXISTS usage_ledger_buckets (
-  bucket text NOT NULL,
-  key_hash text NOT NULL,
-  key text NOT NULL,
-  value jsonb NOT NULL,
-  PRIMARY KEY (bucket, key_hash)
-);
-
-CREATE TABLE IF NOT EXISTS usage_ledger_markers (
-  kind text NOT NULL,
-  id text NOT NULL,
-  value jsonb NOT NULL,
-  claim_at bigint,
-  PRIMARY KEY (kind, id)
-);
-CREATE INDEX IF NOT EXISTS idx_usage_ledger_claim_at ON usage_ledger_markers (kind, claim_at)
-  WHERE claim_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
     id BIGSERIAL PRIMARY KEY,

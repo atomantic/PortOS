@@ -42,8 +42,9 @@ let draftMarkerBase;
 let pendingRunBatch = null;
 const activeRunBatches = new Set();
 const queueUsageWrite = createFileWriteQueue();
-const usesUsageDatabase = () => (!isTestRunner() && process.env.MEMORY_BACKEND !== 'file')
-  || (isTestRunner() && process.env.PORTOS_USAGE_TEST_POSTGRES === '1');
+const usesUsageDatabase = () => isTestRunner()
+  ? process.env.MEMORY_BACKEND === 'postgres'
+  : process.env.MEMORY_BACKEND !== 'file';
 const usageDatabase = () => import('./usageLedgerDb.js');
 
 // Readers continue seeing committed state while a private draft is being
@@ -1863,7 +1864,10 @@ export async function loadUsage({ includeRepairEvidence = false } = {}) {
 /** Refresh just the committed ledger while restore still fences DB writers. */
 export async function reloadRestoredUsageLedger() {
   if (!usesUsageDatabase()) return;
-  await mutateUsage(loadUsageDraft, [{ mutableDraft: false }]);
+  await mutateUsage(async () => {
+    await loadUsageDraft({ mutableDraft: false });
+    bumpChangeToken('usage');
+  }, []);
 }
 
 export async function forgetSiblingReconciledUsageRuns(...args) {

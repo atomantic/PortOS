@@ -3,14 +3,15 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { getChangeToken } from './changeToken.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-ledger-db-' });
 vi.mock('../lib/fileUtils.js', async (original) => makeProxy(await original()));
-vi.stubEnv('PORTOS_USAGE_TEST_POSTGRES', '1');
+vi.stubEnv('MEMORY_BACKEND', 'postgres');
 
 const {
   USAGE_FILE, addDatedUsageBatch, buildUsageDigest, flushPendingUsageWrites, getRecentCodexUsageClaims,
-  getUsage, loadUsage, readUsageRepairLedger, recordRunUsage, recordSession, resetUsage,
+  getUsage, loadUsage, readUsageRepairLedger, recordRunUsage, recordSession, reloadRestoredUsageLedger, resetUsage,
 } = await import('./usage.js');
 const { importLegacyUsageLedger } = await import('./usageLedgerDb.js');
 const { PATHS } = await import('../lib/fileUtils.js');
@@ -114,5 +115,13 @@ describe.skipIf(!ready)('PostgreSQL usage ledger', () => {
     expect(stored).toMatchObject({ totalTokens: { output: 7 }, grokRepairIds: ['legacy-repair', 'repair'] });
     expect(stored.reconciledRuns.rejected).toBeTruthy();
     expect(stored.siblingReconciledRuns.rejected).toBeTruthy();
+  });
+
+  it('invalidates usage checksums after reloading an already normalized restored ledger', async () => {
+    const revision = getChangeToken('usage');
+    const before = getUsage().lastUpdated;
+    await reloadRestoredUsageLedger();
+    expect(getUsage().lastUpdated).toBe(before);
+    expect(getChangeToken('usage')).toBeGreaterThan(revision);
   });
 });
