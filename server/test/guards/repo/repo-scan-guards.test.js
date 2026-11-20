@@ -68,13 +68,16 @@ const SCANNERS_WITHOUT_SUFFIX = new Map([
 ]);
 
 const SERVER_CHECK_DIRS = GUARD_CHECK_DIRS.filter(({ dir }) => dir.startsWith('server/'));
+/** The Vitest workspace a guard directory belongs to, and its path inside it (the form the config globs match). */
+const workspaceOf = (path) => (path.startsWith('client/') ? 'client' : 'server');
+const inWorkspace = (path) => path.slice(workspaceOf(path).length + 1);
 
 /**
- * Server-side `*.guard.test.js` files that are not a runner, and why. A new scan
- * belongs in a `server/test/guards/<subject>/` directory: a separate file costs its
- * own worker and its own pass over the tree on every plan (#16996).
+ * `*.guard.test.js` files that are not a runner, and why. A new scan belongs in a
+ * `<workspace>/…/test/guards/<subject>/` directory: a separate file costs its own
+ * worker and its own pass over the tree on every plan (#16996).
  */
-const STANDALONE_SERVER_GUARDS = new Map([
+const STANDALONE_GUARDS = new Map([
   ['scripts/node-version-drift.guard.test.js', "ci.yml's minimum-Node job runs it by path on the lowest supported Node line"],
 ]);
 
@@ -97,36 +100,37 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
   it('selects every tracked *.guard.test.js, and only those, as the guard set', () => {
     expect(getGuardTests()).toEqual(guardTestFiles(REPO_ROOT));
     expect(getGuardTests()).toEqual(trackedTests.filter(isGuardTest).sort());
-    for (const { runner } of SERVER_CHECK_DIRS) expect(getGuardTests()).toContain(runner);
+    for (const { runner } of GUARD_CHECK_DIRS) expect(getGuardTests()).toContain(runner);
     expect(getGuardTests()).toContain('scripts/node-version-drift.guard.test.js');
   });
 
-  it('runs every server check inside a subject runner and keeps other server guards to the reviewed list', () => {
+  it('runs every check inside a subject runner and keeps other guards to the reviewed list', () => {
     const checksIn = ({ dir }) => guardCheckModules(join(REPO_ROOT, dir)).map((name) => `${dir}/${name}`);
-    const checks = SERVER_CHECK_DIRS.flatMap(checksIn);
-    for (const check of ['repo/agent-instructions-files.test.js', 'repo/tailnet-identity-leak.test.js', 'runtime/logLevelConventions.test.js']) {
-      expect(checks).toContain(`server/test/guards/${check}`);
+    const checks = GUARD_CHECK_DIRS.flatMap(checksIn);
+    for (const check of ['server/test/guards/repo/agent-instructions-files.test.js', 'server/test/guards/runtime/logLevelConventions.test.js',
+      'client/src/test/guards/a11y/controlNames.test.js', 'client/src/test/guards/ui/timeouts.test.js']) {
+      expect(checks).toContain(check);
     }
-    expect(checks.length).toBeGreaterThanOrEqual(60);
-    for (const { dir } of SERVER_CHECK_DIRS) expect(guardCheckModules(join(REPO_ROOT, dir)).length, dir).toBeGreaterThan(0);
-    const trackedChecks = trackedTests.filter((p) => p.startsWith('server/test/guards/'));
+    expect(checks.length).toBeGreaterThanOrEqual(90);
+    for (const { dir } of GUARD_CHECK_DIRS) expect(guardCheckModules(join(REPO_ROOT, dir)).length, dir).toBeGreaterThan(0);
+    const trackedChecks = trackedTests.filter((p) => GUARD_CHECK_DIRS.some(({ runner }) => p.startsWith(`${runner.slice(0, runner.lastIndexOf('/'))}/`)));
     expect(trackedChecks.filter((p) => !isGuardCheck(p) && !isGuardTest(p)), 'outside a subject directory, so no runner loads it').toEqual([]);
     expect(trackedChecks.filter((p) => isGuardCheck(p) && !checks.includes(p)), 'tracked but not loaded').toEqual([]);
-    const runners = new Set(SERVER_CHECK_DIRS.map(({ runner }) => runner));
-    const serverGuards = getGuardTests().filter((p) => !p.startsWith('client/src/'));
-    expect(serverGuards.filter((p) => !runners.has(p) && !STANDALONE_SERVER_GUARDS.has(p)),
-      'move the scan into a server/test/guards/<subject>/ directory, or list it in STANDALONE_SERVER_GUARDS with the reason').toEqual([]);
-    expect([...STANDALONE_SERVER_GUARDS.keys()].filter((p) => !serverGuards.includes(p)), 'dead entries').toEqual([]);
+    const runners = new Set(GUARD_CHECK_DIRS.map(({ runner }) => runner));
+    expect(getGuardTests().filter((p) => !runners.has(p) && !STANDALONE_GUARDS.has(p)),
+      'move the scan into a test/guards/<subject>/ directory, or list it in STANDALONE_GUARDS with the reason').toEqual([]);
+    expect([...STANDALONE_GUARDS.keys()].filter((p) => !getGuardTests().includes(p)), 'dead entries').toEqual([]);
   });
 
   it('collects every runner, and no check module, as a suite', () => {
-    // Workspace-relative, the form the config globs match.
-    const { include, exclude } = workspaceTestGlobs('server');
-    const collects = (rel) => include.some((glob) => globToRegExp(glob).test(rel)) && !exclude.some((glob) => globToRegExp(glob).test(rel));
-    for (const { dir, runner } of SERVER_CHECK_DIRS) {
-      expect(collects(runner.slice('server/'.length)), runner).toBe(true);
-      const loose = guardCheckModules(join(REPO_ROOT, dir)).filter((name) => collects(`${dir.slice('server/'.length)}/${name}`));
-      expect(loose, dir).toEqual([]);
+    const collects = (path) => {
+      const { include, exclude } = workspaceTestGlobs(workspaceOf(path));
+      const rel = inWorkspace(path);
+      return include.some((glob) => globToRegExp(glob).test(rel)) && !exclude.some((glob) => globToRegExp(glob).test(rel));
+    };
+    for (const { dir, runner } of GUARD_CHECK_DIRS) {
+      expect(collects(runner), runner).toBe(true);
+      expect(guardCheckModules(join(REPO_ROOT, dir)).filter((name) => collects(`${dir}/${name}`)), dir).toEqual([]);
     }
   });
 
@@ -148,7 +152,7 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
   it('selects every client guard when a client source file changes', () => {
     const plan = buildCiTestPlan(['client/src/components/Foo.jsx'], { trackedFiles: [...trackedTests, 'client/src/components/Foo.jsx'] });
     const clientGuards = getGuardTests().filter((p) => p.startsWith('client/src/'));
-    expect(clientGuards).toContain('client/src/numberFormattingConventions.guard.test.js');
+    expect(clientGuards).toEqual(GUARD_CHECK_DIRS.filter(({ dir }) => dir.startsWith('client/')).map(({ runner }) => runner).sort());
     expect(clientGuards.filter((p) => !plan.client.files.includes(p))).toEqual([]);
   });
 

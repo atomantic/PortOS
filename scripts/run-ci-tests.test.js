@@ -558,65 +558,6 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
   }
 });
 
-describe('always-run guard time budget through the real runner (#16551)', () => {
-  it('fails the run on a guard over budget only when enforced, timed in its own pass, and warns otherwise', () => {
-    const fixture = mkdtempSync(join(tmpdir(), 'portos-guard-budget-'));
-    try {
-      // Every selected file passes; the guard reports a wall time over the CI budget.
-      installFakeNpm(fixture, [
-        'const fs = require("fs");',
-        'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
-        'const out = process.argv.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
-        `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
-        'const testResults = selection.include.map(rel => ({ name: require("path").resolve(repo, "server", rel), status: "passed", startTime: 0,',
-        '  endTime: rel.endsWith(process.env.FAKE_SLOW_GUARD) ? 6500 : 10, assertionResults: [{ status: "passed" }] }));',
-        'fs.writeFileSync(out, JSON.stringify({ testResults }));',
-        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
-        'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
-      ].join('\n'));
-      const guard = 'scripts/node-version-drift.guard.test.js';
-      const other = 'scripts/lib/releaseTitle.test.js';
-      const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
-        encoding: 'utf8', timeout: 120000,
-        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
-          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard]), CI_TEST_SOURCES: '[]',
-          PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
-      });
-
-      const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
-      expect(enforced.status).toBe(1);
-      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${guard} 6.5s over the 6.0s per-file budget.`);
-      // The guard ran alone, before the rest of the selection.
-      expect(enforced.stdout.match(/^RAN .*$/gm)).toEqual([`RAN ["../${guard}"]`, `RAN ["../${other}"]`]);
-
-      // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
-      // it stays in the one normal pass with the rest of the selection and never fails the run.
-      for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
-        const reported = run(extraEnv);
-        expect(reported.status, reported.stderr).toBe(0);
-        const ran = reported.stdout.match(/^RAN .*$/gm) ?? [];
-        expect(ran).toHaveLength(1);
-        expect(JSON.parse(ran[0].slice(4)).sort()).toEqual([`../${guard}`, `../${other}`].sort());
-        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${guard} 6.5s over the 6.0s per-file budget.`);
-        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
-      }
-
-      const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
-      expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 1: ${guard} 0.0s (budget 6.0s).`);
-    } finally {
-      rmSync(fixture, { recursive: true, force: true });
-    }
-  }, 120_000);
-
-  it('enforces it on the scheduled Linux server run only, and reports it everywhere else', () => {
-    const jobs = readCiJobs();
-    const expression = "CI_GUARD_BUDGET: ${{ github.event_name == 'schedule' && 'enforce' || 'report' }}";
-    expect(Object.entries(jobs).filter(([, body]) => body.includes('CI_GUARD_BUDGET:')).map(([id]) => id)).toEqual(['server']);
-    expect(jobs.server).toContain(expression);
-  });
-});
-
 describe('ci.yml shard wiring', () => {
   // Composite actions expanded: these contracts hold for the steps GitHub runs.
   const CI_JOBS = readCiJobs();

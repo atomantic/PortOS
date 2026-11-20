@@ -64,13 +64,10 @@ The early guards run before broad tests and resource probes. Use
 `node scripts/pregate.js --guards-only` to run just the structural checks.
 Focused runs execute each selected guard once and run lint on every invocation.
 Full runs perform the early checks and keep the CI planner's broad selections.
-The receipt records guard outcomes and per-file wall times (`fileDurations`).
-A guard file over the 3s per-file target (`scripts/lib/guardBudget.js`) gets a
-`🐢` line naming it. Local runs, PRs, pushes and releases warn about slow guards.
-The scheduled Linux server job enforces a 6s budget
-(`CI_GUARD_BUDGET=enforce`) and runs the always-run guards in a separate Vitest
-pass. `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
-`update.sh`, `update.ps1` and the lockfiles. Persistent test memo rules and
+The receipt records guard outcomes. The always-run guards are a handful of
+structural guard runners over one shared corpus (#16996), so there is no
+per-file time budget to report. `scripts/ensure-deps.test.js` is selected by
+changes to `ensure-deps.js`, `update.sh`, `update.ps1` and the lockfiles. Persistent test memo rules and
 worker caps still apply.
 
 Before lint or tests, pregate checks installed package versions against all

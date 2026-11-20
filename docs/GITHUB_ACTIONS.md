@@ -207,7 +207,9 @@ in `scripts/lib/guardScanners.js`) each load every `*.test.js` in the same-named
 directory into one worker over one corpus (`scripts/lib/guardCorpus.js`: one
 `git ls-files`, each file read once); the Vitest config excludes the directories
 and a changed check selects its runner. A new scan goes in the directory for its
-subject; a standalone guard needs a reason in `STANDALONE_SERVER_GUARDS`.
+subject; a standalone guard needs a reason in `STANDALONE_GUARDS`. Client scans run the same way in
+`client/src/test/guards/{a11y,ui}.guard.test.js`, node-environment runners that
+ride any `client/src` js/jsx change.
 `EXPLICIT_ALWAYS_RUN_TESTS` lists the always-run tests that are neither (route
 policy, import growth, the prompt-upgrade contract).
 
@@ -219,13 +221,6 @@ recognise as a scanner fails unless it carries the suffix, lives in a guard
 directory, or is listed in that file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
 or its walk reads a temporary directory). A scanner the detectors cannot see
 (one that scans through an imported helper) is still selected by its name.
-
-Because they run on every PR, each always-run file has a time budget
-(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; ~1.5x the 3s local
-target). Only the scheduled Linux server run enforces it (`CI_GUARD_BUDGET=enforce`,
-`ci.yml`, #16810): `scripts/run-ci-tests.js` runs the always-run guards in their own
-pass and fails any file over budget. Other runs warn with a `::warning::`, and local
-pregate only reports it (`docs/PREGATE.md`).
 
 ### The bundled `lib/slashdo` submodule
 
@@ -370,7 +365,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.guard.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/guards/ui/timeouts.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime

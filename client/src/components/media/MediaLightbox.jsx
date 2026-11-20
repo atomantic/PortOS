@@ -52,7 +52,7 @@ import { isLowResVideo } from '../../lib/videoResolution.js';
 // Opting out means owning the dialog semantics Modal would have supplied:
 // the overlay carries role="dialog"/aria-modal, runs useFocusTrap itself, and
 // portals to <body> in place of Modal's `usePortal` (see the render below);
-// `a11y/overlays.conventions.test.js` allowlists it on that basis.
+// `client/src/test/guards/a11y/overlays.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
 

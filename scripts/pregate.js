@@ -11,9 +11,9 @@
 
 import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, writeSync } from 'fs';
+import { existsSync, writeSync } from 'fs';
 import { readFile } from 'node:fs/promises';
-import { constants, homedir, tmpdir } from 'os';
+import { constants, homedir } from 'os';
 import { setTimeout as delay } from 'timers/promises';
 import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
@@ -31,7 +31,6 @@ import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { moduleSpecifiers, resolveModuleCandidates } from './lib/moduleGraph.js';
 import { cosWorkerBudget, readMaxConcurrentAgents } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, createWorkingTreeHasher, PREGATE_REPORT_PATH, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
@@ -953,18 +952,6 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Name the guard files of a passed stage that ran over the per-file target.
- * Report only: local wall time measures this host's contention as much as the
- * guard, so the scheduled hosted run enforces the budget on its uniform runner (#16551, #16810).
- */
-function reportSlowGuards(result) {
-  const over = overBudgetGuards(result.fileDurations);
-  if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
-  }
-}
-
-/**
  * A fresh `git worktree add` checkout has no node_modules. Creating the
  * symlinks is non-destructive (the linker never replaces a real dependency
  * directory) and is exactly what the diagnostic used to ask the agent to type,
@@ -1185,21 +1172,13 @@ async function main() {
       if (!result || owner.signal) break;
     }
     console.log(`▶️ ${result.name}`);
-    const durationsDir = result.guard ? mkdtempSync(join(tmpdir(), 'portos-pregate-durations-')) : null;
-    const durationsPath = durationsDir && join(durationsDir, 'durations.json');
-    if (durationsPath) result.env = { ...result.env, PORTOS_PREGATE_DURATIONS_PATH: durationsPath };
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
-    if (durationsDir) {
-      result.fileDurations = readGuardDurations(durationsPath);
-      rmSync(durationsDir, { recursive: true, force: true });
-    }
     const verdict = stageOutcomeVerdict(result, outcome);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {
-      if (result.guard) reportSlowGuards(result);
       result.status = 'passed';
       result.exitCode = 0;
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);

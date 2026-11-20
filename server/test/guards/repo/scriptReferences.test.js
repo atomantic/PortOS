@@ -36,7 +36,7 @@ export function isSiblingTest(candidate, file) {
 
 // A whole `[\w.-]+` token equal to a key once its trailing dots are dropped.
 // One scan for the known keys instead of tokenizing ~47 MB into per-file sets
-// keeps this always-run guard inside its time budget.
+// keeps this always-run check cheap (it also beat a linear tokenizer, #16996).
 const keyPattern = (keys) => new RegExp(
   `(?<![\\w.-])(?:${[...keys].sort((a, b) => b.length - a.length).map(escapeRegExp).join('|')})(?=\\.*(?:[^\\w.-]|$))`,
   'g',

@@ -1,11 +1,12 @@
 /**
  * Shared file walker for the repo-hygiene test suites.
  *
- * Several guards (`src/a11y/*.conventions.test.js`, `src/hooks/mountedRefConventions.guard.test.js`) enforce a rule across the client tree by grepping sources, and need one answer to "which files count" (the a11y guard first scanned only `.jsx`, then needed `.js` too), so a correction lands for every guard.
+ * Several guards (the checks in `src/test/guards/`) enforce a rule across the client tree by grepping sources, and need one answer to "which files count" (the a11y guard first scanned only `.jsx`, then needed `.js` too), so a correction lands for every guard.
  * Scoped to git-tracked files (an untracked scratch file can't fail a suite) and excluding test files (a guard can't trip over its own fixtures). Node-only (`child_process`, `fs`), imported by test files exclusively; it lives in `src/test/` rather than `src/lib/` because `lib/` carries the enforced barrel + README rule.
  */
 
-import { trackedFiles } from '../../../scripts/lib/trackedFiles.js';
+// The shared guard corpus: one listing per process, which every client check reads through.
+import { trackedFiles } from '../../../scripts/lib/guardCorpus.js';
 
 const isTest = (f) => f.includes('.test.');
 
@@ -25,7 +26,7 @@ export function trackedSourceFiles(clientRoot) {
 }
 
 /**
- * Git-tracked TEST files under `client/src`, the inverse of the filters above, for a guard whose subject is the tests (`src/test/timeouts.guard.test.js`), so "which files count" keeps one definition.
+ * Git-tracked TEST files under `client/src`, the inverse of the filters above, for a guard whose subject is the tests (`client/src/test/guards/ui/timeouts.test.js`), so "which files count" keeps one definition.
  */
 export function trackedTestFiles(clientRoot) {
   return gitTracked(clientRoot).filter(isTest);

@@ -183,7 +183,7 @@ intentional or never reaches:
 Both default to file-issues and apply to any repository. Deterministic
 contract breaks in untyped client code (a call to a member the imported module
 lacks, a test mock defining members the real module lacks, a browser
-`confirm()`) are not left to an audit: `client/src/moduleContractConventions.guard.test.js`
+`confirm()`) are not left to an audit: `client/src/test/guards/ui/moduleContractConventions.test.js`
 fails CI on them.
 Real-user product outcomes such as retention or satisfaction cannot be inferred
 reliably from a source audit and are not fabricated into this codebase score.

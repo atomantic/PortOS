@@ -26,7 +26,7 @@ Used an isolated Vite harness importing the real components and stylesheet, with
 
 ## Prevention and checks
 
-`client/src/dashboardWidgetContainerConventions.guard.test.js` discovers widget entrypoints from the registry and rejects viewport-based layout variants with explicit exceptions for device-specific behavior. Existing responsive-grid checks remain in place. `docs/UX_DESIGN_GUIDE.md` defines container sizing, wrapping, long strings, local scrolling, viewport/sidebar/zoom/state acceptance and honest coverage reporting.
+`client/src/test/guards/ui/dashboardWidgetContainerConventions.test.js` discovers widget entrypoints from the registry and rejects viewport-based layout variants with explicit exceptions for device-specific behavior. Existing responsive-grid checks remain in place. `docs/UX_DESIGN_GUIDE.md` defines container sizing, wrapping, long strings, local scrolling, viewport/sidebar/zoom/state acceptance and honest coverage reporting.
 
 The UX scheduled-task default now includes responsive layout as checklist item 8, a six-viewport matrix, narrow desktop widgets, clipping checks, sidebar/zoom/state checks and cross-audit deduplication. Version 3 retires version 2's hash so existing uncustomized schedules upgrade through the normal store path; customized prompts remain user-owned.
 

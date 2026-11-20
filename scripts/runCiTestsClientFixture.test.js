@@ -34,7 +34,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
     // Real comment-heavy consumers and fixture templates must resolve without
     // retaining hundreds of unrelated files in the actual runner handoff.
     for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
-      'client/src/services/apiRounds.test.js', 'client/src/a11y/controlNames.conventions.test.js']) {
+      'client/src/services/apiRounds.test.js', 'client/src/test/guards/a11y.guard.test.js']) {
       expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
       expect(plan.client.files, test).not.toContain(test);
     }

@@ -34,8 +34,9 @@ export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
  * Vitest configs exclude them, so a check runs only inside its runner, in one
  * worker over one shared corpus (guardCorpus.js). The server checks are split by
  * subject into three runners of similar cost, so they fill the pool's workers in
- * parallel (three locally under the agent budget, four on hosted CI); a new check
- * goes in the directory whose subject it scans, and its placement is its registration.
+ * parallel (three locally under the agent budget, four on hosted CI); the client
+ * pool has two workers and two runners. A new check goes in the directory whose
+ * subject it scans, and its placement is its registration.
  */
 export const GUARD_CHECK_DIRS = Object.freeze([
   // Conventions over runtime source: rejection ownership, logging, spawning, timers, parameters,
@@ -45,6 +46,10 @@ export const GUARD_CHECK_DIRS = Object.freeze([
   { dir: 'server/test/guards/modules', runner: 'server/test/guards/modules.guard.test.js' },
   // Repository text and test-suite hygiene: docs, scripts, CI, migrations, instruction files, test conventions.
   { dir: 'server/test/guards/repo', runner: 'server/test/guards/repo.guard.test.js' },
+  // Accessibility conventions over client markup, touch input included.
+  { dir: 'client/src/test/guards/a11y', runner: 'client/src/test/guards/a11y.guard.test.js' },
+  // Client UI conventions: layout and styling, effects and data fetching, module contracts, test timeouts.
+  { dir: 'client/src/test/guards/ui', runner: 'client/src/test/guards/ui.guard.test.js' },
 ].map(Object.freeze));
 
 const checkDirOf = (relPath) => GUARD_CHECK_DIRS.find(({ dir }) => relPath.startsWith(`${dir}/`)
@@ -58,16 +63,18 @@ export const guardCheckModules = (dir) => readdirSync(dir).filter((name) => /\.t
 
 /**
  * Register every check in `dir` (a file URL) with the calling runner's Vitest
- * `describe`/`it` (passed in: this module stays builtins-only). Each check is a
- * describe named after its module, so a failure reads `<runner> > <check> > …`
- * and `-t <check>` runs one check. A check that throws while loading fails as
- * its own `loads` test, so one broken module cannot hide the others' results.
+ * `describe`/`it` and its `load(name)` import (all passed in: this module stays
+ * builtins-only, and the runner owns the computed `import()` that moduleGraph.js
+ * bounds to its directory). Each check is a describe named after its module, so a
+ * failure reads `<runner> > <check> > …` and `-t <check>` runs one check. A check
+ * that throws while loading fails as its own `loads` test, so one broken module
+ * cannot hide the others' results.
  */
-export function registerGuardChecks(dir, { describe, it }) {
+export function registerGuardChecks(dir, { describe, it, load }) {
   for (const name of guardCheckModules(dir)) {
     describe(name.replace(/\.test\.jsx?$/, ''), async () => {
       try {
-        await import(new URL(name, dir).href);
+        await load(name);
       } catch (error) {
         it('loads', () => { throw error; });
       }

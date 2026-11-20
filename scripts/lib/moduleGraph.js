@@ -22,6 +22,7 @@
  */
 
 import { posix } from 'path';
+import { GUARD_CHECK_DIRS } from './guardScanners.js';
 import { moduleImports } from './sourceTokens.js';
 
 export const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -48,6 +49,8 @@ export const BOUNDED_DYNAMIC_IMPORTS = Object.freeze({
   },
   'server/lib/slashdoLoader.js': { external: true },
   'server/services/greyboxCapturePage.js': { external: true },
+  // Each structural guard runner loads exactly the check modules in its directory (#16996).
+  ...Object.fromEntries(GUARD_CHECK_DIRS.map(({ dir, runner }) => [runner, { directory: `${dir}/`, pattern: /\/[^/]+\.test\.jsx?$/ }])),
 });
 
 // Browser suites resolve vite and its plugins through resolveClientBundler or

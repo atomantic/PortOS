@@ -616,26 +616,13 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^server\/sockets\//.test(path))) {
     add('server/sockets/asyncHandlerGuard.test.js');
   }
-  if (changedFiles.some((path) => /^client\/src\/.*\.jsx$/.test(path))) {
-    add('client/src/a11y/controlNames.conventions.test.js');
-    add('client/src/a11y/dnd.conventions.test.js');
-    add('client/src/a11y/fileInputsToasts.conventions.test.js');
-    add('client/src/a11y/hitAreas.conventions.test.js');
-    add('client/src/a11y/landmarks.conventions.test.js');
-    add('client/src/a11y/overlays.conventions.test.js');
-    add('client/src/a11y/routeHeadings.conventions.test.js');
-    add('client/src/a11y/scanner.conventions.test.js');
-  }
-  // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
-  // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
-  // so a `.jsx`-only trigger would miss the case that matters most, and the
-  // responsive-grid, popover-clamp, pre-wrap/break, safe-storage, heading-truncation,
-  // sub-nav, dashboard-widget container-query, and global-shadow guards read class
-  // strings, storage accesses, declarations, and JSX markup out of both extensions.
-  // None of these files has a source sibling or imports an app module, so nothing
-  // else selects them — without this entry they only ever run on a full suite.
+  // The client structural guard runners (src/test/guards/{a11y,ui}.guard.test.js,
+  // #16996) read class strings, storage accesses, declarations, JSX markup and test
+  // files out of both extensions; none has a source sibling or imports an app
+  // module, so nothing else selects them. Both `.js` and `.jsx`: the StrictMode
+  // mounted-ref bug one check covers reached its widest blast radius through a
+  // plain-`.js` hook (`useAsyncAction`).
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    // timeouts.guard.test.js scans test files, which this pattern also matches.
     for (const path of trackedSet) if (isClientGuard(path) && isGuardTest(path)) add(path);
   }
 

@@ -245,7 +245,7 @@ describe('pregate hidden-content invocation', () => {
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -321,10 +321,6 @@ describe('pregate hidden-content invocation', () => {
       import { resolve } from 'path';
       import { pathToFileURL } from 'url';
       const files = JSON.parse(process.env.CI_TEST_FILES);
-      // A guard wall time the case plants under the ignored cache, so it never enters the reuse key.
-      if (process.env.PORTOS_PREGATE_DURATIONS_PATH && existsSync('.cache/guard-ms')) {
-        writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify({ 'server/lib/moduleSummaries.test.js': Number(readFileSync('.cache/guard-ms', 'utf8')) }));
-      }
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
       appendFileSync('.cache/events', JSON.stringify({ broad }) + '\\n');
       if (files.includes('server/lib/moduleSummaries.test.js')) {
@@ -474,18 +470,14 @@ describe('pregate hidden-content invocation', () => {
     expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
   });
 
-  it('runs focused guard and lint stages each time and reports slow guard passes', () => {
+  it('runs focused guard and lint stages each time', () => {
     prepareGuardFixture();
     write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
-    write('.cache/guard-ms', '9000');
     for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
       const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain('server structural guards over the 3.0s per-guard target');
       const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
-      expect(report.stages.find(stage => stage.guard)).toMatchObject({
-        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
-      });
+      expect(report.stages.find(stage => stage.guard)).toMatchObject({ status: 'passed', guard: true });
       const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
       expect(events.filter(event => event === 'catalog')).toHaveLength(runNumber);
       expect(events.filter(event => event === 'lint')).toHaveLength(runNumber);
@@ -1068,9 +1060,9 @@ describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
     const serverGuards = getAlwaysRunTests().slice(0, 3);
     const clientGuards = [
-      'client/src/asyncEffectDisposalConventions.guard.test.js',
       'client/src/components/ui/fooPanel.guard.test.jsx',
-      'client/src/hooks/mountedRefConventions.guard.test.js',
+      'client/src/test/guards/a11y.guard.test.js',
+      'client/src/test/guards/ui.guard.test.js',
     ];
     // A convention-sounding name without the suffix is not a tree guard.
     const tracked = [...serverGuards, ...clientGuards,
@@ -1279,7 +1271,7 @@ describe('the gate end to end', () => {
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
