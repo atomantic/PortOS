@@ -1,5 +1,7 @@
 import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createMutex } from '../server/lib/asyncMutex.js';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -24,6 +26,7 @@ import {
   runVerifyCommand,
 } from './sandbox.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { startAutofixerUi } from './ui.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
 // fix agent runs restricted (claude without Bash, or codex's sandbox) in an
@@ -45,6 +48,11 @@ const MAX_DIFF_BYTES = 200 * 1024;
 const recentlyFixed = new Map();
 const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
+// Session publication and index updates may overlap shutdown. Patch promotion
+// and rollback share a separate lock with the dashboard's staged fix actions.
+const withHistoryWrite = createMutex();
+const withFixMutation = createMutex();
+let stopUi;
 let checkTimer = null;
 let shuttingDown = false;
 // The repair in flight, so a shutdown can record it as interrupted.
@@ -157,19 +165,27 @@ async function saveIndex(index) {
   await rename(tmp, INDEX_FILE);
 }
 
-async function saveSession(sessionId, prompt, output, metadata, patch) {
+function saveSession(sessionId, prompt, output, metadata, patch) {
+  return withHistoryWrite(() => writeSession(sessionId, prompt, output, metadata, patch));
+}
+
+async function writeSession(sessionId, prompt, output, metadata, patch) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
   await mkdir(sessionDir, { recursive: true });
 
   await writeFile(join(sessionDir, 'prompt.txt'), prompt);
   await writeFile(join(sessionDir, 'output.txt'), output);
-  await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
   // The staged/applied patch is the human-reviewable artifact of the fix — keep
   // it beside the session so a user can inspect (and, when auto-promote is off,
   // manually apply) exactly what the agent proposed.
   if (typeof patch === 'string' && patch.trim().length > 0) {
     await writeFile(join(sessionDir, 'fix.patch'), patch);
   }
+
+  // Publish staged metadata only after all of its artifacts are readable.
+  const metadataPath = join(sessionDir, 'metadata.json');
+  await writeFile(`${metadataPath}.tmp`, JSON.stringify(metadata, null, 2));
+  await rename(`${metadataPath}.tmp`, metadataPath);
 
   const index = await loadIndex();
   const indexEntry = {
@@ -255,6 +271,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
 
   // Single completion path — write the session record + return the result.
   const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }) => {
+    if (shuttingDown) return;
     const endTime = new Date().toISOString();
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
@@ -313,6 +330,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     console.error(`🛑 [Autofixer] Could not isolate ${processName}: ${wt.error}`);
     return finalize({ success: false, exitCode: -1, error: `worktree isolation failed: ${wt.error}`, extra: { isolated: false } });
   }
+  if (shuttingDown) return;
   const worktreePath = wt.path;
   activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
   const workspaceHold = await repairWorkspaceHold(picked.mode, app.repoPath, worktreePath);
@@ -327,6 +345,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
 
   console.log(`🤖 [Autofixer] Repairing ${processName} in isolated worktree via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''} [${picked.mode}]`);
 
+  if (shuttingDown) return;
   const result = await runCliProviderPrompt({
     provider: picked.provider,
     model: picked.model,
@@ -381,24 +400,27 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   let promotionError = null;
   if (validation.ok && verifyOk) {
     if (autoPromote) {
-      const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
-      if (applied.ok) {
-        const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
-        promoted = !restart.error;
-        promotionError = restart.error || null;
-        if (promoted) {
-          console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+      await withFixMutation(async () => {
+        if (shuttingDown) return;
+        const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
+        if (applied.ok) {
+          const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
+          promoted = !restart.error;
+          promotionError = restart.error || null;
+          if (promoted) {
+            console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+          } else {
+            // Applied cleanly but the restart failed — roll the patch back so the
+            // live tree isn't left mutated (which would make the next cycle
+            // double-apply or fail `git apply --check` forever).
+            const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
+            console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
+          }
         } else {
-          // Applied cleanly but the restart failed — roll the patch back so the
-          // live tree isn't left mutated (which would make the next cycle
-          // double-apply or fail `git apply --check` forever).
-          const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
-          console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
+          promotionError = applied.error;
+          console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
         }
-      } else {
-        promotionError = applied.error;
-        console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
-      }
+      });
     } else {
       staged = true;
       console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
@@ -471,6 +493,7 @@ async function checkAndFixProcesses() {
   console.log(`🚨 [Autofixer] Found ${crashedProcesses.length} crashed process(es)`);
 
   for (const proc of crashedProcesses) {
+    if (shuttingDown) break;
     const processName = proc.name;
 
     if (isOnCooldown(processName)) {
@@ -513,7 +536,19 @@ async function runCheckCycle() {
   }
 }
 
-// Main loop
+// An updater already running at the previous revision can pull this code
+// before deleting the old ecosystem. Retire its leftover sibling before binding.
+async function retireLegacyUi() {
+  if (process.env.pm_id == null) return;
+  const legacyScript = fileURLToPath(new URL('./ui.js', import.meta.url));
+  const processes = await listProcessesStrict();
+  const legacyUi = processes?.find(proc => proc.name === 'portos-autofixer-ui'
+    && Number.isInteger(proc.pm_id) && proc.pm2_env?.pm_exec_path === legacyScript);
+  if (!legacyUi) return;
+  await execPm2(['delete', String(legacyUi.pm_id)]);
+  await execPm2(['save']);
+}
+
 async function main() {
   console.log(`🚀 [Autofixer] Starting PortOS Autofixer daemon`);
   console.log(`⏱️ [Autofixer] Check interval: ${CHECK_INTERVAL / 60000} minutes`);
@@ -524,8 +559,13 @@ async function main() {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
   });
 
+  if (shuttingDown) return;
+  await retireLegacyUi();
+  if (shuttingDown) return;
+  stopUi = await startAutofixerUi({ withFixMutation });
+
   // Run immediately, then wait a full interval after each pass completes.
-  await runCheckCycle();
+  if (!shuttingDown) await runCheckCycle();
 }
 
 // Graceful shutdown
@@ -537,6 +577,7 @@ async function shutdown() {
     checkTimer = null;
   }
 
+  stopUi?.();
   console.log(`\n🛑 [Autofixer] Shutting down...`);
   // Stop the in-flight provider (its detached group) and record the attempt.
   // Worktree removal is left to the next startup's sweep, the guarantee.
@@ -547,6 +588,7 @@ async function shutdown() {
       console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
     });
   }
+  await withHistoryWrite(() => {});
   process.exit(0);
 }
 

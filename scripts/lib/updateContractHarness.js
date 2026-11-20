@@ -37,7 +37,7 @@ export function installUpdateContract(root) {
   writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module', version: '0.0.0' }));
   writeFileSync(join(root, '.gitignore'), 'data/\nnode_modules/\n');
   writeFileSync(join(root, 'scripts/trusted-rebuilds.js'), 'process.exit(19);\n');
-  for (const dir of ['client', 'server', 'autofixer']) {
+  for (const dir of ['client', 'server']) {
     mkdirSync(join(root, dir), { recursive: true });
     writeFileSync(join(root, dir, 'package.json'), '{}');
   }

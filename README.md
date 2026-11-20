@@ -43,7 +43,7 @@ flowchart TB
     db[("PostgreSQL<br/>+ pgvector")]
     cos["<b>portos-cos</b><br/>agent runner"]
     browser["<b>portos-browser</b><br/>PortOS Browser<br/>(Chrome)"]
-    fixer["<b>portos-autofixer</b><br/>+ autofixer-ui"]
+    fixer["<b>portos-autofixer</b><br/>Dashboard :5560"]
     local["<b>Local models</b><br/>LLM: Ollama · LM Studio<br/>llama.cpp · MTPLX<br/>Video: LTX-2.5 · Wan 2.2<br/>MiniMax H3 (MLX)<br/>Image: FLUX.2 · MOSS<br/>Voice: Whisper · Piper<br/>Qwen3-TTS<br/>Music: ACE-Step · MusicGen<br/>3D: TRELLIS.2"]
   end
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { appsNeedingStart } from './pm2-start.js';
+import { appsNeedingStart, autofixerNeedsUpgrade } from './pm2-start.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const root = join(repoRoot, 'fixture-root');
@@ -43,6 +43,12 @@ describe('appsNeedingStart', () => {
 });
 
 describe('npm start wiring', () => {
+  it('identifies only the running legacy Autofixer port for the targeted restart', () => {
+    expect(autofixerNeedsUpgrade({ ...proc('portos-autofixer'), pm2_env: { PORT: '5559' } })).toBe(true);
+    expect(autofixerNeedsUpgrade({ ...proc('portos-autofixer'), pm2_env: { PORT: 5560 } })).toBe(false);
+    expect(autofixerNeedsUpgrade({ ...proc('portos-cos'), pm2_env: { PORT: 5559 } })).toBe(false);
+  });
+
   it('probes before deleting the ecosystem, so a healthy install is never restarted', () => {
     const start = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts.start;
     const probe = start.indexOf('scripts/pm2-start.js');

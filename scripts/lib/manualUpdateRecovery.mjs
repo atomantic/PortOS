@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { assertNotRealDataWrite } from '../../server/lib/testDataIsolation.js';
 
 const validId = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-const workspaces = new Set(['.', 'client', 'server', 'autofixer']);
+const workspaces = new Set(['.', 'client', 'server']);
 const head = root => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 10000 }).trim();
 const requestPath = (directory, id) => {
   if (!validId(id)) throw new Error('Invalid manual update attempt');

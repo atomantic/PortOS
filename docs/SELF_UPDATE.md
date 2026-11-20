@@ -382,7 +382,7 @@ your private branch is what makes your customizations live; there is no separate
 ```bash
 git checkout main && ./update.sh            # .\update.ps1 on Windows
 git checkout <your-branch> && git rebase main
-for d in . client server autofixer; do (cd "$d" && npm install --no-save); done
+for d in . client server; do (cd "$d" && npm install --no-save); done
 node scripts/trusted-rebuilds.js server
 npm run build && npm run pm2:restart
 ```

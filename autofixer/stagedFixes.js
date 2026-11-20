@@ -1,11 +1,11 @@
 import { readFile, writeFile, rename } from 'fs/promises';
 import { join } from 'path';
+import { createMutex } from '../server/lib/asyncMutex.js';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
 
 // Session metadata is the authority for patch disposition. The history index is
 // append-only from the daemon's perspective, so UI actions never overwrite it.
-export function createStagedFixStore({ root, loadApps, execPm2 }) {
-  let tail = Promise.resolve();
+export function createStagedFixStore({ root, loadApps, execPm2, withFixMutation = createMutex() }) {
   const sessionDir = (id) => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id)
     ? join(root, 'sessions', id) : null;
   const metadata = async (id) => {
@@ -57,11 +57,7 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
   };
   return {
     read,
-    mutate: (id, action) => {
-      const run = tail.then(() => perform(id, action));
-      tail = run.catch(() => {});
-      return run;
-    },
+    mutate: (id, action) => withFixMutation(() => perform(id, action)),
     decorateHistory: async (history) => Promise.all(history.map(async entry => {
       const record = await metadata(entry.sessionId);
       return record ? { ...entry, staged: record.staged, promoted: record.promoted, disposition: record.disposition } : entry;

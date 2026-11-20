@@ -11,8 +11,7 @@ const REPO_ROOT = join(__dirname, '..');
 const MANIFESTS = [
   'package.json',
   'server/package.json',
-  'client/package.json',
-  'autofixer/package.json'
+  'client/package.json'
 ];
 
 const readOverrides = (rel) => {
@@ -70,7 +69,7 @@ const trackedLockfiles = () =>
 const workspacePrefix = (label) => (label === 'root' ? '' : `${label}/`);
 
 // PortOS pins security fixes for transitive dependencies as `overrides` in FOUR
-// independent manifests (root, server/, client/, autofixer/) — each with its own
+// independent manifests (root, server/, client/) — each with its own
 // lockfile, so npm resolves each tree separately. The recurring failure (issue #2848) is that a
 // CVE gets pinned in one manifest and the others quietly keep the vulnerable
 // version: `brace-expansion` sat at the patched 5.0.6 in server/ while root and
@@ -191,7 +190,7 @@ describe('dependency override parity across manifests (#2848)', () => {
   // tracked lockfile) sat outside every one of them and quietly resolved
   // path-to-regexp@8.4.0 / qs@6.15.2 while server/ enforced 8.4.2 / 6.15.3
   // (issue #5658). MANIFESTS is a hand-written list; this derives the roster from
-  // the same `discoverWorkspaces()` the install-script allowlist uses, so a fifth
+  // the same `discoverWorkspaces()` the install-script allowlist uses, so a new
   // workspace added later fails here instead of silently inheriting no governance.
   it('governs every workspace manifest that ships its own lockfile', () => {
     const tracked = trackedLockfiles();

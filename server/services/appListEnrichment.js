@@ -40,7 +40,7 @@ export function deriveAppPorts(app, processes) {
   // Attribute each label to a process that belongs to THIS app (#7357) — the
   // same rule the write-back path uses, so a displayed port and a rewritten port
   // can never disagree about whose it is. A sibling surface's `ports.ui` (e.g.
-  // `portos-autofixer-ui` in PortOS's own config) is not the app's UI port.
+  // `portos-autofixer` in PortOS's own config) is not the app's UI port.
   const { ports } = attributeProcessPorts(procs, app);
   if (!uiPort) uiPort = ports.ui;
   if (!apiPort) apiPort = ports.api;

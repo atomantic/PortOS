@@ -17,7 +17,6 @@
         "portos-server",
         "portos-cos",
         "portos-autofixer",
-        "portos-autofixer-ui",
         "portos-browser"
       ],
       "envFile": ".env",
@@ -39,11 +38,6 @@
         },
         {
           "name": "portos-autofixer",
-          "port": 5559,
-          "ports": { "api": 5559 }
-        },
-        {
-          "name": "portos-autofixer-ui",
           "port": 5560,
           "ports": { "ui": 5560 }
         },

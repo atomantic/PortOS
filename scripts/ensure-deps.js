@@ -88,7 +88,7 @@ function dependenciesNewerThanInstall(dir) {
 }
 
 // Wipe `node_modules` ONLY. Every workspace lockfile ensure-deps touches (root,
-// client, server, autofixer) is tracked, so `npm install` re-resolves from the
+// client, server) is tracked, so `npm install` re-resolves from the
 // committed lock — which is the state we want. Deleting it would let a clean
 // reinstall silently float transitive versions past the `overrides` pins.
 export function cleanWorkspaceDeps(dir) {

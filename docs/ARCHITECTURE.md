@@ -44,8 +44,8 @@ See [Blender film ownership](features/music-video-blender.md#shared-engine-and-o
 │  │                                                                               │  │
 │  │  ┌─────────────────────┐  ┌────────────────────┐  ┌────────────────────────┐  │  │
 │  │  │ Chief of Staff      │  │ portos-browser     │  │ portos-autofixer       │  │  │
-│  │  │ portos-cos :5558    │  │ CDP :5556          │  │ daemon :5559           │  │  │
-│  │  │                     │  │ health :5557       │  │ UI :5560               │  │  │
+│  │  │ portos-cos :5558    │  │ CDP :5556          │  │ UI :5560               │  │  │
+│  │  │                     │  │ health :5557       │  │                        │  │  │
 │  │  │ Task Watcher        │  │                    │  │                        │  │  │
 │  │  │ CoS Evaluation      │  │ Persistent         │  │ PM2 crash monitor      │  │  │
 │  │  │ CoS runner / task    │  │ Chromium instance  │  │ (polls every 15m)      │  │  │
@@ -64,7 +64,7 @@ Communication paths:
   Server --apps.json--> portos-autofixer reads registered apps to monitor
   CoS agents --CDP WebSocket--> portos-browser for web automation tasks
   portos-autofixer --pm2 jlist--> detects crashed processes --Claude CLI--> auto-fix
-  portos-autofixer-ui --reads--> data/autofixer/sessions/ for fix history
+  portos-autofixer --reads--> data/autofixer/sessions/ for fix history
 ```
 
 ## Directory Structure
@@ -101,7 +101,7 @@ PortOS/
 │   │   ├── *Validation.js     # Zod schemas, one file per route family
 │   │   └── taskParser.js      # Task stored-form parser (and migration 018's input reader)
 │   └── cos-runner/            # Isolated agent runner
-│       └── index.js           # Standalone Express server
+│       └── index.js           # Express routes in the monitor process
 │
 ├── browser/                   # portos-browser service
 │   ├── server.js              # Launches Chromium with CDP, runs health server
@@ -281,7 +281,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
    g. Promote (git apply + pm2 restart) only when settings.autofixer.autoPromote
       is on; otherwise stage the patch beside the session
    h. Save session (prompt.txt, output.txt, metadata.json, fix.patch) to data/autofixer/sessions/
-4. portos-autofixer-ui (:5560) serves standalone dashboard:
+4. portos-autofixer serves its dashboard on :5560:
    - SSE endpoint for real-time log streaming
    - Fix history viewer with success/failure status
    - Process status indicators
@@ -358,13 +358,13 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 - CDP host restricted to localhost to prevent SSRF
 
 ### Autofixer (`autofixer/server.js` + `autofixer/ui.js`)
-- **Daemon** (:5559): Polls PM2 every 15 minutes for errored processes
+- **Monitor**: Polls PM2 every 15 minutes for errored processes
 - Reads `data/apps.json` to know which processes to monitor
 - 30-minute cooldown per process to prevent fix loops
 - Repairs in a disposable worktree with a restricted CLI provider (`autofixer/sandbox.js`), never the live checkout
 - Verifies under containment ([CONTAINMENT.md](./CONTAINMENT.md)) and promotes only a validated, verified diff when `autoPromote` is on
 - Stores fix sessions in `data/autofixer/sessions/` (prompt, output, metadata, patch)
-- **UI** (:5560): Standalone Express server with SSE real-time log streaming
+- **UI** (:5560): Express routes in the monitor process with SSE real-time log streaming
   - Serves HTTPS with the shared Tailscale cert (`data/certs/`) when one is present, plain HTTP otherwise — matching the scheme the sidebar's `//<host>:5560` link inherits from the main app
 - Fix history viewer, process status dashboard
 
@@ -420,8 +420,7 @@ The authoritative statement is "Security Model" in the root `AGENTS.md`; in brie
 | portos-server | 5555 | `server/index.js` | Main Express API server |
 | portos-browser | 5556 (CDP), 5557 (health) | `browser/server.js` | Persistent Chromium with CDP for web automation |
 | portos-cos | 5558 | `server/cos-runner/index.js` | Isolated CoS agent runner |
-| portos-autofixer | 5559 | `autofixer/server.js` | Autonomous crash detection and Claude CLI repair |
-| portos-autofixer-ui | 5560 | `autofixer/ui.js` | Standalone fix history dashboard with SSE logs |
+| portos-autofixer | 5560 | `autofixer/server.js` | Crash detection, isolated repair and fix history dashboard with SSE logs |
 
 PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`) or the `docker-compose.yml` container (`:5561`), provisioned by `npm run setup:db`.
 

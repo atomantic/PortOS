@@ -19,7 +19,7 @@ const WRAPPER = 'lib/childProcess.js';
 // Trees that cannot import the wrapper, and so are held to the weaker
 // per-call-site rule instead. `aiToolkit/` is vendored and contractually
 // self-contained (aiToolkit/AGENTS.md: no imports out to other PortOS modules).
-// `autofixer/` and `browser/` are separate packages with their own
+// `autofixer/` and `browser/` are sibling directories with their own
 // package.json — but they ARE PM2-forked apps (ecosystem.config.cjs), so they
 // sit in exactly the console-less blast radius this guard covers.
 const CALL_SITE_TREES = ['lib/aiToolkit/', '../autofixer/', '../browser/'];

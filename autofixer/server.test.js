@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFile, rename } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { startAutofixerUi } from './ui.js';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
   settings: {}, verify: vi.fn(), apply: vi.fn(),
 }));
+vi.mock('./ui.js', () => ({ startAutofixerUi: vi.fn(async () => vi.fn()) }));
 vi.mock('./shared.js', () => ({
   DATA_DIR: '/example/data', AUTOFIXER_DIR: '/example/autofixer', INDEX_FILE: '/example/index.json',
   loadApps: harness.apps, execPm2: harness.pm2, listProcessesStrict: harness.list,
@@ -36,6 +39,7 @@ let errorLog;
 let progressLog;
 beforeEach(() => {
   vi.resetModules();
+  startAutofixerUi.mockClear();
   vi.useFakeTimers();
   vi.spyOn(process, 'on').mockReturnValue(process);
   errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -53,6 +57,7 @@ beforeEach(() => {
   harness.apply.mockReset();
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -64,6 +69,20 @@ const start = async () => {
 const nextCycle = () => vi.advanceTimersByTimeAsync(15 * 60 * 1000);
 
 describe('Autofixer daemon repair input boundary', () => {
+  it('retires the old dashboard before opening its port and continues monitoring', async () => {
+    vi.stubEnv('pm_id', '1');
+    const legacy = { name: 'portos-autofixer-ui', pm_id: 7, pm2_env: {
+      pm_exec_path: fileURLToPath(new URL('./ui.js', import.meta.url)),
+    } };
+    harness.list.mockResolvedValueOnce([legacy]).mockResolvedValue([]);
+    await start();
+    expect(harness.pm2.mock.calls).toEqual([[['delete', '7']], [['save']]]);
+    expect(harness.pm2.mock.invocationCallOrder.at(-1)).toBeLessThan(startAutofixerUi.mock.invocationCallOrder[0]);
+    expect(harness.list).toHaveBeenCalledTimes(2);
+    await nextCycle();
+    expect(harness.list).toHaveBeenCalledTimes(3);
+  });
+
   it.each(['--err', '--out'])('refuses repair after failed %s collection and recovers next cycle', async stream => {
     harness.pm2.mockImplementation(async args => {
       if (args.includes(stream)) throw new Error('private command output and path');
@@ -104,7 +123,7 @@ describe('Autofixer daemon repair input boundary', () => {
     harness.apps.mockResolvedValue([]);
     harness.sweep.mockResolvedValue(['autofixer_example-process_1700000000000_abc123']);
     await start();
-    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json.tmp'));
     expect(JSON.parse(meta[1])).toMatchObject({ processName: 'example-process', interrupted: true, success: false });
   });
 
@@ -142,7 +161,7 @@ describe('Autofixer daemon repair input boundary', () => {
     harness.provider.mockResolvedValue({ text: 'partially repaired', partial: true, exitCode: 1 });
     await start();
     expect(harness.validate).not.toHaveBeenCalled();
-    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json.tmp'));
     expect(JSON.parse(meta[1])).toMatchObject({ success: false, diffValid: false, promoted: false, staged: false });
   });
 
@@ -160,7 +179,7 @@ describe('Autofixer daemon repair input boundary', () => {
     await start();
     expect(harness.verify).toHaveBeenCalledOnce();
     expect(harness.apply).not.toHaveBeenCalled();
-    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json.tmp'));
     expect(JSON.parse(meta[1])).toMatchObject({ success: false, promoted: false, staged: false,
       verify: { ok: false, contained: false, exitCode: -1 } });
   });

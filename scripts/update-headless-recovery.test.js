@@ -119,8 +119,8 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   // `pm2 update` restart — the branch a healthy install takes.
   writeFileSync(join(repo, 'scripts', 'pm2-daemon-refresh.js'), 'process.exit(1);\n');
 
-  // The workspaces safe_install cd's into, and the dependency it sanity-checks.
-  for (const ws of ['client', 'server', 'autofixer']) {
+  // The workspaces the updater installs, and the dependency it sanity-checks.
+  for (const ws of ['client', 'server']) {
     mkdirSync(join(repo, ws), { recursive: true });
     writeFileSync(join(repo, ws, 'package.json'), JSON.stringify({ name: ws, version: '0.0.0', type: 'module' }));
   }
@@ -455,6 +455,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
       const start = calls.findIndex(line => line.startsWith('start ecosystem.config.cjs'));
       expect(start).toBeGreaterThan(0);
       expect(calls.slice(0, start)).toContain('delete portos-ui --silent');
+      expect(calls.slice(0, start)).toContain('delete portos-autofixer-ui --silent');
       expect(calls.filter(line => line.startsWith('start '))).toEqual([`start ecosystem.config.cjs --only ${productionApps}`]);
     }
   });

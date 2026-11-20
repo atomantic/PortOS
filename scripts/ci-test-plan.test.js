@@ -433,7 +433,7 @@ describe('gate-tooling tests in a related plan', () => {
   });
 
   it('matches every dependency manifest and Vitest config owner and nothing broader', () => {
-    for (const path of ['package.json', 'package-lock.json', 'client/package.json', 'autofixer/package-lock.json', 'server/.npmrc', 'client/vitest.config.js', 'server/vitest.setup.js']) {
+    for (const path of ['package.json', 'package-lock.json', 'client/package.json', 'server/package-lock.json', 'server/.npmrc', 'client/vitest.config.js', 'server/vitest.setup.js']) {
       expect(TOOLING_OWNER_RE.test(path), path).toBe(true);
     }
     for (const path of ['server/services/maintenanceRun.js', 'server/lib/vitestHelper.js', 'client/src/vitest.js', 'docs/package.json.md', 'server/test/browserFixture.js']) {
@@ -2404,7 +2404,7 @@ describe('dependency manifest Windows escalation', () => {
 
   it('skips Windows for changes in workspaces the native job does not install', () => {
     const unsafe = lockfile({ ...BASE_PACKAGES, 'node_modules/@scope/binding-win32-x64': { version: '1.0.0', os: ['win32'], cpu: ['x64'] } });
-    for (const path of ['package-lock.json', 'client/package-lock.json', 'autofixer/package-lock.json']) {
+    for (const path of ['package-lock.json', 'client/package-lock.json']) {
       const plan = planFor([path], { [path]: classifyDependencyChange(path, BASE, unsafe) });
       expect(plan.full, path).toBe(true);
       expect(plan.windowsMode, path).toBe('skip');
@@ -2699,7 +2699,7 @@ describe('path-gated single-purpose jobs', () => {
   });
 
   it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
-    for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'autofixer/package.json', '.nvmrc',
+    for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'client/package-lock.json', '.nvmrc',
       'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.guard.test.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
     for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {

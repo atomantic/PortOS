@@ -22,10 +22,16 @@ import { realpathSync } from 'fs';
 import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { PORTS } from '../server/lib/ports.js';
 import { redactPaths } from './pm2-daemon-refresh.js';
 
 const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROBE_TIMEOUT_MS = 15000;
+
+export function autofixerNeedsUpgrade(process) {
+  return process?.name === 'portos-autofixer'
+    && Number(process.pm2_env?.PORT) === 5559;
+}
 
 const normalizePath = (path) => {
   let resolved = path;
@@ -107,10 +113,17 @@ async function runCli(argv) {
   }
   try {
     const { default: pm2 } = await import('pm2');
-    const { missing, reasons } = appsNeedingStart({ processes: await listProcesses(pm2), expectedApps, root: ROOT_DIR });
+    const processes = await listProcesses(pm2);
+    const { missing, reasons } = appsNeedingStart({ processes, expectedApps, root: ROOT_DIR });
     if (missing.length) {
       console.log(`🔄 PM2 start needed: ${reasons.join('; ')}`);
       return 1;
+    }
+    if (expectedApps.includes('portos-autofixer') && processes.some(autofixerNeedsUpgrade)) {
+      console.log(`🔄 Updating Autofixer to serve its dashboard on port ${PORTS.AUTOFIXER_UI}`);
+      const { execPm2 } = await import('../autofixer/shared.js');
+      await execPm2(['restart', 'ecosystem.config.cjs', '--only', 'portos-autofixer']);
+      await execPm2(['save']);
     }
   } catch (err) {
     console.log(`🔄 PM2 start needed: could not inspect PM2 (${redactPaths(err.message)})`);

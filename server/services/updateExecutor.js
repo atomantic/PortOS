@@ -17,7 +17,7 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 
 // Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
 // passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
-const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server']);
 const supersededUpdates = new Set();
 
 /**

@@ -7,20 +7,20 @@ import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
 const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn() }));
 vi.mock('child_process', () => ({ spawn: harness.spawn }));
-vi.mock('express', () => {
+const mockExpress = () => {
   const express = () => ({
     use: (handler) => harness.gates.push(handler),
     get: (path, ...handlers) => harness.routes.set(path, handlers),
     post: (path, ...handlers) => harness.routes.set(path, handlers),
   });
   express.json = () => (_req, _res, next) => next();
-  return { default: express };
-});
+  return express;
+};
 vi.mock('../lib/sidecarAuthGate.js', async (original) => ({
   ...await original(), createSidecarAuthGate: () => harness.auth,
 }));
 vi.mock('../lib/tailscale-https.js', () => ({
-  createTailscaleServers: () => ({ server: { listen: vi.fn() }, httpsEnabled: false }),
+  createTailscaleServers: () => ({ server: Object.assign(new EventEmitter(), { listen: (_port, _host, ready) => ready(), address: () => ({ port: 5560 }) }), httpsEnabled: false }),
   watchCertReload: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
@@ -54,8 +54,8 @@ const loadUi = async (enabled = false) => {
   const { createSidecarAuthGate } = await vi.importActual('../lib/sidecarAuthGate.js');
   harness.auth = createSidecarAuthGate({ dataDir, cookieName: 'portos_autofixer_auth' });
   vi.resetModules();
-  const processOn = vi.spyOn(process, 'on').mockReturnValue(process);
-  try { await import('./ui.js'); } finally { processOn.mockRestore(); }
+  const { startAutofixerUi } = await import('./ui.js');
+  await startAutofixerUi({ express: mockExpress() });
 };
 
 const response = () => {
@@ -151,6 +151,7 @@ describe('Autofixer process-control authority', () => {
     await loadUi();
     expect((await mutate('restart', '127.0.0.1', { origin: 'https://attacker.example', host: 'localhost:5560' })).body.code).toBe('CROSS_ORIGIN_BLOCKED');
     await writeFile(join(dataDir, 'settings.json'), '{broken');
+    vi.setSystemTime(Date.now() + 5001); // Let the previously read auth settings expire.
     expect((await mutate('stop', '127.0.0.1')).body.code).toBe('AUTH_REQUIRED');
     const { createSidecarAuthGate } = await vi.importActual('../lib/sidecarAuthGate.js');
     harness.auth = createSidecarAuthGate({ dataDir, cookieName: 'portos_autofixer_auth' });

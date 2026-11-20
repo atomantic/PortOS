@@ -88,8 +88,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `playwright-core` | 1 | KEEP | browser test tooling | Drives the separately provisioned browser for client verification |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
-| **Autofixer dependencies** | | | | |
-| `express` | 1 | KEEP | `autofixer/ui.js` | Same framework and pin as the server workspace, but a separate install prefix with its own lockfile — so it needs its own `overrides` block to inherit the server's express-tree pins |
 | **Browser dependencies** | | | | |
 | _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus in-repo imports from `server/lib/` and `scripts/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
@@ -174,7 +172,7 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 
 ## Override Pins (`overrides`)
 
-The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), [client](../client/package.json), and [autofixer](../autofixer/package.json). The `autofixer/` workspace mirrors only the express-reachable subset (`path-to-regexp`, `body-parser`, and `qs`); adding a pin for a package absent from its tree would read as protection that does not exist. The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
+The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), and [client](../client/package.json). The Autofixer dashboard uses the server’s Express installation. The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
 
 These overrides force-bump transitive dependencies to address known upstream advisories. Check the manifests for the current package and workspace list and exact versions; revisit the overrides if `npm audit` flags new advisories.
 
@@ -190,7 +188,7 @@ These overrides force-bump transitive dependencies to address known upstream adv
 
 ## Install-Script Policy
 
-`ignore-scripts=true` is pinned in **every** workspace's own `.npmrc` (root, `client/`, `server/`, `autofixer/`, `browser/`) — not just the repo root. The list is not maintained by hand: `discoverWorkspaces()` in `scripts/trusted-rebuilds.js` globs every top-level directory carrying a `package.json`, and the test asserts each discovered one has the setting — so a workspace added later is caught rather than silently unguarded. npm resolves the project `.npmrc` from the *local prefix* and never walks up the directory tree, so a root-only setting does not cover `cd client && npm install` or `npm ci --prefix server` (what CI runs). Deleting any workspace `.npmrc` silently re-grants every dependency in that workspace an install-time code-execution slot — the vector the Shai-Hulud worm used.
+`ignore-scripts=true` is pinned in **every** workspace's own `.npmrc` (root, `client/`, `server/`, `browser/`) — not just the repo root. The list is not maintained by hand: `discoverWorkspaces()` in `scripts/trusted-rebuilds.js` globs every top-level directory carrying a `package.json`, and the test asserts each discovered one has the setting — so a workspace added later is caught rather than silently unguarded. npm resolves the project `.npmrc` from the *local prefix* and never walks up the directory tree, so a root-only setting does not cover `cd client && npm install` or `npm ci --prefix server` (what CI runs). Deleting any workspace `.npmrc` silently re-grants every dependency in that workspace an install-time code-execution slot — the vector the Shai-Hulud worm used.
 
 Packages that legitimately need an install script are named explicitly in the allowlist in `scripts/trusted-rebuilds.js`, the single source consumed by `scripts/setup.js` (behind `npm run setup`, `setup.sh` and `setup.ps1`), `scripts/ensure-deps.js`, `update.sh` / `update.ps1`, and CI. `scripts/trusted-rebuilds.test.js` fails if a workspace `.npmrc` loses the setting, or if a dependency appears with an install hook that nobody has explicitly decided about. Because CI caches `server/node_modules` between jobs, `scripts/trusted-rebuild-stamp.js` writes a mark into the tree in the same step that rebuilds it and checks that mark after a cache restore — a tree cached before the rebuild is otherwise indistinguishable from a good one, since the allowlisted packages all ship prebuilt bindings and import fine either way.
 

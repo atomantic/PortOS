@@ -17,7 +17,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../lib/ports.js', () => ({
-  PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554 },
+  PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, AUTOFIXER_UI: 5560 },
 }));
 
 vi.mock('./taskSchedule.js', () => ({
@@ -218,7 +218,7 @@ describe('portless / desktop apps (#2991)', () => {
     expect(reserved).toContain(5554);
     expect(reserved).not.toContain(null);
     expect(reserved.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)).toBe(true);
-    expect(reserved).toEqual([5554, 5555]);
+    expect(reserved).toEqual([5554, 5555, 5560]);
   });
 
   it('createApp stores a desktop app with null ports (no port ever synthesized)', async () => {
@@ -507,12 +507,19 @@ describe('PortOS production process manifest', () => {
     const seed = JSON.parse(readFileSync(new URL('../../data.reference/apps.json', import.meta.url), 'utf8')).apps[PORTOS_APP_ID];
     const scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts;
     const expectedNames = scripts.start.match(/--only "([^"]+)"/)[1].split(',');
+    const legacy = [
+      { name: 'portos-ui', port: 5554 },
+      { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
+      { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
+    ];
+    const autofixer = { name: 'portos-autofixer', port: 5560, ports: { ui: 5560 } };
+    expect(expectedNames).toEqual(['portos-server', 'portos-cos', 'portos-autofixer', 'portos-browser']);
     readJSONFile.mockResolvedValue({ apps: existing ? {
       [PORTOS_APP_ID]: {
         ...seed,
         description: 'Custom description',
-        pm2ProcessNames: [...expectedNames, 'portos-ui'],
-        processes: [...seed.processes, { name: 'portos-ui', port: 5554 }],
+        pm2ProcessNames: [...expectedNames, 'portos-ui', 'portos-autofixer-ui'],
+        processes: [...seed.processes.filter(({ name }) => name !== autofixer.name), ...legacy],
       },
     } : {} });
 
@@ -521,6 +528,8 @@ describe('PortOS production process manifest', () => {
     expect(app.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: null, startCommands: ['npm start'] });
     expect(app.processes[0]).toMatchObject({ name: 'portos-server', port: 5555, ports: { api: 5555 } });
+    expect(app.processes[2]).toEqual(autofixer);
+    expect(seed.processes[2]).toEqual(autofixer);
     expect(seed.pm2ProcessNames).toEqual(expectedNames);
     expect(seed.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(seed).toMatchObject({ uiPort: app.uiPort, apiPort: app.apiPort, devUiPort: app.devUiPort, startCommands: app.startCommands, buildCommand: app.buildCommand });

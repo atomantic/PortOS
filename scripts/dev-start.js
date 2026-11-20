@@ -18,7 +18,6 @@ const DEV_PM2_APPS = [
   'portos-cos',
   'portos-ui',
   'portos-autofixer',
-  'portos-autofixer-ui',
   'portos-browser'
 ];
 
@@ -47,6 +46,8 @@ execFileSync(process.execPath, [join(__dirname, 'setup-db.js')], {
 // Stop and delete existing PortOS processes (ignore errors if none exist)
 try { pm2('stop', ECO); } catch {}
 try { pm2('delete', ECO); } catch {}
+
+try { pm2('delete', 'portos-autofixer-ui', '--silent'); } catch {}
 
 // Brief pause for port release
 await new Promise(r => setTimeout(r, 1500));

@@ -120,28 +120,7 @@ jobs:
           CI_BASE_REF: ${{ github.base_ref }}
         run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
 
-      # `autofixer/` is a real install target — its own package.json, its own
-      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
-      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
-      # it, so a lockfile that no longer installs (a yanked version, a corrupted
-      # integrity hash, a manifest/lockfile mismatch) would ship green and only
-      # break on a user's machine at setup time. The parity assertions in
-      # server/dependency-overrides.guard.test.js are static — they parse the JSON;
-      # only `npm ci` proves the tree still resolves.
-      #
-      # Here rather than on the server job because this job always runs
-      # and this check must never be skipped with it. Deliberately uncached and ungated: a cache hit that skipped
-      # the install would skip the very check this step exists for. 67
-      # packages, well under a second, on the runner's own Node (no setup-node
-      # in this job; the lockfile resolves the same on any supported major).
-      #
-      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
-      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
-      # workspace, because nothing it depends on ships a native addon.
-      - name: Install autofixer dependencies
-        run: node scripts/ci-impact-diagnostics.js autofixer-install -- npm ci --prefix autofixer
-
-      # Same reason: the entry-point syntax check must not ride a skippable job.
+      # The entry-point syntax check must not ride a skippable job.
       - name: Check server entry-point syntax
         run: node scripts/ci-impact-diagnostics.js syntax -- node --check server/index.js
 
@@ -181,12 +160,6 @@ jobs:
       - uses: ./.github/actions/setup-server
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
-
-      # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
-      # express, resolved from autofixer/node_modules). Shards are separate
-      # checkouts, so the impact job's resolution check does not reach them.
-      - name: Install autofixer dependencies
-        run: npm ci --prefix autofixer
 
       # The submodule ships no source into this checkout by default (see
       # AGENTS.md "Slashdo Commands"), so the planner's `slashdo` output is
@@ -736,7 +709,6 @@ jobs:
           npm ci --ignore-scripts
           npm ci --ignore-scripts --prefix client
           npm ci --ignore-scripts --prefix server
-          npm ci --ignore-scripts --prefix autofixer
 
       - name: Run the Node compatibility contract
         run: npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js ../scripts/node-version-drift.guard.test.js
