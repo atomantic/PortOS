@@ -12,9 +12,9 @@ vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../l
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
   USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
-  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims
+  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims, buildUsageDigest
 } = await import('./usage.js');
-const { __resetUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
+const { __resetUsageClaims, mergeUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const home = join(PATHS.data, 'synthetic-home');
 const workspacePath = '/synthetic/usage-workspace';
 const now = Date.now();
@@ -116,6 +116,66 @@ describe('durable usage batches', () => {
     await loadUsage();
     expect(await addDatedUsageBatch([historic])).toEqual([]);
     expect(getUsage().monthlyActivity['2021-03'].tokens).toBe(20);
+  });
+});
+
+describe('exact Codex boundary compaction', () => {
+  it('removes only covered boundaries and preserves billing for every cutoff after reload', async () => {
+    const old = '2022-11-17T00:00:00.000Z';
+    const middle = '2022-11-18T00:00:00.000Z';
+    const recent = '2022-11-19T00:00:00.000Z';
+    const key = 'codex-id:v1:example';
+    const path = '/example/legacy-rollout.jsonl';
+    const mark = (at, ...codexHighWater) => ({ at, codexHighWater });
+    const covered = [key, { tokensIn: 99, tokensOut: 11, fastTokensIn: 19, fastTokensOut: 2 }];
+    const latest = [key, { messages: 0, tokensIn: 100, tokensOut: 4, cacheReadTokens: 0, cacheWriteTokens: 0, fastTokensOut: 2 }];
+    const middleClaim = [key, { tokensIn: 80, tokensOut: 12, fastTokensIn: 20 }];
+    const legacyClaim = [path, { tokensIn: 3, tokensOut: 2 }];
+    const markers = {
+      'covered-run': mark(old, covered),
+      'mixed-run': mark(old, covered, legacyClaim),
+      'middle-run': mark(middle, middleClaim),
+      'latest-run': mark(recent, latest),
+      'same-time-run': mark(recent, latest),
+      'undated-run': mark('unknown', covered),
+      'legacy-run': old,
+    };
+    const original = { ...(await disk()), reconciledRuns: markers, siblingReconciledRuns: { 'covered-run': old },
+      grokRepairIds: ['historical-repair'] };
+    await writeFile(USAGE_FILE, JSON.stringify(original));
+
+    const mergedClaims = (entries) => {
+      __resetUsageClaims();
+      mergeUsageClaims({ codexHighWater: entries });
+      return Object.fromEntries(snapshotUsageClaims().codexHighWater);
+    };
+    const expectedBoundaries = (since) => Object.values(markers)
+      .filter(marker => Date.parse(marker.at) >= since)
+      .flatMap(marker => marker.codexHighWater);
+
+    await loadUsage();
+    const compacted = await disk();
+    expect(compacted.reconciledRuns).toEqual({
+      ...markers,
+      'covered-run': old,
+      'mixed-run': mark(old, legacyClaim),
+      'same-time-run': recent,
+    });
+    expect(compacted.siblingReconciledRuns).toEqual(original.siblingReconciledRuns);
+    expect(compacted.grokRepairIds).toEqual(original.grokRepairIds);
+    expect(getReconciledUsageRunIds()).toEqual(Object.keys(markers));
+    expect(buildUsageDigest()).toEqual(buildUsageDigest(original));
+
+    for (const since of [0, Date.parse(old) + 1, Date.parse(middle) + 1, Date.parse(recent) + 1]) {
+      expect(mergedClaims(await getRecentCodexUsageClaims(since))).toEqual(mergedClaims(expectedBoundaries(since)));
+    }
+    const allTimeClaims = (runs) => Object.values(runs).flatMap(marker => marker.codexHighWater || []);
+    expect(mergedClaims(allTimeClaims(compacted.reconciledRuns))).toEqual(mergedClaims(allTimeClaims(markers)));
+
+    rename.mockClear();
+    await loadUsage();
+    expect(await disk()).toEqual(compacted);
+    expect(rename).not.toHaveBeenCalled();
   });
 });
 

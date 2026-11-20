@@ -275,6 +275,45 @@ const cacheActivityDay = (day) => {
   }
 };
 
+// Both live attribution and historical speed repair merge Codex counters by
+// per-identity maxima. Visit later markers first so discarding a covered claim
+// preserves the same boundary for every live `since` query and for all-time
+// repair. Keep exact identities (including legacy paths), undated evidence, and
+// the run marker itself: a claim can be redundant while its run is still billed.
+function compactCodexHighWater(reconciledRuns) {
+  const markers = Object.entries(reconciledRuns || {})
+    .filter(([, marker]) => Array.isArray(marker?.codexHighWater) && marker.codexHighWater.length)
+    .map(([runId, marker]) => ({ runId, marker, at: Date.parse(marker.at) }))
+    .filter(({ at }) => Number.isFinite(at))
+    .sort((a, b) => b.at - a.at);
+
+  const laterCounters = new Map();
+  let changed = false;
+  for (const { runId, marker } of markers) {
+    const retained = marker.codexHighWater.filter((entry) => {
+      if (!Array.isArray(entry)) return true;
+      const [key, counters] = entry;
+      if (typeof key !== 'string' || !counters || typeof counters !== 'object' || Array.isArray(counters)) return true;
+      const fields = Object.entries(counters);
+      if (!fields.length || fields.some(([, count]) => !Number.isFinite(count) || count < 0)) return true;
+      const later = laterCounters.get(key);
+      if (later && fields.every(([field, count]) => (later.get(field) ?? 0) >= count)) return false;
+
+      const boundary = later ?? new Map();
+      for (const [field, count] of fields) boundary.set(field, Math.max(boundary.get(field) ?? 0, count));
+      laterCounters.set(key, boundary);
+      return true;
+    });
+    if (retained.length === marker.codexHighWater.length) continue;
+    const { at, codexHighWater, ...extra } = marker;
+    reconciledRuns[runId] = retained.length || Object.keys(extra).length
+      ? { ...marker, codexHighWater: retained }
+      : at;
+    changed = true;
+  }
+  return changed;
+}
+
 /**
  * Load usage data from disk
  */
@@ -322,10 +361,12 @@ async function loadUsageDraft() {
   // rewrite every install's usage.json just to add an empty id list.
   if (!Array.isArray(usageData.grokRepairIds)) usageData.grokRepairIds = [];
   grokRepairIndex = new Set(usageData.grokRepairIds);
-  if ((missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks)) {
+  const compacted = compactCodexHighWater(usageData.reconciledRuns);
+  const activityChanged = missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks;
+  if (activityChanged || compacted) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
-    await saveUsage();
+    await saveUsage({ advanceRevision: activityChanged });
   }
 
   console.log(`📊 Loaded usage: ${usageData.totalSessions} sessions, ${usageData.totalMessages} messages`);
@@ -337,9 +378,11 @@ async function loadUsageDraft() {
 /**
  * Save usage data to disk
  */
-async function saveUsage() {
-  const previous = Date.parse(usageData.lastUpdated);
-  usageData.lastUpdated = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+async function saveUsage({ advanceRevision = true } = {}) {
+  if (advanceRevision) {
+    const previous = Date.parse(usageData.lastUpdated);
+    usageData.lastUpdated = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
+  }
   await atomicWrite(USAGE_FILE, JSON.stringify(usageData));
   committedUsage = usageData;
   if (addedRepairIds) addedRepairIds.length = 0;
@@ -1677,8 +1720,8 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
     hourlyActivity: Array.from({ length: 24 }, (_, i) => hourly[i] || 0),
     earliestActivityDay: findEarliestActivityDay(dailyActivity, monthlyActivity),
     // The instant this instance last recorded usage. Doubles as the digest's
-    // LWW stamp on the wire — it moves on every `saveUsage`, and NOT on a mere
-    // re-read, so a peer's checksum stays stable while nothing has happened.
+    // LWW stamp on the wire. Local-only claim compaction leaves the stamp
+    // untouched, so peers keep the same digest while the counters are unchanged.
     lastUpdated: source?.lastUpdated ?? null
   };
 }
