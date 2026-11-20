@@ -55,19 +55,19 @@ function comparePnpmReceipt(lockfile, receipt) {
 
 export async function inspectClaimDependencyLock(sourceWorkspace, worktreePath) {
   const sourceModules = join(sourceWorkspace, 'node_modules');
-  if (!(await stat(sourceModules).catch(() => null))?.isDirectory()) return null;
-
+  const sourceAvailable = (await stat(sourceModules).catch(() => null))?.isDirectory();
   const candidates = await Promise.all(Object.entries(LOCKFILES).map(async ([manager, filename]) => {
     const file = await readCheckoutFile(join(worktreePath, filename));
     return file && { manager, lockfile: file.text };
   }));
   const found = candidates.filter(Boolean);
-  if (!found.length) return null;
+  if (!found.length) return sourceAvailable ? { status: 'unverified' } : null;
   const declared = found.length > 1 ? await declaredPackageManager(worktreePath) : found[0].manager;
   const candidate = found.find(({ manager }) => manager === declared);
   if (!candidate) return { status: 'unverified' };
 
   const { manager, lockfile } = candidate;
+  if (!sourceAvailable) return { manager, status: 'absent' };
   const receiptPath = manager === 'pnpm' ? join('.pnpm', 'lock.yaml') : '.package-lock.json';
   const receipt = await readText(join(sourceModules, receiptPath));
   if (!lockfile || !receipt) return { manager, status: 'unverified' };
@@ -84,14 +84,19 @@ export function formatClaimDependencyStatus(dependencies) {
     return 'Dependency provisioning could not be verified. Inspect dependency paths and symlinks before installing. Never install through links to the source checkout.';
   }
 
-  const blocked = dependencies.find(item => item.status === 'stale' || item.status === 'unverified');
-  if (blocked) {
-    const source = blocked.status === 'stale' ? 'stale in source' : 'source lockfile match unverified';
+  const unavailable = dependencies.find(item =>
+    item.status === 'stale' || item.status === 'unverified' || (item.status === 'absent' && item.manager));
+  if (unavailable) {
+    const source = {
+      stale: 'stale in source',
+      unverified: 'source lockfile match unverified',
+      absent: 'absent in source',
+    }[unavailable.status];
     const install = {
       pnpm: 'with `pnpm install --frozen-lockfile`',
       npm: 'with `npm ci`',
-    }[blocked.manager] ?? 'using the repository’s documented frozen install';
-    return `Dependency provisioning: ${blocked.path} ${source}. PortOS skipped dependency linking. After verifying the dependency paths are local to this worktree, install here ${install}.`;
+    }[unavailable.manager] ?? 'using the repository’s documented install procedure';
+    return `Dependency provisioning: ${unavailable.path} ${source}. PortOS skipped dependency linking. After verifying the dependency paths are local to this worktree, install here ${install}.`;
   }
 
   if (dependencies.every(item => item.status === 'absent')) {

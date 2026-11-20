@@ -64,7 +64,8 @@ describe('provisionClaimCheckout', () => {
   it.each([
     ['pnpm', 'matching', 'linked-match'],
     ['pnpm', 'stale', 'stale'],
-    ['pnpm', 'missing', 'unverified'],
+    ['pnpm', 'missing receipt', 'unverified'],
+    ['pnpm', 'absent', 'absent'],
     ['npm', 'matching', 'linked-match'],
     ['npm', 'stale', 'stale'],
   ])('checks the %s root lockfile before linking a %s install', async (manager, receiptState, expectedStatus) => {
@@ -77,7 +78,7 @@ describe('provisionClaimCheckout', () => {
     });
     const installVersion = receiptState === 'matching' ? '2.0.0' : '1.0.0';
     const receipt = pnpm ? pnpmLock(installVersion) : npmLock(installVersion);
-    await mkdir(join(repo, 'node_modules', '.pnpm'), { recursive: true });
+    if (receiptState !== 'absent') await mkdir(join(repo, 'node_modules', '.pnpm'), { recursive: true });
     await mkdir(join(repo, 'client', 'node_modules'), { recursive: true });
     await writeFile(join(repo, 'client', 'package.json'), '{}');
     await writeFile(join(repo, filename), wanted('2.0.0'));
@@ -87,7 +88,8 @@ describe('provisionClaimCheckout', () => {
     // A matching lockfile in the primary checkout cannot justify linking into
     // a claim whose fetched branch wants a different dependency version.
     await writeFile(join(repo, filename), wanted(installVersion));
-    if (receiptState !== 'missing') await writeFile(receiptPath, receipt);
+    const hasReceipt = receiptState === 'matching' || receiptState === 'stale';
+    if (hasReceipt) await writeFile(receiptPath, receipt);
 
     const { claimCheckout } = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
 
@@ -102,7 +104,7 @@ describe('provisionClaimCheckout', () => {
       expect(existsSync(root)).toBe(false);
       expect(existsSync(child)).toBe(false);
     }
-    if (receiptState !== 'missing') expect(await readFile(receiptPath, 'utf8')).toBe(receipt);
+    if (hasReceipt) expect(await readFile(receiptPath, 'utf8')).toBe(receipt);
   });
 
   it('refuses, creating nothing, when the claim branch already exists on origin', async () => {

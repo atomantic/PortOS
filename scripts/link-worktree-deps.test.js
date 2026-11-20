@@ -59,6 +59,22 @@ describe('link-worktree-deps script', () => {
     expect(readFileSync(receipt, 'utf8')).toBe(installed);
   });
 
+  it('reports an unverified source when an installed managed root lacks a supported lockfile', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    mkdirSync(join(source, 'node_modules'), { recursive: true });
+    mkdirSync(worktree);
+    writeFileSync(join(worktree, 'yarn.lock'), '# yarn lockfile v1\n');
+
+    const result = runScript(source, worktree, '--claim');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('source lockfile match unverified');
+    expect(result.stdout).toContain('using the repository’s documented install procedure');
+    expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
+  });
+
   it('resolves workspace links inside the worktree, not the source checkout (#12633)', () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-')));
     const source = join(root, 'source');

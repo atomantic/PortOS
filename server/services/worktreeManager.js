@@ -80,8 +80,8 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath, { verifyRootLockfile = false } = {}) {
   const lock = verifyRootLockfile ? await inspectClaimDependencyLock(sourceWorkspace, worktreePath) : null;
-  // A stale root install can require a workspace-wide reinstall. Leave child
-  // dependency paths unlinked too so the package manager cannot write through them.
+  // A missing or unverifiable root install can require a workspace-wide
+  // reinstall. Leave child paths unlinked so it cannot write through them.
   if (lock && lock.status !== 'matching') return [{ path: 'node_modules', ...lock }];
 
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
