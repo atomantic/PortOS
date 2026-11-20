@@ -13,7 +13,6 @@ import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import {
   NAV_PRESENTATION,
-  NAV_DESTINATION_PRESENTATION,
   SECTIONS_BEFORE_GOALS,
   SECTIONS_AFTER_GOALS,
   SECTIONS_BELOW_MORE,
@@ -72,6 +71,9 @@ const navRowForPath = (path) => {
     section: command.section,
     feature: command.feature,
     ...(command.navGroup ? { navGroup: command.navGroup } : {}),
+    // A dynamic row keeps its own record-list grandchildren, so it stays at
+    // section level even when its manifest entry names a hub parent.
+    ...(command.parentPath && !NAV_PRESENTATION[path].dynamic ? { parentPath: command.parentPath } : {}),
     ...NAV_PRESENTATION[path],
   };
 };
@@ -88,13 +90,20 @@ const pathWithinRow = (pathname, rowPath) => (
 
 const sectionNavItem = (section) => {
   const children = presentedNavRows
-    .filter((row) => row.section === section && !row.single)
+    .filter((row) => row.section === section && !row.single && !row.parentPath)
     .concat(LOCAL_SECTION_ROWS[section] || [])
     .sort((a, b) => a.label.localeCompare(b.label));
   const childByPath = new Map(children.filter((child) => child.to).map((child) => [child.to, child]));
-  const groups = getSectionNavGroups(section)
+  const tabGroups = getSectionNavGroups(section)
     .map((group) => ({ ...group, children: group.tabs.map((tab) => childByPath.get(tab.to)).filter(Boolean) }))
     .filter((group) => group.children.length > 0);
+  // A grouped section still lists its rows that belong to no group, first and
+  // without a heading, so adding groups can never hide a destination.
+  const groupedChildren = new Set(tabGroups.flatMap((group) => group.children));
+  const ungrouped = children.filter((child) => !groupedChildren.has(child));
+  const groups = tabGroups.length > 0 && ungrouped.length > 0
+    ? [{ label: '', children: ungrouped }, ...tabGroups]
+    : tabGroups;
   return { label: section, feature: SECTION_FEATURE.get(section), children, groups, ...SECTION_PRESENTATION[section] };
 };
 
@@ -264,7 +273,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
   const manifestEntryByPath = useMemo(() => {
     const map = new Map();
     filterNavByFeatures([...commandByPath.values()], isFeatureEnabled).forEach((c) => {
-      map.set(c.path, { path: c.path, label: c.label, icon: NAV_DESTINATION_PRESENTATION[c.path]?.icon || Navigation });
+      map.set(c.path, { path: c.path, label: c.label, icon: NAV_PRESENTATION[c.path]?.icon || Navigation });
     });
     return map;
   }, [isFeatureEnabled]);
@@ -292,6 +301,16 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
           };
         }),
       };
+    };
+    // A manifest `parentPath` nests the row under its parent row as a
+    // third-level link instead of dropping it from the sidebar.
+    const decorateParentChild = (child) => {
+      if (!child.to || child.grandChildren) return child;
+      const nested = presentedNavRows
+        .filter((row) => row.parentPath === child.to && isFeatureEnabled(row.feature))
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map((row) => ({ to: row.to, label: row.label, title: row.label, icon: row.icon, activePathPrefix: row.to }));
+      return nested.length > 0 ? { ...child, grandChildren: nested } : child;
     };
     // Feature gate, applied before any decoration: a disabled feature drops its
     // whole section (POST) or just its tagged rows (DataDog, JIRA), and a
@@ -325,7 +344,12 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         };
       }
       if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map(decorateDynamicChild) };
+        const decorate = (child) => decorateParentChild(decorateDynamicChild(child));
+        return {
+          ...item,
+          children: item.children.map(decorate),
+          ...(item.groups ? { groups: item.groups.map((group) => ({ ...group, children: group.children.map(decorate) })) } : {}),
+        };
       }
       return item;
     });
@@ -571,7 +595,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         {expandedSections[item.label] && !sidebarCollapsed && (
           <div className="ml-4 mt-1 min-w-0">
             {(item.groups?.length
-              ? item.groups.flatMap((group) => [{ groupLabel: group.label }, ...group.children])
+              ? item.groups.flatMap((group) => [...(group.label ? [{ groupLabel: group.label }] : []), ...group.children])
               : item.children
             ).map((child, childIndex) => {
               if (child.groupLabel) {
