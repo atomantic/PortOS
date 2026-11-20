@@ -43,7 +43,7 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
-import { writeFile, rm } from 'fs/promises';
+import { mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join as pathJoin } from 'path';
 
@@ -457,6 +457,16 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    it('filters the gallery to original files on this machine when requested', async () => {
+      const items = [{ filename: 'local-filter.png' }, { filename: 'hosted-filter.png' }];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      await mkdir(fileUtils.PATHS.images, { recursive: true });
+      await writeFile(pathJoin(fileUtils.PATHS.images, items[0].filename), 'local image');
+      const page = await request(app).get('/api/image-gen/gallery?localOnly=true&summary=true');
+      expect(page.status).toBe(200);
+      expect(page.body).toMatchObject({ items: [items[0]], total: 1, hiddenTotal: 0 });
+    });
+
     // #8292: migrated consumers opt into compact card rows; search and visible
     // counts still read the full stored metadata, and older callers keep full records.
     it('projects compact visible rows on request while searching the full prompt', async () => {
@@ -492,7 +502,7 @@ describe('Image Gen Routes', () => {
       expect(oversized.status).toBe(400);
     });
 
-    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename='])('rejects invalid paging: %s', async query => {
+    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename=', 'localOnly=yes'])('rejects invalid paging: %s', async query => {
       const response = await request(app).get('/api/image-gen/gallery?' + query);
       expect(response.status).toBe(400);
       expect(imageGen.local.listGallery).not.toHaveBeenCalled();

@@ -34,9 +34,9 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
   body: JSON.stringify({ deep }),
   silent: true,
 });
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  for (const [key, value] of Object.entries({ hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
+  for (const [key, value] of Object.entries({ hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
     if (value !== undefined) params.set(key, value);
   }
   return request(`/image-gen/gallery?${params}`, options);
