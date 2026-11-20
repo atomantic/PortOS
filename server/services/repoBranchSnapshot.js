@@ -13,12 +13,30 @@ export function repoObservationEnv() {
   return env;
 }
 
-export async function readRepoBranchSnapshot(repoPath, { strict = true } = {}) {
+export async function readRepoBranchSnapshot(repoPath, { strict = true, comparisonBranch } = {}) {
+  const readRefs = (format, ignoreExitCode) => execGit(
+    ['for-each-ref', `--format=${format}`, 'refs/heads/'], repoPath, { ignoreExitCode, env: repoObservationEnv() },
+  );
+  // A ')' or '%' in a legal ref name is not safe to embed in a format atom.
+  // A missing default ref (including an unborn repository) also falls back to plain inventory.
+  const canCompare = comparisonBranch && !/[)%]/.test(comparisonBranch);
+  const refsPromise = canCompare
+    ? readRefs(`${FORMAT}%00%(ahead-behind:refs/heads/${comparisonBranch})`, true).catch(() => null)
+      .then(result => result?.exitCode === 0 ? result : readRefs(FORMAT, !strict))
+    : readRefs(FORMAT, !strict);
   const inventory = listWorktrees(repoPath);
-  const [refs, worktrees] = await Promise.all([
-    execGit(['for-each-ref', `--format=${FORMAT}`, 'refs/heads/'], repoPath, { ignoreExitCode: !strict, env: repoObservationEnv() }),
-    strict ? inventory : inventory.catch(() => []),
-  ]);
-  const branches = refs.stdout.split(/\r?\n/).filter(Boolean).map(parseBranchVerboseLine);
-  return { branches, worktrees, tips: new Map(branches.map(branch => [branch.name, branch.tip])) };
+  const [refs, worktrees] = await Promise.all([refsPromise, strict ? inventory : inventory.catch(() => [])]);
+  const counts = new Map();
+  const branches = refs.stdout.split(/\r?\n/).filter(Boolean).map(line => {
+    const branch = parseBranchVerboseLine(line);
+    const match = canCompare && line.split('\0')[6]?.match(/^(\d+) (\d+)$/);
+    if (branch.tip && match) counts.set(branch.name, { ahead: Number(match[1]), behind: Number(match[2]) });
+    return branch;
+  });
+  const tips = new Map(branches.map(branch => [branch.name, branch.tip]));
+  // The atom resolves its target separately from ref enumeration. Mutual
+  // reachability (0/0) proves that the default row still names that same commit.
+  const self = counts.get(comparisonBranch);
+  if (!self || self.ahead !== 0 || self.behind !== 0) counts.clear();
+  return { branches, worktrees, tips, counts };
 }

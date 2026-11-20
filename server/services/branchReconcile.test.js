@@ -802,6 +802,24 @@ describe('gatherBranchState', () => {
     expect(execGit.mock.calls.filter(([args]) => ['rev-parse', 'show-ref'].includes(args[0]))).toEqual([]);
   });
 
+  it('recomputes divergence at the enumerated commits when the batch target moved', async () => {
+    const target = '1'.repeat(40);
+    const feature = '2'.repeat(40);
+    git.getBranches.mockResolvedValue([{ name: 'feature', merged: true, tip: feature }]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    execGit.mockImplementation(async args => {
+      if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: [
+        ['*', 'main', '', '', 'commit', target, '1 0'],
+        [' ', 'feature', '', '', 'commit', feature, '7 3'],
+      ].map(fields => fields.join('\0')).join('\n') };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '2\t4' };
+      return { exitCode: 0, stdout: '' };
+    });
+    expect(await gatherBranchState('/repo', { defaultBranch: 'main' })).toMatchObject([{ ahead: 4, behind: 2 }]);
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'rev-list' && args.includes(`${target}...${feature}`))).toBe(true);
+  });
+
   it('holds every branch when the single policy snapshot is unreadable', async () => {
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     readBranchCompletionPolicies.mockRejectedValueOnce(new Error('synthetic archive failure'));
