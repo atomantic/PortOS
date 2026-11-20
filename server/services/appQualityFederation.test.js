@@ -69,6 +69,15 @@ it('sends a requester only the categories it can parse, and the pre-expansion se
   expect(FEDERATION_LEGACY_CATEGORIES).toHaveLength(25);
 });
 
+it('sends both original profiles to an older peer and the grouped category only when requested', async () => {
+  const source = deps([row('simplify', 65), row('better-complexity', 75), row('code-simplification', 85)]);
+  const eligible = ['simplify', 'better-complexity'];
+  const old = await exportPortosQuality(peer.instanceId, 30, source, undefined, eligible);
+  expect(old.measurements.map(item => item.report.category).sort()).toEqual([...eligible].sort());
+  const domains = await exportPortosQuality(peer.instanceId, 30, source, undefined, ['code-simplification']);
+  expect(domains.measurements.map(item => item.report.category)).toEqual(['code-simplification']);
+});
+
 it('keeps a newer peer\'s known categories when it also sends one this install cannot parse', async () => {
   const remote = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 80)]));
   const withUnknown = { ...remote, measurements: [...remote.measurements,
@@ -83,7 +92,7 @@ it('reads stored lifecycle measurements under the renamed category', async () =>
     [{ id: 'portos-default' }],
     deps([row('react-lifecycle', 73)]),
   );
-  expect(app.quality.categories.find(category => category.id === 'ui-lifecycle'))
+  expect(app.quality.categories.find(category => category.id === 'ui-runtime-bugs'))
     .toMatchObject({ score: 73, coverage: 'broad', stale: false });
 });
 

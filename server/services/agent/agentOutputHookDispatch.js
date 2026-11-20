@@ -379,7 +379,7 @@ export async function dispatchTaskOutputHook({ agentId, task, success, workspace
         emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
       });
     }
-    if (taskType === 'code-quality' && success) {
+    if ((taskType === 'code-quality' || taskType === 'architecture-maintainability') && success) {
       // The triage lane's ranked "Recommended next audits" (#12085) lands on the
       // task's execution record so the Schedule card shows where to look next.
       const { parseRecommendedAudits } = await import('../../lib/auditQuality.js');

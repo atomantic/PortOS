@@ -7,6 +7,7 @@
 
 import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditLanes, computeLaneHealth, LANE_HEALTH_WINDOW_DAYS, LANE_REFILE_WINDOW_DAYS } from '../lib/laneHealth.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
@@ -135,6 +136,9 @@ export async function collectLaneHealth(app, { forge, taskType = null, now = Dat
   const lanes = auditLanes();
   const lane = taskType ? lanes.find((candidate) => candidate.id === normalizeAuditTaskType(taskType)) : null;
   if (taskType && !lane) return { ok: false, reason: 'not-an-audit-lane' };
+  // A grouped audit can own findings under several historical metric labels.
+  // The existing all-lanes bounded read sees all of them in one forge call.
+  const singleMetric = lane && !Object.hasOwn(CONSOLIDATED_AUDIT_DOMAINS, lane.id);
   const windowDays = LANE_HEALTH_WINDOW_DAYS;
   const refileDays = LANE_REFILE_WINDOW_DAYS;
   const from = now - windowDays * DAY_MS;
@@ -142,7 +146,7 @@ export async function collectLaneHealth(app, { forge, taskType = null, now = Dat
   // `deps.exec` / `deps.runGit` replace the forge CLI and git spawns.
   const exec = deps.exec || runForgeCli;
   const [issues, pullRequests, commits] = await Promise.all([
-    listForgeIssuesSince({ ...forgeOptions, since: from - refileDays * DAY_MS, label: lane?.metricLabel ?? null, limit: lane ? ONE_LANE_ISSUE_LIMIT : ALL_LANES_ISSUE_LIMIT, exec }),
+    listForgeIssuesSince({ ...forgeOptions, since: from - refileDays * DAY_MS, label: singleMetric ? lane.metricLabel : null, limit: singleMetric ? ONE_LANE_ISSUE_LIMIT : ALL_LANES_ISSUE_LIMIT, exec }),
     listForgeMergedPullRequestsSince({ ...forgeOptions, since: from, exec }),
     listRevertCommitsSince(app.repoPath, from, { runGit: deps.runGit || execGit }),
   ]);
@@ -163,8 +167,9 @@ export async function collectLaneHealth(app, { forge, taskType = null, now = Dat
   const oldestCreated = issues.truncated && createdTimes.length ? Math.max(from, Math.min(...createdTimes)) : from;
   const report = computeLaneHealth({
     issues: linkedIssues, pullRequests: pullRequests.ok ? pullRequests.items : [], commits: commits || [],
-    lanes: lane ? [lane] : lanes, now, windowDays, refileDays, from: oldestCreated,
+    lanes: singleMetric ? [lane] : lanes, now, windowDays, refileDays, from: oldestCreated,
   });
+  if (lane) report.lanes = report.lanes.filter(row => row.id === lane.id);
   return { ok: true, ...report, truncated: issues.truncated, partial };
 }
 

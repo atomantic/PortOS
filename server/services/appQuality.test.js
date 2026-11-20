@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
-import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
+import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES } from '../lib/auditCatalog.js';
 import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS } from '../lib/auditQuality.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 
@@ -17,8 +17,8 @@ const assessedAt = '2026-09-10T00:00:00Z';
 // without turning a missing/malformed report into a perfect score.
 describe('scheduled audit measurement workflow', () => {
   it('covers every scheduled audit lens with a discovery strategy and score contract', () => {
-    expect(Object.keys(AUDIT_DISCOVERY).sort()).toEqual(Object.keys(AUDIT_DEFINITIONS).sort());
-    for (const category of Object.keys(AUDIT_DEFINITIONS)) {
+    expect(Object.keys(AUDIT_DISCOVERY).sort()).toEqual(Object.keys(AUDIT_EXECUTION_PROFILES).sort());
+    for (const category of Object.keys(AUDIT_EXECUTION_PROFILES)) {
       expect(auditQualityInstructions(category)).toContain(AUDIT_DISCOVERY[category]);
       expect(auditQualityInstructions(category)).toContain(`"category":"${category}"`);
     }
@@ -163,7 +163,9 @@ describe('scheduled audit measurement workflow', () => {
     const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services' }] });
     expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services' }]);
     expect(read.mock.calls[0][0]).toMatch(/slice IS NOT NULL/);
-    expect(read.mock.calls[0][1]).toEqual(['portos-default', 'ui-lifecycle', AUDIT_SLICE_HISTORY_RUNS]);
+    expect(read.mock.calls[0][1]).toEqual(['portos-default', ['ui-lifecycle', 'react-lifecycle'], AUDIT_SLICE_HISTORY_RUNS]);
+    await readRecentAuditSlices('portos-default', 'ui-runtime-bugs', { query: read });
+    expect(read.mock.calls[1][1][1]).toEqual(['ui-runtime-bugs', 'app-bugs', 'ui-bugs', 'console-errors', 'ui-lifecycle', 'react-lifecycle']);
   });
 
   // The same run reaches the window as the local row and again through the
@@ -176,6 +178,19 @@ describe('scheduled audit measurement workflow', () => {
     const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
     expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 50, window: { runs: 2 } });
+  });
+
+  it('retains both same-day profile scores across snapshot serialization and counts their domain once', () => {
+    const timestamp = '2026-09-10T10:00:00Z';
+    const rows = ['better-complexity', 'simplify'].map((category, index) =>
+      ({ category, assessedAt: timestamp, report: report({ category, score: index ? 80 : 20 }) }));
+    const saved = classifyQualitySnapshot(serializeQualitySnapshot('a'.repeat(64),
+      rows.map(row => ({ ...row.report, assessedAt: timestamp }))));
+    expect(saved.records.map(row => [row.category, row.score]).sort()).toEqual([['better-complexity', 20], ['simplify', 80]]);
+    const history = buildAppQualityHistory(rows, 1, Date.parse(timestamp));
+    expect(history.points[0]).toMatchObject({ score: 50, ratedCategories: 1, categories: {
+      'better-complexity': { score: 20 }, simplify: { score: 80 }, 'code-simplification': { score: 50 },
+    } });
   });
 
   it('selects the same numeric winner for local and published records at an exact timestamp tie', () => {
@@ -231,7 +246,7 @@ describe('scheduled audit measurement workflow', () => {
     ].map(([category, score, coverage, confidence, date]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(date).toISOString() }));
     const quality = summarizeAppQuality(records, now);
     expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: Object.keys(AUDIT_DEFINITIONS).length });
-    expect(quality.categories.find(c => c.id === 'ux')).toMatchObject({ score: 100, stale: true });
+    expect(quality.categories.find(c => c.id === 'design-usability')).toMatchObject({ score: 100, stale: true });
     expect(summarizeAppQuality().score).toBeNull();
   });
 
@@ -241,15 +256,15 @@ describe('scheduled audit measurement workflow', () => {
     const now = Date.now();
     const records = [
       ['code-quality', 80, 'broad', 'high'],
-      ['typing', null, 'not-applicable', 'low'],
+      ['privacy', null, 'not-applicable', 'low'],
       ['mobile-responsive', 60, 'broad', 'high'],
     ].map(([category, score, coverage, confidence]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(now).toISOString() }));
-    const quality = summarizeAppQuality(records, now, { inapplicable: { accessibility: 'no user interface found', 'mobile-responsive': 'no user interface found' } });
+    const quality = summarizeAppQuality(records, now, { inapplicable: { accessibility: 'no user interface found', 'design-usability': 'no user interface found' } });
     const byId = Object.fromEntries(quality.categories.map(c => [c.id, c]));
     expect(byId.accessibility).toMatchObject({ applicable: false, inapplicableReason: 'no user interface found' });
-    expect(byId.typing).toMatchObject({ applicable: false, inapplicableReason: expect.stringMatching(/not applicable/) });
+    expect(byId.privacy).toMatchObject({ applicable: false, inapplicableReason: expect.stringMatching(/not applicable/) });
     // Detected as UI-less, but a fresh broad assessment exists: it counts.
-    expect(byId['mobile-responsive']).toMatchObject({ applicable: true, inapplicableReason: null });
+    expect(byId['design-usability']).toMatchObject({ applicable: true, inapplicableReason: null });
     expect(quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length - 2);
     expect(quality.score).toBe(70);
   });
@@ -262,7 +277,7 @@ describe('scheduled audit measurement workflow', () => {
       report: report({ category: 'react-lifecycle', score: 73 }),
     };
 
-    expect(summarizeAppQuality([legacy], now).categories.find(category => category.id === 'ui-lifecycle'))
+    expect(summarizeAppQuality([legacy], now).categories.find(category => category.id === 'ui-runtime-bugs'))
       .toMatchObject({ score: 73, coverage: 'broad', stale: false });
     expect(buildAppQualityHistory([legacy], 1, now).points.at(-1).categories['ui-lifecycle'])
       .toMatchObject({ score: 73, coverage: 'broad', confidence: 'high' });
@@ -279,11 +294,11 @@ describe('scheduled audit measurement workflow', () => {
   // different checkout, so the Quality tab must not hide the category on it.
   it('does not let a peer\'s not-applicable ruling mark a category inapplicable here', () => {
     const now = Date.now();
-    const peerRow = { category: 'ux', sourcePeerId: 'peer-a', sourcePeerName: 'Peer A', assessedAt: new Date(now).toISOString(),
-      report: report({ category: 'ux', score: null, coverage: 'not-applicable', confidence: 'low' }) };
+    const peerRow = { category: 'design-usability', sourcePeerId: 'peer-a', sourcePeerName: 'Peer A', assessedAt: new Date(now).toISOString(),
+      report: report({ category: 'design-usability', score: null, coverage: 'not-applicable', confidence: 'low' }) };
     const localRow = { ...peerRow, sourcePeerId: undefined, sourcePeerName: undefined };
-    expect(summarizeAppQuality([peerRow], now).categories.find(c => c.id === 'ux').applicable).toBe(true);
-    expect(summarizeAppQuality([localRow], now).categories.find(c => c.id === 'ux').applicable).toBe(false);
+    expect(summarizeAppQuality([peerRow], now).categories.find(c => c.id === 'design-usability').applicable).toBe(true);
+    expect(summarizeAppQuality([localRow], now).categories.find(c => c.id === 'design-usability').applicable).toBe(false);
   });
 
   // The detail read feeds the repository scan into the summary; a failing scan
@@ -332,7 +347,7 @@ it('records honest unscored partial Deep evidence without inventing a score or c
   expect(JSON.parse(query.mock.calls[0][1][4])).toEqual(partial);
   const summary = summarizeAppQuality([{ category: 'observability', report: partial, assessedAt, agentId: 'agent-partial' }], Date.parse(assessedAt));
   expect(summary).toMatchObject({ score: null, ratedCategories: 0 });
-  expect(summary.categories.find(category => category.id === 'observability')).toMatchObject({ score: null, coverage: 'partial' });
+  expect(summary.categories.find(category => category.id === 'reliability-error-handling')).toMatchObject({ score: null, coverage: 'partial' });
   expect(parseAuditQualityReport(sentinel({ ...partial, coverage: 'broad', scannedFiles: 10636 }), 'observability')).toBeNull();
   expect(parseAuditQualityReport(sentinel({ ...partial, scannedFiles: 0 }), 'observability')).toBeNull();
   expect(auditQualityInstructions('observability')).toContain('For partial coverage, use sliceScore:null');

@@ -14,7 +14,7 @@
  * Pure: shape and decisions only; job creation, file writes and catalog reads belong to the two adapters.
  */
 
-import { AUDIT_DEFINITIONS } from './auditCatalog.js';
+import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
 import { ON_DEMAND_INTERVAL } from './autonomousJobIntervals.js';
 import { QUOTA_BURN_BOUNDS, QUOTA_BURN_JOB_TYPE } from './quotaBurnConfig.js';
 import { matchStoredAuditPreset } from './quotaBurnPresets.js';
@@ -23,7 +23,7 @@ import { isProgrammaticScheduledTaskType } from './taskTargetScope.js';
 
 /** `<preset id> → <scheduled audit task type>`, INVERTED from the catalog so it can't drift from the pairing `auditCatalog.test.js` enforces. */
 export const AUDIT_TASK_TYPE_BY_PRESET_ID = Object.freeze(Object.fromEntries(
-  Object.entries(AUDIT_DEFINITIONS)
+  Object.entries(AUDIT_EXECUTION_PROFILES)
     .filter(([, definition]) => typeof definition.quotaBurnId === 'string' && definition.quotaBurnId)
     .map(([taskType, definition]) => [definition.quotaBurnId, taskType]),
 ));

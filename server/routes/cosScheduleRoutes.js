@@ -1,6 +1,6 @@
 import { executionOptionsSchema } from '../lib/aiToolkit/internal/executionOptionsValidation.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
-import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
+import { AUDIT_EXECUTION_TASK_TYPES } from '../lib/auditCatalog.js';
 /**
  * CoS Task Schedule Routes
  */
@@ -35,7 +35,7 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // service's live provider gate, not to this schema. Blank effort inherits each
 // scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
-  taskTypes: z.array(z.enum(Object.keys(AUDIT_DEFINITIONS))).min(1).max(Object.keys(AUDIT_DEFINITIONS).length).optional(),
+  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).min(1).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
   // The user named these checks one by one (the Quality tab's per-category Run),
   // so each runs even where the repository scan says it cannot apply.
   explicitCheck: z.boolean().optional(),

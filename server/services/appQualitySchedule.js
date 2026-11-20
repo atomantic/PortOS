@@ -22,7 +22,7 @@ import { execGit } from '../lib/execGit.js';
 import { query } from '../lib/db.js';
 import {
   AUDIT_CAPABILITY_MISSING_REASON,
-  AUDIT_DEFINITIONS,
+  AUDIT_EXECUTION_PROFILES,
   AUDIT_REPO_CAPABILITIES,
   AUDIT_TASK_TYPE_LIST,
   normalizeAuditTaskType,
@@ -197,7 +197,7 @@ async function loadNotApplicableCategories(appId, now = Date.now()) {
  * @param {object} app - The managed app record
  * @returns {Promise<{ checks: object[], capabilities: object, scanned: number }>}
  */
-export async function resolveQualityChecks(app) {
+export async function resolveQualityChecks(app, taskTypes = AUDIT_TASK_TYPE_LIST) {
   const [{ capabilities, scanned, complete }, notApplicable] = await Promise.all([
     detectRepoCapabilities(app),
     loadNotApplicableCategories(app.id),
@@ -207,11 +207,11 @@ export async function resolveQualityChecks(app) {
   // capability reads false for want of evidence, and gating on that would
   // deselect most of the catalog over a repository nobody actually looked at.
 
-  const checks = AUDIT_TASK_TYPE_LIST.map(taskType => {
+  const checks = taskTypes.map(taskType => {
     const reason = notApplicable.has(taskType)
       ? 'a previous audit reported this category as not applicable here'
       : missingCapabilityReason(taskType, capabilities, complete);
-    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable: !reason, reason };
+    return { taskType, label: AUDIT_EXECUTION_PROFILES[taskType].label, applicable: !reason, reason };
   });
   return { checks, capabilities, scanned, complete };
 }
@@ -232,9 +232,8 @@ export async function resolveQualityChecks(app) {
  */
 export async function resolveAuditApplicability(app, taskType) {
   const category = normalizeAuditTaskType(taskType);
-  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_DEFINITIONS, category)) return { applicable: true, reason: null };
-  const { checks } = await resolveQualityChecks(app);
-  const check = checks.find(entry => entry.taskType === category);
+  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_EXECUTION_PROFILES, category)) return { applicable: true, reason: null };
+  const { checks: [check] } = await resolveQualityChecks(app, [category]);
   return { applicable: check?.applicable !== false, reason: check?.reason || null };
 }
 
@@ -276,7 +275,7 @@ export async function inapplicableAuditReasons(app) {
  * @returns {Promise<string|null>}
  */
 export async function inapplicableAuditReason(appId, taskType) {
-  if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, normalizeAuditTaskType(taskType))) return null;
+  if (!appId || !Object.hasOwn(AUDIT_EXECUTION_PROFILES, normalizeAuditTaskType(taskType))) return null;
   const verdict = await getAppById(appId)
     // The schedule form's recorded override is the user's choice for this app,
     // whichever lane dispatches the audit.
@@ -345,13 +344,16 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
  */
 export async function buildQualitySchedulePlan(app, options = {}) {
   const settings = resolveQualityScheduleOptions(options);
+  // Explicit requests from older clients still select their original task profile.
+  // A domain plan must leave all other legacy cadences in place and avoid their slots.
+  const requested = Array.isArray(options.taskTypes) ? options.taskTypes : null;
+  const plannedTypes = [...new Set([...AUDIT_TASK_TYPE_LIST, ...(requested || [])])].filter(type => Object.hasOwn(AUDIT_EXECUTION_PROFILES, type));
   // Independent: the repository scan and the schedule read share no input.
   const [{ checks, capabilities, scanned, complete }, sources] = await Promise.all([
-    resolveQualityChecks(app),
-    collectBusyOccupancies(app, { ignoreTaskTypes: [...AUDIT_TASK_TYPE_LIST, ...CLAIM_DRAIN_TASK_TYPES] }),
+    resolveQualityChecks(app, plannedTypes),
+    collectBusyOccupancies(app, { ignoreTaskTypes: [...plannedTypes, ...CLAIM_DRAIN_TASK_TYPES] }),
   ]);
 
-  const requested = Array.isArray(options.taskTypes) ? options.taskTypes : null;
   const taskTypes = requested ?? checks.filter(check => check.applicable).map(check => check.taskType);
 
   const plan = planQualitySchedule({
@@ -396,7 +398,7 @@ export async function applyQualitySchedulePlan(app, options = {}) {
 
   const inapplicable = new Set(built.checks.filter(check => !check.applicable).map(check => check.taskType));
   const patches = {};
-  for (const taskType of AUDIT_TASK_TYPE_LIST) {
+  for (const { taskType } of built.checks) {
     const slot = scheduled.get(taskType);
     // A check the user selected although it was marked not applicable is an
     // explicit override: record it so the scheduled lane's applicability gate

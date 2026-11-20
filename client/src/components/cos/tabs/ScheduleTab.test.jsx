@@ -81,6 +81,23 @@ describe('mergeUpdatedTaskInterval', () => {
 });
 
 describe('ScheduleTab on-demand feedback', () => {
+  it('shows scheduled legacy audits and makes on-demand legacy profiles available separately', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    const profile = { type: 'on-demand', enabled: true };
+    api.getCosSchedule.mockResolvedValueOnce({ tasks: {
+      'code-simplification': { ...profile, displayName: 'Code simplification' },
+      simplify: { ...profile, displayName: 'Legacy simplify', legacyAuditDomain: 'code-simplification' },
+      'better-complexity': { ...profile, displayName: 'Legacy complexity', legacyAuditDomain: 'code-simplification', enabledAppCount: 1 },
+    } });
+    render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
+    expect(await screen.findByText('Code simplification')).toBeVisible();
+    expect(screen.getByText('Legacy complexity')).toBeVisible();
+    expect(screen.queryByText('Legacy simplify')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Show all legacy audit profiles' }));
+    expect(screen.getByText('Legacy simplify')).toBeVisible();
+  });
+
   it('retains the last schedule on a failed refresh, shows the failure, and recovers', async () => {
     const user = userEvent.setup();
     api.getCodeReviewDefaults.mockResolvedValue({});
