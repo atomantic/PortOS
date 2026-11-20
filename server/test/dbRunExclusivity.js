@@ -42,6 +42,7 @@ export async function acquireDbRunLock({
   createClient = async config => new (await import('pg')).default.Client(config),
   log = console.log,
   waitLogIntervalMs = WAIT_LOG_INTERVAL_MS,
+  storage = {},
 } = {}) {
   const config = testDatabaseConfig(env);
   if (!/_test$/.test(config.database)) return async () => {};
@@ -55,12 +56,21 @@ export async function acquireDbRunLock({
     return async () => {};
   }
 
-  const { rows: [{ locked }] } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [DB_RUN_ADVISORY_LOCK_KEY]);
-  if (!locked) {
-    log(`⏳ Another DB test run holds ${config.database} — waiting for it to finish…`);
-    const timer = setInterval(() => log(`⏳ Still waiting for the DB test run holding ${config.database}…`), waitLogIntervalMs);
-    timer.unref?.();
-    await client.query('SELECT pg_advisory_lock($1)', [DB_RUN_ADVISORY_LOCK_KEY]).finally(() => clearInterval(timer));
+  try {
+    const { rows: [{ locked }] } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [DB_RUN_ADVISORY_LOCK_KEY]);
+    if (!locked) {
+      log(`⏳ Another DB test run holds ${config.database} — waiting for it to finish…`);
+      const timer = setInterval(() => log(`⏳ Still waiting for the DB test run holding ${config.database}…`), waitLogIntervalMs);
+      timer.unref?.();
+      await client.query('SELECT pg_advisory_lock($1)', [DB_RUN_ADVISORY_LOCK_KEY]).finally(() => clearInterval(timer));
+    }
+    // Check after waiting: the preceding run could have consumed disk space.
+    const { checkDbTestStorage } = await import('../scripts/dbTestStorage.mjs');
+    await checkDbTestStorage(client, { ...storage, host: config.host, log });
+  } catch (error) {
+    // Ending the session releases the lock even when global setup refuses to run.
+    await client.end().catch(() => {});
+    throw error;
   }
 
   return async () => {

@@ -59,7 +59,7 @@ const config = defineConfig({
     hookTimeout: 30000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,
-    // The lock comes first so a queued run waits before touching the shared database or temp root.
+    // Acquire the run lock and check PostgreSQL storage before any fixture setup.
     globalSetup: [
       fileURLToPath(new URL('./test/dbRunExclusivity.js', import.meta.url)),
       fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url)),

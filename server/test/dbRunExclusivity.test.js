@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { resolve } from 'node:path';
 import { DB_RUN_ADVISORY_LOCK_KEY, acquireDbRunLock } from './dbRunExclusivity.js';
 import dbConfig from '../vitest.config.db.js';
 
 // A lock that is free the first time it is tried; `held` makes try-lock fail and
 // the blocking call wait until `grant()` — the shape of a peer run in progress.
-function fakeClient({ held = false, connectError = null } = {}) {
+function fakeClient({ held = false, connectError = null, cluster } = {}) {
   const grant = Promise.withResolvers();
   const calls = [];
   const client = {
@@ -15,6 +16,7 @@ function fakeClient({ held = false, connectError = null } = {}) {
       calls.push(sql);
       if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: !held }] };
       if (sql.includes('pg_advisory_lock')) await grant.promise;
+      if (sql.includes('pg_settings')) return { rows: cluster ? [cluster] : [] };
       return { rows: [] };
     }),
   };
@@ -25,7 +27,7 @@ describe('acquireDbRunLock', () => {
   it('holds the lock for the whole run and unlocks on release', async () => {
     const { client, calls } = fakeClient();
     const release = await acquireDbRunLock({ env: {}, createClient: () => client, log: vi.fn() });
-    expect(calls).toEqual(['SELECT pg_try_advisory_lock($1) AS locked']);
+    expect(calls).toEqual(['SELECT pg_try_advisory_lock($1) AS locked', expect.stringContaining('pg_settings')]);
     expect(client.end).not.toHaveBeenCalled();
     await release();
     expect(calls.at(-1)).toBe('SELECT pg_advisory_unlock($1)');
@@ -55,6 +57,26 @@ describe('acquireDbRunLock', () => {
     const release = await acquireDbRunLock({ env: { PGTESTDATABASE: 'portos' }, createClient: refused, log: vi.fn() });
     expect(refused).not.toHaveBeenCalled();
     await release();
+  });
+
+  it('rechecks capacity after the previous run and drops the lock if space is low', async () => {
+    const directory = resolve('synthetic-pg-data');
+    const pidFile = `123\n${directory}\n1234567890\n5432\n`;
+    const { client, calls, grant } = fakeClient({ held: true, cluster: { directory, pid_file: pidFile } });
+    const statfsImpl = vi.fn(async () => ({ blocks: 1000, bsize: 4096, bavail: 0 }));
+    const pending = acquireDbRunLock({
+      env: {},
+      createClient: () => client,
+      log: vi.fn(),
+      storage: { readFileImpl: async () => pidFile, realpathImpl: async path => path, statfsImpl },
+    });
+    const refused = expect(pending).rejects.toThrow('PostgreSQL data volume has 0 B free');
+    await vi.waitFor(() => expect(calls).toContain('SELECT pg_advisory_lock($1)'));
+    expect(statfsImpl).not.toHaveBeenCalled();
+    grant();
+    await refused;
+    expect(statfsImpl).toHaveBeenCalledWith(directory);
+    expect(client.end).toHaveBeenCalledOnce();
   });
 
   it('does not block the run when Postgres is unreachable (the suites skip themselves)', async () => {
