@@ -813,6 +813,12 @@ export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) 
   return firstLine.trim().substring(0, 100) || 'CoS automated task';
 }
 
+async function getLocalBranchNames(dir) {
+  // Read branch refs directly so worktree markers and ambiguous short refs cannot change their names.
+  const { stdout } = await execGitSafe(['for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/'], dir);
+  return stdout?.split(/\r?\n/).filter(Boolean) ?? [];
+}
+
 export async function getDefaultBranch(dir, { allowRemote = true, strict = false } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
@@ -834,8 +840,7 @@ export async function getDefaultBranch(dir, { allowRemote = true, strict = false
   }
 
   // Fall back to local branch detection
-  const result = await execGitSafe(['branch', '--list'], dir);
-  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
+  const branches = await getLocalBranchNames(dir);
   if (branches.includes('main')) return 'main';
   if (branches.includes('master')) return 'master';
 
@@ -873,8 +878,7 @@ export async function getRepoBranches(dir, knownBranches) {
   }
 
   // Get local branches once — reused for both base fallback and dev detection
-  const branches = knownBranches ?? (await execGitSafe(['branch', '--list'], dir)).stdout
-    ?.trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean) ?? [];
+  const branches = knownBranches ?? await getLocalBranchNames(dir);
 
   if (!baseBranch) {
     if (branches.includes('main')) baseBranch = 'main';

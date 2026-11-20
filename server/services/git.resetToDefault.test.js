@@ -236,7 +236,7 @@ describe('resetToDefaultBranch', () => {
       ...HAPPY_PATH,
       // origin/HEAD names a branch whose remote-tracking ref is gone.
       'rev-parse --verify refs/remotes/origin/main': { stdout: '', stderr: 'fatal: Needed a single revision', exitCode: 1 },
-      'branch --list': ok('* main')
+      'for-each-ref --format=%(refname:lstrip=2) refs/heads/': ok('main')
     });
 
     await expect(resetToDefaultBranch('/repo')).rejects.toThrow(/origin\/main/);
