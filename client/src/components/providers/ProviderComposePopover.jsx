@@ -58,18 +58,18 @@ export default function ProviderComposePopover({
   useOnce = true,
 }) {
   const catalog = useProviderCatalog(open);
-  const [harnessId, setHarnessId] = useState('');
-  const [method, setMethod] = useState('');
-  const [serviceSlug, setServiceSlug] = useState('');
+  const initialHarness = initial?.harnessId || '';
+  const initialMethod = initial?.method || '';
+  const initialService = initial?.serviceSlug || '';
+  const [harnessId, setHarnessId] = useState(() => (open ? initialHarness : ''));
+  const [method, setMethod] = useState(() => (open ? initialMethod : ''));
+  const [serviceSlug, setServiceSlug] = useState(() => (open && initialHarness && initialMethod ? initialService : ''));
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [executionOptions, setExecutionOptions] = useState(undefined);
   const [bootstrapSlug, setBootstrapSlug] = useState('');
   const [presetName, setPresetName] = useState('');
   const [showPresetField, setShowPresetField] = useState(false);
-  const initialHarness = initial?.harnessId || '';
-  const initialMethod = initial?.method || '';
-  const initialService = initial?.serviceSlug || '';
 
   // Reset every time the popover is (re)opened, so a previous choice never
   // lingers. A service seed with no harness and method yet stays out of

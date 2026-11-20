@@ -212,7 +212,7 @@ describe('AIProviders page load error handling', () => {
     const install = await screen.findByRole('button', { name: /Install OpenCode CLI/ });
     expect(install).toBeEnabled();
     fireEvent.click(install);
-    const modal = screen.getByTestId('runtime-install-modal');
+    const modal = await screen.findByTestId('runtime-install-modal');
     expect(modal).toHaveAttribute('data-runtime', 'opencode');
     expect(modal).toHaveAttribute('data-stream-method', 'POST');
     expect(modal).toHaveAttribute('data-flush-ms', '250');

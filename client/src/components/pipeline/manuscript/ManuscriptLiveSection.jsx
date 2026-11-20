@@ -16,6 +16,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import useEscapeKey from '../../../hooks/useEscapeKey';
 import useAnchorReveal from '../../../hooks/useAnchorReveal';
+import './manuscriptAnchorFlash.css';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
 import { CommentCardFromProps } from './ManuscriptCommentCard';
 import ManuscriptSectionFrame from './ManuscriptSectionFrame';

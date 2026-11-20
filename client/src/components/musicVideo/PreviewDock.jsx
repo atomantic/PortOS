@@ -11,6 +11,7 @@ import { sceneShotName } from '../../lib/musicVideoStages.js';
 import { getMusicVideoCompositionPlayback } from '../../services/apiMusicVideo.js';
 import { hashString } from '../../utils/hashString.js';
 import useSoloPlayback from '../../hooks/useSoloPlayback.js';
+import './PreviewDock.css';
 
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
@@ -141,7 +142,7 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * controls in a column to its right, for a short, wide space (the editor). Each
  * player marks its picture (`data-preview-picture`), its play bar
  * (`data-preview-scrub`) and its other controls (`data-preview-controls`);
- * `.mv-preview-beside` in index.css places them.
+ * `.mv-preview-beside` in PreviewDock.css places them.
  */
 export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false, controlsBeside = false }) {
   const [searchParams, setSearchParams] = useSearchParams();

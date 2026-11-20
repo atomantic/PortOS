@@ -54,7 +54,7 @@ describe('PreviewDock controls beside the picture', () => {
     const { unmount } = render(<MemoryRouter><PreviewDock project={project} sources={sources} audioUrl="/song.mp3" controlsBeside /></MemoryRouter>);
     const dock = screen.getByRole('complementary', { name: 'Preview' });
     expect(dock.classList.contains('mv-preview-beside')).toBe(true);
-    // The layout in index.css places the picture's siblings: the steppers go in the side column.
+    // The layout in PreviewDock.css places the picture's siblings: the steppers go in the side column.
     const picture = dock.querySelector('[data-preview-picture]');
     const controls = picture.parentElement.querySelector(':scope > [data-preview-controls]');
     expect(controls.contains(screen.getByRole('button', { name: 'Next shot' }))).toBe(true);
