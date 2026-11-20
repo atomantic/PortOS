@@ -18,7 +18,9 @@ assembly test reaching a prompt section through its builder). Each hop adds at
 most 25 suites per source, the second hop at most 60 per run, nearest hop
 first and an importer's own suite before its other referrers; the overflow is
 listed under `skipped` in the receipt and left to CI. The second hop never adds the heavy
-suites (gate tooling and the pool's exclusive tests, tens of seconds each). Untracked tests count.
+suites (gate tooling and the pool's exclusive tests, tens of seconds each). The
+selector overlaps up to 32 file reads and keeps its ranking independent of
+read completion order. Untracked tests count.
 A changed non-module file has no import edge (the test memo records loaded
 modules, not opened files), so suites that spell its path, or an unambiguous
 name, as a quoted string literal are selected too, at most 25 per file and not

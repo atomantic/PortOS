@@ -446,6 +446,34 @@ describe('pregate hidden-content invocation', () => {
     expect(report.passed).toBe(!changed);
   });
 
+  it('invalidates a dirty receipt when a file changes during focused selection', () => {
+    prepareGuardFixture();
+    write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    const preload = `
+      import fsPromises from 'node:fs/promises';
+      import { writeFileSync } from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const original = fsPromises.readFile;
+      let edited = false;
+      fsPromises.readFile = (path, ...args) => {
+        if (!edited && path.endsWith('moduleSummaries.test.js')) {
+          writeFileSync('server/lib/helper.js', '// Helper.\\nexport const helper = 2;\\n');
+          edited = true;
+        }
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--base', base,
+    ], { cwd: root, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain('The working tree changed while pregate ran');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report).toMatchObject({ passed: false, treeStable: false });
+    expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
+  });
+
   it('runs focused guard and lint stages each time and reports slow guard passes', () => {
     prepareGuardFixture();
     write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
@@ -1692,10 +1720,10 @@ describe('validatedTreeHash', () => {
 });
 
 describe('focused local policy', () => {
-  it('runs direct behavior owners and edited unit tests without transitive or resource suites', () => {
+  it('runs direct behavior owners and edited unit tests without transitive or resource suites', async () => {
     const tracked = ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/unrelated.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'client/src/Card.jsx', 'client/src/Card.test.jsx', 'scripts/tool.test.js', 'server/services/htmlComposition/index.test.js'];
     const changed = ['server/lib/a.js', 'client/src/Card.jsx', 'scripts/tool.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'docs/README.md', 'server/services/htmlComposition/index.test.js'];
-    const local = focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
+    const local = await focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
     expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
     expect(local.client.files).toContain('client/src/Card.test.jsx');
     expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
@@ -1707,7 +1735,36 @@ describe('focused local policy: referencing suites within two import hops', () =
   const reader = files => path => files[path] ?? null;
   const plant = (files, extraTracked = []) => ({ tracked: [...new Set([...Object.keys(files), ...extraTracked])], read: reader(files) });
 
-  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', () => {
+  it('bounds concurrent reads and preserves selection when reads finish out of order', async () => {
+    const files = {
+      'server/lib/source.js': '',
+      'server/lib/mid.js': "import './source.js';",
+      'config.json': '{}',
+      ...Object.fromEntries(Array.from({ length: 70 }, (_, index) => [
+        `server/lib/reader-${String(index).padStart(2, '0')}.test.js`,
+        index % 3 === 0 ? "import './mid.js';" : "readFileSync('config.json');",
+      ])),
+    };
+    const { tracked, read } = plant(files);
+    const changed = ['server/lib/source.js', 'config.json'];
+    const ordered = await focusedLocalPlan(plan(), tracked, changed, read);
+    const reads = new Map();
+    let active = 0;
+    let peak = 0;
+    const unordered = await focusedLocalPlan(plan(), tracked, changed, async path => {
+      reads.set(path, (reads.get(path) ?? 0) + 1);
+      peak = Math.max(peak, ++active);
+      await new Promise(resolve => setTimeout(resolve, path.endsWith('0.test.js') ? 10 : 1));
+      active -= 1;
+      return read(path);
+    });
+
+    expect(peak).toBe(32);
+    expect([...reads.values()].every(count => count === 1)).toBe(true);
+    expect(unordered).toEqual(ordered);
+  });
+
+  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', async () => {
     const files = {
       'server/routes/x.test.js': "vi.mock('../services/x.js', () => ({}));",
       'server/routes/lazy.test.js': "const m = await import('../services/x');",
@@ -1716,7 +1773,7 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/routes/lookalike.test.js': "import { a } from '../other/x.js';",
     };
     const { tracked, read } = plant(files, ['server/services/x.js', 'server/other/x.js']);
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
     expect(local.relatedOverflow).toEqual([]);
   });
@@ -1725,15 +1782,15 @@ describe('focused local policy: referencing suites within two import hops', () =
   it.each([
     ['server/lib/dispatchLabels.js', 'server/lib/quotaBurnPresets.js', 'server/lib/quotaBurnPresets.test.js', "import { LABELS } from './dispatchLabels.js';", "import { presets } from './quotaBurnPresets.js';"],
     ['server/services/promptSections/prAttribution.js', 'server/services/agent/agentPromptBuilder.js', 'server/services/cos/cosTaskClaimWork.composition.test.js', "import { attribution } from '../promptSections/prAttribution.js';", "import { buildAgentPrompt } from '../agent/agentPromptBuilder.js';"],
-  ])('selects the suite two hops from %s through %s', (source, importer, test, importerText, testText) => {
+  ])('selects the suite two hops from %s through %s', async (source, importer, test, importerText, testText) => {
     const files = { [source]: 'export const x = 1;', [importer]: importerText, [test]: testText };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, [source], read);
+    const local = await focusedLocalPlan(plan(), tracked, [source], read);
     expect(local.server.files).toContain(test);
     expect(local.relatedOverflow).toEqual([]);
   });
 
-  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', () => {
+  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/viaLazy.js': "export const load = () => import('./a.js');",
@@ -1744,11 +1801,11 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/lib/deep.test.js': "import './hop3.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files.sort()).toEqual(['server/lib/lazy.test.js', 'server/lib/mock.test.js']);
   });
 
-  it('follows a directory import of a changed index module at both hops', () => {
+  it('follows a directory import of a changed index module at both hops', async () => {
     const files = {
       'client/src/components/micrographics/index.js': '',
       'client/src/components/Widget.jsx': "import { Spark } from './micrographics';",
@@ -1758,11 +1815,11 @@ describe('focused local policy: referencing suites within two import hops', () =
       'client/src/components/direct.test.jsx': "import { Spark } from './micrographics';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
     expect(local.client.files.sort()).toEqual(['client/src/components/Widget.test.jsx', 'client/src/components/direct.test.jsx', 'client/src/components/micrographics/Sub.test.jsx']);
   });
 
-  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', () => {
+  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', async () => {
     const files = {
       'scripts/lib/tool.js': '',
       'scripts/lib/toolUser.js': "import './tool.js';",
@@ -1771,29 +1828,29 @@ describe('focused local policy: referencing suites within two import hops', () =
       'scripts/lib/toolUser.test.js': "import './toolUser.js';",
     };
     const { tracked, read } = plant(files);
-    expect(focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read).server.files).toEqual(['scripts/lib/toolUser.test.js']);
+    expect((await focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read)).server.files).toEqual(['scripts/lib/toolUser.test.js']);
     const direct = { ...files, 'scripts/run-ci-tests.test.js': "import './lib/tool.js';" };
     const withDirect = plant(direct);
-    expect(focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read).server.files.sort())
+    expect((await focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read)).server.files.sort())
       .toEqual(['scripts/lib/toolUser.test.js', 'scripts/run-ci-tests.test.js']);
   });
 
-  it('does not count a suite already selected for another reason against the second hop', () => {
+  it('does not count a suite already selected for another reason against the second hop', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/mid.js': "import './a.js';",
       'server/lib/both.test.js': "import './a.js'; import './mid.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files).toEqual(['server/lib/both.test.js']);
     expect(local.relatedOverflow).toEqual([]);
   });
 
-  it('caps suites per changed source and reports the overflow as skipped', () => {
+  it('caps suites per changed source and reports the overflow as skipped', async () => {
     const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 3 }, (_, i) => [`server/routes/s${String(i).padStart(2, '0')}.test.js`, "vi.mock('../services/x.js');"]));
     const { tracked, read } = plant(files, ['server/services/x.js']);
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
     expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3, hop: 1 }]);
     const skipped = uncoveredSuites(local);
@@ -1802,7 +1859,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(skipped[0].reason).toContain('3 suite(s) referencing server/services/x.js');
   });
 
-  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', () => {
+  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/mid.js': "import './a.js';",
@@ -1810,7 +1867,7 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/lib/mid.test.js': "import './mid.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
     expect(local.server.files).toContain('server/lib/mid.test.js');
     expect(local.relatedOverflow).toEqual([{ source: 'server/lib/a.js', count: 3, hop: 2 }]);
@@ -1818,7 +1875,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(skipped.reason).toContain('3 suite(s) two imports away from server/lib/a.js');
   });
 
-  it('caps the second hop per run across sources and never displaces a first-hop suite', () => {
+  it('caps the second hop per run across sources and never displaces a first-hop suite', async () => {
     const sources = Array.from({ length: 4 }, (_, i) => `server/lib/src${i}.js`);
     const files = {};
     for (const [i, source] of sources.entries()) {
@@ -1828,7 +1885,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     }
     files['server/hop1/direct.test.js'] = "import '../lib/src3.js';";
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, sources, read);
+    const local = await focusedLocalPlan(plan(), tracked, sources, read);
     const added = local.server.files.filter(file => file.startsWith('server/hop2/'));
     expect(local.server.files).toContain('server/hop1/direct.test.js');
     expect(added).toHaveLength(SECOND_HOP_RUN_CAP);
@@ -1838,7 +1895,7 @@ describe('focused local policy: referencing suites within two import hops', () =
   });
 
   describe('suites that read a changed non-module file as text', () => {
-    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', () => {
+    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', async () => {
       const files = {
         'scripts/checkNpmVersion.test.js': "const readJson = rel => JSON.parse(readFileSync(join(REPO_ROOT, rel)));\nreadJson('package.json');\nreadFileSync(join(ROOT, \"setup.ps1\"));",
         'scripts/lookalike.test.js': "readFileSync(join(ROOT, 'package.json.bak')); // setup.ps1 in a comment, unquoted",
@@ -1846,23 +1903,23 @@ describe('focused local policy: referencing suites within two import hops', () =
         'server/lib/viaName.test.js': 'readFileSync(`package.json`);',
       };
       const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
-      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      const local = await focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
       expect(local.server.files.sort()).toEqual(['scripts/checkNpmVersion.test.js', 'server/lib/viaName.test.js']);
       expect(local.relatedOverflow).toEqual([]);
     });
 
-    it('ignores an untracked or deleted changed file and a heavy suite', () => {
+    it('ignores an untracked or deleted changed file and a heavy suite', async () => {
       const files = { 'scripts/gone.test.js': "readFileSync('gone.json')", 'scripts/pregate.test.js': "readFileSync('package.json')" };
       const { tracked, read } = plant(files, ['package.json']);
-      expect(focusedLocalPlan(plan(), tracked, ['gone.json'], read).server.files).toEqual([]);
-      expect(focusedLocalPlan(plan(), tracked, ['package.json'], read).server.files).not.toContain('scripts/pregate.test.js');
+      expect((await focusedLocalPlan(plan(), tracked, ['gone.json'], read)).server.files).toEqual([]);
+      expect((await focusedLocalPlan(plan(), tracked, ['package.json'], read)).server.files).not.toContain('scripts/pregate.test.js');
     });
 
-    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', () => {
+    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', async () => {
       const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 4 }, (_, i) => [`server/lib/a${String(i).padStart(2, '0')}.test.js`, "readFileSync('package.json')"]));
       files['server/lib/zz.test.js'] = "readFileSync('package.json'); readFileSync('setup.ps1');";
       const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
-      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      const local = await focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
       expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
       expect(local.server.files).toContain('server/lib/zz.test.js');
       expect(local.relatedOverflow).toEqual([{ source: 'package.json', count: 5, hop: 'text' }]);
@@ -1871,15 +1928,15 @@ describe('focused local policy: referencing suites within two import hops', () =
       expect(skipped.reason).toContain('5 suite(s) reading package.json as text');
     });
 
-    it('answers a nested file by its full path, and by base name only while the name is rare', () => {
+    it('answers a nested file by its full path, and by base name only while the name is rare', async () => {
       const nested = { 'client/package.json': '' };
       const rare = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')", 'scripts/name.test.js': "readFileSync(join(dir, 'package.json'))" };
       const { tracked, read } = plant(rare);
-      expect(focusedLocalPlan(plan(), tracked, ['client/package.json'], read).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
+      expect((await focusedLocalPlan(plan(), tracked, ['client/package.json'], read)).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
       const common = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')" };
       for (let i = 0; i <= RELATED_SUITE_CAP; i += 1) common[`scripts/n${String(i).padStart(2, '0')}.test.js`] = "readFileSync('package.json')";
       const planted = plant(common);
-      expect(focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read).server.files).toEqual(['scripts/full.test.js']);
+      expect((await focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read)).server.files).toEqual(['scripts/full.test.js']);
     });
   });
 });
