@@ -218,7 +218,7 @@ describe('portless / desktop apps (#2991)', () => {
     expect(reserved).toContain(5554);
     expect(reserved).not.toContain(null);
     expect(reserved.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)).toBe(true);
-    expect(reserved).toEqual([5554, 5555]);
+    expect(reserved).toEqual([5554, 5555, 5560]);
   });
 
   it('createApp stores a desktop app with null ports (no port ever synthesized)', async () => {
