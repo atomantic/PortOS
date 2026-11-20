@@ -2519,6 +2519,9 @@ describe('path-gated single-purpose jobs', () => {
       for (const entry of SUPERCOLLIDER_LIVE_ENTRIES) expect(inputs).toContain(entry);
       expect(buildCiTestPlan(['server/lib/brandNewHelper.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(true);
       expect(buildCiTestPlan(['server/lib/unrelated.js'], { supercolliderLiveInputs: inputs }).supercolliderLive).toBe(false);
+      // An entry on disk the tracked graph cannot see has unknown edges: the job runs.
+      write('scripts/setup-supercollider.js', "import '../server/lib/brandNewHelper.js';\n");
+      expect(collectSuperColliderLiveInputs(root)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

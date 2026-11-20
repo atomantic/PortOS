@@ -663,13 +663,16 @@ export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:pa
 
 /**
  * Repository-relative static import closure of `entries` over `graph`, or
- * null when a member cannot be read or a relative edge resolves to no file —
- * the caller then runs the gated job rather than trusting a partial walk.
- * Every entry is an input even when absent, so deleting or renaming one still
- * runs the job that names it.
+ * null when a member cannot be read, a relative edge resolves to no file, or
+ * an entry exists in `cwd` outside the graph (untracked) — the caller then
+ * runs the gated job rather than trusting a partial walk. Every entry is an
+ * input even when absent, so deleting or renaming one still runs the job
+ * that names it.
  */
-const staticClosureOf = (entries, graph) => {
-  const closure = graph.closure(entries.filter((entry) => graph.known.has(entry)), graph.staticDependencies);
+const staticClosureOf = (entries, graph, cwd) => {
+  const present = entries.filter((entry) => existsSync(join(cwd, entry)));
+  if (present.some((entry) => !graph.known.has(entry))) return null;
+  const closure = graph.closure(present, graph.staticDependencies);
   return closure && uniqueSorted([...entries, ...closure]);
 };
 
@@ -678,13 +681,13 @@ const trackedModuleGraph = (cwd) => createModuleGraph(gitPaths(['ls-files', '-z'
   (path) => readFileSync(join(cwd, path), 'utf8'));
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
-export const collectLinuxContainmentInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, graph);
+export const collectLinuxContainmentInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, graph, cwd);
 
 /** Static closure of the SuperCollider live suite, its setup script and their Vitest harness. */
-export const collectSuperColliderLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, graph);
+export const collectSuperColliderLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(SUPERCOLLIDER_LIVE_ENTRIES, graph, cwd);
 
 /** Static closure of the Docker containment live suite and its Vitest harness. */
-export const collectDockerContainmentLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(DOCKER_CONTAINMENT_LIVE_ENTRIES, graph);
+export const collectDockerContainmentLiveInputs = (cwd, graph = trackedModuleGraph(cwd)) => staticClosureOf(DOCKER_CONTAINMENT_LIVE_ENTRIES, graph, cwd);
 
 /** True when the diff reaches a gated job's inputs; null inputs fail open to running it. */
 const touchesJobInputs = (changed, inputs, pattern) => inputs === null

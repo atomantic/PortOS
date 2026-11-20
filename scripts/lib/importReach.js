@@ -27,13 +27,15 @@ import { globToRegExp, toWorkspacePath, workspaceTestGlobs } from './workspaceTe
 
 /**
  * Resolved repo-relative edges for every module of `graph` (`createModuleGraph`).
- * A module that cannot be read or tokenized has no entry. An edge that is both
+ * A module that cannot be read or tokenized has no entry and is listed in
+ * `uninspected` instead, because its edges are unknown. An edge that is both
  * static and dynamic is recorded as static.
  *
- * @returns {Map<string, { static: Set<string>, dynamic: Set<string> }>}
+ * @returns {{ edges: Map<string, { static: Set<string>, dynamic: Set<string> }>, uninspected: string[] }}
  */
 export function importEdges(graph) {
   const edges = new Map();
+  const uninspected = [];
   for (const file of graph.files) {
     if (!MODULE_SOURCE_RE.test(file)) continue;
     let deferred;
@@ -42,6 +44,7 @@ export function importEdges(graph) {
       ({ deferred } = graph.specifiersOf(file));
       statics = graph.staticDependencies(file).dependencies;
     } catch {
+      uninspected.push(file);
       continue;
     }
     const staticTargets = new Set(statics.filter((target) => target !== file));
@@ -49,7 +52,7 @@ export function importEdges(graph) {
       .filter((target) => target !== file && !staticTargets.has(target)));
     edges.set(file, { static: staticTargets, dynamic: dynamicTargets });
   }
-  return edges;
+  return { edges, uninspected };
 }
 
 function reverseEdges(graph, dynamic) {
@@ -120,14 +123,19 @@ export function formatReachSummary(report, { limit = 3 } = {}) {
   const shown = rows.slice(0, limit)
     .map((row) => `${row.source} ${row.dynamicReach} (static ${row.staticReach})`);
   const more = rows.length > limit ? `, +${rows.length - limit} more` : '';
-  return `dynamic-aware fan-out ${report.selected} suite(s): ${shown.join(', ')}${more}`;
+  const unknown = report.uninspected?.length
+    ? `; reach unknown: ${report.uninspected[0]}${report.uninspected.length > 1 ? ` and ${report.uninspected.length - 1} more` : ''} could not be read`
+    : '';
+  return `dynamic-aware fan-out ${report.selected} suite(s): ${shown.join(', ')}${more}${unknown}`;
 }
 
 /**
  * Reach of `sources` over a module graph. A collection passes its own
  * `graph` (`createModuleGraph`) so the planner tokenizes each file once;
  * otherwise the tracked files of `cwd` (or the given `files`) are read
- * directly, an absent file counting as unreadable.
+ * directly, an absent file counting as unreadable. A module that cannot be
+ * inspected may hide any number of edges, so `selected` then assumes every
+ * test the graph holds and `uninspected` names the modules.
  */
 export function measureRepoImportReach({ cwd, files, sources, isTest = serverRunnerTestPredicate(), graph }) {
   const moduleGraph = graph ?? createModuleGraph(
@@ -137,8 +145,10 @@ export function measureRepoImportReach({ cwd, files, sources, isTest = serverRun
       return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
     },
   );
-  const edges = importEdges(moduleGraph);
-  return importReachReport(edges, sources.filter((source) => edges.has(source)), isTest);
+  const { edges, uninspected } = importEdges(moduleGraph);
+  const report = importReachReport(edges, sources.filter((source) => edges.has(source)), isTest);
+  if (uninspected.length === 0) return report;
+  return { ...report, selected: Math.max(report.selected, moduleGraph.files.filter(isTest).length), uninspected };
 }
 
 function main() {
