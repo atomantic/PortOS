@@ -17,7 +17,7 @@ afterAll(async () => {
 describe.skipIf(!runDb)('app quality persistence', () => {
   it('keeps the newest assessment across duplicate completion and delayed recovery, isolated by app', async () => {
     await ensureSchema();
-    const now = Date.now();
+    const now = Date.parse('2026-09-10T12:00:00Z');
     const write = (offset, score, success = true) => recordAuditQuality({
       task: { metadata: { app: appId } }, taskType: 'better-complexity',
       agentId: `agent-${offset}`, workspacePath: '/test-repo', success,
@@ -32,15 +32,21 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     await write(-2000, 5); // recovery of an older run cannot supersede it
     await write(0, 99, false); // failed run cannot overwrite measured evidence
     // This persistence fixture has no managed checkout or federation peers.
-    const deps = { getPeers: async () => [], getAppById: async id => ({ id }) };
+    const deps = { now, getPeers: async () => [], getAppById: async id => ({ id }) };
     const [app, other] = await enrichAppsWithQuality([{ id: appId }, { id: `${appId}-other` }], deps);
     expect(app.quality).toMatchObject({ score: 65, ratedCategories: 1 });
     const history = await getAppQualityHistory({ id: appId }, 30, deps);
-    expect(history.points.at(-1)).toMatchObject({ score: 65, ratedCategories: 1 });
-    const retained = await query('SELECT report FROM app_quality_measurements WHERE app_id = $1 ORDER BY assessed_at', [appId]);
-    expect(retained.rows.map(row => row.report.score)).toEqual([30, 65]);
+    expect(history.additionalCategories.map(category => category.id)).toContain('better-complexity');
+    expect(history.points.at(-1)).toMatchObject({ score: 65, ratedCategories: 1, categories: {
+      'better-complexity': { score: 65 },
+      'code-simplification': { score: 65 },
+    } });
+    const retained = await query('SELECT category, report FROM app_quality_measurements WHERE app_id = $1 ORDER BY assessed_at', [appId]);
+    expect(retained.rows.map(row => [row.category, row.report.score])).toEqual([
+      ['better-complexity', 30], ['better-complexity', 65],
+    ]);
     expect(other.quality.score).toBeNull();
-    expect(app.quality.categories.find(category => category.id === 'better-complexity')).toMatchObject({ agentId: 'agent--1000', score: 65 });
+    expect(app.quality.categories.find(category => category.id === 'code-simplification')).toMatchObject({ agentId: 'agent--1000', score: 65 });
   });
 
   it('reads old local history and retains conflicting runs tied at the latest timestamp', async () => {
