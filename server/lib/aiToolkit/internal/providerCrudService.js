@@ -104,16 +104,25 @@ export function createProviderCrudService({
       return created;
     },
 
-    async updateProvider(id, updates) {
+    async updateProvider(id, updates, { trackModelRemovals = false } = {}) {
       const data = await loadProviders();
-      if (!data.providers[id]) return null;
+      const previous = data.providers[id];
+      if (!previous) return null;
 
-      if (data.providers[id].executionSourceProviderId && Object.keys(updates).some(key => !['name', 'enabled', 'executionOptions'].includes(key))) {
+      if (previous.executionSourceProviderId && Object.keys(updates).some(key => !['name', 'enabled', 'executionOptions'].includes(key))) {
         const error = new Error('Edit the source provider to change this execution selection route.');
         error.status = 400;
         throw error;
       }
-      const provider = { ...data.providers[id], ...updates, id };
+      if (trackModelRemovals && Array.isArray(updates.models)) {
+        const selected = new Set(updates.models);
+        const previousRemoved = Array.isArray(previous.removedModels) ? previous.removedModels : [];
+        const previousModels = Array.isArray(previous.models) ? previous.models : [];
+        const removedModels = [...new Set([...previousRemoved, ...previousModels])]
+          .filter(model => !selected.has(model));
+        if (removedModels.length > 0 || previousRemoved.length > 0) updates = { ...updates, removedModels };
+      }
+      const provider = { ...previous, ...updates, id };
       normalizeClearedFields(provider);
 
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));

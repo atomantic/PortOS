@@ -327,6 +327,8 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile, throu
   if (through === null) {
     const { reconcileShippedPrompts } = await import('./migrations/shippedPromptHashes.js');
     await reconcileShippedPrompts({ rootDir });
+    const { reconcileShippedProviderModels } = await import('./migrations/shippedProviderModels.js');
+    await reconcileShippedProviderModels({ rootDir });
   }
   return ran;
 }
