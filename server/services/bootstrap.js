@@ -149,37 +149,14 @@ import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.
 import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
+import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
-import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
-import { initCatalogImageAttachHook } from './catalog/catalogImageAttachHook.js';
 import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalog/catalogUniverseFiling.js';
-import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
-import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
-import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
-import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
-import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
-import { initMusicVideoSequenceVideoHook } from './musicVideoSequenceVideoHook.js';
-import { initMusicVideoSequenceTakeHook } from './musicVideoSequenceTakeHook.js';
-import { initMusicVideoCollectionHook } from './musicVideoCollectionHook.js';
-import { initMusicVideoRenderSpendHook } from './musicVideoRenderSpendHook.js';
-import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
-import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
-import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
-import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
-import { initSpriteReferenceImageHook } from './spriteReferenceImageHook.js';
-import { initMoodBoardItemRenderHook } from './moodBoardItemRenderHook.js';
-import { initStoryboardPanelImageHook } from './storyboardPanelImageHook.js';
-import { initDeckRenderHook } from './deckRenderHook.js';
-import { initCreativeDirectorSceneImageHook } from './creativeDirectorSceneImageHook.js';
-import { initCreativeDirectorRenderFailureHook } from './creativeDirector/renderFailureHook.js';
-import { initComicPagesFilenameHook } from './pipeline/comicPagesFilenameHook.js';
-import { initStoryboardsFilenameHook } from './pipeline/storyboardsFilenameHook.js';
-import { initSeasonCoverFilenameHook } from './pipeline/seasonCoverFilenameHook.js';
 import { universeStore } from './universeBuilder.js';
 import { seriesStore } from './pipeline/series.js';
 import { issueStore } from './pipeline/issues.js';
@@ -728,96 +705,13 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   restoreLoops().catch(err => logBootstrapFailure('❌ Loop restore failed', err));
 };
 
-/**
- * Media-job-queue-dependent completion hooks. Every one of these files a
- * finished render onto its owning record even if the requesting client
- * unmounted mid-render, so they must be wired AFTER the queue has loaded its
- * persisted jobs (otherwise they'd miss `completed` events for reloaded jobs).
- */
+/** Wire startup observers once the media queue has restored its persisted jobs. */
 const initMediaJobDependentHooks = () => {
-  // Universe Builder needs the media job queue running before it can listen
-  // for `completed` events — so initialize the hook here.
-  initUniverseBuilderCollectionHook();
-  // Sprite local-render hook (#4876) — stages a finished MiniMax H3 clip into
-  // its animation run and files the outcome, for renders that outlive the
-  // request that started them. Its boot pass also reconciles jobs that settled
-  // while the server was down, which is the only thing that can rescue a
-  // multi-hour render interrupted by a restart.
+  // These operate on the restored archive, catalog events and generator quota
+  // events respectively. None can wait for a tagged media-queue completion.
   initSpriteLocalAnimationHook();
-  // Catalog image-attach hook — durably files a queued render onto its target
-  // ingredient on completion, even if the editor page unmounted mid-render
-  // (#1359).
-  initCatalogImageAttachHook();
-  // Files catalog record images into their universes' collections as they
-  // attach or the record joins a universe/story. It only listens.
   initCatalogUniverseFiling();
-  // Writers-Room scene-image hook — durably files a queued storyboard render
-  // onto its analysis snapshot + work collection on completion (#1363).
-  initWritersRoomSceneImageHook();
-  // FableLoom scene-image hook — durably files a queued scene render onto its
-  // loom episode's node on completion, even if the editor unmounted mid-render.
-  initFableLoomSceneImageHook();
-  // FableLoom scene-video hook — durably files a queued local clip onto its
-  // loom episode's node on completion, even if the editor unmounted.
-  initFableLoomSceneVideoHook();
-  // Music Video scene-image hook — durably files a queued reference-frame
-  // render onto its project scene's `referenceImageId` on completion, even if
-  // the director board unmounted mid-render (#1760 Phase 1b).
-  initMusicVideoSceneImageHook();
-  // Music Video scene-video hook — durably files a queued i2v scene clip onto
-  // its project scene's `videoHistoryId` on completion (#1760 Phase 1).
-  initMusicVideoSceneVideoHook();
-  // Music Video sequence hook (#14241) — cuts one sequence clip onto its scenes' in/out points.
-  initMusicVideoSequenceVideoHook();
-  // Music Video sequence-take hook (#16128) — files one multi-shot take on each covered shot with its own in-point.
-  initMusicVideoSequenceTakeHook();
-  // Music Video collection hook — files every render that names a music video
-  // (a shot's, Cast & Sets, or a tagged Image/Video Gen request) into its collection.
-  initMusicVideoCollectionHook();
-  // Music Video render spend hook (#16506) — records every paid render a project's jobs complete.
-  initMusicVideoRenderSpendHook();
-  // Music Video Cast & Sets hook — files a queued check-in reference image
-  // (character sheet, looks, set plates, in-set tests) onto its stage key.
-  // It only listens: nothing is generated at boot.
-  initMusicVideoCastSetsImageHook();
-  // Music Video cover art hook — composes the release cover from a cover
-  // source image the director asked for. It only listens.
-  initMusicVideoCoverArtImageHook();
-  // Creative Director music-bed hook — durably files a queued first-pass
-  // audio render onto its project's `musicBed` field on completion, even if
-  // the requesting client unmounted mid-render (#1928).
-  initCreativeDirectorMusicBedHook();
-  // Music Studio audio jobs attach to their track after completion so the
-  // library remains correct across a client remount or navigation.
-  initMusicStudioHook();
-  // Image-gen quota observation — the cloud image backends expose no quota API,
-  // so the Usage page's Image Gen card is built from renders we watched succeed
-  // or get refused. One bus subscriber, never per-provider edits.
   initImageGenQuotaHook();
-  // Sprite reference-candidate hook — copies a completed reference/anchor
-  // render into the sprite record's reference/candidates/ with a generation
-  // sidecar (#2896).
-  initSpriteReferenceImageHook();
-  // Mood board note render hook — turns a rendered text note into its image
-  // item (#10531). It only listens.
-  initMoodBoardItemRenderHook();
-  // Storyboard panel frames — each finished frame becomes a panel take.
-  initStoryboardPanelImageHook();
-  // Deck card hook — files a completed card render onto its deck card row.
-  initDeckRenderHook();
-  // Creative Director scene-frame hook — durably files a queued first-pass
-  // reference-frame render onto its project scene's `sourceImageFile` on
-  // completion, even if no client is watching (#1867).
-  initCreativeDirectorSceneImageHook();
-  // Creative Director render failures are actionable code defects; queue one
-  // deduplicated internal repair task for every tagged CD media lane.
-  initCreativeDirectorRenderFailureHook();
-  // Pipeline filename hooks — stamp `filename` onto stage records on
-  // media-job completion so the UI can still render them after the
-  // 24h media-job archive TTL elapses.
-  initComicPagesFilenameHook();
-  initStoryboardsFilenameHook();
-  initSeasonCoverFilenameHook();
   // Best-effort pre-materialize the MortalLoom iCloud store so the
   // dashboard's proactive-alerts poll (and other readers) don't trigger
   // on-demand downloads that surface as EAGAIN. `brctl download` only
@@ -1036,7 +930,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // can race with ensureDir). A failure here is fatal: the queue owns
     // persistence + SSE + temp-file cleanup, and accepting requests with a
     // half-init queue silently corrupts state.
-    initMediaJobQueue,
+    initMediaJobQueue: options => initMediaJobQueue({ ...options, prepareTerminalHooks: createMediaJobHookLoader() }),
     // LoRA run records reconcile against the live queue (interrupted runs →
     // failed) and mirror queue-side cancels. Own step so the smoke boot can
     // no-op it: the reconcile needs a database the hermetic root does not have.

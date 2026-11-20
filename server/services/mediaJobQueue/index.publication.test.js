@@ -209,27 +209,30 @@ describe('backup snapshot admission for media completion', () => {
     const jobId = '00000000-0000-4000-8000-000000000092';
     const result = { filename: `${jobId}.mp4` };
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{
-      id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic' },
+      id: jobId, kind: 'video', status: 'running', params: { prompt: 'synthetic', musicVideoProjectId: 'project-example' },
       durabilityPending: { status: 'completed', result, completedAt: new Date().toISOString() },
     }] }));
     mediaJobQueue.mediaJobEvents.off('completed', onCompleted);
     const completed = vi.fn();
     const { runPostRouteSequence } = await import('../bootstrapSequence.js');
+    const { createMediaJobHookLoader } = await import('./hookRegistry.js');
+    const loadHook = vi.fn(() => {
+      mediaJobQueue.mediaJobEvents.on('completed', onCompleted);
+      mediaJobQueue.mediaJobEvents.on('completed', completed);
+    });
+    const prepareTerminalHooks = createMediaJobHookLoader([[job => job.params.musicVideoProjectId, loadHook]]);
     const noWork = async () => {};
     const onFatal = vi.fn();
     let beforeHooks;
     await runPostRouteSequence({
       startBackgroundServices: noWork, ensureSelf: noWork, initSyncLog: noWork,
       recoverStuckClassifications: noWork, recoverInterruptedRepoClones: noWork,
-      initMediaJobQueue: mediaJobQueue.initMediaJobQueue,
+      initMediaJobQueue: options => mediaJobQueue.initMediaJobQueue({ ...options, prepareTerminalHooks }),
       initLoraTraining: async () => {
         await mediaJobQueue.flushMediaJobQueue();
         beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
       },
-      initMediaJobDependentHooks: () => {
-        mediaJobQueue.mediaJobEvents.on('completed', onCompleted);
-        mediaJobQueue.mediaJobEvents.on('completed', completed);
-      },
+      initMediaJobDependentHooks: () => expect(loadHook).not.toHaveBeenCalled(),
       resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
       initSharing: noWork, recoverCreativeDirectorProjects: noWork,
       runDatabasePhase: noWork, loadSeriesCoverBackfill: async () => noWork,
@@ -239,6 +242,7 @@ describe('backup snapshot admission for media completion', () => {
     await waitFor(() => rows.has(jobId));
     expect(onFatal).not.toHaveBeenCalled();
     expect(beforeHooks).toMatchObject({ job: { status: 'running', durabilityPending: { result } }, rowCount: 0 });
+    expect(loadHook).toHaveBeenCalledTimes(1);
     expect(completed).toHaveBeenCalledTimes(1);
     expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'completed', result });
     expect(stubs.generateVideo).not.toHaveBeenCalled();
