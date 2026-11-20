@@ -74,6 +74,23 @@ describe('Autofixer daemon repair input boundary', () => {
     expect(harness.startUi.mock.invocationCallOrder[0]).toBeLessThan(harness.list.mock.invocationCallOrder[0]);
   });
 
+  it('keeps scanning and retries the dashboard after a listener failure', async () => {
+    harness.startUi.mockRejectedValueOnce(Object.assign(new Error('Example port in use'), { code: 'EADDRINUSE' }));
+    await start();
+    expect(errorLog.mock.calls.flat().join('\n')).toContain('Dashboard startup failed');
+    expect(harness.list).toHaveBeenCalledOnce();
+    await nextCycle();
+    expect(harness.startUi).toHaveBeenCalledTimes(2);
+    expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+
+  it('never tries to repair the combined watchdog itself', async () => {
+    harness.apps.mockResolvedValue([{ pm2ProcessNames: ['portos-autofixer'] }]);
+    harness.list.mockResolvedValue([{ name: 'portos-autofixer', pm2_env: { status: 'errored' } }]);
+    await start();
+    expect(harness.provider).not.toHaveBeenCalled();
+  });
+
   it.each(['--err', '--out'])('refuses repair after failed %s collection and recovers next cycle', async stream => {
     harness.pm2.mockImplementation(async args => {
       if (args.includes(stream)) throw new Error('private command output and path');

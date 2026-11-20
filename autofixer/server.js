@@ -472,7 +472,9 @@ async function checkAndFixProcesses() {
 
   const crashedProcesses = pm2List.filter(proc => {
     const status = proc.pm2_env?.status;
-    return status === 'errored' && monitoredProcesses.includes(proc.name);
+    // The combined process is the watchdog. It cannot repair itself, and
+    // awaiting its own PM2 restart would block the shutdown drain.
+    return proc.name !== 'portos-autofixer' && status === 'errored' && monitoredProcesses.includes(proc.name);
   });
 
   if (crashedProcesses.length === 0) {
@@ -518,6 +520,18 @@ function scheduleNextCheck() {
 // loop runs outside a request lifecycle and must keep retrying autonomously.
 async function runCheckCycle() {
   try {
+    if (!stopUi) {
+      // Keep monitoring when the dashboard port is busy. The next cycle also
+      // retries the listener, so resolving the port conflict needs no restart.
+      stopUi = await startAutofixerUi(stagedFixes).catch(error => {
+        console.error(`❌ [Autofixer] Dashboard startup failed: ${error.message}`);
+        return null;
+      });
+      if (shuttingDown) {
+        stopUi?.();
+        return;
+      }
+    }
     await checkAndFixProcesses();
   } catch (error) {
     if (!shuttingDown) console.error(`❌ [Autofixer] Process check failed: ${error?.message || String(error)}`);
@@ -539,11 +553,6 @@ async function main() {
   });
 
   if (shuttingDown) return;
-  stopUi = await startAutofixerUi(stagedFixes);
-  if (shuttingDown) {
-    stopUi();
-    return;
-  }
   // Run immediately, then wait a full interval after each pass completes.
   await runCheckCycle();
 }
