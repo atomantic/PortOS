@@ -168,7 +168,7 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
     // First arg is the script path
-    expect(args[0]).toMatch(/scripts[/\\]flux2_macos\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]flux2_macos\.py$/);
     // Required CLI fields land in the args list (order isn't important here,
     // but we want presence + the exact repo/tokenizer values).
     expect(args).toContain('--quantization');
@@ -621,7 +621,7 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
       },
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
-    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]z_image_turbo\.py$/);
     expect(args).toContain('--repo');
     expect(args[args.indexOf('--repo') + 1]).toBe('Tongyi-MAI/Z-Image-Turbo');
     expect(args).toContain('--prompt');
@@ -710,7 +710,7 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
       },
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
-    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]z_image_turbo\.py$/);
     expect(args).toContain('--pipeline-class');
     expect(args[args.indexOf('--pipeline-class') + 1]).toBe('ErnieImagePipeline');
     expect(args).toContain('--use-pe');
