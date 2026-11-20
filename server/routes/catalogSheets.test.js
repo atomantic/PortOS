@@ -522,6 +522,25 @@ describe('catalog sheet routes', () => {
     expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
   });
 
+  // Catches the single-character standard sheet missing from the Sheets picker
+  // or failing to render through a linked universe's canon pointer.
+  it('renders the single-character standard sheet for a universe-linked character', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
+    mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1', role: 'owner' }]);
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
+    });
+    const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+    expect(listed.body.variants.find((v) => v.id === 'single')).toMatchObject({ label: 'Standard (one character)' });
+    const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({ variant: 'single' });
+    expect(preview.body.preview.sentPrompt).toContain('STANDARD CHARACTER REFERENCE SHEET');
+    expect(preview.body.preview.sentPrompt).toContain('it is the only face on the page');
+    const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({ variant: 'single' });
+    expect(res.body).toMatchObject({ delegatedTo: 'universe', variant: 'single' });
+    expect(queuedParams().prompt).toBe(preview.body.preview.sentPrompt);
+  });
+
   // Catches a photoreal universe starting its cast on the illustrated sheet.
   it('lists and defaults to the photographic sheet for a character in a photoreal universe', async () => {
     mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
@@ -532,7 +551,7 @@ describe('catalog sheet routes', () => {
       characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
     });
     const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'face', 'blueprint', 'comparison']);
+    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'single', 'face', 'blueprint', 'comparison']);
     const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
     expect(preview.body.preview.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
     expect(preview.body.preview.sentPrompt).toContain('Soft window light');
@@ -543,7 +562,7 @@ describe('catalog sheet routes', () => {
 
     mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', characters: [] });
     const plain = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'face', 'blueprint', 'comparison']);
+    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'single', 'face', 'blueprint', 'comparison']);
   });
 
   describe('look renders', () => {

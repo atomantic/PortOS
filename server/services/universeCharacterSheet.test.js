@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, listSheetVariants } from './universeCharacterSheet.js';
+import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, STANDARD_SHEET_VARIANT_ID, getSheetVariantBuilder, listSheetVariants } from './universeCharacterSheet.js';
+import { buildCharacterComparisonSheetPrompt } from './catalog/catalogComparisonSheet.js';
+import { HEADLESS_FRONT_VIEW } from '../lib/characterSheetLayout.js';
 
 const baseUniverse = {
   id: 'u-123',
@@ -162,7 +164,7 @@ describe('universeCharacterSheet — variant catalog + prototype-pollution guard
   it('listSheetVariants exposes the registered variants', () => {
     const variants = listSheetVariants();
     const ids = variants.map((v) => v.id);
-    expect(ids).toEqual(['standard', 'photographic', 'face', 'blueprint']);
+    expect(ids).toEqual(['standard', 'photographic', 'single', 'face', 'blueprint']);
     for (const v of variants) {
       expect(v).toHaveProperty('label');
       expect(v).toHaveProperty('description');
@@ -178,5 +180,35 @@ describe('universeCharacterSheet — variant catalog + prototype-pollution guard
         renderCharacterReferenceSheet('u-1', 'c-1', { variant }),
       ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
     }
+  });
+});
+
+describe('universeCharacterSheet — single-character standard sheet', () => {
+  const build = getSheetVariantBuilder(STANDARD_SHEET_VARIANT_ID);
+  const person = { name: 'Ana', age: '40', stats: [{ label: 'Height', value: '5 ft 6 in' }] };
+
+  // The standard is one half of a comparison sheet: a regression that lets the
+  // two layouts drift apart gives one person two different reference standards.
+  it('draws the same headless front view as each half of a comparison sheet', () => {
+    const single = build({}, person).prompt;
+    expect(single).toContain(HEADLESS_FRONT_VIEW);
+    expect(buildCharacterComparisonSheetPrompt({}, person, { name: 'Ben' }).prompt).toContain(HEADLESS_FRONT_VIEW);
+  });
+
+  it('keeps one face, a height ruler worked out in code, and no default negatives', () => {
+    const built = build({}, person);
+    expect(built.prompt).toMatch(/it is the only face on the page/);
+    expect(built.prompt).toMatch(/One face only: no extra angles, no expression rows/);
+    expect(built.prompt).toContain('The ruler runs from 0 at the floor line to 7 ft');
+    expect(built.prompt).toContain("Ana's head top sits at 5 ft 6 in, 5.5 of the 7 intervals up from the floor");
+    expect(built.prompt).toContain('"Ana 5 ft 6 in"');
+    expect(built.negativePrompt).toBe('');
+    expect(built.width / built.height).toBe(1.5);
+  });
+
+  it('draws no height mark it cannot measure', () => {
+    const { prompt } = build({}, { name: 'Bo' });
+    expect(prompt).not.toMatch(/Height mark|height caption|head top sits/);
+    expect(prompt).toMatch(/Draw both standing figures against this ruler/);
   });
 });

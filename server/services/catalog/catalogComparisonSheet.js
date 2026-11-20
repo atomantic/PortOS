@@ -33,6 +33,7 @@ import { CATALOG_COMPARISON_VARIANT_ID } from '../../lib/catalog/catalogTypes.js
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { DEFAULT_PHOTOGRAPHIC_SHEET_STYLE, extractCharacterPromptCommon } from '../universeCharacterSheet.js';
 import { promptAddition } from '../../lib/modelInput.js';
+import { BACK_VIEW, FACE_PORTRAIT_FRAMING, HEADLESS_FRONT_VIEW, rulerScaleLine, sheetPersonBlock } from '../../lib/characterSheetLayout.js';
 
 export const COMPARISON_SHEET_VARIANT_ID = CATALOG_COMPARISON_VARIANT_ID;
 export const COMPARISON_SHEET_ROLE = `sheet:${COMPARISON_SHEET_VARIANT_ID}`;
@@ -62,19 +63,7 @@ function imageMapLine(left, right, leftCount, rightCount) {
   return `Reference images: ${parts.join('; ')}. Keep each person's face, hair, skin, build and clothes exactly as their own images show them, and never blend the two people.`;
 }
 
-function personBlock(side, person) {
-  const { name, age, physical, visualIdentity, special, wardrobeLine, propsLine } = person.common;
-  return [
-    `${side} HALF: ${name}.`,
-    age ? `Age: ${age}, and they look exactly that age.` : '',
-    person.height ? `Height: ${person.height.text}.` : '',
-    physical ? `Physical description: ${physical}` : '',
-    visualIdentity ? `Facial identity: ${visualIdentity}` : '',
-    special ? `Distinctive traits: ${special}` : '',
-    wardrobeLine ? `Wardrobe, identical in every view: ${wardrobeLine}.` : '',
-    propsLine ? `Carried or worn where natural: ${propsLine}.` : '',
-  ].filter(Boolean).join(' ');
-}
+const personBlock = (side, person) => sheetPersonBlock(`${side} HALF: ${person.common.name}.`, person);
 
 // How the two heights relate, stated in words the model can draw from.
 function heightRelationLine(left, right) {
@@ -84,35 +73,6 @@ function heightRelationLine(left, right) {
   const [taller, shorter] = left.height.cm > right.height.cm ? [left, right] : [right, left];
   const inches = Math.round(diff / 2.54);
   return `${taller.common.name} is ${diff} cm (about ${inches} in) taller than ${shorter.common.name}: the top of ${shorter.common.name}'s head reaches ${Math.round((shorter.height.cm / taller.height.cm) * 100)}% of ${taller.common.name}'s height. Draw that difference exactly; both stand on the same floor line.`;
-}
-
-const IMPERIAL_HEIGHT = /\d\s*(?:ft|feet|foot|'|’)|\d\s*(?:in|inch|inches)\b/i;
-const feetAndInches = (inches) => `${Math.floor(inches / 12)} ft${inches % 12 ? ` ${inches % 12} in` : ''}`;
-const intervals = (value) => String(Math.round(value * 10) / 10);
-
-// The rulers' range and marks, worked out in code: an image model asked for
-// "evenly spaced ticks reaching a little above" draws uneven marks that end
-// level with the taller head, then stretches the figures past them. A ruler
-// that runs well past the taller person, cut into whole equal intervals, plus
-// where each head falls on it, gives the figures a fixed scale to be drawn to.
-// Units follow the height captions: feet when any height is stated in feet or
-// inches, else centimetres.
-function rulerScaleLine(people) {
-  const measured = people.filter((person) => Number.isFinite(person.height?.cm));
-  if (!measured.length) return 'Every ruler interval is the same length, numbered in the units of the height captions, and the ruler runs well above the taller person. Draw every standing figure against these rulers.';
-  const tallest = Math.max(...measured.map((person) => person.height.cm));
-  if (people.some((person) => IMPERIAL_HEIGHT.test(person.height?.text || ''))) {
-    const top = Math.ceil((tallest / 2.54 + 6) / 12);
-    const marks = Array.from({ length: top + 1 }, (_, foot) => (foot ? `${foot} ft` : '0')).join(', ');
-    const heads = measured.map((person) => {
-      const inches = Math.round(person.height.cm / 2.54);
-      return `${person.common.name}'s head top sits at ${feetAndInches(inches)}, ${intervals(inches / 12)} of the ${top} intervals up from the floor`;
-    });
-    return `Each ruler runs from 0 at the floor line to ${top} ft, well above the taller person's head, and is divided into ${top} one-foot intervals of exactly equal length, the first (0 to 1 ft) the same as every other. A long tick and a small number mark every foot (${marks}), and one shorter tick marks each half foot exactly midway between them; no other ticks. The figures are drawn to this scale: ${heads.join('; ')}.`;
-  }
-  const top = Math.ceil((tallest + 15) / 50) * 50;
-  const heads = measured.map((person) => `${person.common.name}'s head top sits at ${Math.round(person.height.cm)} cm, ${intervals(person.height.cm / 50)} of the ${top / 50} intervals up from the floor`);
-  return `Each ruler runs from 0 at the floor line to ${top} cm, well above the taller person's head, and is divided into ${top / 50} intervals of 50 cm, all exactly equal in length, the first (0 to 50 cm) the same as every other. A long tick and a small number mark every 50 cm (${Array.from({ length: top / 50 + 1 }, (_, i) => (i ? `${i * 50} cm` : '0')).join(', ')}), and a shorter tick marks every 10 cm between them; no other ticks. The figures are drawn to this scale: ${heads.join('; ')}.`;
 }
 
 const describe = (character) => {
@@ -139,10 +99,10 @@ export function buildCharacterComparisonSheetPrompt(universe, leftCharacter, rig
     universeAestheticLine(universe || {}) || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
     imageMapLine(L, R, leftCount, rightCount),
     `Layout: the page is exactly twice as wide as it is tall and is split into two equal halves by an imaginary vertical line down the exact centre. The LEFT half belongs only to ${L} and the RIGHT half only to ${R}. The right half is the mirror image of the left half's layout. Nothing crosses or touches the centre line: leave an empty strip of plain backdrop along it, so the page can be cut in two and each half stands alone.`,
-    `Each half is a tight grid that uses the whole page with no unused margins. From the outer edge of each half toward the centre, in this order: (1) a portrait column that runs the full page height: FACE, one large head-and-shoulders portrait filling everything above the teeth strip, as big as the column allows, showing the whole head with a little space above the hair, the chin, the full neck and the collar, relaxed natural expression, looking at the camera; and TEETH, a short wide close-up strip of the same person's mouth in a natural, unposed laugh with ordinary teeth, flush with the bottom edge directly under the face; (2) the ruler (below); (3) FRONT, a full-body standing view from the front with the head absent, the figure ending cleanly at the neck inside the collar like a headless display mannequin, with no face and no hair; (4) BACK, a full-body standing view from behind, including the back of the head and hair. So the two BACK views stand nearest the centre line, one on each side of it.`,
+    `Each half is a tight grid that uses the whole page with no unused margins. From the outer edge of each half toward the centre, in this order: (1) a portrait column that runs the full page height: FACE, one large head-and-shoulders portrait filling everything above the teeth strip, as big as the column allows, ${FACE_PORTRAIT_FRAMING}; and TEETH, a short wide close-up strip of the same person's mouth in a natural, unposed laugh with ordinary teeth, flush with the bottom edge directly under the face; (2) the ruler (below); (3) ${HEADLESS_FRONT_VIEW}; (4) ${BACK_VIEW}. So the two BACK views stand nearest the centre line, one on each side of it.`,
     `The standing figures and rulers also use the full page height: one shared floor line near the bottom edge, leaving only a thin strip under the feet for their captions, and the tops of the rulers near the top edge, so the taller person's head sits a little below them with room above for the height caption. All four standing figures are drawn to one scale, feet on that floor line, arms relaxed at the sides, whole body visible from the top of the hair to the soles. ${heightRelationLine(left, right)}`.trim(),
     `Height marks: above the head of each BACK view, in the clear space over the hair, a short horizontal line level with the top of the head and with that person's height on the ruler, with a small caption over it, "${heightLabel(left)}" over ${L} and "${heightLabel(right)}" over ${R}. The line and caption never touch the hair.`,
-    `Rulers: in each half one thin vertical ruler stands in clear backdrop between the portrait column and the FRONT view, on the inner side of the portraits and right beside the standing figures, so it reads as measuring the bodies and never the face. The right half's ruler mirrors the left half's at the same distance from the centre line. Each ruler touches nothing and rises from the shared floor line with zero at the floor. ${rulerScaleLine([left, right])} There is no other ruler, scale bar or grid, and nothing at all along the centre line.`,
+    `Rulers: in each half one thin vertical ruler stands in clear backdrop between the portrait column and the FRONT view, on the inner side of the portraits and right beside the standing figures, so it reads as measuring the bodies and never the face. The right half's ruler mirrors the left half's at the same distance from the centre line. Each ruler touches nothing and rises from the shared floor line with zero at the floor. ${rulerScaleLine([left, right].map((person) => ({ name: person.common.name, height: person.height })))} There is no other ruler, scale bar or grid, and nothing at all along the centre line.`,
     `Captions, small plain sans-serif, never covering a person: "${L}" in the top outer corner of the left face panel and "${R}" in the top outer corner of the right face panel; under the feet of each standing view "${L} FRONT", "${L} BACK", "${R} BACK", "${R} FRONT".`,
     personBlock('LEFT', left),
     personBlock('RIGHT', right),

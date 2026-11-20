@@ -27,6 +27,7 @@ import { catalogFamilyRenderContext, familyImagesAddition } from './catalog/cata
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { characterHeightStat } from '../lib/catalog/catalogAppearance.js';
 import { formatHeight, resolveHeight } from '../lib/characterHeight.js';
+import { BACK_VIEW, FACE_PORTRAIT_FRAMING, HEADLESS_FRONT_VIEW, rulerScaleLine, sheetPersonBlock } from '../lib/characterSheetLayout.js';
 import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
@@ -43,6 +44,10 @@ import {
 import {
   claimPendingSheetSlot, releasePendingSheetSlot,
 } from './universeCharacterSheetSlot.js';
+
+// The single-character standard sheet. Not `standard`: that id is the legacy
+// illustrated turnaround's (LEGACY_SHEET_VARIANT_ID), kept for stored pointers.
+export const STANDARD_SHEET_VARIANT_ID = 'single';
 
 // Local FLUX backend: 2048×1536 keeps panel labels legible while still
 // rendering in a single pass on Apple Silicon.
@@ -402,6 +407,48 @@ function buildCharacterFaceSheetPrompt(universe, character) {
   };
 }
 
+// Standard sheet size: 3:2 landscape gives the full-height face portrait and
+// two full-body figures room without the empty margins a 4:3 page leaves.
+const STANDARD_SHEET_WIDTH = 1536;
+const STANDARD_SHEET_HEIGHT = 1024;
+
+/**
+ * Standard sheet: one person drawn the way each half of a comparison sheet is
+ * (catalogComparisonSheet.js), for a model that conditions on a single
+ * character. One large face is the only face on the page, so a video or image
+ * model never blends several renderings of the head; the headless FRONT and
+ * the BACK carry build, wardrobe and height against a ruler.
+ */
+function buildCharacterStandardSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterStandardSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+  const common = extractCharacterPromptCommon(character);
+  const { name } = common;
+  const height = resolveHeight(characterHeightStat(character), common.age);
+  const promptParts = [
+    `STANDARD CHARACTER REFERENCE SHEET: one wide studio reference page for ONE real person, ${name}, photographed against one plain, even mid-grey seamless backdrop with no gradient, panels of colour or boxes behind the figures.`,
+    universeAestheticLine(universe) || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+    `Layout: a tight grid that uses the whole page with no unused margins. From the left edge to the right, in this order: (1) FACE, one large head-and-shoulders portrait filling the full page height, as big as its column allows, ${FACE_PORTRAIT_FRAMING}; it is the only face on the page; (2) the ruler (below); (3) ${HEADLESS_FRONT_VIEW}; (4) ${BACK_VIEW}.`,
+    `The standing figures and the ruler also use the full page height: one shared floor line near the bottom edge, leaving only a thin strip under the feet for captions, and the top of the ruler near the top edge, so the head sits a little below it${height ? ' with room above for the height caption' : ''}. Both standing figures are drawn to one scale, feet on that floor line, arms relaxed at the sides, whole body visible from the top of the hair to the soles. Both views are dead-on: shoulders and hips square to the lens and level, weight even across both feet; the BACK view from directly behind with no glance back.`,
+    height ? `Height mark: above the head of the BACK view, in the clear space over the hair, a short horizontal line level with the top of the head and with ${name}'s height on the ruler, with a small caption over it, "${name} ${height.text}". The line and caption never touch the hair.` : '',
+    `Ruler: one thin vertical ruler stands in clear backdrop between the FACE portrait and the FRONT view, right beside the standing figures, so it reads as measuring the bodies and never the face. It touches nothing and rises from the floor line with zero at the floor. ${rulerScaleLine([{ name, height }])} There is no other ruler, scale bar or grid.`,
+    `Captions, small plain sans-serif, never covering the person: "${name}" in the top outer corner of the face panel; "FRONT" and "BACK" under the feet of the standing views.`,
+    sheetPersonBlock(`${name}.`, { common, height }),
+    height ? 'Before finishing, check the page against the ruler: the head top level with its own height on the ruler and its height line, never above it, and every ruler interval the same length.' : '',
+    'The same lighting, exposure, colour and camera height across the whole page. Hands empty unless a carried item is listed above. One face only: no extra angles, no expression rows, no other people. No film borders, light leaks, scratches or frame edges.',
+  ].filter(Boolean);
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: '',
+    width: STANDARD_SHEET_WIDTH,
+    height: STANDARD_SHEET_HEIGHT,
+    modelId: null,
+  };
+}
+
 // Per-generation filename so re-renders don't trample prior versions; the
 // "live" sheet pointer on the character always names the newest, but older
 // files stay on disk for rollback. The variant token in the middle keeps
@@ -430,6 +477,15 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Photographic turnaround',
     description: 'Studio photographs of a real person on a plain backdrop — front/3/4/side/back full-body views and a row of expression portraits. No default negatives. For photoreal universes.',
     collectionCategory: 'character-photo-sheet',
+    defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+  }),
+  [STANDARD_SHEET_VARIANT_ID]: Object.freeze({
+    id: STANDARD_SHEET_VARIANT_ID,
+    build: buildCharacterStandardSheetPrompt,
+    filenameToken: 'single',
+    label: 'Standard (one character)',
+    description: 'The comparison-sheet standard for one person: one large face (the only face on the sheet), a headless front view and a back view against a height ruler. The reference to give image and video models.',
+    collectionCategory: 'character-standard-sheet',
     defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
   }),
   face: Object.freeze({
