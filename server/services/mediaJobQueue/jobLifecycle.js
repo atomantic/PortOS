@@ -1,6 +1,6 @@
 import { isRemoteMediaJob } from './remoteMediaJob.js';
 
-// Public status remains running while the terminal sink drains progress.
+// Public status remains running until the terminal outcome is durable.
 // The synchronous claim is transient: neither persistence nor public job
 // projections include it. Cancellation intent alone does not claim an outcome.
 const hasUnclaimedRunningOutcome = (job) => job.status === 'running' && !job.terminating;

@@ -18,6 +18,7 @@ import {
   resolveI2vReferenceStrength, runtimeSupportsI2vReferenceMode,
 } from '../../lib/videoReferenceModes';
 import { useSocketResource } from '../../hooks/useSocketResource';
+import socket from '../../services/socket';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatCount, formatTimeOfDaySeconds } from '../../utils/formatters';
 import { getVideoGenStatus, getVideoHistoryItem, getTopazJobStatus, cancelTopazRemoteJob, recoverTopazJob } from '../../services/apiImageVideo.js';
@@ -156,13 +157,15 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '',
   const clearButtonRef = useRef(null);
   const restoreClearFocus = useRef(false);
   const { data, loading, error, refetch: fetchJobs, updateData } = useSocketResource(async () => {
+    const snapshotRequestedAt = performance.now();
     const [jobs, holds] = await Promise.all([
       listQueueMediaJobs({ ...(kind ? { kind } : {}), limit: recentLimit }),
       !kind || kind === 'video' ? listMediaVideoHolds() : [],
     ]);
     if (!Array.isArray(jobs) || !Array.isArray(holds)) throw new Error('Invalid queue snapshot');
-    return { jobs, holds };
+    return { jobs, holds, snapshotRequestedAt };
   }, {
+    namespace: 'media-jobs',
     events: QUEUE_EVENTS,
     resourceKey: JSON.stringify([kind, recentLimit]),
     matchesEvent: () => {
@@ -176,9 +179,11 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '',
   const hasSnapshot = data !== null;
   const loadError = !!error;
   const setJobs = (updater) => updateData(previous => ({
+    ...previous,
     jobs: updater(previous?.jobs ?? []), holds: previous?.holds ?? [],
   }));
   const setHolds = (updater) => updateData(previous => ({
+    ...previous,
     jobs: previous?.jobs ?? [], holds: updater(previous?.holds ?? []),
   }));
 
@@ -419,13 +424,13 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '',
                     <span className="text-[11px] text-port-text-muted">{formatLaneCounts(lane.jobs)}</span>
                   </div>
                   {lane.jobs.map((j) => (
-                    <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />
+                    <JobRow key={j.id} job={j} snapshotRequestedAt={data?.snapshotRequestedAt} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />
                   ))}
                 </section>
               ))}
             </div>
           ) : (
-            live.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />)
+            live.map((j) => <JobRow key={j.id} job={j} snapshotRequestedAt={data?.snapshotRequestedAt} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />)
           )}
 
           {displayedRecent.length > 0 && (
@@ -584,7 +589,38 @@ function TrainingJobDetail({ runId }) {
   );
 }
 
-function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
+function RunningJobProgress({ job, snapshotRequestedAt }) {
+  const { id, startedAt } = job;
+  const [frame, setFrame] = useState(null);
+  useEffect(() => {
+    const onProgress = (update) => {
+      if (update.id === id && update.startedAt === startedAt) {
+        setFrame({ ...update, receivedAt: performance.now() });
+      }
+    };
+    socket.on('media-jobs:progress', onProgress);
+    return () => socket.off('media-jobs:progress', onProgress);
+  }, [id, startedAt]);
+
+  // A frame received during a snapshot request may be newer than that response.
+  const latest = frame?.id === id && frame.startedAt === startedAt && frame.receivedAt >= snapshotRequestedAt ? frame : job;
+  const progressPct = Number.isFinite(latest.progress)
+    ? Math.max(0, Math.min(100, Math.round(latest.progress * 100)))
+    : 0;
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex items-center justify-between gap-2 text-xs text-port-text-muted">
+        <span className="truncate" title={latest.statusMsg || undefined}>{latest.statusMsg || 'Running'}</span>
+        <span className="font-mono shrink-0">{progressPct}%</span>
+      </div>
+      <div className="h-1.5 bg-port-border rounded overflow-hidden">
+        <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function JobRow({ job, snapshotRequestedAt, onCancel, onRetry, onRunNow, onDelete }) {
   const Icon = KIND_ICON[job.kind] || Film;
   const isTopaz = job.kind === 'video-upscale' && job.params?.mode === 'topaz';
   const canCancel = job.status === 'queued' || job.status === 'running';
@@ -595,11 +631,6 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCloud = job.status === 'queued' && job.kind === 'image' && isCloudCliMode(job.params?.mode);
   const canRunNow = isQueuedCloud && typeof onRunNow === 'function';
-  // Number.isFinite (not typeof === 'number') so a NaN from a hand-edited
-  // media-jobs.json can't render as `NaN%` / `width: NaN%`.
-  const progressPct = Number.isFinite(job.progress)
-    ? Math.max(0, Math.min(100, Math.round(job.progress * 100)))
-    : 0;
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
   const [topazStatus, setTopazStatus] = useState(null);
@@ -754,17 +785,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
       {job.status === 'queued' && job.statusMsg && (
         <div role="status" className="text-xs text-port-warning-text mt-2 truncate" title={job.statusMsg}>{job.statusMsg}</div>
       )}
-      {job.status === 'running' && (
-        <div className="mt-2 space-y-1">
-          <div className="flex items-center justify-between gap-2 text-xs text-port-text-muted">
-            <span className="truncate" title={job.statusMsg || undefined}>{job.statusMsg || 'Running'}</span>
-            <span className="font-mono shrink-0">{progressPct}%</span>
-          </div>
-          <div className="h-1.5 bg-port-border rounded overflow-hidden">
-            <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
-          </div>
-        </div>
-      )}
+      {job.status === 'running' && <RunningJobProgress job={job} snapshotRequestedAt={snapshotRequestedAt} />}
       {job.kind === 'training' && job.params?.runId && (
         <TrainingJobDetail runId={job.params.runId} status={job.status} />
       )}

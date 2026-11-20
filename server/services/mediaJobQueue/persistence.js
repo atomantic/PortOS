@@ -199,9 +199,8 @@ function queuePersist(operation) {
     notifyQueueChanged();
     return Promise.reject(new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts'));
   }
-  // Every queue mutation, including holds, deletion and debounced progress,
-  // converges here. Invalidate after the write settles so readers see the final
-  // in-memory state even when persistence is unavailable.
+  // Invalidate after a durable mutation's write settles so readers see the
+  // final in-memory state even when persistence is unavailable.
   persistChain = persistChain.then(operation, operation).finally(() => {
     notifyQueueChanged();
   });
@@ -213,7 +212,7 @@ export function persist() {
 async function persistImpl({ onSnapshotWritten, trimArchive = true } = {}) {
   if (trimArchive) trimArchiveForSnapshot();
   const snapshot = captureQueueSnapshot();
-  await atomicWrite(JOBS_FILE, snapshot.data);
+  await atomicWrite(JOBS_FILE, JSON.stringify(snapshot.data));
   onSnapshotWritten?.();
   await acknowledgeWrittenTransitions(snapshot.transitions);
   if (snapshot.hasDeferredCompletion) recoverCompletionsUnderAdmission();
@@ -249,7 +248,7 @@ function captureQueueSnapshot() {
   ];
   // A completion's terminal row and its `completed` fan-out publish together,
   // so only a snapshot written inside a backup admission lease commits one. Any
-  // other write (progress, enqueue, the shutdown flush, or one landing after a
+  // other write (enqueue, the shutdown flush, or one landing after a
   // completion's own retries gave up) keeps it `running` on disk and leaves it
   // to an admitted recovery commit, never publishing it in the middle of a cut.
   const completionAdmitted = !completionRecoveryDeferred && holdsBackupAssetPublication();
@@ -636,8 +635,7 @@ export async function drainMediaJobQueue() {
 }
 
 // Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
-// then write one fresh snapshot — it captures the latest in-memory progress,
-// so a debounced progress write still pending in runJob is not lost — and wait
+// then write one fresh snapshot, including the latest in-memory progress, and wait
 // for the whole persist chain behind it. Bounded so a stalled disk cannot eat
 // the shutdown budget; never rejects, reporting the outcome instead.
 export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {

@@ -753,8 +753,27 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'media-jobs:changed': {
     direction: 'server-to-client',
-    summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',
+    summary: 'Invalidate queue snapshots after job lifecycle, archive or hold changes.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:subscribe': {
+    direction: 'client-to-server', summary: 'Observe transient media queue progress on this socket.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:unsubscribe': {
+    direction: 'client-to-server', summary: 'Stop observing media queue progress on this socket.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:progress': {
+    direction: 'server-to-client',
+    summary: 'Latest in-memory progress for one running media job, sent to queue subscribers.',
+    payloadSchema: {
+      type: 'object', required: ['id', 'startedAt', 'progress', 'statusMsg'], additionalProperties: false,
+      properties: {
+        id: { type: 'string' }, startedAt: { type: 'string' }, progress: { type: 'number' },
+        statusMsg: { type: 'string' }, etaMs: { type: 'number' },
+      },
+    },
   },
   'training:checkpoints:changed': {
     direction: 'server-to-client',

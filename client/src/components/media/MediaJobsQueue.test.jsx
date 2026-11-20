@@ -48,8 +48,10 @@ vi.mock('../../services/apiLoraTraining.js', () => ({
 }));
 
 const socketHandlers = vi.hoisted(() => new Map());
+const socketEmit = vi.hoisted(() => vi.fn());
 vi.mock('../../services/socket', () => ({
   default: {
+    emit: socketEmit,
     on: (event, handler) => {
       if (!socketHandlers.has(event)) socketHandlers.set(event, new Set());
       socketHandlers.get(event).add(handler);
@@ -82,6 +84,7 @@ const trainingJob = {
 
 beforeEach(() => {
   listQueueMediaJobs.mockReset();
+  socketEmit.mockClear();
   cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
   deleteFailedCanceledMediaJobs.mockReset();
   toast.mockClear();
@@ -96,6 +99,43 @@ beforeEach(() => {
   getVideoGenStatus.mockResolvedValue({ models: [] });
   listLorasFull.mockReset();
   listLorasFull.mockResolvedValue([]);
+});
+
+it('applies only matching progress frames to a running row without rereading the queue', async () => {
+  listQueueMediaJobs.mockResolvedValue([trainingJob]);
+  listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
+  const { unmount } = render(<MediaJobsQueue kind="training" />);
+  expect(await screen.findByText('50%')).toBeInTheDocument();
+  expect(socketEmit).toHaveBeenCalledWith('media-jobs:subscribe');
+
+  const progress = { id: trainingJob.id, startedAt: trainingJob.startedAt, progress: 0.7, statusMsg: 'Training step 350/500' };
+  act(() => {
+    emitSocket('media-jobs:progress', { ...progress, id: 'another-job', progress: 0.9 });
+    emitSocket('media-jobs:progress', { ...progress, startedAt: trainingJob.queuedAt, progress: 0.8 });
+  });
+  expect(screen.getByText('50%')).toBeInTheDocument();
+
+  act(() => emitSocket('media-jobs:progress', progress));
+  expect(screen.getByText('70%')).toBeInTheDocument();
+  expect(screen.getByText('Training step 350/500')).toBeInTheDocument();
+  expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
+
+  let finishRead;
+  listQueueMediaJobs.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  act(() => emitSocket('media-jobs:changed', {}));
+  await waitFor(() => expect(listQueueMediaJobs).toHaveBeenCalledTimes(2));
+  await act(async () => {
+    emitSocket('media-jobs:progress', { ...progress, progress: 0.75 });
+    finishRead([trainingJob]);
+  });
+  expect(screen.getByText('75%')).toBeInTheDocument();
+
+  listQueueMediaJobs.mockResolvedValue([{ ...trainingJob, progress: 0.8, statusMsg: 'Saving outcome' }]);
+  act(() => emitSocket('media-jobs:changed', {}));
+  expect(await screen.findByText('Saving outcome')).toBeInTheDocument();
+  expect(screen.getByText('80%')).toBeInTheDocument();
+  unmount();
+  expect(socketEmit).toHaveBeenCalledWith('media-jobs:unsubscribe');
 });
 
 it('offers provider reconciliation for an uncertain Topaz job without a retry', async () => {

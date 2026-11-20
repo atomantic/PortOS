@@ -2,7 +2,7 @@
 // Shared mocks, stubs and per-test lifecycle live in ./index.test.fixture.js,
 // which must stay the first import that can resolve a mocked module.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { tempDataDir, atomicWriteSpy, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, importFresh, flush, remoteVideoMediaParams, remoteRecoverySettlement, waitFor, persistedJobs, persistedIds, holdNextWrite } from './index.test.fixture.js';
+import { tempDataDir, atomicWriteSpy, queueSnapshotJobs, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, importFresh, flush, remoteVideoMediaParams, remoteRecoverySettlement, waitFor, persistedJobs, persistedIds, holdNextWrite } from './index.test.fixture.js';
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -232,7 +232,7 @@ describe('durable remote source-audio settlement', () => {
     const write = atomicWriteSpy.getMockImplementation();
     let terminalWrites = 0;
     atomicWriteSpy.mockImplementation((path, data) => {
-      if (data?.jobs?.some(entry => entry.id === first.jobId && entry.status === 'completed') && ++terminalWrites > 1) {
+      if (queueSnapshotJobs(path, data).some(entry => entry.id === first.jobId && entry.status === 'completed') && ++terminalWrites > 1) {
         return Promise.reject(new Error('fixture archive persistence failure'));
       }
       return write(path, data);
@@ -289,7 +289,7 @@ describe('durable remote source-audio settlement', () => {
     const attempts = [];
     let landed = false;
     atomicWriteSpy.mockImplementation((path, data) => {
-      if (!landed && data?.jobs?.some(entry => entry.id === job.jobId && entry.status === 'completed')) {
+      if (!landed && queueSnapshotJobs(path, data).some(entry => entry.id === job.jobId && entry.status === 'completed')) {
         attempts.push(Date.now());
         if (attempts.length <= failures) return Promise.reject(Object.assign(new Error(`fixture ${code}`), { code }));
         landed = true;
@@ -335,7 +335,7 @@ describe('durable remote source-audio settlement', () => {
     const job = await startAudioJob();
     const write = atomicWriteSpy.getMockImplementation();
     let failing = true;
-    atomicWriteSpy.mockImplementation((path, data) => failing && data?.jobs?.some(entry => entry.id === job.jobId && entry.status === 'completed')
+    atomicWriteSpy.mockImplementation((path, data) => failing && queueSnapshotJobs(path, data).some(entry => entry.id === job.jobId && entry.status === 'completed')
       ? Promise.reject(new Error('fixture storage unavailable')) : write(path, data));
     try {
       videoGenEvents.emit('completed', { generationId: job.jobId, remoteInputsDisposable: true });
@@ -561,7 +561,7 @@ describe('shutdown quiesce', () => {
     expect(existsSync(tempDataDir)).toBe(false);
   });
 
-  it('reset detaches abandoned providers and drains progress before removing the fixture', async () => {
+  it('reset detaches abandoned providers without leaving progress work behind', async () => {
     const events = ['progress', 'status', 'completed', 'failed', 'activity'];
     const before = events.map(event => imageGenEvents.listenerCount(event));
     let finishKickoff;
