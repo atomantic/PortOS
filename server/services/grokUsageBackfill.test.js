@@ -7,9 +7,9 @@ const ledger = vi.hoisted(() => ({ grokRepairIds: [] }));
 const written = vi.hoisted(() => []);
 const paths = vi.hoisted(() => ({ data: '' }));
 
-vi.mock('./usage.js', () => ({
+vi.mock('./usage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   loadUsage: vi.fn(async () => ledger),
-  getUsage: vi.fn(() => ledger),
   addDatedUsageBatch: vi.fn(async additions => additions.filter(item => {
     if (ledger.grokRepairIds.includes(item.repairId)) return false;
     ledger.grokRepairIds.push(item.repairId);
@@ -18,7 +18,8 @@ vi.mock('./usage.js', () => ({
   })),
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...await importOriginal(),
   PATHS: paths,
 }));
 
@@ -110,7 +111,7 @@ describe('applyGrokUsageRepair', () => {
 
   it('refuses to apply a plan read from a directory the server will not save', async () => {
     await expect(applyGrokUsageRepair({ home, dataDir: join(dataDir, 'elsewhere') }))
-      .rejects.toThrow(/usage\.json/);
+      .rejects.toThrow(/active install ledger/);
     expect(written).toHaveLength(0);
   });
 
@@ -170,6 +171,6 @@ describe('planGrokUsageRepairFromDisk bad inputs', () => {
 
   it('does not treat an unreadable usage ledger as an empty repair list', async () => {
     await writeFile(join(dataDir, 'usage.json'), '{not-json');
-    await expect(planGrokUsageRepairFromDisk({ home, dataDir })).rejects.toThrow(SyntaxError);
+    await expect(planGrokUsageRepairFromDisk({ home, dataDir })).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
   });
 });

@@ -63,6 +63,7 @@ import {
   USAGE_CHECKSUM_PATHS,
 } from './peerUsage.js';
 import { editGoals } from './identity/store.js';
+import { getChangeToken } from './changeToken.js';
 
 // --- Category Definitions ---
 
@@ -1312,9 +1313,7 @@ const CHECKSUM_PATHS = {
   // getter filters back to sync:true and the checksum is unchanged when no
   // synced session moved, so the orchestrator still skips the transfer.
   storyBuilder: [STORY_BUILDER_DIR, STORY_BUILDER_EPOCH_KEY],
-  // usage invalidates on our OWN usage.json (every recorded AI run rewrites it)
-  // and on the peer-digest store (a peer's newer digest changes what we forward
-  // on). Both are atomicWrite'd — see peerUsage.js.
+  // Usage combines the local ledger revision with file-backed projections.
   usage: USAGE_CHECKSUM_PATHS,
 };
 
@@ -1499,6 +1498,7 @@ export async function getChecksum(category, { forPeerId } = {}) {
   const paths = CHECKSUM_PATHS[category];
   if (paths) {
     const fingerprints = await readFingerprintMap(paths);
+    if (category === 'usage') fingerprints.usageLedger = getChangeToken('usage');
     // Cache keyed by (category, forPeerId): different requesting peers get
     // different exclude-sets → different scoped snapshots → different
     // checksums. A single per-category cache slot would let peer-B's checksum

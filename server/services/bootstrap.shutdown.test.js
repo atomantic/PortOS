@@ -107,8 +107,10 @@ describe('shutdown signal deadline and recovery', () => {
     const stopping = lifecycle.stop();
     await entered.promise;
     expect(lifecycle.exit).not.toHaveBeenCalled();
+    expect(lifecycle.close).not.toHaveBeenCalled();
     gate.resolve();
     await stopping;
+    expect(lifecycle.close).toHaveBeenCalledOnce();
     expect(lifecycle.exit).toHaveBeenCalledWith(0);
   });
 
