@@ -1,5 +1,8 @@
+import { claimTrust, claimOwnership } from './claimForgePolicy.js';
 import { JIRA_CLAIM } from './claimJira.js';
 import {
+  CONTRIBUTOR_RELEASE_GH,
+  CONTRIBUTOR_RELEASE_GLAB,
   REQUIRED_REVIEW_PUBLICATION_RULE,
   REQUIRED_CI_LATE_REGISTRATION_NOTE,
   buildIssueRevalidationGuidance
@@ -11,21 +14,55 @@ import {
   claimGithubCommentScreen,
   CLAIM_GITHUB_MERGE,
   CLAIM_GITHUB_QUEUE,
-  CLAIM_GITHUB_QUEUE_END,
-  CLAIM_GITHUB_TRUST,
-  CLAIM_GITHUB_OWNERSHIP,
-  CLAIM_GITHUB_CHECKOUT
+  CLAIM_GITHUB_QUEUE_END
 } from './claimGithub.js';
 import {
   CLAIM_GITLAB_COMMENTS,
-  CLAIM_GITLAB_QUEUE,
-  CLAIM_GITLAB_TRUST,
-  CLAIM_GITLAB_OWNERSHIP,
-  CLAIM_GITLAB_CHECKOUT
+  CLAIM_GITLAB_QUEUE
 } from './claimGitlab.js';
 import { buildClaimLinkedScreen, buildClaimCheckRecovery, buildClaimEpicSection } from '../../promptSections/claimOnDemand.js';
 import { CONTRIBUTION_SECURITY_POLICY } from '../../../lib/contributionSecurityPolicy.js';
 import { mandatoryDispatchHintGuidance } from '../../../lib/dispatchLabels.js';
+
+function claimCheckout(forge) {
+  const github = forge === 'github';
+  const resolve = github ? '' : `DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
+`;
+  const base = github ? 'main' : '"${DEFAULT_BRANCH}"';
+  const upstream = github ? 'origin/main' : '"origin/${DEFAULT_BRANCH}"';
+  const mark = github ? `gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
+gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
+${CONTRIBUTOR_RELEASE_GH}` : `ME="$(glab api user 2>/dev/null | sed -n 's/.*"username":"\\([^"]*\\)".*/\\1/p')"
+glab issue update "\${NUM}" --assignee "\${ME:-@me}" 2>/dev/null
+glab issue update "\${NUM}" --label in-progress 2>/dev/null
+${CONTRIBUTOR_RELEASE_GLAB}`;
+  return `## Phase 2 — Claim (worktree + markers)
+
+Repeat the pre-claim checks including the final contributor screen. Use your own claim worktree, never the source checkout or slashdo /do:next.${github ? ' If the default is not main, resolve it with \`gh repo view --json defaultBranchRef -q .defaultBranchRef.name\` and substitute it below.' : ''}
+\`\`\`bash
+NUM="\${NUM:?Prepare an eligible issue first}"
+${resolve}WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
+mkdir -p {worktreesRoot}
+git fetch origin ${base}
+\`\`\`
+
+Bind the exact branch using the Claim ownership binding section and require bound:true before creating the checkout.
+\`\`\`bash
+git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" ${upstream}
+\`\`\`
+On collision never force or reuse the branch. Follow the selection exit.
+
+Repeat the binding and require bound:true before running any command in the worktree. Link dependencies (never npm install here), set cross-machine markers best-effort and remove invitations independently; an absent label must not prevent the other removal.
+\`\`\`bash
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
+${mark}
+cd "\${WORKTREE}"
+\`\`\`
+
+Do not restore contributor-invitation labels when releasing a claim. Preserve the checkout, branch and markers for an open PR/MR.`;
+}
+
 
 // A pinned, non-epic forge claim whose checkout PortOS cut at spawn (#15517):
 // the agent starts inside it, so the checkout phase becomes a verification.
@@ -66,46 +103,34 @@ const claimSliceRule = (pr) => `**Slice size.** Every ${pr} pays a fixed claim, 
 
 function claimImplement(forge) {
   const jira = forge === 'jira';
-  const github = forge === 'github';
-  const pr = jira ? 'MR/PR' : github ? 'PR' : 'MR';
-  const cli = github ? 'gh' : 'glab';
-  const instructions = jira ? JIRA_CLAIM.implementation : `Write the code, tests and docs the issue requires, following the repo's AGENTS.md / CLAUDE.md conventions, and run the relevant tests as you go.
-
-${claimSliceRule(pr)}`;
-  const scope = jira ? JIRA_CLAIM.backbone : `small supporting helpers, refactors, and tests that the fix depends on belong here, not a follow-up. Only defer genuinely-large work outside the issue's own scope; when you do, file a NEW issue (\`${cli} issue create\`) tagged \`plan\` that references this one (\`Related to #<num>\`). Follow the shared Issue Filing Labels contract above.`;
-  const reference = jira ? 'ticket so the trail is grep-able' : 'issue';
-  const key = jira ? '<KEY>' : '#<num>';
+  const pr = jira ? 'MR/PR' : forge === 'github' ? 'PR' : 'MR';
+  const cli = forge === 'github' ? 'gh' : 'glab';
   return `## Phase 4 — Implement
 
-${instructions}
+Write code, tests and docs following the repository's AGENTS.md / CLAUDE.md.${jira ? ' Observe its route error handling, functional style, Zod validation, Tailwind tokens and reactive UI conventions.' : ''} Run relevant tests as you go.${jira ? '' : '\n\n' + claimSliceRule(pr)}
 
-**Roll discovered backbone work INTO this ${pr}** — ${scope}
+**Roll discovered backbone work INTO this ${pr}** — include supporting helpers, refactors and tests. Only defer genuinely-large adjacent work.${jira ? '' : ` File it with \`${cli} issue create\`, label it \`plan\`, include \`Related to #<num>\` and follow the shared Issue Filing Labels contract above.`}
 
-Commit with a conventional message referencing the ${reference}:
-
-\`\`\`
-<type>: <one-line description> (${key})
-\`\`\``;
+Commit with a conventional message: \`<type>: <one-line description> (${jira ? '<KEY>' : '#<num>'})\`.`;
 }
 
 function claimLocalReview(forge) {
   const github = forge === 'github';
-  const pr = github ? 'PR' : 'MR';
-  const cli = github ? 'gh' : 'glab';
-  const heading = forge === 'jira' ? 'Review locally, then open the MR/PR and move to In Review' : `Review locally (BEFORE any ${pr} exists)`;
-  const procedure = forge === 'jira' ? JIRA_CLAIM.review : `**Every reviewer that can read the working tree runs HERE, while there is still no ${pr}.** Open the ${pr} once the branch is review-clean, a reviewer's \`~max\` budget is spent with every accepted finding fixed or rejected/tracked and disclosed, or a required reviewer is recorded as review-blocked: the ${pr} then carries the finished diff, and the only things left to satisfy are CI and the reviewers that genuinely cannot start until ${github ? `a PR` : `an MR`} is open.
+  const jira = forge === 'jira';
+  const pr = jira ? 'MR/PR' : github ? 'PR' : 'MR';
+  const report = jira ? 'POST JIRA/tickets/<KEY>/comments' : github
+    ? 'gh issue comment "${NUM}" --body "..."' : 'glab issue note "${NUM}" -m "..."';
+  return `## Phase 5 — Review locally (BEFORE any ${pr} exists)
 
-The configured reviewers for this task, in order, are \`{reviewers}\`. Split that list in two, preserving its order:
+${REQUIRED_REVIEW_PUBLICATION_RULE}
 
-- **LOCAL reviewers — every token that is NOT an \`@<login>\`.** \`claude\` / \`codex\` / \`antigravity\` (CLI binary: \`agy\`) / \`grok\` / \`cursor\` invoke a local-CLI critique; \`lmstudio\` / \`ollama\` use the appended Local Reviewer Procedure. They read this branch's own diff and need no ${pr} — run them in THIS phase.
-- **${github ? `PR-SIDE` : `MR-SIDE`} reviewers — every \`@<login>\` token**, plus any review bot the ${github ? `repo` : `project`} requests automatically when ${github ? `a PR` : `an MR`} opens. They review ${github ? `cloud-side` : `server-side`} and cannot start before the ${pr} exists — they run in Phase 6.
-
-1. **Write the changelog entry now, before the reviewers run**, so every commit they read is already on the branch. If the repo maintains a changelog, add a one-line entry **following the convention that repo documents** (read its \`AGENTS.md\` or \`CLAUDE.md\` and changelog README first): its per-branch fragment flow when it documents one, otherwise its unreleased section in its existing prose style. If the repo has no changelog, skip this${github ? ` — the PR + commit history is the record` : ``}.
-2. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix the findings in the same diff, before any reviewer runs. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
-3. **Run each LOCAL reviewer in the listed order against the BRANCH diff, not ${github ? `a PR` : `an MR`} diff.** No ${pr} exists yet, so \`${github ? `gh pr` : `glab mr`} diff\` has nothing to read — use the CLI's own base-diff mode or \`git diff ${github ? `origin/main` : `"origin/\${DEFAULT_BRANCH}`}...${github ? `HEAD\` (substitute the repo's default branch when it isn't \`main` : `HEAD"`}\`${github ? `)` : ``}. Apply the findings, run the tests, and commit the fixes — capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets) — then advance to the next reviewer. If a reviewer cannot produce a verdict, follow the Required-review publication rule at the top of Phase 5.
-4. **If the branch cannot be brought to a shippable state here, do NOT open ${github ? `a PR` : `an MR`}** — that means accepted findings the reviewers raised are neither fixed nor rejected/tracked with rationale, fixes leave the build/tests red, a review fix is unpushed, or the review/status state cannot be persisted. ${github ? `Comment` : `Reviewer unavailability alone is review-blocked, so it does not take this stop path. Post a note`} on the ISSUE naming the ${github ? `` : `reviewer and the `}failure (\`${cli} issue ${github ? `comment` : `note`} "\${NUM}" ${github ? `--body` : `-m`} "..."\`), leave the assignee and the \`in-progress\` label in place, preserve the checkout and branch for recovery, and stop. ${github ? `Reviewer unavailability alone is \`review-blocked\`, so it does not take this stop path` : `Leave the branch and worktree in place for a human to pick up cold`}. Do NOT run Phase 7.`;
-  return `## Phase 5 — ${heading}\n\n${REQUIRED_REVIEW_PUBLICATION_RULE}\n\n${procedure}`;
+Split \`{reviewers}\` in configured order: LOCAL reviewers are every non-@login (claude, codex, \`antigravity\` (CLI binary: \`agy\`), grok, cursor use their CLI; lmstudio/ollama use the appended Local Reviewer Procedure). **${forge === 'gitlab' ? 'MR' : 'PR'}-SIDE reviewers** (@logins and automatically requested bots) review after publication in Phase 6.
+1. Follow the repo's AGENTS.md / CLAUDE.md and changelog README before review: use its documented per-branch fragment or unreleased convention, otherwise its existing unreleased style. Skip if there is no changelog or the repo records changes only in git.
+2. Self-review for reuse, naming, dead code, edge cases and efficiency. On Claude Code run the three-agent \`/simplify\` pass; elsewhere perform the equivalent. Fix findings.
+3. Run each LOCAL reviewer in listed order on the BRANCH diff, not ${github ? 'a PR' : jira ? 'an MR/PR' : 'an MR'} diff (CLI base mode or \`git diff "origin/\${DEFAULT_BRANCH}...HEAD"\`). Independently resolve findings, run tests and commit fixes; observe each reviewer's \`~max=<n>\` budget (default 3 rounds), then advance. Disclose a spent budget and any rejected/tracked findings with rationale. Record unavailability according to the rule above; do NOT substitute self-review.
+4. Unresolved accepted findings, failed build/tests, unpublished review fixes or inability to persist review/status state prevent publication. Report failure on the issue/ticket (\`${report}\`), preserve claim markers, branch and exact checkout, and stop before cleanup. Reviewer unavailability alone follows the publication rule.`;
 }
+
 
 function claimPublishedReview(forge) {
   const github = forge === 'github';
@@ -279,14 +304,14 @@ Effective PR completion policy: ${policy}. Execute preparation and current-need 
   return [intro, `## Selection exit\n\n${selectionExit}`,
     `**Security-model eligibility — before claiming, assigning a volunteer, or implementing:**\n${CONTRIBUTION_SECURITY_POLICY}`,
     buildIssueRevalidationGuidance(pinned), mandatoryDispatchHintGuidance({ cli: github ? 'gh' : 'glab' }),
-    github ? CLAIM_GITHUB_TRUST : CLAIM_GITLAB_TRUST,
+    claimTrust(forge),
     ...(review ? [CLAIM_REVIEW_TRUST] : []),
-    github ? CLAIM_GITHUB_OWNERSHIP : CLAIM_GITLAB_OWNERSHIP,
+    claimOwnership(forge),
     pinned ? claimPinnedPreparation(forge, target, preverified, provisioned) : `{issueAuthorFilter}\n\n${queue}`,
     CLAIM_PRECLAIM,
     ...(compactEpic ? [CLAIM_NOT_EPIC] : [buildClaimEpicSection(forge, leaveOpen),
       'After epic handling, repeat the pre-claim checks for the chosen child before Phase 2.']),
-    provisioned ? claimServerCheckout(forge, target) : github ? CLAIM_GITHUB_CHECKOUT : CLAIM_GITLAB_CHECKOUT,
+    provisioned ? claimServerCheckout(forge, target) : claimCheckout(forge),
     claimRevalidation(forge, leaveOpen),
     claimLinkedWork(forge),
   ].join('\n\n');
