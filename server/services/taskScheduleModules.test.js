@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import * as backoff from './taskScheduleBackoff.js';
 import * as constants from './taskScheduleConstants.js';
 import * as registry from './taskScheduleRegistry.js';
+import * as evaluator from './taskScheduleEvaluator.js';
+import * as perpetual from './taskSchedulePerpetual.js';
+import * as status from './taskScheduleStatus.js';
 import * as ledger from './branchReconcileOutcome.js';
 import * as schedule from './taskSchedule.js';
 
@@ -15,6 +18,12 @@ describe('taskSchedule module boundaries', () => {
         .map((name) => [name, constants[name]]),
       ...['DEFAULT_TASK_INTERVALS', 'SELF_IMPROVEMENT_TASK_TYPES', 'getTaskTypeInvocation',
         'requiresManagedAppTarget', 'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
+      ...['createFeatureGate', 'shouldRunTask', 'shouldContinuePerpetualDrain', 'getDueTasks', 'getNextTaskType']
+        .map((name) => [name, evaluator[name]]),
+      ...['computePerpetualRecheckAt', 'boundParkedUntil', 'parkPerpetual', 'getPerpetualParkInfo',
+        'recordPerpetualStall', 'isPerpetualParkActive', 'getPerpetualDrainState', 'recordPerpetualDispatch',
+        'resetPerpetualForManualRun', 'applyOnDemandRunResets'].map((name) => [name, perpetual[name]]),
+      ...['getScheduleStatus', 'getUpcomingTasks'].map((name) => [name, status[name]]),
       ...['recordTaskTypeFailure', 'recordTaskTypeSuccess'].map((name) => [name, backoff[name]])
     ]);
 
@@ -43,7 +52,8 @@ describe('taskSchedule module boundaries', () => {
   });
 
   it('keeps the checkout-retirement ledger out of the cadence module (#14177)', () => {
-    const scheduler = source('./taskSchedule.js');
+    const scheduler = ['./taskSchedule.js', './taskScheduleEvaluator.js', './taskSchedulePerpetual.js',
+      './taskScheduleStatus.js'].map(source).join('\n');
     for (const name of Object.keys(ledger)) {
       expect(schedule[name], name).toBeUndefined();
       expect(scheduler, name).not.toMatch(new RegExp(`function ${name}\\b`));
