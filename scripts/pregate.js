@@ -1010,7 +1010,12 @@ async function main() {
   } else if (options.guardsOnly) {
     plan = { reason: 'structural guards', browser: { files: [] } };
   } else {
-    const { browserFiles, ...summary } = buildCiTestPlan(changedFiles, { trackedFiles: presentFiles });
+    const { browserFiles, ...summary } = buildCiTestPlan(changedFiles, {
+      trackedFiles: presentFiles,
+      linuxContainmentInputs: [],
+      supercolliderLiveInputs: [],
+      dockerContainmentLiveInputs: [],
+    });
     plan = { ...summary, browser: { files: browserFiles } };
   }
   console.log(`📋 ${changedFiles.length} changed file(s) — ${plan.reason}.`);

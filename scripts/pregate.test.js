@@ -549,14 +549,16 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       // Changing scripts selects full lint; any accidental stage run leaves a
       // durable marker. Startup/package-manager repair is a separate trap.
       for (const name of ['run-ci-lint.js', 'run-actionlint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
-        write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
+        write(`scripts/${name}`, `import { mkdirSync, writeFileSync } from 'fs';
+          mkdirSync('.cache', { recursive: true });
+          writeFileSync('.cache/unexpected-stage', '${name}');`);
       }
       const result = run();
       if (state === 'matching' || autoLinks) {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain('Dependency consistency preflight passed');
         expect(result.stdout.includes('Linked worktree dependencies from the primary checkout')).toBe(autoLinks);
-        expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
+        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
         const needsLink = state === 'dangling';
@@ -576,7 +578,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
           dangling: 'linked target unavailable',
         }[state];
         expect(result.stderr).toContain(diagnostic);
-        expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
+        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(false);
       }
       expect(lstatSync(modules).isSymbolicLink()).toBe(true);
       expect(sourceSnapshot()).toEqual(before);
