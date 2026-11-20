@@ -347,10 +347,4 @@ export async function getModelSource(id) {
   };
 }
 
-export async function recoverInterruptedModels() {
-  const result = await store.recoverInterruptedModels();
-  if (result.recovered > 0) {
-    console.log(`🧊 Recovered ${result.recovered} interrupted Three.js model generation(s)`);
-  }
-  return result;
-}
+export { recoverInterruptedThreejsModels as recoverInterruptedModels } from '../modelRecovery.js';

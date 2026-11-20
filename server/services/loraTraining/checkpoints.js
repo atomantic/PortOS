@@ -24,7 +24,6 @@
 import { readFile } from 'fs/promises';
 import { existsSync, statSync, readdirSync } from 'fs';
 import { join, basename } from 'path';
-import sharp from 'sharp';
 import { PATHS } from '../../lib/fileUtils.js';
 import { extractZipEntryToBuffer } from '../../lib/zipStream.js';
 import { TRAINING_RUNTIMES } from './runtimes.js';
@@ -150,6 +149,7 @@ export function listRunCheckpoints(run) {
  */
 export async function isPreviewCollapsed(previewPath) {
   if (!previewPath || !existsSync(previewPath)) return false;
+  const { default: sharp } = await import('sharp');
   const stats = await sharp(previewPath).stats().catch(() => null);
   if (!stats?.channels?.length) return false;
   const rgb = stats.channels.slice(0, 3);

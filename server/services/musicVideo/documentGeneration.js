@@ -15,7 +15,7 @@ import { readJSONFileStrict } from '../../lib/jsonIo.js';
 import { PATHS } from '../../lib/paths.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { withCreativeLatitude } from '../../lib/creativeLatitude.js';
-import { parse } from '@babel/parser';
+import { createRequire } from 'node:module';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 import { resolveNarrativeEvents } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
@@ -37,6 +37,8 @@ const queueAuthoring = createKeyCachedQueue();
 const jsonForScript = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const FORBIDDEN_GLOBALS = new Set(['window', 'document', 'globalThis', 'self', 'fetch', 'XMLHttpRequest', 'WebSocket',
   'Date', 'performance', 'crypto', 'Function', 'eval', 'setTimeout', 'setInterval', 'requestAnimationFrame']);
+
+const require = createRequire(import.meta.url);
 
 function hasUnsafeReference(node) {
   if (!node || typeof node !== 'object') return false;
@@ -104,6 +106,7 @@ function checkedFunction(source) {
   }
   if (!isDeterministicCodeSource(source)) throw fail('A section contains a networked or non-deterministic call', 'NONDETERMINISTIC_SECTION');
   let body;
+  const { parse } = require('@babel/parser');
   try { body = parse(source, { sourceType: 'script' }).program.body; }
   catch { throw fail('A section function has invalid JavaScript', 'INVALID_SECTION_SOURCE'); }
   const fn = body[0];

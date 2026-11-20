@@ -167,7 +167,7 @@ vi.mock('../moodBoard/index.js', async (importOriginal) => ({
   getBoard: vi.fn(),
   mergeBoardsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
-vi.mock('../fableLoom/index.js', () => ({
+vi.mock('../fableLoom/records.js', () => ({
   getLoom: vi.fn(),
   listLooms: vi.fn().mockResolvedValue([]),
   mergeLoomsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
@@ -309,7 +309,7 @@ import {
   mergeProjectsFromSync as mergeCreativeDirectorProjectsFromSync,
 } from '../creativeDirector/local.js';
 import { listBoards, getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
-import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/index.js';
+import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/records.js';
 import {
   listWorksForSync, getWorkForSync, mergeWorksFromSync,
   listFoldersForSync, getFolderForSync, mergeFoldersFromSync,

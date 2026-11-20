@@ -20,6 +20,7 @@
 
 import { codedError } from '../../lib/codedError.js';
 import { randomUUID } from 'node:crypto';
+import { liveGenerations } from './recovery.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
@@ -39,7 +40,6 @@ import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../l
 import { escapeRegExp } from '../../lib/textUtils.js';
 
 // Separate from the advisory progress channel: overlapping runs each stay live.
-const liveGenerations = new Map();
 const hasLiveGeneration = (issueId, stageId) => [...liveGenerations.values()]
   .some((run) => run.issueId === issueId && run.stageId === stageId);
 
@@ -1016,26 +1016,7 @@ export function recoverLegacyStage(issueId, stageId, revision) {
   });
 }
 
-/** Only this install's abandoned generations may be demoted; legacy ownership is unknown. */
-export async function recoverStuckGeneratingStages() {
-  const instanceId = await getInstanceId();
-  if (!instanceId || instanceId === UNKNOWN_INSTANCE_ID) return 0;
-  let recovered = 0;
-  for (const issue of await listIssues({ withHistory: false })) {
-    for (const stageId of TEXT_STAGE_IDS) {
-      const snapshot = issue.stages[stageId];
-      if (snapshot.status !== 'generating' || snapshot.generation?.instanceId !== instanceId) continue;
-      await updateStageWithLatest(issue.id, stageId, (current) => {
-        if (current.status !== 'generating' || current.generation?.instanceId !== instanceId
-          || current.generation?.id !== snapshot.generation.id
-          || current.updatedAt !== snapshot.updatedAt || liveGenerations.has(current.generation.id)) return {};
-        recovered += 1;
-        return { status: 'error', errorMessage: 'Interrupted by a server restart — generate again.' };
-      });
-    }
-  }
-  return recovered;
-}
+export { recoverStuckGeneratingStages } from './recovery.js';
 
 // Export internals for tests.
 export const __testing = { buildStageContext, buildIdeaContextAugment, buildProseContextAugment, resolveVolumeNeighbors, extractProseTail, extractNextIssueBeats, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, resolveDraftGate, pickBestAttempt, JUDGEABLE_STAGES, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };

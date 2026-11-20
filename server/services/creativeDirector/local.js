@@ -28,7 +28,6 @@ import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalog/catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
-import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 
 export { startingImageFilename } from './projectsLogic.js';
 
@@ -145,6 +144,7 @@ export async function setTreatment(id, treatmentInput) {
   // `/:id/treatment` PATCH, episodeVideo, liveDirector) honors the opt-in
   // instead of the flag silently no-op'ing for treatments that land another way.
   if (next?.generateFirstPass && next.workspace !== 'video') {
+    const { enqueueFirstPassSceneFrames } = await import('./firstPassGen.js');
     enqueueFirstPassSceneFrames(next)
       .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
   }

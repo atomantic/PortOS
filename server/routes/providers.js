@@ -26,7 +26,6 @@ import {
 } from '../services/provider/providerServices.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
@@ -55,7 +54,6 @@ import {
   getCodexAccountReadiness,
   startCodexChatGptLogin,
 } from '../services/codexAppServer.js';
-import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import {
   isAuthoringOneShotProvider,
@@ -848,6 +846,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     // existed still renders THIS server's button label, so the service resolves
     // what the checklist is currently offering instead of assuming a start.
     const action = setupQuery.action ? String(setupQuery.action) : null;
+    const { runLocalRuntimeSetup, SETUP_ACTIONS } = await import('../services/localRuntimeSetup.js');
     if (action !== null && !SETUP_ACTIONS.includes(action)) {
       throw new ServerError('Unknown setup action.', { status: 400, code: 'UNKNOWN_SETUP_ACTION', context: { action } });
     }
@@ -1078,6 +1077,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
 
   // PortOS-specific extensions (parameterized routes before toolkit mount)
   router.get('/:id/vision-health', asyncHandler(async (req, res) => {
+    const { checkVisionHealth } = await import('../services/visionTest.js');
     const result = await checkVisionHealth(req.params.id);
     res.json(result);
   }));
@@ -1085,6 +1085,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   router.post('/:id/test-vision', asyncHandler(async (req, res) => {
     const { imagePath, prompt, expectedContent, model } = validateRequest(providerVisionTestSchema, req.body);
 
+    const { testVision } = await import('../services/visionTest.js');
     const result = await testVision({
       imagePath,
       prompt: prompt || 'Describe what you see in this image.',
@@ -1098,6 +1099,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
 
   router.post('/:id/vision-suite', asyncHandler(async (req, res) => {
     const { model } = validateRequest(providerVisionSuiteSchema, req.body);
+    const { runVisionTestSuite } = await import('../services/visionTest.js');
     const result = await runVisionTestSuite(req.params.id, model);
     res.json(result);
   }));

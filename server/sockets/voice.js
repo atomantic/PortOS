@@ -18,7 +18,6 @@
 
 import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
 import { socketHasCurrentHostControl } from '../services/authGate.js';
-import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
 import {
@@ -182,6 +181,7 @@ export const registerVoiceHandlers = (socket) => {
     };
 
     try {
+      const { runTurn } = await import('../services/voice/pipeline.js');
       const { transcript, reply } = await runTurn({
         audio, mimeType, text, source, history: state.history, emit, signal, state,
         hasHostControl: () => socketHasCurrentHostControl(socket),
@@ -528,6 +528,7 @@ export const registerVoiceHandlers = (socket) => {
     const { signal } = call.ctrl;
     let spoken = '';
     try {
+      const { runTurn } = await import('../services/voice/pipeline.js');
       await runTurn({
         audio: pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
         mimeType: 'audio/wav',

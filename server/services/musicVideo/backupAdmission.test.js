@@ -30,7 +30,7 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   }),
 }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'instance-test') }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()), mutateVideoHistory: vi.fn(async () => {}) }));
 vi.mock('./codeRender.js', async (importOriginal) => ({ ...(await importOriginal()), writeCodeProofSheet: vi.fn(async () => null) }));
 vi.mock('./documentRender.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -49,8 +49,7 @@ const { startPublishKitBuild } = await import('./publishKit.js');
 const { thumbnailCandidates } = await import('./thumbnailFrames.js');
 const { encodeDocumentComposition } = await import('./documentRender.js');
 const { runFfmpegProcess } = await import('../../lib/ffmpeg.js');
-const { mutateVideoHistory } = await import('../videoGen/local.js');
-const { saveHistory } = await import('../videoGen/history.js');
+const { mutateVideoHistory, saveHistory } = await import('../videoGen/history.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 
 afterAll(() => cleanupTempDataRoots());

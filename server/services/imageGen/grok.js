@@ -48,7 +48,6 @@ import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
-import sharp from 'sharp';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import {
@@ -457,6 +456,7 @@ function runGrok(job, jobId, bin, baseArgs, {
           // Grok wrote a real image but not a PNG (jpeg/webp/gif) despite the
           // prompt. The gallery serves by extension and sidecars assume PNG,
           // so transcode rather than shipping mislabeled bytes.
+          const { default: sharp } = await import('sharp');
           const pngBytes = await sharp(stagingPath).png().toBuffer();
           await atomicWrite(outputPath, pngBytes);
         }

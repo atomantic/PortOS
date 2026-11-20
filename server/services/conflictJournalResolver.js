@@ -26,7 +26,7 @@ import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.j
 import { restoreCommission } from './creativeCommissions/store.js';
 import { restoreDeck } from './decks.js';
 import { restoreStoryboard } from './storyboards/index.js';
-import { restoreLoom } from './fableLoom/index.js';
+import { restoreLoom } from './fableLoom/records.js';
 import { codedError } from '../lib/codedError.js';
 import { isSafeRecordId } from '../lib/zodCompat.js';
 

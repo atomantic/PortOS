@@ -41,7 +41,7 @@ import { listTracks } from '../tracks/index.js';
 import { listProjects } from '../creativeDirector/local.js';
 import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.js';
 import { listBoards } from '../moodBoard/index.js';
-import { listLooms } from '../fableLoom/index.js';
+import { listLooms } from '../fableLoom/records.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listDecksForSync } from '../decks.js';

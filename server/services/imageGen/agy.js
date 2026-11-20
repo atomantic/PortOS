@@ -19,7 +19,6 @@ import { mkdir, open, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
-import sharp from 'sharp';
 import {
   ANTIGRAVITY_CLI_ID,
   ensureAntigravityPrintArgs,
@@ -488,6 +487,7 @@ function runAgy(job, jobId, bin, args, {
           await copyFileGuarded(stagingPath, outputPath);
           await unlinkGuarded(stagingPath).catch(() => {});
         } else {
+          const { default: sharp } = await import('sharp');
           const pngBytes = await sharp(stagingPath).png().toBuffer();
           await atomicWrite(outputPath, pngBytes);
         }

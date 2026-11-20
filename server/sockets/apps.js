@@ -1,7 +1,5 @@
-import { streamDetection } from '../services/streamingDetect.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
-import * as appDeployer from '../services/appDeployer.js';
 import { runAppUpdate } from '../services/appUpdateRunner.js';
 import { activeOperationsPayload, appOperationResource, claimAppOperation, endAppOperation, recordOperationStep, runAppOperation } from '../services/appOperations.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
@@ -32,6 +30,7 @@ export const registerAppHandlers = (socket, io) => {
       const data = validateSocketData(detectStartSchema, rawData, socket, 'detect:start');
       if (!data) return;
       console.log(`🔍 Starting detection: ${data.path}`);
+      const { streamDetection } = await import('../services/streamingDetect.js');
       await streamDetection(socket, data.path);
     } catch (err) {
       const message = err?.message ?? String(err);
@@ -236,7 +235,8 @@ export const registerAppHandlers = (socket, io) => {
           io.emit(`app:deploy:${type}`, frame);
         };
 
-        const result = await appDeployer.runDeployFlow(app.id, data.flags, { onOutput });
+        const { runDeployFlow } = await import('../services/appDeployer.js');
+        const result = await runDeployFlow(app.id, data.flags, { onOutput });
         if (!result.ok) {
           io.emit('app:deploy:error', { appId: app.id, ...runId, message: result.error });
           return;

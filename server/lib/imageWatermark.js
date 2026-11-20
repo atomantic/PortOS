@@ -25,7 +25,6 @@
 // Never auto-applied. The corner box defaults to the sparkle's typical
 // footprint but the caller may override `region` for off-spec placements.
 
-import sharp from 'sharp';
 import { ServerError } from './errorHandler.js';
 
 // Cap decoded pixels to guard against decompression-bomb inputs (mirrors the
@@ -167,6 +166,7 @@ export async function removeCornerWatermark(buffer, opts = {}) {
     throw new ServerError('Decoded payload is empty', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  const { default: sharp } = await import('sharp');
   const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata().catch(() => null);
   const width = meta?.width;
   const height = meta?.height;

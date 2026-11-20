@@ -25,14 +25,8 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
-import { enqueueTreatmentTask } from './agentBridge.js';
-import { advanceAfterPlanStepSettled } from './planAdvance.js';
 import { registerCreativeDirectorProjectStarter } from './projectStartSink.js';
 import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
-import { dispatchSceneEvaluation } from './sceneEvaluator.js';
-import { runSceneRender } from './sceneRunner.js';
-import { runStitch } from './stitchRunner.js';
-import { sampleEvaluationFrames } from '../videoGen/local.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { PATHS, sleep } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -164,6 +158,7 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   // subsequent step runs server-side through the tool registry, no agent task).
   // Legacy video projects (no directive) stay on the scene loop below.
   if (fresh.directive) {
+    const { advanceAfterPlanStepSettled } = await import('./planAdvance.js');
     return advanceAfterPlanStepSettled(fresh.id);
   }
 
@@ -315,9 +310,13 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
     inflightTreatment.add(projectId);
     await updateProject(project.id, { status: 'planning' })
       .catch((e) => { inflightTreatment.delete(projectId); throw e; });
-    const fresh = await getProject(project.id);
-    await enqueueTreatmentTask(fresh)
-      .finally(() => inflightTreatment.delete(projectId));
+    try {
+      const fresh = await getProject(project.id);
+      const { enqueueTreatmentTask } = await import('./agentBridge.js');
+      await enqueueTreatmentTask(fresh);
+    } finally {
+      inflightTreatment.delete(projectId);
+    }
     return;
   }
 
@@ -438,6 +437,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
         // the persisted row may already name. Hold one backup admission from
         // the first frame write through the row update (as sceneRunner does).
         frames = await withBackupAssetPublication(async () => {
+          const { sampleEvaluationFrames } = await import('../videoGen/local.js');
           const sampled = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
             .catch((err) => {
               console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
@@ -470,6 +470,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
       console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
       const sceneRefreshed = recheck?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
       if (recheck && sceneRefreshed) {
+        const { dispatchSceneEvaluation } = await import('./sceneEvaluator.js');
         await dispatchSceneEvaluation(recheck, { ...sceneRefreshed, evaluationFrames: frames });
       }
       return;
@@ -593,6 +594,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
       console.log(`⚠️ CD advance: project ${projectId} or scene ${nextPending.sceneId} disappeared between reads — bailing`);
       return;
     }
+    const { runSceneRender } = await import('./sceneRunner.js');
     await runSceneRender(updated, sceneFresh);
     return;
   }
@@ -625,7 +627,12 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   // where two callers could both reach this line).
   if (project.status === 'stitching' || inflightStitch.has(projectId)) return;
   inflightStitch.add(projectId);
-  await runStitch(projectId).finally(() => inflightStitch.delete(projectId));
+  try {
+    const { runStitch } = await import('./stitchRunner.js');
+    await runStitch(projectId);
+  } finally {
+    inflightStitch.delete(projectId);
+  }
 }
 
 /**
@@ -639,7 +646,10 @@ export async function startCreativeDirectorProject(projectId) {
     const { videoReviewAllowsDispatch } = await import('./videoReview.js');
     if (!await videoReviewAllowsDispatch(projectId, [])) return;
   }
-  if (project?.directive && (project.workspace !== 'video' || (project.treatment && !project.treatment.artifact?.stale))) return advanceAfterPlanStepSettled(projectId);
+  if (project?.directive && (project.workspace !== 'video' || (project.treatment && !project.treatment.artifact?.stale))) {
+    const { advanceAfterPlanStepSettled } = await import('./planAdvance.js');
+    return advanceAfterPlanStepSettled(projectId);
+  }
   return advanceAfterSceneSettled(projectId);
 }
 

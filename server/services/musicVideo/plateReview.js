@@ -1,7 +1,6 @@
 /** User-started production plate review. No boot work, tools or provider fallback. */
 import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
-import sharp from 'sharp';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
@@ -114,6 +113,7 @@ async function writeContactSheet(file, imagePaths) {
   const columns = Math.min(imagePaths.length, 4);
   const tile = imagePaths.length <= 4 ? 512 : imagePaths.length <= 9 ? 384 : 256;
   const rows = Math.ceil(imagePaths.length / columns);
+  const { default: sharp } = await import('sharp');
   const tiles = await Promise.all(imagePaths.map(async (path, index) => ({
     input: await sharp(path).resize(tile, tile, { fit: 'contain', background: '#000' }).png().toBuffer(),
     left: (index % columns) * (tile + 8), top: Math.floor(index / columns) * (tile + 8),

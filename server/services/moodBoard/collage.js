@@ -17,7 +17,6 @@ import { createHash } from 'crypto';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
 import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
@@ -149,6 +148,7 @@ export async function extractItemFrames(boardId, itemId, { count, times }) {
 }
 
 async function resizeCell(source, cell) {
+  const { default: sharp } = await import('sharp');
   return sharp(source).rotate().resize(cell, cell, { fit: 'cover', position: 'centre' }).jpeg({ quality: 90 }).toBuffer();
 }
 
@@ -227,6 +227,7 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
       return { input, left: GAP_PX + offset + (idx % cols) * (cell + GAP_PX), top: GAP_PX + row * (cell + GAP_PX) };
     });
 
+    const { default: sharp } = await import('sharp');
     const jpeg = await sharp({ create: { width, height, channels: 3, background: BG } })
       .composite(placed)
       .jpeg({ quality: 90 })

@@ -16,7 +16,6 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { getImageModels } from '../../lib/mediaModels.js';
 
 import { getSettings } from '../settings.js';
 import { writeLoraSidecar } from '../loras.js';
@@ -34,7 +33,6 @@ import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 
 import { listRunCheckpoints, resolveCheckpointAdapterBuffer, selectDeployableCheckpoint } from './checkpoints.js';
 import * as runsDb from './db.js';
-import { generateImage } from '../imageGen/local.js';
 
 export { listRuns, getRun, getRunRequired } from './db.js';
 export { trainingEvents } from './events.js';
@@ -691,6 +689,7 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
   // Resolve the inference model for this LoRA's variant. The registered base is
   // flux2-klein-<variant>; fall back to the run's baseModelId.
   const variant = run.fluxVariant || null;
+  const { getImageModels } = await import('../../lib/mediaModels.js');
   const models = getImageModels();
   const modelId = (variant && models.find((m) => m.id === `flux2-klein-${variant}`)?.id)
     || (models.find((m) => m.id === run.baseModelId)?.id)
@@ -704,6 +703,7 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
   const res = run.params?.resolution || 768;
 
   console.log(`🖼️ training [${shortId(runId)}] rendering preview for promoted step ${step} (${modelId})`);
+  const { generateImage } = await import('../imageGen/local.js');
   const result = await generateImage({
     pythonPath,
     prompt,

@@ -52,7 +52,6 @@
 
 import { stat } from 'node:fs/promises';
 import { Worker } from 'node:worker_threads';
-import sharp from 'sharp';
 import {
   hasMeaningfulAlpha as hasMeaningfulAlphaShared,
 } from '../../lib/borderKey.js';
@@ -188,6 +187,7 @@ export function subjectFrameLayout({ width, height, subjectScale }) {
  */
 async function frameSubject(frame, { subjectScale, transparent }) {
   const layout = subjectFrameLayout({ width: frame.width, height: frame.height, subjectScale });
+  const { default: sharp } = await import('sharp');
   const resized = await sharp(frame.data, {
     raw: { width: frame.width, height: frame.height, channels: 4 },
   })
@@ -277,6 +277,7 @@ export async function prepareSourceImage({
   // large to process affordably (KEY_MAX_PIXELS), and when it has no alpha channel
   // at all, skip the full-buffer meaningful-alpha scan below (ensureAlpha
   // fabricates the channel).
+  const { default: sharp } = await import('sharp');
   const { hasAlpha, width, height } = await sharp(sourcePath).metadata();
   if (!width || !height || width * height > KEY_MAX_PIXELS) return null;
   // Measure AFTER EXIF transposition: raw pixels carry no orientation tag and the

@@ -14,7 +14,6 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import sharp from 'sharp';
 import { readFile, readdir, stat, mkdtemp, open, rename } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
@@ -1292,6 +1291,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           const targetW = Math.round(Number(upscaleTo?.width));
           const targetH = Math.round(Number(upscaleTo?.height));
           if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
+            const { default: sharp } = await import('sharp');
             const resized = await sharp(outputPath)
               .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
               // compressionLevel 6 (sharp default) — near-identical size to 9 but
@@ -1498,6 +1498,7 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
   const output = join(PATHS.images, filename);
   const staging = `${output}.tmp`;
   try {
+    const { default: sharp } = await import('sharp');
     await sharp(input, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toFile(staging);
     // Encoding stays outside admission. Publish the final file, metadata, and
     // derived database row together so a backup cannot split those writes.

@@ -20,7 +20,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   probeVideoDuration: vi.fn(async () => 30),
   probeVideoGeometry: vi.fn(async () => null),
 }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(), saveHistory: vi.fn(async () => {}) }));
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()), loadHistory: vi.fn(), saveHistory: vi.fn(async () => {}) }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), updateProject: vi.fn(async () => ({})) }));
 
@@ -35,7 +35,7 @@ import {
   renderMusicVideo,
 } from './render.js';
 import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
-import { loadHistory } from '../videoGen/local.js';
+import { loadHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject } from './projects.js';
 import { planShots } from './shotPlan.js';

@@ -11,7 +11,6 @@
 // gpt-image renders remain detectable by openai.com/synthid. Keep UI copy
 // honest about that distinction.
 
-import sharp from 'sharp';
 import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
@@ -215,12 +214,13 @@ const IGNORE_ZONE_FEATHER_MAX = 50;
  * back to the un-composited diffused buffer instead of failing the request.
  * `sharpImpl` is injectable for tests.
  */
-export async function compositeIgnoreZone(base, original, mask, { feather = IGNORE_ZONE_FEATHER_DEFAULT, sharpImpl = sharp } = {}) {
+export async function compositeIgnoreZone(base, original, mask, { feather = IGNORE_ZONE_FEATHER_DEFAULT, sharpImpl } = {}) {
   if (!Buffer.isBuffer(base) || !Buffer.isBuffer(original) || !Buffer.isBuffer(mask)) return null;
   // Cap every decode at MAX_PIXELS — the mask (and, via the length-framed
   // envelope, the original) can be independently sized, so the decompression-
   // bomb guard the main cleaner enforces must extend to this pass too.
   const opts = { limitInputPixels: MAX_PIXELS };
+  if (sharpImpl === undefined) sharpImpl = (await import('sharp')).default;
   const meta = await sharpImpl(base, opts).metadata().catch(() => null);
   const w = Math.round(Number(meta?.width));
   const h = Math.round(Number(meta?.height));
@@ -321,6 +321,7 @@ export async function cleanImageBuffer(buffer, options = {}) {
   let c2paStripped = false;
 
   try {
+    const { default: sharp } = await import('sharp');
     if (denoise) {
       // Single decode for EXIF auto-orient + denoise + encode. .rotate() with no
       // args bakes the EXIF Orientation tag into pixels so the cleaned image

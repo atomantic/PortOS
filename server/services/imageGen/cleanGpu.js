@@ -31,7 +31,6 @@
 
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import sharp from 'sharp';
 import { PATHS, ensureDir, atomicWrite, tryReadFile, resolveImageCleanTmp } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../../lib/imageClean.js';
@@ -79,6 +78,7 @@ export async function enqueueGpuClean({
   const initAbsPath = join(PATHS.imageCleanTmp, initName);
   // Normalize to PNG so the runner's init-image decode is stable regardless of
   // the source format, then write the raw bytes.
+  const { default: sharp } = await import('sharp');
   const initPng = await sharp(initBuffer).png().toBuffer();
   await atomicWrite(initAbsPath, initPng);
 
@@ -164,6 +164,7 @@ export async function readGpuCleanResult(jobId) {
     }
   }
 
+  const { default: sharp } = await import('sharp');
   const dims = await sharp(rendered).metadata().catch(() => ({}));
   return { data: rendered, width: dims.width || null, height: dims.height || null, composited: false };
 }

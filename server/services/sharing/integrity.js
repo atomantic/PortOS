@@ -15,7 +15,7 @@ import { computeRecordIntegrity } from '../../lib/syncIntegrity.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
-import { listLooms } from '../fableLoom/index.js';
+import { listLooms } from '../fableLoom/records.js';
 import { listAuthors } from '../authors/index.js';
 import { listArtists } from '../artists/index.js';
 import { listAlbums } from '../albums/index.js';

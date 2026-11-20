@@ -15,8 +15,6 @@
  * mathematically degenerate frame is rejected and a dark-but-real tail still qualifies.
  */
 
-import sharp from 'sharp';
-
 // Tail window the candidates are decoded from, and how densely. Capped at the reach of the single
 // `-sseof -1.0` seek this replaces: focus tends to be highest at the OLDEST candidate, so a wider
 // window would anchor further from the cut at every chain seam; recency alone can't bound it.
@@ -113,10 +111,11 @@ export function scoreFrame(frame, { recency = 1 } = {}) {
  * Decode an image file to a raw greyscale frame; null on ANY decode failure (a partial candidate
  * must never abort a render the user already paid GPU time for).
  */
-export async function decodeGreyscaleFrame(path, { sharpImpl = sharp } = {}) {
+export async function decodeGreyscaleFrame(path, { sharpImpl } = {}) {
   // `removeAlpha()` states the one-channel requirement explicitly; the channel check below is the
   // backstop, since an interleaved buffer is still >= width*height bytes and would pass the shape
   // check while the scorer read alpha samples as neighbouring pixels.
+  if (sharpImpl === undefined) sharpImpl = (await import('sharp')).default;
   const decoded = await sharpImpl(path).removeAlpha().greyscale().raw()
     .toBuffer({ resolveWithObject: true })
     .catch(() => null);
@@ -134,7 +133,7 @@ export async function decodeGreyscaleFrame(path, { sharpImpl = sharp } = {}) {
  * nothing decoded or all are degenerate. `index` is the position in the input array AS PASSED
  * (non-string entries are skipped, not renumbered): the caller derives the anchor's time offset from it.
  */
-export async function pickBestFrame(paths, { sharpImpl = sharp } = {}) {
+export async function pickBestFrame(paths, { sharpImpl } = {}) {
   const list = Array.isArray(paths) ? paths : [];
   if (!list.length) return null;
   let best = null;

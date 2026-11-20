@@ -1,4 +1,5 @@
-import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
+import { voiceObservation } from '../services/localModelObservations.js';
+import { observeModelMutations } from '../services/modelObservation.js';
 import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
 /**
  * Voice Routes
@@ -14,9 +15,9 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
-import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
+import { invalidateHealthCache } from '../services/voice/health.js';
 import * as facetimeBridge from '../services/voice/facetimeBridge.js';
-import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
+import { reconcile, downloadPiperVoice, startWhisper, stopWhisper } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices, listVoiceEngines, VALID_ENGINES } from '../services/voice/tts.js';
 import {
   listVoiceProfiles,
@@ -177,19 +178,6 @@ router.put('/config', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/voice/status — reachability + enabled flag + binary/model presence
-const voiceObservation = observeModelResource('voice-readiness', async () => {
-  const cfg = await getVoiceConfig();
-  const [services, bins] = await Promise.all([checkAll(cfg), verifyBinaries(cfg)]);
-  const models = verifyModels(cfg);
-  return {
-    enabled: cfg.enabled,
-    sttEngine: cfg.stt.engine,
-    ttsEngine: cfg.tts.engine,
-    services,
-    binaries: bins,
-    models,
-  };
-}, 5000);
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await voiceObservation.read());
 }));
