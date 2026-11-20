@@ -49,6 +49,14 @@ snapshots fails pregate and leaves a receipt with `treeStable: false`. It also
 records `validationMode` (`focused` or `ci`); focused mode marks server and client
 results as reduced coverage.
 
+With a resolved remote default or explicit base, focused planning and receipt
+verification use four Git calls for a stable clean checkout and six for a stable
+dirty checkout whose temporary index is byte-identical at both ends. Dirty
+snapshots each stage into a fresh copy of the live index. A different snapshot
+index triggers `git write-tree` to check the resulting tree, since stat changes
+can alter the index without altering tracked content. Stage subprocesses run
+their own checks, including the hidden-content scan.
+
 ## Structural guards and dependency check
 
 The early guards run before broad tests and resource probes. Use

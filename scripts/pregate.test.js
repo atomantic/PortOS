@@ -19,7 +19,7 @@ import {
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
-  collectPregateChangedFiles,
+  collectPregateInputs,
   resolvePlanStages,
   describeBrowserSelection,
   describeStageCommand,
@@ -36,7 +36,7 @@ import {
   workflowLintSelected,
   UNCOVERED_SUITES,
 } from './pregate.js';
-import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash } from './lib/pregateReport.js';
+import { buildPregateReport, createWorkingTreeHasher, PREGATE_REPORT_PATH } from './lib/pregateReport.js';
 import { probeTestDatabase, TEST_DATABASE, uncreatableExtensions, testDatabaseStageEnv } from './lib/pregateResources.js';
 
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -499,7 +499,10 @@ describe('pregate hidden-content invocation', () => {
     write('client/src/example.js', 'export const example = true;\n');
     git('add', 'client/src/example.js');
     git('commit', '-qm', 'focused source change');
-    if (dirty) write(trackedPath, `${clean}worktree change\n`);
+    if (dirty) {
+      write(trackedPath, `${clean}worktree change\n`);
+      write('docs/untracked note.md', '# Untracked\n');
+    }
     const preload = `
       import childProcess from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
@@ -521,9 +524,13 @@ describe('pregate hidden-content invocation', () => {
     expect(focused.stdout).toContain('Planning against origin/development');
     expect(focused.stdout).not.toContain('fixture-planner');
     const gitCommands = focused.stdout.split('\n').filter(line => line.startsWith('fixture-git '));
-    expect(gitCommands).toHaveLength(dirty ? 9 : 6);
+    expect(gitCommands).toHaveLength(dirty ? 6 : 4);
     expect(gitCommands).not.toContain('fixture-git check-attr');
-    expect(gitCommands.filter(cmd => cmd === 'fixture-git write-tree')).toHaveLength(dirty ? 2 : 0);
+    expect(gitCommands.filter(cmd => cmd === 'fixture-git write-tree')).toHaveLength(dirty ? 1 : 0);
+    git('add', '-A');
+    expect(JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'))).toMatchObject({
+      passed: true, treeStable: true, tree: git('write-tree'),
+    });
     const full = invoke('--full', '--plan-only');
     expect(full.status, full.stderr).toBe(0);
     expect(full.stdout).toContain('fixture-planner');
@@ -634,6 +641,29 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     ], { cwd: root, encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Planning against origin/main');
+  });
+
+  it('combines committed and worktree changes while keeping staged path membership', () => {
+    const committed = 'docs/committed.md';
+    const staged = 'docs/staged add.md';
+    const intent = 'docs/intent.md';
+    const untracked = 'docs/untracked.md';
+    write(committed, '# Committed\n');
+    git('add', committed);
+    git('commit', '-qm', 'branch change');
+    git('rm', trackedPath);
+    write(trackedPath, clean); // A staged deletion can have untracked content at the same path.
+    write(staged, '# Staged\n');
+    git('add', staged);
+    write(intent, '# Intent to add\n');
+    git('add', '-N', intent);
+    write(untracked, '# Untracked\n');
+
+    const inputs = collectPregateInputs(base, git('rev-parse', 'HEAD^{tree}'), { cwd: root });
+    expect(inputs.changedFiles.filter(path => path.startsWith('docs/'))).toEqual(
+      [committed, staged, intent, untracked, trackedPath].sort(),
+    );
+    expect(inputs.trackedFiles.filter(path => path.startsWith('docs/'))).toEqual([committed, staged, intent].sort());
   });
 
   it('does not link or check dependencies for --plan-only, even in a bare worktree', () => {
@@ -1207,7 +1237,7 @@ describe('the gate end to end', () => {
       mkdirSync(dirname(join(root, test)), { recursive: true });
       writeFileSync(join(root, test), "import { it } from 'vitest';\nit('works', () => {});\n");
 
-      const { changedFiles, workingTreeFiles } = collectPregateChangedFiles(base, { cwd: root });
+      const { changedFiles, workingTreeFiles } = collectPregateInputs(base, git('rev-parse', 'HEAD^{tree}'), { cwd: root });
       const inputs = collectPlanInputs({ baseSha: base, changedFiles, cwd: root });
       const plan = buildCiTestPlan(inputs.changedFiles, {
         trackedFiles: inputs.trackedFiles,
@@ -1642,7 +1672,7 @@ describe('buildPregateReport', () => {
   });
 });
 
-describe('validatedTreeHash', () => {
+describe('working tree snapshots', () => {
   it('hashes the working tree — modified, deleted, untracked, not ignored — exactly as a commit of it would', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-pregate-tree-'));
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -1670,12 +1700,13 @@ describe('validatedTreeHash', () => {
       const indexBefore = readFileSync(join(root, '.git', 'index'));
       const statusBefore = git('status', '--porcelain=v1', '--untracked-files=all');
 
-      const hash = validatedTreeHash(root);
+      const hashWorkingTree = createWorkingTreeHasher(root);
+      const hash = hashWorkingTree();
 
       expect(hash).not.toBe(committedTree);
       expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
       expect(git('status', '--porcelain=v1', '--untracked-files=all')).toBe(statusBefore);
-      expect(validatedTreeHash(root)).toBe(hash);
+      expect(hashWorkingTree()).toBe(hash);
 
       git('add', '--all');
       git('commit', '-qm', 'validated state');
@@ -1710,7 +1741,7 @@ describe('validatedTreeHash', () => {
       writeFileSync(join(root, 'value.js'), 'export const value = 2;\n');
       utimesSync(join(root, 'value.js'), past, past);
 
-      const tree = validatedTreeHash(root);
+      const tree = createWorkingTreeHasher(root)();
 
       expect(git('rev-parse', `${tree}:value.js`)).toBe(git('hash-object', 'value.js'));
     } finally {
