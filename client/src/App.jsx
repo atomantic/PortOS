@@ -7,7 +7,7 @@ import { getSettings, updateSettings, getSelfInstance } from './services/apiSyst
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import BrailleSpinner from './components/BrailleSpinner';
-import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
+import { CatalogTypesProvider } from './components/CatalogTypesContext.jsx';
 import { lazyWithReload } from './utils/lazyWithReload';
 
 // Direct links to other pages should not download the dashboard's grid/editor.

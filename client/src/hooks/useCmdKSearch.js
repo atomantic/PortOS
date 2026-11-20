@@ -12,10 +12,11 @@ export function openCmdKSearch() {
   document.dispatchEvent(new Event(CMD_K_SEARCH_OPEN_EVENT));
 }
 
-export function useCmdKSearch() {
+export function useCmdKSearch(disabled = false) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    if (disabled) return undefined;
     const handler = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.repeat) {
         e.preventDefault();
@@ -29,7 +30,7 @@ export function useCmdKSearch() {
       document.removeEventListener('keydown', handler);
       document.removeEventListener(CMD_K_SEARCH_OPEN_EVENT, openHandler);
     };
-  }, []);
+  }, [disabled]);
 
   return { open, setOpen };
 }

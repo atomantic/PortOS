@@ -46,13 +46,9 @@ export const libraryForType = (type) => CREATIVE_LIBRARIES.find((lib) => lib.typ
 export const libraryForPathname = (pathname = '') =>
   CREATIVE_LIBRARIES.find((lib) => pathname === lib.path || pathname.startsWith(`${lib.path}/`)) || null;
 
-// Detail route for an ingredient: its library page when it has one, otherwise
-// the generic catalog editor.
-export function ingredientPath(ingredient) {
-  const id = encodeURIComponent(ingredient?.id || '');
-  const lib = libraryForType(ingredient?.type);
-  return lib ? `${lib.path}/${id}` : `/catalog/${encodeURIComponent(ingredient?.type || 'idea')}/${id}`;
-}
+// Detail route for an ingredient: re-exported from the pure leaf helper so
+// shell/palette callers don't pull in `greyboxVocabulary.js`.
+export { ingredientPath } from './ingredientPath.js';
 
 // The detail tab a `:tab` route param names, falling back to the first
 // (Profile) for an absent or unknown one.

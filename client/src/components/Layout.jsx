@@ -66,8 +66,8 @@ import { useThemeContext } from './ThemeContext';
 import NotificationDropdown from './NotificationDropdown';
 import ThemeSwitcher from './ThemeSwitcher';
 import VoiceToggleButton from './voice/VoiceToggleButton';
-import CmdKSearch from './CmdKSearch';
-import KeyboardHelp from './KeyboardHelp';
+import CmdKSearchGate from './CmdKSearchGate';
+import KeyboardHelpGate from './KeyboardHelpGate';
 import VoiceWidgetGate from './voice/VoiceWidgetGate';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 import SidebarContext from './SidebarContext.jsx';
@@ -1165,11 +1165,11 @@ export default function Layout() {
             renders <main>, so the shell is declared where the route is. */}
         <Outlet />
       </div>
-      {/* Cmd+K search overlay — mounted in layout so it's available on every page */}
+      {/* Cmd+K search overlay — thin hotkey gate loads CmdKSearch on first trigger */}
       <ActionActivityBar />
-      <CmdKSearch />
-      {/* Keyboard shortcuts help — press ? to toggle */}
-      <KeyboardHelp />
+      <CmdKSearchGate />
+      {/* Keyboard shortcuts help — thin hotkey gate loads KeyboardHelp on first `?` */}
+      <KeyboardHelpGate />
       {/* The one shared "your live views are frozen" signal — see #12027 */}
       <SocketReconnectingPill />
       </VoiceWidgetGate>

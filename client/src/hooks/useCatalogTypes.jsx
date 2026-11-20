@@ -6,73 +6,101 @@
  * list/picker/editor; anywhere the catalog type list/lookup is needed.
  */
 
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import useMounted from './useMounted';
+import { useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { CatalogTypesStoreContext, CatalogTypesProvider } from '../components/CatalogTypesContext.jsx';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 import { CATALOG_TYPES, mergeCatalogTypes } from '../lib/catalogTypes';
 
-/**
- * Catalog type registry hook + context. Fetches `GET /api/catalog/types` once (the FULL active registry, system + user-defined) and merges it with the static `CATALOG_TYPES` fallback, which is the SYNCHRONOUS fallback so the first render returns the built-in six and the UI never blanks.
- * Exposed: `types` (ordered merged list `{ id, label, badgeColor, primaryContentKey, primaryContentLabel, snippetFallbackKeys, editorFields?, system }`), `getType(id)`, `ids`, `loading` (true until the first fetch resolves), `error` (the last fetch failure, null when current; `types` still carries the fallback), `refresh` (re-fetch after a Settings → Catalog mutation).
- */
-
-const CatalogTypesContext = createContext(null);
+export { CatalogTypesProvider };
 
 // Build the merged registry from a raw server array (or [] for fallback). The
 // server returns system + user entries; mergeCatalogTypes drops the system
 // ones (already in the static fallback) and normalizes the rest.
 const buildRegistry = (userTypesRaw) => mergeCatalogTypes(CATALOG_TYPES, userTypesRaw);
 
-// Shared fetch-and-merge state machine used by BOTH the Provider and the
-// standalone (provider-less) fallback. `enabled` gates the fetch effect so the
-// standalone path can stay dormant when a context is present. Synchronous
-// fallback to the static system registry so first render never blanks.
-function useRegistryFetcher(enabled = true) {
-  const [registry, setRegistry] = useState(() => buildRegistry([]));
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const mountedRef = useMounted();
+const createInitialState = () => ({
+  registry: buildRegistry([]),
+  loading: true,
+  error: null,
+});
 
-  const refresh = useCallback(() => listCatalogTypes({ silent: true })
+function ensureStoreState(store) {
+  if (!store.state) store.state = createInitialState();
+  return store.state;
+}
+
+function notifyStore(store) {
+  for (const listener of store.listeners) listener(store.state);
+}
+
+function fetchIntoStore(store) {
+  const current = ensureStoreState(store);
+  const run = listCatalogTypes({ silent: true })
     .then((data) => {
-      if (!mountedRef.current) return;
       const serverTypes = Array.isArray(data?.types) ? data.types : [];
-      setRegistry(buildRegistry(serverTypes.filter((t) => t && t.system === false)));
-      setError(null);
-      setLoading(false);
+      store.state = {
+        registry: buildRegistry(serverTypes.filter((t) => t && t.system === false)),
+        loading: false,
+        error: null,
+      };
+      notifyStore(store);
     })
     // Network/route failure → keep the static fallback, surface the error so
     // Settings can offer a retry instead of reading as "no custom types".
-    .catch((err) => { if (mountedRef.current) { setError(err || new Error('Failed to load catalog types')); setLoading(false); } }), []);
-
-  useEffect(() => { if (enabled) refresh(); }, [enabled, refresh]);
-
-  return useMemo(() => ({
-    types: registry.list,
-    getType: (id) => registry.byId[id],
-    ids: registry.list.map((t) => t.id),
-    loading,
-    error,
-    refresh,
-  }), [registry, loading, error, refresh]);
-}
-
-export function CatalogTypesProvider({ children }) {
-  const value = useRegistryFetcher(true);
-  return <CatalogTypesContext.Provider value={value}>{children}</CatalogTypesContext.Provider>;
+    .catch((err) => {
+      store.state = {
+        registry: store.state?.registry || current.registry,
+        loading: false,
+        error: err || new Error('Failed to load catalog types'),
+      };
+      notifyStore(store);
+    })
+    .finally(() => {
+      if (store.inFlight === run) store.inFlight = null;
+    });
+  store.inFlight = run;
+  return run;
 }
 
 /**
- * Read the catalog type registry. When used outside a `CatalogTypesProvider`
- * (e.g. a test that doesn't mount the provider) it falls back to a standalone
- * fetch-and-merge so the hook is still usable in isolation.
+ * Read the catalog type registry. Shares one lazy fetch across consumers under
+ * a `CatalogTypesProvider`, and falls back to a standalone store when used
+ * outside a provider (e.g. an isolated test).
  */
 export function useCatalogTypes() {
-  const ctx = useContext(CatalogTypesContext);
-  // Hooks must run unconditionally — run the standalone fetcher but keep it
-  // dormant (no fetch) when a context already provides the registry.
-  const standalone = useRegistryFetcher(!ctx);
-  return ctx || standalone;
+  const ctxStore = useContext(CatalogTypesStoreContext);
+  const standaloneRef = useRef(null);
+  if (!ctxStore && !standaloneRef.current) {
+    standaloneRef.current = { state: null, inFlight: null, listeners: new Set() };
+  }
+  const store = ctxStore || standaloneRef.current;
+
+  const [snapshot, setSnapshot] = useState(() => ensureStoreState(store));
+
+  useEffect(() => {
+    const listener = (nextState) => setSnapshot(nextState);
+    store.listeners.add(listener);
+    // Sync if the store updated between render and effect, and trigger the
+    // first shared fetch once a consumer actually mounts.
+    if (store.state && store.state !== snapshot) setSnapshot(store.state);
+    if (!store.inFlight && store.state?.loading) {
+      fetchIntoStore(store);
+    }
+    return () => {
+      store.listeners.delete(listener);
+    };
+  }, [store]);
+
+  const refresh = useCallback(() => fetchIntoStore(store), [store]);
+
+  return useMemo(() => ({
+    types: snapshot.registry.list,
+    getType: (id) => snapshot.registry.byId[id],
+    ids: snapshot.registry.list.map((t) => t.id),
+    loading: snapshot.loading,
+    error: snapshot.error,
+    refresh,
+  }), [snapshot, refresh]);
 }
 
 export default useCatalogTypes;

@@ -58,12 +58,12 @@ vi.mock('./NotificationDropdown', () => ({
 }));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('./voice/VoiceWidgetGate', () => ({ default: ({ children }) => children }));
-vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
+vi.mock('./CmdKSearchGate', () => ({ default: () => <div data-testid="command-palette" /> }));
 vi.mock('../utils/staleChunkReload', async (importOriginal) => ({
   ...await importOriginal(),
   reloadOnceForStaleChunk: vi.fn().mockResolvedValue(false),
 }));
-vi.mock('./KeyboardHelp', () => ({ default: () => null }));
+vi.mock('./KeyboardHelpGate', () => ({ default: () => null }));
 
 // --- Socket: record handlers, never connect. ---
 vi.mock('../services/socket', () => ({
