@@ -13,6 +13,7 @@ import {
   normalizeThemeId,
 } from '../themes/portosThemes';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getSettings, updateSettings } from '../services/apiSystem.js';
 
 const STORAGE_KEY = 'portos-theme';
@@ -61,12 +62,10 @@ export default function useTheme() {
   const userPickedRef = useRef(false);
 
   useEffect(() => {
-    const controller = new AbortController();
-    // Silent — a failed read just falls back to localStorage (handled below),
-    // so the request() helper must not toast on top of our own warn.
-    getSettings({ silent: true, signal: controller.signal })
+    let cancelled = false;
+    readShellBootstrap('settings', () => getSettings({ silent: true }))
       .then(settings => {
-        if (userPickedRef.current) return;
+        if (cancelled || userPickedRef.current) return;
         const serverTheme = settings?.theme ? normalizeThemeId(settings.theme) : null;
         const currentSaved = normalizeThemeId(safeReadStorage(STORAGE_KEY));
         if (serverTheme && serverTheme !== currentSaved) {
@@ -78,14 +77,10 @@ export default function useTheme() {
         }
       })
       .catch((err) => {
-        // request() collapses an aborted fetch into a generic error, so check
-        // the controller too — an unmount/StrictMode remount isn't a failure.
-        // The unauthenticated login screen also mounts ThemeProvider. Its
-        // AUTH_REQUIRED response is the expected gate, not a theme failure.
-        if (controller.signal.aborted || err.name === 'AbortError' || err.code === 'AUTH_REQUIRED') return;
+        if (cancelled || err.code === 'AUTH_REQUIRED') return;
         console.warn(`⚠️ Theme fetch failed, using localStorage fallback: ${err.message}`);
       });
-    return () => controller.abort();
+    return () => { cancelled = true; };
   }, []);
 
   const setTheme = useCallback((id) => {

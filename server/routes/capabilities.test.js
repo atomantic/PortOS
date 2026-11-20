@@ -71,6 +71,7 @@ const { getGenomeSummary } = await import('../services/genome.js');
 const { getAllProviders } = await import('../services/provider/providers.js');
 const { getProviderPrerequisiteReadinessMap } = await import('../services/provider/providerPrerequisites.js');
 const { getProviderReadinessMap } = await import('../services/provider/providerReadiness.js');
+const { getShellSetupStatus } = await import('../services/capabilitiesSnapshot.js');
 const { default: capabilitiesRoutes } = await import('./capabilities.js');
 
 const makeApp = () => {
@@ -99,6 +100,19 @@ describe('GET /api/capabilities', () => {
       expect(typeof c.settingsPath).toBe('string');
       expect(c.settingsPath.startsWith('/')).toBe(true);
     }
+  });
+
+  it('keeps the shell setup verdict aligned without probing optional integrations', async () => {
+    countMemories.mockClear();
+    getGenomeSummary.mockClear();
+    const setup = await getShellSetupStatus();
+    expect(countMemories).not.toHaveBeenCalled();
+    expect(getGenomeSummary).not.toHaveBeenCalled();
+
+    const response = await request(makeApp()).get('/api/capabilities');
+    expect(setup.setup).toEqual(response.body.setup);
+    expect(setup.capabilities.map(({ id }) => id)).toEqual(['network', 'providers']);
+    expect(byId(setup, 'providers')).toMatchObject({ setupComplete: true, setupRequired: true });
   });
 
   it('reads the active memory count from the lightweight count helper', async () => {

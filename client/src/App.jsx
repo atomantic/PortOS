@@ -7,7 +7,7 @@ import { getSettings, updateSettings, getSelfInstance } from './services/apiSyst
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import BrailleSpinner from './components/BrailleSpinner';
-import { CatalogTypesProvider } from './components/CatalogTypesContext.jsx';
+import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
 
 // Direct links to other pages should not download the dashboard's grid/editor.
@@ -247,12 +247,14 @@ if (import.meta.hot) {
 function useTimezoneBootstrap(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
-    getSettings().then((s) => {
-      if (s?.timezone) return;
+    let cancelled = false;
+    readShellBootstrap('settings', () => getSettings({ silent: true })).then((s) => {
+      if (cancelled || s?.timezone) return;
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (!tz || tz === 'UTC') return;
       return updateSettings({ timezone: tz });
     }).catch(() => null);
+    return () => { cancelled = true; };
   }, [enabled]);
 }
 
@@ -262,10 +264,12 @@ function useTimezoneBootstrap(enabled = true) {
 function useDocumentTitle(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
-    getSelfInstance({ silent: true }).then((self) => {
+    let cancelled = false;
+    readShellBootstrap('selfInstance', () => getSelfInstance({ silent: true })).then((self) => {
       const name = self?.name?.trim();
-      if (name) document.title = `PortOS: ${name}`;
+      if (!cancelled && name) document.title = `PortOS: ${name}`;
     }).catch(() => null);
+    return () => { cancelled = true; };
   }, [enabled]);
 }
 
@@ -603,7 +607,5 @@ export default function App() {
       </Routes>
     </Suspense>
   );
-  return isHostedAudienceRoute
-    ? routeContent
-    : <CatalogTypesProvider>{routeContent}</CatalogTypesProvider>;
+  return routeContent;
 }

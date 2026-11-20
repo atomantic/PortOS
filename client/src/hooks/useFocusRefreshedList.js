@@ -30,9 +30,10 @@ const NO_EVENTS = [];
 // render landing), so a burst collapses into one names read.
 const RECORD_EVENT_COALESCE_MS = 1000;
 
-export function useFocusRefreshedList(fetchFn, label = 'list', events = NO_EVENTS) {
+export function useFocusRefreshedList(fetchFn, label = 'list', events = NO_EVENTS, enabled = true) {
   const [items, setItems] = useState([]);
   useEffect(() => {
+    if (!enabled) return;
     let lastSuccessAt = 0;
     let cancelled = false;
     let coalesceTimer = null;
@@ -77,6 +78,6 @@ export function useFocusRefreshedList(fetchFn, label = 'list', events = NO_EVENT
       for (const event of events) socket.off(event, onRecordChanged);
       if (events.length) socket.off('connect', load);
     };
-  }, [fetchFn, label, events]);
+  }, [fetchFn, label, events, enabled]);
   return items;
 }

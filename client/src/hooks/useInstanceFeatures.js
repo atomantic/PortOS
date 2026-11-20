@@ -11,6 +11,7 @@
 
 import { useCallback, useSyncExternalStore } from 'react';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
 import * as systemApi from '../services/apiSystem.js';
 
 // One snapshot and event bridge for every mounted consumer. `null` means not
@@ -27,12 +28,15 @@ const commitSnapshot = (result) => {
   subscribers.forEach((notify) => notify());
 };
 
-const loadInstanceFeatures = () => {
+const loadInstanceFeatures = (initial = false) => {
   if (!inFlight) {
     const requested = generation;
     let fetcher;
     try { fetcher = systemApi.getInstanceFeatures; } catch { fetcher = undefined; }
-    const request = (typeof fetcher === 'function' ? fetcher.call(systemApi, { silent: true }) : Promise.reject(new Error('getInstanceFeatures unavailable')))
+    const read = () => typeof fetcher === 'function'
+      ? fetcher({ silent: true })
+      : Promise.reject(new Error('getInstanceFeatures unavailable'));
+    const request = (initial ? readShellBootstrap('features', read) : read())
       .then((data) => ({
         features: Array.isArray(data?.features) ? data.features : [],
         // Feature GROUPS (#40) — Settings > Features is the only consumer that
@@ -77,7 +81,7 @@ const subscribe = (notify) => {
     window.addEventListener(INSTANCE_FEATURES_CHANGED, onFeaturesChanged);
   }
   subscribers.add(notify);
-  if (snapshot === INITIAL_STATE) loadInstanceFeatures();
+  if (snapshot === INITIAL_STATE) loadInstanceFeatures(true);
   return () => {
     subscribers.delete(notify);
     if (subscribers.size === 0) {

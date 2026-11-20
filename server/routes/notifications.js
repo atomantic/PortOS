@@ -13,7 +13,8 @@ const router = Router();
 // GET /api/notifications - List all notifications
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(listNotificationsQuerySchema, req.query);
-  const result = await notifications.getNotifications({
+  const read = query.includeCount ? notifications.getNotificationSnapshot : notifications.getNotifications;
+  const result = await read({
     type: query.type,
     unreadOnly: query.unreadOnly === 'true',
     limit: query.limit

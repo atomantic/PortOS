@@ -16,7 +16,7 @@ export function getMaintenanceStatus() {
 // Coarse banner projection: state, plus the blocker count only while draining
 // (the one state that displays it). Operation-list/revision churn in a stable
 // state leaves it unchanged. Carries no hold capability, resource, owner or PID.
-function readinessProjection(status = getMaintenanceStatus()) {
+export function readinessProjection(status = getMaintenanceStatus()) {
   const { state, agentDiskPressure } = status;
   return { state, blockerCount: state === 'draining' ? status.blockers.length : 0,
     ...(agentDiskPressure && { agentDiskPressure }) };

@@ -12,18 +12,15 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import { CatalogTypesTab } from './CatalogTypesTab';
-import { CatalogTypesProvider } from '../../hooks/useCatalogTypes.jsx';
+import { __resetCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { listCatalogTypes, createCatalogType, deleteCatalogType } from '../../services/apiCatalogTypes';
 import toast from '../ui/Toast';
 
-const renderTab = () => render(
-  <CatalogTypesProvider>
-    <CatalogTypesTab />
-  </CatalogTypesProvider>,
-);
+const renderTab = () => render(<CatalogTypesTab />);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetCatalogTypes();
   listCatalogTypes.mockResolvedValue({ types: [] });
 });
 

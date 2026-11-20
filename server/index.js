@@ -20,6 +20,7 @@ import { isSmokeBoot } from './lib/runtimeEnv.js';
 import { installUpgradeFallback } from './lib/upgradeFallback.js';
 
 import systemHealthRoutes from './routes/systemHealth.js';
+import shellBootstrapRoutes from './routes/shellBootstrap.js';
 import systemActivityRoutes from './routes/systemActivity.js';
 import { createManagedVisitorRoutes } from './routes/managedVisitors.js';
 import { createManagedVisitorAdminRoutes } from './routes/managedVisitorAdmin.js';
@@ -339,6 +340,7 @@ app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);
+app.use('/api/shell', shellBootstrapRoutes);
 app.use('/api/system', maintenanceRoutes);
 app.use('/api/system/capabilities', systemCapabilitiesRoutes);
 app.use('/api/system-resources', systemResourcesRoutes);

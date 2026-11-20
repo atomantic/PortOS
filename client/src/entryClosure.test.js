@@ -34,7 +34,7 @@ const VOICE_STACK_MODULES = [
 // Shell overlays and domain-specific helpers stay out of the cold-load bundle
 // until invoked (#17007): CmdKSearch and KeyboardHelp sit behind thin hotkey
 // gates, OutputBlocks/MarkdownOutput load when a toast expands, and
-// CatalogTypesProvider populates lazily when a consumer mounts.
+// the Catalog type store populates lazily when a consumer mounts.
 const LAZY_SHELL_MODULES = [
   'components/CmdKSearch.jsx',
   'components/KeyboardHelp.jsx',

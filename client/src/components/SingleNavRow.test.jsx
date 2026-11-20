@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { Home } from 'lucide-react';
-import { SingleNavRow } from './Layout';
+import { SingleNavRow } from './SidebarNav.jsx';
 
 const baseItem = { to: '/', label: 'Dashboard', icon: Home, single: true };
 

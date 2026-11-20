@@ -11,6 +11,7 @@ import { NOTIFICATION_TYPES } from './notificationTypes.js';
 // negative slice or an ignored NaN.
 export const listNotificationsQuerySchema = z.object({
   type: z.enum(Object.values(NOTIFICATION_TYPES)).optional(),
+  includeCount: z.literal('true').optional(),
   unreadOnly: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
 });
