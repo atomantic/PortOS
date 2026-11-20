@@ -27,7 +27,7 @@ import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
-import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
+import { cosWorkerBudget, readMaxConcurrentAgents } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
@@ -144,8 +144,8 @@ export function describeBrowserSelection(files) {
  * setting (scripts/lib/cosWorkerBudget.js), shared by every Vitest workspace.
  */
 let derivedWorkerBudget;
-export function pregateWorkerEnv(env) {
-  derivedWorkerBudget ??= String(cosWorkerBudget());
+export function pregateWorkerEnv(env, primaryCheckout) {
+  derivedWorkerBudget ??= String(cosWorkerBudget({ agents: readMaxConcurrentAgents(primaryCheckout) }));
   return { ...env, PORTOS_PREGATE_MAX_WORKERS: env.PORTOS_PREGATE_MAX_WORKERS || derivedWorkerBudget };
 }
 
@@ -574,8 +574,17 @@ export function collectPregateChangedFiles(baseSha, { cwd = REPO_ROOT, status = 
 function repoState(base) {
   const args = ['rev-parse', '--path-format=absolute', '--git-path', 'index', '--git-common-dir', '--git-dir', 'HEAD', 'HEAD^{tree}'];
   if (!base) args.push('--symbolic-full-name', '--revs-only', 'refs/remotes/origin/HEAD');
-  const [indexPath, commonDir, gitDir, head, tree, remoteDefault] = git(args).trimEnd().split('\n');
-  return { indexPath, commonDir, gitDir, head, tree, baseRef: base || remoteDefault?.replace(/^refs\/remotes\//, '') || 'origin/main' };
+  const result = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
+  const [indexPath, commonDir, gitDir, head, tree, remoteDefault] = (result.stdout ?? '').trimEnd().split('\n');
+  // Some Git versions return a nonzero status for the optional trailing ref.
+  // Trust the mandatory fields only if the command actually resolved them.
+  const validObjects = [head, tree].every(id => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id ?? ''));
+  if (!indexPath || !commonDir || !gitDir || !validObjects || result.error || result.signal
+    || (result.status !== 0 && (base || result.status !== 128 || remoteDefault))) {
+    throw new Error('Cannot resolve the Git worktree, index and HEAD tree for pregate.');
+  }
+  const baseRef = base || remoteDefault?.replace(/^refs\/remotes\//, '') || 'origin/main';
+  return { indexPath, commonDir, gitDir, head, tree, baseRef };
 }
 
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
@@ -1059,6 +1068,7 @@ async function main() {
     process.exit(1);
   }
   console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
+  const { PORTOS_PREGATE_MAX_WORKERS: maxWorkers } = pregateWorkerEnv(process.env, dirname(repo.commonDir));
 
   let { uncovered, stages } = planStages({}, {});
 
@@ -1149,7 +1159,7 @@ async function main() {
     stages: results,
     skipped: uncovered,
     downgraded,
-    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers: pregateWorkerEnv(process.env).PORTOS_PREGATE_MAX_WORKERS },
+    runtime: { node: process.version, platform: process.platform, arch: process.arch, maxWorkers },
     startedAt,
     finishedAt: new Date().toISOString(),
   });

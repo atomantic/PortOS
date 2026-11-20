@@ -588,6 +588,26 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     },
   );
 
+  it('falls back to origin/main when the remote default ref is unset', () => {
+    git('update-ref', 'refs/remotes/origin/main', base);
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const original = childProcess.spawnSync;
+      childProcess.spawnSync = (command, args, options) => {
+        if (command !== 'git' || !args.includes('refs/remotes/origin/HEAD')) return original(command, args, options);
+        const result = original(command, args.slice(0, 8), options);
+        return { ...result, status: 128 };
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--plan-only',
+    ], { cwd: root, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Planning against origin/main');
+  });
+
   it('does not link or check dependencies for --plan-only, even in a bare worktree', () => {
     const worktree = join(scratch, 'plan-only-worktree');
     git('worktree', 'add', '--detach', worktree, base);
