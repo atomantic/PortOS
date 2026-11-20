@@ -75,7 +75,6 @@ function normalizeRecord(record, { instanceId, seedTime, nowIso }) {
   // Strip the inner `id` (map key is the id) AND the machine-local Obsidian
   // fields (extracted to the sidecar by the caller; they must never federate).
   // The Obsidian keys are no-ops on inbox records, which never carry them.
-  // eslint-disable-next-line no-unused-vars
   const { id: _innerId, obsidianPath: _op, obsidianVaultId: _ov, ...rest } = record;
   const normalized = {
     ...rest,
