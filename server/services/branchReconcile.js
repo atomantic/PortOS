@@ -831,7 +831,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   );
 
   const { readBranchCompletionPolicies, readBranchCompletionHoldDetail, indexBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-  const completionPolicies = candidates.length ? await readBranchCompletionPolicies({ repoPath }).catch(() => null) : [];
+  const completionPolicies = candidates.length ? await readBranchCompletionPolicies({ repoPath, branches: candidates.map(candidate => candidate.name) }).catch(() => null) : [];
   const policyIndex = indexBranchCompletionPolicies(repoPath, completionPolicies);
 
   const defaultTip = tips.get(defaultBranch);
@@ -1298,7 +1298,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   const readPolicyHold = async (tip) => {
     const input = { repoPath, branch: b.branch, tip, retirement: mergedRetirement };
     if (!superseded || b.openPr) return completionPolicy.readBranchCompletionHold(input);
-    const agents = await completionPolicy.readBranchCompletionPolicies({ repoPath }).catch(() => null);
+    const agents = await completionPolicy.readBranchCompletionPolicies({ repoPath, branch: b.branch }).catch(() => null);
     const detail = await completionPolicy.readBranchCompletionHoldDetail({ ...input, agents });
     return supersededPolicyHold({ hold: detail.reason, superseded, openPr: b.openPr, detail }).hold;
   };

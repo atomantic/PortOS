@@ -9,11 +9,11 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
-import { atomicWrite, safeJSONParse } from '../../lib/fileUtils.js';
-import { loadAgentIndex, getAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
+import { safeJSONParse } from '../../lib/fileUtils.js';
+import { loadAgentIndex, getAgentDir, writeArchivedAgentMetadata } from './cosAgentIndex.js';
 import {
   loadCompletionOrderIndex,
   markCompletionFeedbackResolved,
@@ -286,8 +286,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       const dateBucket = feedbackArchiveDate(agent);
       const archived = await readArchivedAgent(agentId, dateBucket);
       if (archived.kind === 'found') {
-        await atomicWrite(archived.metadataPath, { ...archived.agent, feedback: feedbackData });
-        invalidateArchivedRecord(agentId);
+        await writeArchivedAgentMetadata(dirname(archived.metadataPath), { ...archived.agent, feedback: feedbackData });
       }
 
       emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
@@ -305,8 +304,7 @@ export async function submitAgentFeedback(agentId, feedback) {
     }
 
     const updated = { ...archived.agent, feedback: feedbackData };
-    await atomicWrite(archived.metadataPath, updated);
-    invalidateArchivedRecord(agentId);
+    await writeArchivedAgentMetadata(dirname(archived.metadataPath), updated);
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
     return { success: true, agent: { ...updated, id: agentId }, feedbackData, clearPendingRef: true };

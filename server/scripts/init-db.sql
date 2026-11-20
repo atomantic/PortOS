@@ -486,6 +486,23 @@ CREATE TABLE IF NOT EXISTS cos_agent_store (
     version BIGINT NOT NULL DEFAULT 0
   );
 
+CREATE TABLE IF NOT EXISTS cos_branch_completion_policies (
+    agent_id TEXT COLLATE "C" NOT NULL,
+    repo_path TEXT COLLATE "C" NOT NULL,
+    branch TEXT COLLATE "C" NOT NULL,
+    pr_url TEXT,
+    policy_json JSON NOT NULL,
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY (agent_id, repo_path, branch)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_cos_branch_completion_scope ON cos_branch_completion_policies (repo_path, branch);
+
+CREATE TABLE IF NOT EXISTS cos_branch_policy_archive (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    source_stamp TEXT NOT NULL
+  );
+
 CREATE TABLE IF NOT EXISTS ai_connections (
       id UUID PRIMARY KEY,
       revision INTEGER NOT NULL DEFAULT 1,

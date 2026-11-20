@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', async () => {
   } };
 });
 const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, invalidateArchivedRecord } = await import('./cos/cosAgentIndex.js');
+const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, invalidateArchivedRecord, writeArchivedAgentMetadata } = await import('./cos/cosAgentIndex.js');
 
 const date = '2026-01-01';
 const writeRecord = async (id, patch = {}) => {
@@ -53,7 +53,7 @@ describe('archived agent record memoization', () => {
 
   it('retains at most 500 full records, touching reads and rejecting stale fills after invalidation', () => {
     const epoch = archivedRecordCacheEpoch();
-    const store = id => cacheArchivedRecord(id, date, { id, output: 'full record' }, epoch, { id });
+    const store = id => cacheArchivedRecord(id, date, { id, output: 'full record' }, epoch);
     for (let id = 0; id < 500; id++) store(id);
     expect(getCachedArchivedRecord(0, date).agent.id).toBe(0);
     store(500);
@@ -61,29 +61,32 @@ describe('archived agent record memoization', () => {
     expect(getCachedArchivedRecord(0, date).agent.id).toBe(0);
     for (let id = 501; id < 1000; id++) store(id);
     expect(Array.from({ length: 1000 }, (_, id) => getCachedArchivedRecord(id, date)).filter(Boolean)).toHaveLength(500);
-    expect(getCachedArchivedRecord(1, date, true)?.agent).toEqual({ id: 1 });
     invalidateArchivedRecord(1);
     store(1);
-    expect(getCachedArchivedRecord(1, date, true)).toBeNull();
+    expect(getCachedArchivedRecord(1, date)).toBeNull();
   });
 
   it('preserves scoped policy after full-record eviction, and observes a changed handoff after invalidation', async () => {
     const repoPath = '/synthetic/repository';
     const metadata = { sourceWorkspace: repoPath, worktreeBranch: 'feature/example', prCompletionPolicy: 'leave-open' };
     await writeRecord('agent-a', { metadata, output: 'large transcript' });
-    const [projected] = await readBranchCompletionPolicies({ repoPath });
+    const branch = metadata.worktreeBranch;
+    const [projected] = await readBranchCompletionPolicies({ repoPath, branch });
     expect(projected.metadata.prCompletionPolicy).toBe('leave-open');
     expect(projected).not.toHaveProperty('output');
+    await readBranchCompletionPolicies();
     const epoch = archivedRecordCacheEpoch();
-    for (let id = 0; id < 500; id++) cacheArchivedRecord(id, date, {}, epoch, {});
+    for (let id = 0; id < 500; id++) cacheArchivedRecord(id, date, {}, epoch);
     expect(getCachedArchivedRecord('agent-a', date)).toBeNull();
-    await readBranchCompletionPolicies({ repoPath });
-    expect(runtime.metadataReads).toBe(2);
-    await writeRecord('agent-a', { metadata: { ...metadata, prCompletionPolicy: 'review-then-merge' } });
-    invalidateArchivedRecord('agent-a');
-    const [changed] = await readBranchCompletionPolicies({ repoPath });
+    expect(await readBranchCompletionPolicies({ repoPath, branch: 'feature/other' })).toEqual([]);
+    await readBranchCompletionPolicies({ repoPath, branch });
+    expect(runtime.metadataReads).toBe(4);
+    await writeArchivedAgentMetadata(join(runtime.dir, 'agents', date, 'agent-a'), {
+      id: 'agent-a', status: 'completed', metadata: { ...metadata, prCompletionPolicy: 'review-then-merge' },
+    });
+    const [changed] = await readBranchCompletionPolicies({ repoPath, branch });
     expect(changed.metadata.prCompletionPolicy).toBe('review-then-merge');
-    expect(runtime.metadataReads).toBe(3);
+    expect(runtime.metadataReads).toBe(5);
   });
 
   it('names the unreadable record when one archive file is corrupt', async () => {
