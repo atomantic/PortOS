@@ -34,7 +34,7 @@ export default function AppLaneHealth({ appId }) {
     return () => { active = false; };
   }, [appId, refresh]);
   const data = state.data;
-  const lanes = (data?.lanes || []).filter((lane) => lane.filed > 0)
+  const lanes = (data?.lanes || []).filter((lane) => !lane.legacyAuditDomain && lane.filed > 0)
     .sort((a, b) => noise(b) - noise(a) || b.filed - a.filed || a.label.localeCompare(b.label));
   return (
     <section aria-label="Lane health" className="bg-port-card border border-port-border rounded-lg p-4 space-y-3 min-w-0">

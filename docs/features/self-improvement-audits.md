@@ -90,13 +90,51 @@ proposals, never automatically scored or implemented defects. Preserve authored 
 identity; PortOS's Kestrel references apply only to PortOS. Manual Run or an explicitly
 chosen cadence remains the trigger; adding this lane starts no provider work.
 
+## Active audit domains
+
+The Quality tab plans and scores these 16 domains. CoS Schedule shows active domains and any scheduled legacy profiles. Select **Show all legacy audit profiles** to inspect or run a specific older profile. Each domain starts on demand.
+
 | Task type | Owns | Files under | Mode | Isolated |
 |---|---|---|---|---|
 | `security` | Exposure real under the app's own threat model | `security` | implement | |
+| `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
+| `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
+| `api-contract` | Route validation, client/server drift, envelopes | `api-contract` | file | |
+| `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
+| `feature-completeness` | Work started and never finished, offered to users anyway | `bug`, `incomplete` | file | |
+| `architecture-maintainability` | Architecture and maintainability | `code-quality`, `architecture-maintainability` | file | yes |
+| `code-simplification` | Code simplification | `code-quality`, `code-simplification` | file | yes |
+| `ui-runtime-bugs` | Application and UI runtime bugs | `bug`, `ui-runtime-bugs` | file |  |
+| `reliability-error-handling` | Reliability and error handling | `resilience`, `reliability-error-handling` | file |  |
+| `data-integrity-safety` | Data integrity and safety | `data-safety`, `data-integrity-safety` | file |  |
+| `test-quality-coverage` | Test quality and coverage | `tests`, `test-quality-coverage` | file |  |
+| `performance-efficiency` | Performance and resource efficiency | `performance`, `performance-efficiency` | file |  |
+| `infrastructure-environment` | Infrastructure and development environment | `infrastructure`, `infrastructure-environment` | file |  |
+| `design-usability` | Design and usability | `ux`, `design-usability` | file |  |
+| `documentation-content` | Documentation and product copy | `documentation`, `documentation-content` | file |  |
+
+## Legacy task profiles
+
+Stored schedules keep their original task IDs, prompts, delivery modes, execution history and app overrides. Applying a new Quality plan preserves independent legacy cadences. Historical snapshots keep each profile's daily observation even when several profiles now contribute to one domain.
+
+| Domain | Legacy profiles |
+|---|---|
+| `architecture-maintainability` | `code-quality`, `better-structural-drift`, `module-hygiene`, `typing` |
+| `code-simplification` | `simplify`, `over-engineering`, `better-complexity`, `better-cognitive-load` |
+| `ui-runtime-bugs` | `app-bugs`, `ui-bugs`, `console-errors`, `ui-lifecycle` |
+| `reliability-error-handling` | `error-handling`, `better-runtime-safety`, `reliability`, `workflow-recovery`, `observability` |
+| `data-integrity-safety` | `data-safety`, `data-integrity`, `upgrade-rehearsal` |
+| `test-quality-coverage` | `test-coverage`, `better-test-quality` |
+| `performance-efficiency` | `performance`, `cost-efficiency` |
+| `infrastructure-environment` | `infrastructure`, `better-dev-environment` |
+| `design-usability` | `design`, `ux`, `mobile-responsive` |
+| `documentation-content` | `documentation`, `copy` |
+
+| Task type | Owns | Files under | Mode | Isolated |
+|---|---|---|---|---|
 | `code-quality` | Conventional maintainability defects | `code-quality` | implement | |
 | `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | file | |
 | `performance` | Provably wasted work on a hot path | `performance`, `perf` | implement | |
-| `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
 | `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
 | `ui-bugs` | Things that are broken in the running interface | `bug`, `ui-bug` | implement | |
 | `mobile-responsive` | Layout at viewport widths ≤1024 and touch mechanics | `mobile` | implement | |
@@ -109,7 +147,6 @@ chosen cadence remains the trigger; adding this lane starts no provider work.
 | `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
 | `over-engineering` | Process and validation machinery costing more than the harm it prevents | `code-quality`, `over-engineering` | file | |
 | `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |
-| `api-contract` | Route validation, client/server drift, envelopes | `api-contract` | file | |
 | `ui-lifecycle` | UI resource lifetimes, stale data, async ordering, state continuity | `ui-lifecycle` | file | |
 | `observability` | Silent catches, log noise, missing error context | `code-quality`, `observability` | file | |
 | `copy` | User-facing wording | `ux`, `copy` | file | |
@@ -118,15 +155,12 @@ chosen cadence remains the trigger; adding this lane starts no provider work.
 | `better-structural-drift` | The same fact kept in two places | `code-quality`, `structural-drift` | file | yes |
 | `better-runtime-safety` | Latent defects not yet triggered | `bug`, `runtime-safety` | file | |
 | `app-bugs` | Server and core-logic behavior bugs a user or job can hit: wrong results, edge inputs, success that did nothing, user-triggerable races | `bug`, `app-bug` | file | |
-| `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 | `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
 | `infrastructure` | Deployment, container, IaC and CI configuration | `infrastructure` | file | |
 | `data-integrity` | Ingestion, idempotency, lost updates, consistency, schema evolution | `data-safety`, `data-integrity` | file | |
 | `reliability` | Shutdown, health checks, backpressure, job leasing, mixed-version deploys | `resilience`, `reliability` | file | |
-| `privacy` | Exposure, minimization, retention and erasure of personal data | `privacy` | file | |
 | `cost-efficiency` | Metered spend: paid calls, unbounded scans, over-provisioning | `performance`, `cost` | file | |
-| `feature-completeness` | Work started and never finished, offered to users anyway | `bug`, `incomplete` | file | |
 | `workflow-recovery` | Multi-step workflows that strand their record between steps | `bug`, `workflow` | file | |
 | `upgrade-rehearsal` | Executed migrations, backup restore and boot against scratch installs | `data-safety`, `upgrade-rehearsal` | file | |
 

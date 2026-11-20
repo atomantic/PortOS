@@ -4,6 +4,7 @@ import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import {
   applyDepfreeMode,
+  AUDIT_EXECUTION_PROFILES,
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
   AUDIT_TASK_TYPE_LIST,
@@ -32,8 +33,18 @@ import {
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
+  it('assigns every executable profile to one active domain and keeps filing metrics unambiguous', async () => {
+    const { AUDIT_DOMAIN_ALIASES, auditDomainFor } = await import('./scheduledTaskTypes.js');
+    expect(AUDIT_TASK_TYPES.size).toBeLessThanOrEqual(16);
+    expect(Object.keys(AUDIT_DOMAIN_ALIASES)).toHaveLength(31);
+    expect(AUDIT_TASK_TYPES.size + Object.keys(AUDIT_DOMAIN_ALIASES).length).toBe(Object.keys(AUDIT_EXECUTION_PROFILES).length);
+    for (const id of Object.keys(AUDIT_EXECUTION_PROFILES)) expect(AUDIT_TASK_TYPES.has(auditDomainFor(id)), id).toBe(true);
+    const metrics = Object.values(AUDIT_EXECUTION_PROFILES).map(def => def.filing.metricLabel);
+    expect(new Set(metrics).size).toBe(metrics.length);
+  });
+
   it('has a filing preset (slug + label) for every audit type', () => {
-    for (const [taskType, def] of Object.entries(AUDIT_DEFINITIONS)) {
+    for (const [taskType, def] of Object.entries(AUDIT_EXECUTION_PROFILES)) {
       expect(def.filing, taskType).toBeTruthy();
       expect(def.filing.slugPrefix, taskType).toMatch(/-$/);
       expect(def.filing.issueLabel, taskType).toBeTruthy();
@@ -47,7 +58,7 @@ describe('AUDIT_DEFINITIONS', () => {
 
   it('maps every quota-burn audit preset to a scheduled audit type', () => {
     const mapped = new Set(
-      Object.values(AUDIT_DEFINITIONS).map((def) => def.quotaBurnId).filter(Boolean)
+      Object.values(AUDIT_EXECUTION_PROFILES).map((def) => def.quotaBurnId).filter(Boolean)
     );
     for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
       expect(mapped.has(preset.id), `missing scheduled counterpart for ${preset.id}`).toBe(true);
@@ -61,7 +72,7 @@ describe('AUDIT_DEFINITIONS', () => {
   // — nothing dereferences it at runtime — so only a test can catch it.
   it('every non-null quotaBurnId names a preset that exists', () => {
     const presetIds = new Set(QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id));
-    const referenced = Object.entries(AUDIT_DEFINITIONS)
+    const referenced = Object.entries(AUDIT_EXECUTION_PROFILES)
       .filter(([, def]) => def.quotaBurnId != null);
     // Guards the guard: an accidental `quotaBurnId: null` sweep would make the
     // loop below vacuous while still passing.
@@ -72,7 +83,7 @@ describe('AUDIT_DEFINITIONS', () => {
   });
 
   it('never points two audit types at the same burn preset', () => {
-    const ids = Object.values(AUDIT_DEFINITIONS).map((def) => def.quotaBurnId).filter(Boolean);
+    const ids = Object.values(AUDIT_EXECUTION_PROFILES).map((def) => def.quotaBurnId).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -112,7 +123,7 @@ describe('AUDIT_DEFINITIONS', () => {
   // advisory order; its metric label keeps the two sets of findings apart.
   it('registers upgrade-rehearsal as data-safety\'s executed, ungated successor', () => {
     expect(AUDIT_SUGGESTED_AFTER['upgrade-rehearsal']).toEqual(['data-safety']);
-    expect(AUDIT_DEFINITIONS['upgrade-rehearsal'].filing).toMatchObject({ issueLabel: 'data-safety', extraLabels: ['upgrade-rehearsal'] });
+    expect(AUDIT_EXECUTION_PROFILES['upgrade-rehearsal'].filing).toMatchObject({ issueLabel: 'data-safety', extraLabels: ['upgrade-rehearsal'] });
     expect(auditCapabilityRequirement('upgrade-rehearsal')).toBeNull();
     expect(defaultFileIssuesFor('upgrade-rehearsal')).toBe(true);
   });
@@ -123,7 +134,7 @@ describe('AUDIT_DEFINITIONS', () => {
   });
 
   it('files UI lifecycle findings under framework-neutral names', () => {
-    expect(AUDIT_DEFINITIONS['ui-lifecycle'].filing).toMatchObject({
+    expect(AUDIT_EXECUTION_PROFILES['ui-lifecycle'].filing).toMatchObject({
       slugPrefix: 'ui-lifecycle-',
       issueLabel: 'ui-lifecycle',
       label: 'ui-lifecycle-audit',

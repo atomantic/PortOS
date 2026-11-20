@@ -4,15 +4,18 @@
  * Also re-exports the retired-name map (`TASK_TYPE_RENAMES`, `currentTaskTypeName`, `taskExecutionKey`)
  * for tasks and records written before a task rename.
  */
+import { CONSOLIDATED_AUDIT_DOMAINS } from './auditDomains.js';
 import { PRIVATE_SECURITY_TASK_TYPE } from './privateSecurityPolicy.js';
 import { currentTaskTypeName } from './taskTypeRenames.js';
 import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';
 
+export { AUDIT_DOMAIN_ALIASES, auditDomainFor } from './auditDomains.js';
 export { TASK_TYPE_RENAMES, currentTaskTypeName } from './taskTypeRenames.js';
 
 export const taskExecutionKey = (taskType) => `task:${currentTaskTypeName(taskType.startsWith('task:') ? taskType.slice(5) : taskType)}`;
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
+  ...Object.keys(CONSOLIDATED_AUDIT_DOMAINS),
   PRIVATE_SECURITY_TASK_TYPE,
   'model-comparison-refresh',
   'security', 'code-quality', 'test-coverage', 'performance',

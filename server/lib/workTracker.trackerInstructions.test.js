@@ -25,7 +25,7 @@ import { getAuditFilingPreset } from './auditCatalog.js';
 // budget when a full run is contending for CPU. File scope is unbudgeted
 // (#7951, #10356).
 const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-const { AUDIT_TASK_TYPES, applyDepfreeMode, modeContractFor } = await import('./auditCatalog.js');
+const { AUDIT_EXECUTION_TASK_TYPES, applyDepfreeMode, modeContractFor } = await import('./auditCatalog.js');
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
 
@@ -254,8 +254,8 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   // If an audit prompt later adopts a placeholder the generator substitutes but
   // this chain does not, this test fails and names the token — add it here.
   it('leaves no unexpanded {token} in ANY shipped audit prompt, in either mode', async () => {
-    expect(AUDIT_TASK_TYPES.size).toBeGreaterThan(1);
-    for (const taskType of AUDIT_TASK_TYPES) {
+    expect(AUDIT_EXECUTION_TASK_TYPES.length).toBeGreaterThan(1);
+    for (const taskType of AUDIT_EXECUTION_TASK_TYPES) {
       const template = DEFAULT_TASK_PROMPTS[taskType];
       expect(template, taskType).toBeTruthy();
       for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {

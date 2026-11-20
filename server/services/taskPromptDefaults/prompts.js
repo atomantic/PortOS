@@ -2,10 +2,12 @@
  * Keep legacy synchronous reads and key enumeration while loading a domain only
  * when its first body is requested. Node caches each catalog after that load.
  */
+import { CONSOLIDATED_AUDIT_DOMAINS } from '../../lib/auditDomains.js';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const catalogs = {
+  auditDomains: () => require('./catalog/auditDomains.js').prompts,
   media: () => require('./catalog/media.js').prompts,
   security: () => require('./catalog/security.js').prompts,
   quality: () => require('./catalog/quality.js').prompts,
@@ -25,6 +27,7 @@ const catalogs = {
 
 // Keep the public catalog's original iteration order across domain boundaries.
 const catalogForTask = {
+  ...Object.fromEntries(Object.keys(CONSOLIDATED_AUDIT_DOMAINS).map(id => [id, catalogs.auditDomains])),
   'app-launch-video': catalogs.media,
   'model-comparison-refresh': catalogs.media,
   'security': catalogs.security,

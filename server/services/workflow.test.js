@@ -18,7 +18,7 @@ const { getScheduleStatus } = await import('./taskSchedule.js');
 const { getAllJobs } = await import('./autonomousJobs.js');
 const { checkJobGate, hasGate, getRegisteredGates } = await import('./jobGates.js');
 const { getWorkflowGraph, projectWorkflowTimeline, WORKFLOW_STAGES } = await import('./workflow.js');
-const { AUDIT_TASK_TYPES } = await import('../lib/auditCatalog.js');
+const { isAuditTaskType } = await import('../lib/auditCatalog.js');
 
 
 beforeEach(() => {
@@ -67,10 +67,10 @@ describe('WORKFLOW_STAGES contract', () => {
   // stage adds on top of the catalog.
   it('adds dependency-updates to the derived audit stage, and nothing else', () => {
     const audit = WORKFLOW_STAGES.find(s => s.id === 'audit');
-    const extras = audit.taskTypes.filter(type => !AUDIT_TASK_TYPES.has(type));
+    const extras = audit.taskTypes.filter(type => !isAuditTaskType(type));
     expect(extras).toEqual(['dependency-updates']);
     // It earns the stage without being a catalog type: no file-issues toggle.
-    expect(AUDIT_TASK_TYPES.has('dependency-updates')).toBe(false);
+    expect(isAuditTaskType('dependency-updates')).toBe(false);
   });
 
   it('does not place the same job id in two stages', () => {

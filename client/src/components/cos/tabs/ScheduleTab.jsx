@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -45,6 +45,7 @@ function mergeOnDemandRequest(schedule, request) {
 // model pickers stay live without standing up a second independent poll of the
 // same data.
 export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId, daemonRunning }) {
+  const [showLegacy, setShowLegacy] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: schedule, updateData: setSchedule, loading, error, refetch: fetchSchedule } = useSocketResource(
     () => api.getCosSchedule({ silent: true }),
@@ -158,6 +159,10 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
   const improvementDisabled = schedule.improvementEnabled === false;
   const tasks = schedule.tasks || schedule.appImprovement || schedule.selfImprovement || {};
+  // The API retains every durable task ID for queued work and older clients.
+  // Keep scheduled legacy tasks visible even when browsing the active catalog.
+  const listedTasks = showLegacy ? tasks : Object.fromEntries(Object.entries(tasks).filter(([, task]) =>
+    !task.legacyAuditDomain || task.type === 'cron' || task.perpetual || task.enabledAppCount > 0));
   const allTaskTypes = Object.keys(tasks);
   const selectedConfig = selectedTask ? tasks[selectedTask] : null;
   // The drawer's header shows the same advisory step the card does, so it is
@@ -218,8 +223,14 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         </Banner>
       )}
 
+      {Object.values(tasks).some(task => task.legacyAuditDomain) && (
+        <label htmlFor="show-legacy-audit-profiles" className="inline-flex items-center gap-2 text-sm text-gray-300">
+          <input id="show-legacy-audit-profiles" type="checkbox" checked={showLegacy} onChange={event => setShowLegacy(event.target.checked)} />
+          Show all legacy audit profiles
+        </label>
+      )}
       <AppTaskTypeSection
-        tasks={tasks}
+        tasks={listedTasks}
         apps={apps}
         providers={providers}
         providersLoaded={providersLoaded}

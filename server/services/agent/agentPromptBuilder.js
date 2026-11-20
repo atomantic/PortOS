@@ -122,7 +122,7 @@ const AGENT_PR_DELIVERY_MODES = new Set([COMPLETION_MODES.TUI, COMPLETION_MODES.
 // prompts and tasks queued before a prompt revision get the same guidance.
 
 export const UI_AUDIT_TASK_TYPES = Object.freeze([
-  'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux'
+  'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux', 'design-usability', 'ui-runtime-bugs'
 ]);
 const UI_AUDIT_TASK_TYPE_SET = new Set(UI_AUDIT_TASK_TYPES);
 

@@ -2,6 +2,7 @@
  * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels.
  */
 
+import { ACTIVE_AUDIT_DOMAIN_IDS, CONSOLIDATED_AUDIT_DOMAINS, auditDomainFor, normalizeAuditTaskType } from './auditDomains.js';
 import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { renderOrPrependSection } from './promptSectionRenderer.js';
@@ -120,10 +121,7 @@ Every actionable finding must end as a verified fix or a linked existing/new tra
 export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'typed', 'tests', 'dependencies', 'api', 'infrastructure']);
 
 /** Read aliases kept only for in-flight tasks and historical quality records. */
-export const LEGACY_AUDIT_TASK_TYPE_ALIASES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
-export const normalizeAuditTaskType = (taskType) => Object.hasOwn(LEGACY_AUDIT_TASK_TYPE_ALIASES, taskType)
-  ? LEGACY_AUDIT_TASK_TYPE_ALIASES[taskType]
-  : taskType;
+export { LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from './auditDomains.js';
 
 /** Why an app lacking the capability is not worth scheduling that audit for. */
 export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
@@ -141,7 +139,7 @@ export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
  * `quotaBurnId` maps onto `QUOTA_BURN_PROMPT_PRESETS` so a new burn preset
  * cannot land without a scheduled counterpart (guarded in auditCatalog.test.js).
  */
-export const AUDIT_DEFINITIONS = Object.freeze({
+const legacyProfiles = Object.freeze({
   security: {
     quotaBurnId: 'security-audit',
     label: 'Security',
@@ -694,13 +692,29 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   },
 });
 
-export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
+const consolidated = Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, domain]) => {
+  const members = domain.members.map(member => legacyProfiles[member]);
+  const requirement = members[0].requiresCapability;
+  return [id, {
+    label: domain.label, description: domain.mission, defaultFileIssues: true, quotaBurnId: null,
+    doWorkRequiresWorktree: members.some(member => member.doWorkRequiresWorktree),
+    requiresCapability: members.every(member => member.requiresCapability === requirement) ? requirement : null,
+    filing: filing({ slugPrefix: id + '-', label: id + '-audit', issueLabel: domain.issueLabel,
+      labelDescription: domain.label + ' audit', noun: domain.label + ' finding(s)' }),
+  }];
+}));
+
+export const AUDIT_EXECUTION_PROFILES = Object.freeze({ ...legacyProfiles, ...consolidated });
+export const AUDIT_EXECUTION_TASK_TYPES = Object.freeze(Object.keys(AUDIT_EXECUTION_PROFILES));
+export const AUDIT_DEFINITIONS = Object.freeze(Object.fromEntries(
+  ACTIVE_AUDIT_DOMAIN_IDS.map(id => [id, AUDIT_EXECUTION_PROFILES[id]])
+));
+export const AUDIT_TASK_TYPES = new Set(ACTIVE_AUDIT_DOMAIN_IDS);
 
 /**
  * The same set as an ordered list, in catalog order. The Set answers
- * membership; anything that has to ENUMERATE the audits — a request schema's
- * enum, a schedule planner laying them out — reads this rather than re-deriving
- * `Object.keys(AUDIT_DEFINITIONS)` and acquiring a second vocabulary.
+ * membership; the Quality page and the default schedule planner enumerate these
+ * active domains. Input schemas accept AUDIT_EXECUTION_TASK_TYPES for older clients.
  */
 export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
 
@@ -711,7 +725,7 @@ export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
  * @returns {boolean} True if registered in AUDIT_DEFINITIONS
  */
 export function isAuditTaskType(taskType) {
-  return AUDIT_TASK_TYPES.has(normalizeAuditTaskType(taskType));
+  return Object.hasOwn(AUDIT_EXECUTION_PROFILES, normalizeAuditTaskType(taskType));
 }
 
 /**
@@ -721,7 +735,7 @@ export function isAuditTaskType(taskType) {
  * @returns {boolean} True if the audit defaults to filing issues rather than fixing
  */
 export function defaultFileIssuesFor(taskType) {
-  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.defaultFileIssues === true;
+  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.defaultFileIssues === true;
 }
 
 /**
@@ -732,7 +746,7 @@ export function defaultFileIssuesFor(taskType) {
  * @returns {boolean} True when live-checkout remediation is forbidden
  */
 export function auditDoWorkRequiresWorktree(taskType) {
-  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.doWorkRequiresWorktree === true;
+  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.doWorkRequiresWorktree === true;
 }
 
 /**
@@ -825,7 +839,7 @@ export const FILE_ISSUES_DELIVERY_SETTINGS = Object.freeze({
  * @returns {string|null} A member of AUDIT_REPO_CAPABILITIES, or null
  */
 export function auditCapabilityRequirement(taskType) {
-  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.requiresCapability || null;
+  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.requiresCapability || null;
 }
 
 /**
@@ -835,7 +849,7 @@ export function auditCapabilityRequirement(taskType) {
  * @returns {object|null} Filing preset metadata (slugPrefix, label, issueLabel, planItemBody, etc.) or null
  */
 export function getAuditFilingPreset(taskType) {
-  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.filing || null;
+  return AUDIT_EXECUTION_PROFILES[normalizeAuditTaskType(taskType)]?.filing || null;
 }
 
 // Owner labels as `task-type=labels`: the lane metric label is what lane
@@ -974,7 +988,7 @@ export function applyDepfreeMode(promptTemplate, taskType, metadata) {
  * adding a slashdo scope without a scheduled owner or leaving stale scope
  * labels fails at the source boundary.
  */
-export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
+const profileScopes = Object.freeze({
   security: ['security', 'privacy'],
   'code-quality': ['code-quality', 'observability'],
   dry: ['simplify'],
@@ -988,16 +1002,20 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
 });
 
-/** @deprecated Use DO_BETTER_SCOPE_COVERAGE; kept for API compatibility. */
+export const DO_BETTER_SCOPE_COVERAGE = Object.freeze(Object.fromEntries(
+  Object.entries(profileScopes).map(([scope, profiles]) => [scope, [...new Set(profiles.map(auditDomainFor))]])
+));
+/** @deprecated Use DO_BETTER_SCOPE_COVERAGE. */
 export const DO_BETTER_LENS_COVERAGE = DO_BETTER_SCOPE_COVERAGE;
 
 /** Display metadata is derived, so upgrades never rewrite durable task IDs. */
 export function getAuditScheduleMetadata(taskType) {
   const canonicalType = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(canonicalType)) return { displayName: taskType, defaultLabels: [] };
-  const scopes = Object.entries(DO_BETTER_SCOPE_COVERAGE)
+  const scopes = Object.entries(Object.hasOwn(AUDIT_DEFINITIONS, canonicalType) ? DO_BETTER_SCOPE_COVERAGE : profileScopes)
     .filter(([, types]) => types.includes(canonicalType)).map(([scope]) => scope);
   return {
+    ...(auditDomainFor(canonicalType) !== canonicalType && { legacyAuditDomain: auditDomainFor(canonicalType) }),
     displayName: canonicalType.startsWith('better-') ? canonicalType : `better-${canonicalType}`,
     defaultLabels: ['codebase-improvement', 'slashdo', ...scopes],
   };
@@ -1033,6 +1051,11 @@ export function getAuditScheduleMetadata(taskType) {
 export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // Broad triage first, then coverage, so the tests written next are aimed at
   // the findings the triage surfaced.
+  'test-quality-coverage': Object.freeze(['architecture-maintainability']),
+  'code-simplification': Object.freeze(['architecture-maintainability', 'feature-completeness']),
+  'infrastructure-environment': Object.freeze(['security', 'test-quality-coverage']),
+  'performance-efficiency': Object.freeze(['code-simplification']),
+  'documentation-content': Object.freeze(['performance-efficiency', 'design-usability']),
   'test-coverage': Object.freeze(['code-quality']),
   'better-test-quality': Object.freeze(['test-coverage']),
   'better-dev-environment': Object.freeze(['better-test-quality']),
@@ -1064,6 +1087,11 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
 // text must never be the only place an ordering relationship is recorded.
 // Urgent bugs outrank the sequence; re-measure after each merged change.
 export const AUDIT_RUN_GUIDANCE = Object.freeze({
+  'test-quality-coverage': 'Target coverage and weak assertions at the behavioral risks identified during architectural review.',
+  'code-simplification': 'Simplify code once ownership is understood and unfinished features have been identified.',
+  'infrastructure-environment': 'Review deployment and developer workflows after code security and test behavior are understood.',
+  'performance-efficiency': 'Measure the cost of the code that remains after simplification.',
+  'documentation-content': 'Document the verified performance characteristics and final user workflows.',
   'better-test-quality': 'Assesses whether the tests you have detect the regressions the other audits found — so refactors that follow have a safety net.',
   'better-dev-environment': 'Follows test quality, so it measures the host impact of the suite that will keep running rather than tests about to be deleted.',
   'test-coverage': 'Adds the missing boundary coverage a refactor needs before it starts; avoid duplicating assertions a stronger test already makes.',

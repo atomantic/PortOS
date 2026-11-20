@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AUDIT_SUGGESTED_AFTER, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
+import { AUDIT_SUGGESTED_AFTER, AUDIT_EXECUTION_TASK_TYPES, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
 import { cronWeekdayHours } from './cronFields.js';
 import {
   buildBusySlots,
@@ -13,7 +13,7 @@ const busyFrom = (crons, padding = {}) =>
 
 // A fixed 35-audit prefix keeps slot-count assertions independent of how many
 // lanes the catalog grows to (the planner needs ceil(audits / 7) slots a day).
-const FIXED_AUDITS = AUDIT_TASK_TYPE_LIST.slice(0, 35);
+const FIXED_AUDITS = AUDIT_EXECUTION_TASK_TYPES.slice(0, 35);
 const planFixed = (overrides = {}) => planQualitySchedule({ taskTypes: [...FIXED_AUDITS], ...overrides });
 
 const planAll = (overrides = {}) => planQualitySchedule({ taskTypes: [...AUDIT_TASK_TYPE_LIST], ...overrides });
@@ -31,7 +31,7 @@ describe('buildBusySlots', () => {
 
 describe('orderQualityChecks', () => {
   it('puts every selected check after the predecessors the catalog names', () => {
-    const ordered = orderQualityChecks([...AUDIT_TASK_TYPE_LIST]);
+    const ordered = orderQualityChecks([...AUDIT_EXECUTION_TASK_TYPES]);
     for (const [taskType, predecessors] of Object.entries(AUDIT_SUGGESTED_AFTER)) {
       for (const predecessor of predecessors) {
         expect(ordered.indexOf(predecessor)).toBeLessThan(ordered.indexOf(taskType));
@@ -197,7 +197,7 @@ describe('planQualitySchedule', () => {
   });
 
   it('confines slots to the chosen window and says so when they do not fit', () => {
-    const plan = planAll({ options: { windowStartHour: 9, windowEndHour: 11 } });
+    const plan = planFixed({ options: { windowStartHour: 9, windowEndHour: 11 } });
     for (const slot of plan.slots) {
       expect(slot.hour).toBeGreaterThanOrEqual(9);
       expect(slot.hour).toBeLessThanOrEqual(11);
