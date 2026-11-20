@@ -7,8 +7,12 @@ import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './san
 // applying, restarting and rolling back one patch cannot overlap another.
 export function createStagedFixStore({ root, loadApps, execPm2 }) {
   let tail = Promise.resolve();
+  let stopping = false;
   const serialize = (operation) => {
-    const run = tail.then(operation);
+    const run = tail.then(() => {
+      if (stopping) throw new Error('Autofixer is shutting down');
+      return operation();
+    });
     tail = run.catch(() => {});
     return run;
   };
@@ -41,21 +45,28 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
       if (!validation.ok) return { status: 409, error: validation.reason };
       const applied = await applyDiffToLive(app.repoPath, patch, root);
       if (!applied.ok) return { status: 409, error: applied.error };
-      const restartsSelf = record.processName === 'portos-autofixer';
-      // Persist the applied patch before PM2 shuts down its own dashboard.
-      if (restartsSelf) await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
-      const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
-      if (restart.error) {
-        const rollback = await revertDiffFromLive(app.repoPath, patch, root);
+      const rollback = async (error) => {
+        const reverted = await revertDiffFromLive(app.repoPath, patch, root);
         // A failed rollback must not advertise this patch as safe to apply again.
-        if (rollback.error) {
-          await save(id, { ...record, staged: false, disposition: 'recovery-required', error: rollback.error });
-        } else if (restartsSelf) {
+        if (reverted.error) {
+          await save(id, { ...record, staged: false, disposition: 'recovery-required', error: reverted.error });
+        } else if (record.processName === 'portos-autofixer') {
           await save(id, record);
         }
-        return { status: 500, error: `Restart failed: ${restart.error}${rollback.error ? '; rollback failed — inspect the checkout' : '; patch rolled back'}` };
+        return `Restart failed: ${error}${reverted.error ? '; rollback failed — inspect the checkout' : '; patch rolled back'}`;
+      };
+      if (record.processName === 'portos-autofixer') {
+        // Commit the applied disposition before dispatching a restart that
+        // waits for this daemon to exit. The shutdown drain cannot await it.
+        await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+        void execPm2(['restart', record.processName])
+          .catch(error => serialize(() => rollback(error.message)))
+          .then(message => { if (message) console.error(`❌ [Autofixer] ${message}`); })
+          .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`));
+        return { success: true, disposition: 'applied', status: 202 };
       }
-      if (restartsSelf) return { success: true, disposition: 'applied' };
+      const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
+      if (restart.error) return { status: 500, error: await rollback(restart.error) };
       disposition = 'applied';
     }
     const updated = { ...record, staged: false, promoted: disposition === 'applied', disposition };
@@ -70,6 +81,10 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
   return {
     read,
     serialize,
+    stopMutations: () => {
+      stopping = true;
+      return tail;
+    },
     mutate: (id, action) => serialize(() => perform(id, action)),
     decorateHistory: async (history) => Promise.all(history.map(async entry => {
       const record = await metadata(entry.sessionId);

@@ -360,6 +360,9 @@ module.exports = {
       watch: false,
       autorestart: true,
       max_restarts: 10,
+      // Finish one in-flight patch transaction before PM2 escalates to SIGKILL.
+      // It can run two bounded git apply calls, a PM2 restart and a rollback.
+      kill_timeout: 250000,
       min_uptime: '10s',
       restart_delay: 5000,
       ...memoryLimits(HELPER_MAX_MEMORY)

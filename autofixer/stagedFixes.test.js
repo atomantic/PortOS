@@ -54,6 +54,24 @@ describe('staged repair lifecycle', () => {
     expect((await store.read(id)).status).toBe(404);
   });
 
+  it('finishes the in-flight transaction and refuses queued mutations during shutdown', async () => {
+    const entered = Promise.withResolvers();
+    const hold = Promise.withResolvers();
+    restart.mockImplementation(async () => {
+      entered.resolve();
+      return hold.promise;
+    });
+    const apply = store.mutate(id, 'apply');
+    await entered.promise;
+    const refused = expect(store.mutate(id, 'discard')).rejects.toThrow('shutting down');
+    const drain = store.stopMutations();
+    hold.resolve({ stdout: 'ok' });
+    await drain;
+    await expect(apply).resolves.toEqual({ success: true, disposition: 'applied' });
+    await refused;
+    expect(await store.decorateHistory([{ sessionId: id, staged: true }])).toMatchObject([{ staged: false, promoted: true }]);
+  });
+
   it('rejects a stale patch without changing files or restarting', async () => {
     await writeFile(join(repo, 'example.txt'), 'newer edit\n');
     expect((await store.mutate(id, 'apply')).status).toBe(409);
