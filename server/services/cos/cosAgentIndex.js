@@ -31,25 +31,49 @@ const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 // and bucket date. Archive writers call invalidateArchivedRecord after each
 // metadata.json write so the next read sees it; the epoch stops a read that
 // started before a write from caching the superseded content.
+const MAX_ARCHIVED_RECORDS = 500;
 const archivedRecordCache = new Map();
+// The narrow policy fields outlive full-record eviction; both caches follow
+// the same record invalidation, re-dating, pruning and restore boundary.
+const archivedPolicies = new Map();
 let archivedRecordEpoch = 0;
 
 export const archivedRecordCacheEpoch = () => archivedRecordEpoch;
-export const getCachedArchivedRecord = (id, date) => {
+export const getCachedArchivedRecord = (id, date, policyOnly = false) => {
+  if (policyOnly) {
+    const policy = archivedPolicies.get(id);
+    return policy?.date === date ? policy : null;
+  }
   const hit = archivedRecordCache.get(id);
-  return hit?.date === date ? hit : null;
+  if (!hit || hit.date !== date) return null;
+  archivedRecordCache.delete(id);
+  archivedRecordCache.set(id, hit);
+  return hit;
 };
-export function cacheArchivedRecord(id, date, agent, epoch) {
-  if (epoch === archivedRecordEpoch) archivedRecordCache.set(id, { date, agent });
+export function cacheArchivedRecord(id, date, agent, epoch, policy) {
+  if (epoch !== archivedRecordEpoch) return;
+  archivedPolicies.set(id, { date, agent: policy });
+  archivedRecordCache.delete(id);
+  archivedRecordCache.set(id, { date, agent });
+  if (archivedRecordCache.size > MAX_ARCHIVED_RECORDS) archivedRecordCache.delete(archivedRecordCache.keys().next().value);
 }
 export function pruneArchivedRecordCache(liveIds) {
-  for (const id of archivedRecordCache.keys()) if (!liveIds.has(id)) archivedRecordCache.delete(id);
+  for (const id of archivedPolicies.keys()) {
+    if (liveIds.has(id)) continue;
+    archivedPolicies.delete(id);
+    archivedRecordCache.delete(id);
+  }
 }
 /** Drop one record, or every record when called without an id (file restore). */
 export function invalidateArchivedRecord(agentId) {
   archivedRecordEpoch++;
-  if (agentId === undefined) archivedRecordCache.clear();
-  else archivedRecordCache.delete(agentId);
+  if (agentId === undefined) {
+    archivedRecordCache.clear();
+    archivedPolicies.clear();
+  } else {
+    archivedRecordCache.delete(agentId);
+    archivedPolicies.delete(agentId);
+  }
 }
 
 // Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)

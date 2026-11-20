@@ -2312,16 +2312,14 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
 
-  const currentBranch = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
-    .catch(() => '');
-
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
   const roots = { worktreesDir: WORKTREES_DIR, claudeTreesRoot };
 
   // An unreadable inventory is not an empty successful sweep: callers must
   // retain work rather than falling through to receipt-free orphan cleanup.
-  const worktrees = await listWorktrees(sourceWorkspace);
+  const { readRepoBranchSnapshot } = await import('./repoBranchSnapshot.js');
+  const { branches, worktrees, tips } = await readRepoBranchSnapshot(sourceWorkspace);
+  const currentBranch = branches.find(branch => branch.current)?.name;
   const reaped = [];
   const skipped = [];
 
@@ -2338,7 +2336,8 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     const scan = await decideWith(facts => decideMergedWorktreeReap({
       tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
     }), {
-      ...contentReaders,
+      dirty: contentReaders.dirty,
+      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, scannedBranch, target, tips).catch(() => false),
       // A merged PR at this exact head makes uncommitted and untracked files
       // disposable, and proves a new or still-used branch shipped (#16625).
       mergedPrAtHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
