@@ -56,6 +56,9 @@ function Where() {
 const renderPanel = async (search = '') => {
   render(<MemoryRouter initialEntries={[`/music-video/mv-test/produce${search}`]}><Harness /><Where /></MemoryRouter>);
   await screen.findByRole('tablist', { name: 'Blender film' });
+  // The settings tab measures the workspace on mount; let that request settle here so
+  // its state update cannot land after a test's last synchronous assertion, outside act().
+  await waitFor(() => expect(screen.queryByText('Measuring the workspace…')).not.toBeInTheDocument());
 };
 const push = (event, payload) => act(async () => { for (const fn of handlers.get(event) || []) fn(payload); });
 const deferred = () => {
