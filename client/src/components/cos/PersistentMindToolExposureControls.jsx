@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import * as api from '../../services/api';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import toast from '../ui/Toast';
 
 const MIN_RETENTION_TURNS = 0;
@@ -39,7 +39,7 @@ export default function PersistentMindToolExposureControls({
     setSaving(true);
     onSavingChange?.(true);
     try {
-      await api.updateCosConfig({ persistentMindCapabilities: patch }, { silent: true });
+      await updateCosConfig({ persistentMindCapabilities: patch }, { silent: true });
       onSaved?.({ ...capabilities, ...patch });
       toast.success(successMessage);
     } catch (error) {

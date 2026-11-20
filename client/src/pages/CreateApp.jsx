@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router';
 import { io } from 'socket.io-client';
 import { CheckCircle, Circle, Loader, AlertCircle, Play, Wrench } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { getActiveProvider } from '../services/apiProviders.js';
+import { getDirectories } from '../services/apiScaffold.js';
+import { createApp } from '../services/apiApps.js';
 import IconPicker from '../components/IconPicker';
 import FolderPicker from '../components/FolderPicker';
 import Banner from '../components/ui/Banner';
@@ -111,12 +113,12 @@ export default function CreateApp() {
 
   // Fetch active provider and default directory on mount
   useEffect(() => {
-    api.getActiveProvider().then(provider => {
+    getActiveProvider().then(provider => {
       if (provider) setActiveProvider(provider);
     }).catch(() => {});
 
     // Set default path to PortOS parent directory
-    api.getDirectories().then(result => {
+    getDirectories().then(result => {
       if (result?.currentPath) setRepoPath(result.currentPath);
     }).catch(() => {});
   }, []);
@@ -261,7 +263,7 @@ export default function CreateApp() {
       nativeLaunch
     };
 
-    const result = await api.createApp(data).catch(err => {
+    const result = await createApp(data).catch(err => {
       setError(err.message);
       return null;
     });

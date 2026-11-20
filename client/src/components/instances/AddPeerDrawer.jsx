@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Lock } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
-import { addPeer, addTailcatPeer, startTailcatServe } from '../../services/api';
+import { addPeer, addTailcatPeer, startTailcatServe } from '../../services/apiSystem.js';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../../lib/ports.js';
 import { useTailcatServe } from './TailcatServeProvider';
 import TailcatAddress from './TailcatAddress';

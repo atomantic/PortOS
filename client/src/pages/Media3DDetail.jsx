@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2, ChevronDown } from 'lucide-react';
-import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel, imageTo3dAssetUrl, imageTo3dFullMeshUrl } from '../services/api';
+import {
+  getImageTo3dModel,
+  generateImageTo3dModel,
+  deleteImageTo3dModel,
+  imageTo3dAssetUrl,
+  imageTo3dFullMeshUrl,
+} from '../services/apiImageTo3d.js';
 import useMounted from '../hooks/useMounted';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { timeAgo } from '../utils/formatters';

@@ -6,7 +6,7 @@ import BrailleSpinner from '../BrailleSpinner.jsx';
 import Banner from '../ui/Banner.jsx';
 import toast from '../ui/Toast.jsx';
 import { useSocketResource } from '../../hooks/useSocketResource.js';
-import * as api from '../../services/api.js';
+import { getCosTasks, forceSpawnTask } from '../../services/apiAgents.js';
 
 const QUEUE_EVENTS = [
   'cos:tasks:changed',
@@ -32,7 +32,7 @@ export default function QueuesPanel() {
   // thousand finished tasks — and this resource refetches on every task/agent
   // event. The panel only reads pending, running and spawning tasks.
   const { data, loading, error: queueError, refetch, updateData } = useSocketResource(
-    () => api.getCosTasks({ view: 'queue', silent: true }),
+    () => getCosTasks({ view: 'queue', silent: true }),
     { namespace: 'cos', events: QUEUE_EVENTS },
   );
   const tasks = useMemo(() => {
@@ -54,7 +54,7 @@ export default function QueuesPanel() {
 
   const runNow = async (task) => {
     setSpawningId(task.id);
-    const result = await api.forceSpawnTask(task.id, { silent: true }).catch((error) => {
+    const result = await forceSpawnTask(task.id, { silent: true }).catch((error) => {
       toast.error(error?.message || 'Could not start task');
       return null;
     });

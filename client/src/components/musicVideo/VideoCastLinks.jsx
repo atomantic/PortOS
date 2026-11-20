@@ -3,7 +3,12 @@ import { Link } from 'react-router';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import IngredientPicker from '../IngredientPicker.jsx';
 import toast from '../ui/Toast';
-import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../../services/api';
+import {
+  linkVideoSubjects,
+  listVideoSubjectLinks,
+  restoreVideoSubjectDescription,
+  saveVideoSubjectToCatalog,
+} from '../../services/apiCatalog.js';
 import { formatCount } from '../../utils/formatters';
 import { ingredientPath } from '../../lib/creativeLibraries.js';
 

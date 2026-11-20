@@ -12,7 +12,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModelDetail from './ThreejsModelDetail';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiThreejsModels.js', () => ({
   deleteThreejsModel: vi.fn(),
   generateThreejsModel: vi.fn(),
   getThreejsModel: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock('../components/threejsModels/ThreejsModelPreview', () => ({
   default: ({ family }) => <div>Model preview {family?.id || 'no family'}</div>,
 }));
 
-import { generateThreejsModel, getThreejsModel, listThreejsModelFamilies } from '../services/api';
+import { generateThreejsModel, getThreejsModel, listThreejsModelFamilies } from '../services/apiThreejsModels.js';
 
 const baseRecord = {
   id: 'threejs-example',

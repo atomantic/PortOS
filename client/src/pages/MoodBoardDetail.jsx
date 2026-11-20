@@ -50,7 +50,7 @@ import {
   extractMoodBoardItemFrames,
   extractMoodBoardItemFramesAt,
   renderMoodBoardItem,
-} from '../services/api';
+} from '../services/apiMoodBoard.js';
 import socket from '../services/socket';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource, moodBoardPosterSrc } from '../lib/moodBoardItemSrc';
 import {

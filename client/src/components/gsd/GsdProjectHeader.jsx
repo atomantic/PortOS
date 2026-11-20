@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router';
 import toast from '../ui/Toast';
 import { RefreshCw, Terminal, Play, Settings } from 'lucide-react';
-import * as api from '../../services/api';
+import { addCosTask } from '../../services/apiAgents.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import ProgressBar from '../ui/ProgressBar.jsx';
 
@@ -33,7 +33,7 @@ export default function GsdProjectHeader({ project, appId, repoPath, onRefresh }
   };
 
   const handleNewMilestone = async () => {
-    await api.addCosTask({
+    await addCosTask({
       description: 'Run /gsd:new-milestone to start a new milestone cycle',
       app: appId,
       priority: 'MEDIUM',

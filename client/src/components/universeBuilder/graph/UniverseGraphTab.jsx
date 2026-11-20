@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Loader2, Network } from 'lucide-react';
-import { getUniverseGraph } from '../../../services/api';
+import { getUniverseGraph } from '../../../services/apiUniverseBuilder.js';
 import { pluralize } from '../../../lib/textUtils';
 import {
   GRAPH_EDGE_GROUPS, GRAPH_KIND_ORDER, computeUniverseGaps, edgeDef, indexGraph, neighbourIds,

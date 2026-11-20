@@ -57,7 +57,7 @@ describe('vi.mock factory contract conventions', () => {
   });
 
   it('follows export * when collecting real exports', () => {
-    expect(exportNames(join(ROOT, 'client/src/services/api.js')).size).toBeGreaterThan(50);
+    expect(exportNames(join(ROOT, 'server/lib/fileUtils.js'))).toContain('safeJSONParse');
   });
 
   it('mocks only members the real modules export', () => {

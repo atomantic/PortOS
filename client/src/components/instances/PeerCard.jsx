@@ -5,7 +5,16 @@ import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import socket from '../../services/socket';
-import { updatePeer, removePeer, connectPeer, probePeer, syncPeer, listPeerSubscriptions, retryTailcatForward, forgetTailcatForward } from '../../services/api';
+import {
+  updatePeer,
+  removePeer,
+  connectPeer,
+  probePeer,
+  syncPeer,
+  retryTailcatForward,
+  forgetTailcatForward,
+} from '../../services/apiSystem.js';
+import { listPeerSubscriptions } from '../../services/apiPeerSync.js';
 import PeerSyncSecretEditor from './PeerSyncSecretEditor';
 import PeerAppsList from './PeerAppsList';
 import PeerAgentsSection from './PeerAgentsSection';

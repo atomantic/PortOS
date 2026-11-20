@@ -28,7 +28,8 @@ vi.mock('../services/socket', () => ({
   },
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiMoodBoard.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
   updateMoodBoard: (...args) => mockUpdateMoodBoard(...args),
   addMoodBoardItem: (...args) => mockAddMoodBoardItem(...args),

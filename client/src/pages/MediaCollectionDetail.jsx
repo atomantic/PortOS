@@ -17,12 +17,16 @@ import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { verifyImageNow } from '../services/apiImageVerifier';
 import {
-  getMediaCollection, updateMediaCollection,
+  getMediaCollection,
+  updateMediaCollection,
   listMediaCollections,
-  addMediaCollectionItem, removeMediaCollectionItem,
-  deleteImage, deleteVideoHistoryItem,
-  pullMissingMetadata, localizeMediaCollection,
-} from '../services/api';
+  addMediaCollectionItem,
+  removeMediaCollectionItem,
+  deleteImage,
+  deleteVideoHistoryItem,
+  localizeMediaCollection,
+} from '../services/apiImageVideo.js';
+import { pullMissingMetadata } from '../services/apiPeerSync.js';
 import socket from '../services/socket';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';

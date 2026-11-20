@@ -19,7 +19,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import EmptyState from '../components/EmptyState';
 import MediaImage from '../components/MediaImage';
 import { timeAgo } from '../utils/formatters';
-import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
+import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/apiMoodBoard.js';
 import { moodBoardItemSrc, moodBoardPosterSrc } from '../lib/moodBoardItemSrc';
 
 const itemCounts = (board) => {

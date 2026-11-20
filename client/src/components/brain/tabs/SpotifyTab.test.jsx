@@ -14,7 +14,16 @@ const api = vi.hoisted(() => ({
   syncSpotifyPlaylists: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
+vi.mock('../../../services/apiSpotify.js', () => ({
+  getSpotifyStatus: api.getSpotifyStatus,
+  getSpotifyAuthUrl: api.getSpotifyAuthUrl,
+  saveSpotifyCredentials: api.saveSpotifyCredentials,
+  clearSpotifyAuth: api.clearSpotifyAuth,
+  syncSpotify: api.syncSpotify,
+  getSpotifyPlaylists: api.getSpotifyPlaylists,
+  syncSpotifyPlaylists: api.syncSpotifyPlaylists,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const { SpotifyTab } = await import('./SpotifyTab');

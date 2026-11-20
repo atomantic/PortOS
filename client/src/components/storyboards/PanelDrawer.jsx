@@ -9,7 +9,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import IngredientPicker from '../IngredientPicker';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import { listCatalogIngredientMedia, listCatalogIngredientsByIds } from '../../services/api';
+import { listCatalogIngredientMedia, listCatalogIngredientsByIds } from '../../services/apiCatalog.js';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import {
   SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_COMPOSITIONS, SHOT_COMPOSITION_HINTS, SHOT_COMPOSITION_LABELS,

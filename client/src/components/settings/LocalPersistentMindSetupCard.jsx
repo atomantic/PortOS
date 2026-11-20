@@ -31,7 +31,7 @@ import {
   getLocalPersistentMindSetup,
   installLocalLlmBackend,
   installLocalLlmModel,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
 
 const STEP_ICON = {
   ready: CheckCircle2,

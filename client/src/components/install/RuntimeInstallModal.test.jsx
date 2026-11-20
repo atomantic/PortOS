@@ -6,7 +6,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 vi.mock('../../hooks/useInstallStream', () => ({
   useInstallStream: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
@@ -16,7 +16,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import { useInstallStream } from '../../hooks/useInstallStream';
-import { addCosTask } from '../../services/api';
+import { addCosTask } from '../../services/apiAgents.js';
 import toast from '../ui/Toast';
 import RuntimeInstallModal from './RuntimeInstallModal';
 

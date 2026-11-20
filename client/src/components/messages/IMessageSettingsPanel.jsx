@@ -8,11 +8,7 @@ import FullDiskAccessSteps from './FullDiskAccessSteps';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatDateTime } from '../../utils/formatters';
 import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
-import {
-  getImessageStatus,
-  checkImessageSetup,
-  syncImessage,
-} from '../../services/api';
+import { getImessageStatus, checkImessageSetup, syncImessage } from '../../services/apiMessages.js';
 
 // iMessage ingestion settings (#2151). Opt-in, machine-local ingestion of the
 // macOS Messages database (chat.db) into the Tribe touchpoint log + activity

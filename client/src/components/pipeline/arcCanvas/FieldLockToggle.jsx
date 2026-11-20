@@ -1,6 +1,6 @@
 import { Loader2, Lock, Unlock } from 'lucide-react';
 import { useLockToggle } from '../../../hooks/useLockToggle';
-import { setPipelineArcFieldLock } from '../../../services/api';
+import { setPipelineArcFieldLock } from '../../../services/apiPipeline.js';
 
 // Per-field arc lock toggle. Click flips `series.locked.arcFields[field]`; the
 // server-side `commitSeasonsWithRemap` honors the map so auto-resolve /

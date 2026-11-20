@@ -28,7 +28,7 @@ import {
   endHostedLoomSession,
   preflightHostedLoomSession,
   updateHostedLoomSession,
-} from '../../services/api';
+} from '../../services/apiFableLoom.js';
 
 export default function LoomHostedSessionModal({
   loom,

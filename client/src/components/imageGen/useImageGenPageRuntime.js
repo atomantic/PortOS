@@ -30,16 +30,15 @@ import toast from '../ui/Toast';
 import {
   buildFormData,
   cancelImageGen,
-  generateImage,
   generateImageMultipart,
   getActiveImageJob,
   getFlux2Status,
-  getImageGenStatus,
   getRegenAvailability,
-  listMediaJobs,
   previewImagePrompt,
   regenerateGalleryImage,
-} from '../../services/api';
+} from '../../services/apiImageVideo.js';
+import { generateImage, getImageGenStatus } from '../../services/apiSystem.js';
+import { listMediaJobs } from '../../services/apiMediaJobs.js';
 import { musicVideoFilingFields } from '../../lib/musicVideoFiling';
 
 // The style presets folded into the prompt, recorded beside it on the render (#11317).

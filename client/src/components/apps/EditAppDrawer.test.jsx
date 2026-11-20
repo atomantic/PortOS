@@ -5,26 +5,35 @@ import { MemoryRouter } from 'react-router';
 // Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
 // resolver and the update path used on save.
 const { getInstanceFeatures } = vi.hoisted(() => ({ getInstanceFeatures: vi.fn() }));
-vi.mock('../../services/api', () => ({
-  getDatadogInstances: vi.fn(),
-  getInstanceFeatures,
+vi.mock('../../services/apiApps.js', () => ({
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
   getAppLayeredIntelligenceOutcomes: vi.fn(),
   getAppTaskTypes: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
-  getProviders: vi.fn(),
   updateApp: vi.fn(),
   upgradeAppTls: vi.fn(),
 }));
-
-// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
-vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures,
+  getDatadogInstances: vi.fn(),
+}));
+
+import { getDatadogInstances } from '../../services/apiSystem.js';
+import {
+  getAppWorkTracker,
+  getAppLayeredIntelligence,
+  getAppLayeredIntelligenceOutcomes,
+  getAppTaskTypes,
+  updateAppTaskTypeOverride,
+  updateApp,
+} from '../../services/apiApps.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';
 import EditAppDrawer from './EditAppDrawer';
 
@@ -53,22 +62,22 @@ async function openTab(name) {
 
 beforeEach(() => {
   __resetInstanceFeatureCache();
-  api.getDatadogInstances.mockResolvedValue({ instances: {} });
-  api.getInstanceFeatures.mockResolvedValue({
+  getDatadogInstances.mockResolvedValue({ instances: {} });
+  getInstanceFeatures.mockResolvedValue({
     features: [
       { id: 'datadog', label: 'DataDog', enabled: true },
       { id: 'jira', label: 'JIRA', enabled: true },
       { id: 'gsd', label: 'GSD', enabled: true },
     ],
   });
-  api.getAppWorkTracker.mockResolvedValue({
+  getAppWorkTracker.mockResolvedValue({
     configured: 'auto',
     resolved: 'github',
     host: 'github.com',
     forge: 'gh',
     source: 'origin',
   });
-  api.getAppLayeredIntelligence.mockResolvedValue({
+  getAppLayeredIntelligence.mockResolvedValue({
     appId: 'app-1',
     isPortos: false,
     config: {
@@ -81,13 +90,13 @@ beforeEach(() => {
       allowedScopes: ['app-improvement', 'app-data-gap'],
     },
   });
-  api.getAppLayeredIntelligenceOutcomes.mockResolvedValue({ stats: {}, recent: [] });
-  api.getProviders.mockResolvedValue({ providers: [] });
+  getAppLayeredIntelligenceOutcomes.mockResolvedValue({ stats: {}, recent: [] });
+  getProviders.mockResolvedValue({ providers: [] });
   // Scheduling (enabled/interval/provider/model) is read from the per-app task
   // override now (#2322); default to an empty override.
-  api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
-  api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
-  api.updateApp.mockResolvedValue({});
+  getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+  updateAppTaskTypeOverride.mockResolvedValue({ success: true });
+  updateApp.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -128,8 +137,8 @@ describe('EditAppDrawer tabbed layout', () => {
     fireEvent.change(screen.getByLabelText('GSD availability'), { target: { value: 'disabled' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].featureOverrides).toEqual({
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].featureOverrides).toEqual({
       datadog: null,
       jira: true,
       gsd: false,
@@ -155,7 +164,7 @@ describe('EditAppDrawer work tracker selector', () => {
     await openTab('Workflow');
 
     await screen.findByLabelText('Work Tracker');
-    expect(api.getAppWorkTracker).toHaveBeenCalledWith('app-1');
+    expect(getAppWorkTracker).toHaveBeenCalledWith('app-1');
     await waitFor(() =>
       expect(screen.getByText(/Auto → GitHub Issues \(origin: github\.com\)/)).toBeInTheDocument()
     );
@@ -172,8 +181,8 @@ describe('EditAppDrawer work tracker selector', () => {
     // The Save button lives in the footer and is present on every tab.
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    const [id, payload] = api.updateApp.mock.calls[0];
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    const [id, payload] = updateApp.mock.calls[0];
     expect(id).toBe('app-1');
     expect(payload.workTracker).toBe('gitlab');
   });
@@ -189,8 +198,8 @@ describe('EditAppDrawer work tracker selector', () => {
     fireEvent.change(input, { target: { value: '  acme-bot  ' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].forgeAccount).toBe('acme-bot');
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].forgeAccount).toBe('acme-bot');
   });
 
   it('omits `jira` from the save payload so a drawer save cannot clobber the JIRA tab config', async () => {
@@ -203,9 +212,9 @@ describe('EditAppDrawer work tracker selector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1]).not.toHaveProperty('jira');
-    expect(api.updateApp.mock.calls[0][1]).not.toHaveProperty('datadog');
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1]).not.toHaveProperty('jira');
+    expect(updateApp.mock.calls[0][1]).not.toHaveProperty('datadog');
   });
 
   it('saves the selected default PR completion policy', async () => {
@@ -217,8 +226,8 @@ describe('EditAppDrawer work tracker selector', () => {
     fireEvent.change(select, { target: { value: 'leave-open' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('leave-open');
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].defaultPrCompletion).toBe('leave-open');
   });
   it('preserves an app draft default when saving another field', async () => {
     renderDrawer({ app: { ...APP, defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'draft' } });
@@ -226,8 +235,8 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(await screen.findByLabelText('Default PR completion')).toHaveValue('draft');
     expect(screen.getByText(/Per-run choices override this default/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('draft');
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].defaultPrCompletion).toBe('draft');
   });
 
   it('defaults Use auto-merge off for a managed app and on for PortOS, and saves the choice', async () => {
@@ -237,8 +246,8 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(toggle).not.toBeChecked();
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].useAutoMerge).toBe(true);
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].useAutoMerge).toBe(true);
   });
 
   it('defaults Use auto-merge on for PortOS itself', async () => {
@@ -259,8 +268,8 @@ describe('EditAppDrawer work tracker selector', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].verifyRepoStateOnCompletion).toBe(false);
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].verifyRepoStateOnCompletion).toBe(false);
   });
 
   // Publishing writes to the app's own repo, so the stored value must round-trip
@@ -275,8 +284,8 @@ describe('EditAppDrawer work tracker selector', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].publishQualitySnapshot).toBe(false);
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].publishQualitySnapshot).toBe(false);
   });
 
   it('leaves repo snapshot publishing off for an app that never opted in', async () => {
@@ -306,8 +315,8 @@ describe('EditAppDrawer native launch target', () => {
     fireEvent.change(screen.getByLabelText('Button Label'), { target: { value: 'Play Game' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1]).toMatchObject({
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1]).toMatchObject({
       uiPort: 3000,
       nativeLaunch: {
         label: 'Play Game',
@@ -326,8 +335,8 @@ describe('EditAppDrawer update command', () => {
     fireEvent.change(screen.getByLabelText('Update Command'), { target: { value: 'npm run update' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    expect(api.updateApp.mock.calls[0][1].updateCommand).toBe('npm run update');
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].updateCommand).toBe('npm run update');
   });
 });
 
@@ -344,7 +353,7 @@ describe('EditAppDrawer required-field validation across tabs', () => {
     await waitFor(() =>
       expect(screen.getByText('Name and Repository Path are required.')).toBeInTheDocument()
     );
-    expect(api.updateApp).not.toHaveBeenCalled();
+    expect(updateApp).not.toHaveBeenCalled();
     // The General tab is surfaced so the offending field is visible again.
     expect(await screen.findByLabelText('Name')).toBeInTheDocument();
   });
@@ -358,7 +367,7 @@ describe('EditAppDrawer required-field validation across tabs', () => {
     await waitFor(() =>
       expect(screen.getByText('Name and Repository Path are required.')).toBeInTheDocument()
     );
-    expect(api.updateApp).not.toHaveBeenCalled();
+    expect(updateApp).not.toHaveBeenCalled();
   });
 
   it('blocks Save when a hidden port field holds a non-integer value', async () => {
@@ -372,7 +381,7 @@ describe('EditAppDrawer required-field validation across tabs', () => {
     await waitFor(() =>
       expect(screen.getByText('UI Port must be a whole number between 1 and 65535.')).toBeInTheDocument()
     );
-    expect(api.updateApp).not.toHaveBeenCalled();
+    expect(updateApp).not.toHaveBeenCalled();
     expect(await screen.findByLabelText('UI Port')).toBeInTheDocument();
   });
 });
@@ -381,8 +390,8 @@ describe('EditAppDrawer failed reads', () => {
   it('fails the Intelligence tab, not the loop state, when the schedule override read fails', async () => {
     // A defaulted override would render an enabled loop as off, and unticking it
     // would then diff as no change — the loop could not be stopped from here.
-    api.getAppTaskTypes.mockRejectedValueOnce(new Error('boom'));
-    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: { 'layered-intelligence': { enabled: true } } });
+    getAppTaskTypes.mockRejectedValueOnce(new Error('boom'));
+    getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: { 'layered-intelligence': { enabled: true } } });
     renderDrawer();
     await openTab('Intelligence');
 
@@ -394,8 +403,8 @@ describe('EditAppDrawer failed reads', () => {
   });
 
   it('shows a retryable error instead of "no instances configured" when the DataDog read fails', async () => {
-    api.getDatadogInstances.mockRejectedValueOnce(new Error('boom'));
-    api.getDatadogInstances.mockResolvedValue({ instances: { dd1: { id: 'dd1', name: 'Prod', site: 'datadoghq.com' } } });
+    getDatadogInstances.mockRejectedValueOnce(new Error('boom'));
+    getDatadogInstances.mockResolvedValue({ instances: { dd1: { id: 'dd1', name: 'Prod', site: 'datadoghq.com' } } });
     renderDrawer({ app: { ...APP, datadog: { enabled: true, instanceId: 'dd1' } } });
     await openTab('Features');
 

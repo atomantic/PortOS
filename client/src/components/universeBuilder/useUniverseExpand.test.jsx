@@ -21,7 +21,10 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../services/api', () => apiMocks);
+vi.mock('../../services/apiUniverseBuilder.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...apiMocks,
+}));
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import useUniverseExpand from './useUniverseExpand.js';

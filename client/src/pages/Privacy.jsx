@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import { Shield, LayoutDashboard, KeyRound, Building2, Repeat, ShieldOff } from 'lucide-react';
 import { useValidTab } from '../hooks/useValidTab';
 import useUrlParams from '../hooks/useUrlParams';
-import { getPrivacySubjects } from '../services/api';
+import { getPrivacySubjects } from '../services/apiPrivacy.js';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import PrivacyOverviewTab from '../components/privacy/PrivacyOverviewTab';

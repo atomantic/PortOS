@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiStoryboards.js', () => ({
   listStoryboards: vi.fn(),
   createStoryboard: vi.fn(),
   deleteStoryboard: vi.fn(),
 }));
 
 import Storyboards from './Storyboards';
-import { listStoryboards } from '../services/api';
+import { listStoryboards } from '../services/apiStoryboards.js';
 
 const renderPage = () => render(<MemoryRouter><Storyboards /></MemoryRouter>);
 

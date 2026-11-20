@@ -8,7 +8,12 @@ import DockerContainmentCard from './DockerContainmentCard';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
-import { installEidoverseFeature, updateEidoverseWorldsSource, updateInstanceFeature, updateInstanceFeatureGroup } from '../../services/api';
+import {
+  installEidoverseFeature,
+  updateEidoverseWorldsSource,
+  updateInstanceFeature,
+  updateInstanceFeatureGroup,
+} from '../../services/apiSystem.js';
 
 // How the current value was decided, so a user who never touched the toggle can
 // see that the install picked it up from a configured integration rather than

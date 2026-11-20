@@ -11,7 +11,13 @@ const api = vi.hoisted(() => ({
   repairRunRecords: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getRunEventStats: api.getRunEventStats,
+  getRunEventProjections: api.getRunEventProjections,
+  getRunEventDiagnostic: api.getRunEventDiagnostic,
+  getRunReconciliation: api.getRunReconciliation,
+  repairRunRecords: api.repairRunRecords,
+}));
 
 import RunEventsTab, { projectionAnnotations, summarizeEventData, describeFinding } from './RunEventsTab';
 

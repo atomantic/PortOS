@@ -18,9 +18,13 @@ import { RENDER_TARGET } from '../../lib/imageGenBackends';
 import { buildUniverseSectionRenderTag } from '../../lib/universeRunTag';
 import { BEAT_KIND_COLORS, getBeatKindColor } from '../../lib/beatColors';
 import {
-  updateStorySession, generateStoryStep, refineStoryStep,
-  setStoryIssueLock, generateStoryIssues, updateUniverse, patchUniverseCanonEntry,
-} from '../../services/api';
+  updateStorySession,
+  generateStoryStep,
+  refineStoryStep,
+  setStoryIssueLock,
+  generateStoryIssues,
+} from '../../services/apiStoryBuilder.js';
+import { updateUniverse, patchUniverseCanonEntry } from '../../services/apiUniverseBuilder.js';
 import { useStoryStepRun } from './useStoryStepRuns.jsx';
 
 const FIELD_INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-gray-200 focus:border-port-accent focus:outline-none';

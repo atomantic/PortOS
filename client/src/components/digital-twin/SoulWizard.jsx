@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Sparkles
 } from 'lucide-react';
-import * as api from '../../services/api';
+import { createSoulDocument } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
 
@@ -143,7 +143,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
     const content = generateSoulDocument();
 
     try {
-      await api.createSoulDocument({
+      await createSoulDocument({
         filename: 'SOUL.md',
         title: 'Soul',
         category: 'core',

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Images, Pencil, Plus, X } from 'lucide-react';
 import toast from '../ui/Toast';
-import { generateImage, previewImagePrompt } from '../../services/api';
+import { generateImage } from '../../services/apiSystem.js';
+import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { formatCount } from '../../utils/formatters';
 import ModelInputPreview from './ModelInputPreview';

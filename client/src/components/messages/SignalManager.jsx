@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import * as api from '../../services/api';
+import {
+  listSignalConversations,
+  getSignalBlocklist,
+  blockSignalConversation,
+  purgeSignalConversation,
+  setSignalBlocklist,
+} from '../../services/apiSignal.js';
 import toast from '../ui/Toast';
 
 // Loaded explicitly: settings does not fetch message history until requested.
@@ -13,7 +19,7 @@ export default function SignalManager() {
   const [confirm, setConfirm] = useState(null);
   const load = async () => {
     const [rows, blocklist] = await Promise.all([
-      api.listSignalConversations(query), data === null ? api.getSignalBlocklist() : null,
+      listSignalConversations(query), data === null ? getSignalBlocklist() : null,
     ]);
     setData(rows.conversations);
     if (blocklist) {
@@ -30,9 +36,9 @@ export default function SignalManager() {
   };
   const perform = async () => {
     if (confirm.block) {
-      await api.blockSignalConversation(confirm.id);
+      await blockSignalConversation(confirm.id);
       setConversations((current) => [...new Set([...lines(current), confirm.id])].join('\n'));
-    } else await api.purgeSignalConversation(confirm.id);
+    } else await purgeSignalConversation(confirm.id);
     setConfirm(null);
     await load();
     toast.success('Signal data updated');
@@ -62,7 +68,7 @@ export default function SignalManager() {
       <label htmlFor="signal-blocked-handles" className="block">Blocked handles (one per line)<textarea disabled={busy} id="signal-blocked-handles" value={handles} onChange={(event) => setHandles(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
       <label htmlFor="signal-blocked-conversations" className="block">Blocked conversation IDs (one per line)<textarea disabled={busy} id="signal-blocked-conversations" value={conversations} onChange={(event) => setConversations(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
       <p className="text-xs text-gray-400">Saving exclusions affects future imports. Use Block and purge above to remove existing conversation history.</p>
-      <button disabled={busy} onClick={() => run(async () => { const saved = await api.setSignalBlocklist({ handles: lines(handles), conversationIds: lines(conversations) }); setHandles(saved.handles.join('\n')); setConversations(saved.conversationIds.join('\n')); await load(); toast.success('Signal exclusions saved'); })} className="min-h-10 p-2 border border-port-border rounded">Save exclusions</button>
+      <button disabled={busy} onClick={() => run(async () => { const saved = await setSignalBlocklist({ handles: lines(handles), conversationIds: lines(conversations) }); setHandles(saved.handles.join('\n')); setConversations(saved.conversationIds.join('\n')); await load(); toast.success('Signal exclusions saved'); })} className="min-h-10 p-2 border border-port-border rounded">Save exclusions</button>
     </>}
   </section>;
 }

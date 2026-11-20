@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router';
 import { Brain, Database, Eraser, MessagesSquare, ShieldCheck } from 'lucide-react';
-import * as api from '../../services/api';
+import { cleanupPersistentMind } from '../../services/apiAgents.js';
 import Banner from '../ui/Banner';
 
 const CLEANUP_OPTIONS = [
@@ -52,7 +52,7 @@ export default function PersistentMindMaintenancePanel({
     setPending(true);
     setError(null);
     setResult(null);
-    await api.cleanupPersistentMind({
+    await cleanupPersistentMind({
       scopes: CLEANUP_OPTIONS.map(({ scope }) => scope).filter((scope) => selected.has(scope)),
       confirmation: 'CLEAR',
     }, { silent: true })

@@ -14,7 +14,12 @@ const api = vi.hoisted(() => ({
   removeMediaCollectionItem: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listMediaCollections: api.listMediaCollections,
+  createMediaCollection: api.createMediaCollection,
+  addMediaCollectionItem: api.addMediaCollectionItem,
+  removeMediaCollectionItem: api.removeMediaCollectionItem,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const item = { kind: 'image', key: 'image:hero.png', filename: 'hero.png' };

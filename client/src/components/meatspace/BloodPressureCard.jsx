@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine
 } from 'recharts';
 import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown, Trash2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getBloodPressure, addBloodPressure, removeBloodPressure } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -39,7 +39,7 @@ export default function BloodPressureCard() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
-    const data = await api.getBloodPressure({ silent: true }).catch(() => null);
+    const data = await getBloodPressure({ silent: true }).catch(() => null);
     setFailed(data === null);
     setReadings(data?.readings || []);
     setLoading(false);
@@ -57,7 +57,7 @@ export default function BloodPressureCard() {
     const dia = parseNum(form.diastolic);
     if (sys == null || dia == null || !form.date) return;
     setSaving(true);
-    const reading = await api.addBloodPressure({ date: form.date, systolic: sys, diastolic: dia })
+    const reading = await addBloodPressure({ date: form.date, systolic: sys, diastolic: dia })
       .catch(() => null);
     setSaving(false);
     if (!reading) return;
@@ -243,7 +243,7 @@ export default function BloodPressureCard() {
                         confirmIcon={Trash2}
                         ariaLabel={`Confirm delete blood pressure ${reading.date}`}
                         onConfirm={() => confirmDelete(async () => {
-                          const removed = await api.removeBloodPressure(reading.date).catch(() => null);
+                          const removed = await removeBloodPressure(reading.date).catch(() => null);
                           if (removed) setRemovingDate(reading.date);
                         })}
                         onCancel={cancelDelete}

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Gauge } from 'lucide-react';
-import { probePeer, updatePeer } from '../../services/api';
+import { probePeer, updatePeer } from '../../services/apiSystem.js';
 import {
   FEDERATED_MEDIA_KINDS,
   federatedMediaModelKey as keyOf,

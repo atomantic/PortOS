@@ -7,7 +7,7 @@ import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import { FormField } from '../ui/FormField';
 import { INPUT_CLASS } from '../apps/constants';
-import * as api from '../../services/api';
+import { getProviderServiceDefinitions, createProviderService } from '../../services/apiProviders.js';
 import { SERVICE_SLUG_RE } from '../../../../server/lib/serviceDefinitions.js';
 import { transportsFromDraft } from '../../lib/providerManagement';
 
@@ -45,7 +45,7 @@ const transportsDraftFor = (definition) => Object.fromEntries(
   Object.entries(definition?.transports || {}).map(([protocol, transport]) => [protocol, transport.defaultBaseUrl || '']),
 );
 
-const fetchDefinitions = () => api.getProviderServiceDefinitions({ silent: true })
+const fetchDefinitions = () => getProviderServiceDefinitions({ silent: true })
   .then((data) => (Array.isArray(data?.definitions) ? data.definitions : []));
 
 export default function ProviderServiceForm({ onClose, onCreated }) {
@@ -97,7 +97,7 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
       ...(supportsApiKey && draft.credentialVia === 'stored' && draft.apiKey.trim() ? { credentials: { apiKey: draft.apiKey.trim() } } : {}),
     };
     setBusy(true);
-    const result = await api.createProviderService(body, { silent: true }).catch((err) => ({ error: err?.message || 'Could not add the service' }));
+    const result = await createProviderService(body, { silent: true }).catch((err) => ({ error: err?.message || 'Could not add the service' }));
     setBusy(false);
     if (!result?.service) {
       toast.error(result?.error || 'Could not add the service');

@@ -27,11 +27,28 @@ import LoadFailedState from '../ui/LoadFailedState';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import {
-  addStoryboardBeat, addStoryboardPanel, addStoryboardPanelTake, correctStoryboardPanel, createBlankSketch, deleteStoryboardBeat,
-  deleteStoryboardPanel, drawStoryboardPanel, getStoryboard, listMoodBoardNames, moveStoryboardBeat, moveStoryboardPanel,
-  removeStoryboardPanelTake, runStoryboardPanelNode, selectStoryboardPanelTake, sendStoryboardPanelToFableLoom, updateStoryboard, updateStoryboardBeat,
-  updateStoryboardPanel, updateStoryboardPanelNode, updateStoryboardRecipe,
-} from '../../services/api';
+  addStoryboardBeat,
+  addStoryboardPanel,
+  addStoryboardPanelTake,
+  correctStoryboardPanel,
+  deleteStoryboardBeat,
+  deleteStoryboardPanel,
+  drawStoryboardPanel,
+  getStoryboard,
+  moveStoryboardBeat,
+  moveStoryboardPanel,
+  removeStoryboardPanelTake,
+  runStoryboardPanelNode,
+  selectStoryboardPanelTake,
+  sendStoryboardPanelToFableLoom,
+  updateStoryboard,
+  updateStoryboardBeat,
+  updateStoryboardPanel,
+  updateStoryboardPanelNode,
+  updateStoryboardRecipe,
+} from '../../services/apiStoryboards.js';
+import { createBlankSketch } from '../../services/apiImageVideo.js';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
 import { formatTimecode } from '../../utils/formatters';
 import useListResource from '../../hooks/useListResource';
 import { storyboardPanelSpans } from '../../../../server/lib/storyboardShotSync.js';

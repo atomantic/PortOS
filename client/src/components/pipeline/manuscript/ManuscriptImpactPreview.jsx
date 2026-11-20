@@ -24,7 +24,7 @@ import HunkDiff from '../../ui/HunkDiff';
 import toast from '../../ui/Toast';
 import { planManuscriptEdits } from '../../../lib/applyManuscriptEdits';
 import { selectedEditsFor, sectionKeysOf } from './ManuscriptCommentCard';
-import { acceptPipelineManuscriptFix } from '../../../services/api';
+import { acceptPipelineManuscriptFix } from '../../../services/apiPipeline.js';
 import { STAGE_LABEL } from './constants';
 
 // Gather every selected edit across the given comments, grouped by the section

@@ -8,7 +8,7 @@ import {
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
   withdrawEidoverseFoundation,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
 import { formatDateShort, timeAgo } from '../../utils/formatters';
 
 /**

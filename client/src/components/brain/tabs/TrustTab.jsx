@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
-import * as api from '../../../services/api';
+import { getBrainInbox, getBrainSettings, updateBrainSettings } from '../../../services/apiBrain.js';
 import {
   RefreshCw,
   Shield,
@@ -41,9 +41,9 @@ export default function TrustTab({ onRefresh }) {
     // The rows own their error UI (silent), and a failure is carried as a
     // value so it never reads as an empty log or as default settings.
     const [inboxResult, settingsResult] = await Promise.all([
-      api.getBrainInbox({ status: statusFilter || undefined, limit: 100, silent: true })
+      getBrainInbox({ status: statusFilter || undefined, limit: 100, silent: true })
         .then((data) => ({ data }), (error) => ({ error: asError(error) })),
-      api.getBrainSettings({ silent: true })
+      getBrainSettings({ silent: true })
         .then((data) => ({ data }), (error) => ({ error: asError(error) })),
     ]);
     if (!isCurrent()) return;
@@ -75,7 +75,7 @@ export default function TrustTab({ onRefresh }) {
       return;
     }
 
-    const result = await api.updateBrainSettings({
+    const result = await updateBrainSettings({
       confidenceThreshold: threshold,
       dailyDigestTime: settingsForm.dailyDigestTime,
       weeklyReviewTime: settingsForm.weeklyReviewTime,

@@ -2,7 +2,10 @@ import { expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 const api = vi.hoisted(() => ({ updateCosConfig: vi.fn(), cancelPersistentMindThinkingRequest: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({
+  updateCosConfig: api.updateCosConfig,
+  cancelPersistentMindThinkingRequest: api.cancelPersistentMindThinkingRequest,
+}));
 import PersistentMindThinkingRequests from './PersistentMindThinkingRequests.jsx';
 it('preserves edits on a status refresh, saves only the separate grant, and cancels a pending request', async () => {
   const user = userEvent.setup();

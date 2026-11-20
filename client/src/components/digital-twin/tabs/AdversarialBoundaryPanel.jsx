@@ -1,5 +1,9 @@
 import { ShieldAlert } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getAdversarialTests,
+  getAdversarialTestHistory,
+  runAdversarialTests,
+} from '../../../services/apiDigitalTwin.js';
 import { ADVERSARIAL_STATUS } from '../constants';
 import TwinEvaluationSuitePanel, { SuiteModelResponses } from './TwinEvaluationSuitePanel';
 
@@ -30,9 +34,9 @@ const SUITE = {
   statusMap: ADVERSARIAL_STATUS,
   passResult: 'held',
   failResult: 'breached',
-  getTests: api.getAdversarialTests,
-  getHistory: api.getAdversarialTestHistory,
-  runTests: api.runAdversarialTests,
+  getTests: getAdversarialTests,
+  getHistory: getAdversarialTestHistory,
+  runTests: runAdversarialTests,
   successToast: 'Adversarial boundary tests completed'
 };
 

@@ -6,15 +6,12 @@ import { awaitEnabled } from '../../../test/enabledBarrier.js';
 // Stub the training-log API so mount-time fetches (refreshTrainingStats) and
 // round-completion writes (logTraining) never hit the network — mirrors the
 // mocking convention used by PostDrillConfig.test.jsx / PostHistory.test.jsx.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   submitTrainingEntry: vi.fn(() => Promise.resolve({})),
   getTrainingStats: vi.fn(() => Promise.resolve({
     currentStreak: 3,
     byDrill: { 'morse:morse-copy': { practiceCount: 4, accuracy: 80, totalMs: 1000, daysActive: 2 } },
   })),
-  // Morse server-progress API: a fresh install (kochLevelSet:false, no rounds)
-  // by default so the trainer mounts without adopting or rendering populated
-  // panel content (avoids text collisions with the mode-grid assertions).
   submitMorseRound: vi.fn(() => Promise.resolve({})),
   getMorseProgress: vi.fn(() => Promise.resolve({
     days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
@@ -25,7 +22,13 @@ vi.mock('../../../services/api', () => ({
 
 import MorseTrainer, { MORSE_TABLE, KeyPad, isNodeOnPath, resultsToItems } from './MorseTrainer';
 import { MORSE_MODES as MODES, MORSE_MODE_IDS } from './trainerModes';
-import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
+import {
+  submitTrainingEntry,
+  getTrainingStats,
+  submitMorseRound,
+  getMorseProgress,
+  updateMorseLevel,
+} from '../../../services/apiMeatspace.js';
 
 // Minimal Web Audio mock so CopyDrill's round flow (which calls ensureCtx →
 // playMorse) can run in jsdom without a real AudioContext. No existing shared

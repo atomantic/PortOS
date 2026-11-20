@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as api from '../../../services/api';
+import {
+  getAutomationSchedules,
+  getScheduleStats,
+  createAutomationSchedule,
+  deleteAutomationSchedule,
+  toggleAutomationSchedule,
+  runAutomationScheduleNow,
+} from '../../../services/apiSchedules.js';
+import { getPlatformAccounts } from '../../../services/apiAccounts.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
@@ -29,9 +37,9 @@ export default function SchedulesTab({ agentId }) {
     if (!background) setLoading(true);
     setLoadError(false);
     await Promise.all([
-      api.getAutomationSchedules(agentId, null, { silent: true }),
-      api.getPlatformAccounts(agentId, null, { silent: true }),
-      api.getScheduleStats({ silent: true })
+      getAutomationSchedules(agentId, null, { silent: true }),
+      getPlatformAccounts(agentId, null, { silent: true }),
+      getScheduleStats({ silent: true })
     ]).then(([nextSchedules, nextAccounts, nextStats]) => {
       setSchedules(nextSchedules);
       setAccounts(nextAccounts);
@@ -73,25 +81,25 @@ export default function SchedulesTab({ agentId }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const created = await api.createAutomationSchedule(formData);
+    const created = await createAutomationSchedule(formData);
     resetForm();
     setSchedules(prev => [...prev.filter(s => s.id !== created.id), created]);
   };
 
   const handleDelete = async (id) => {
-    await api.deleteAutomationSchedule(id);
+    await deleteAutomationSchedule(id);
     setSchedules(prev => prev.filter(s => s.id !== id));
   };
 
   const handleToggle = async (id, enabled) => {
-    const updated = await api.toggleAutomationSchedule(id, enabled);
+    const updated = await toggleAutomationSchedule(id, enabled);
     setSchedules(prev => prev.map(s => (s.id === id ? { ...s, ...updated } : s)));
   };
 
   const handleRunNow = async (id) => {
     setRunningId(id);
     try {
-      await api.runAutomationScheduleNow(id);
+      await runAutomationScheduleNow(id);
       fetchData({ background: true });
     } catch {
       // The request helper already shows the failure toast.

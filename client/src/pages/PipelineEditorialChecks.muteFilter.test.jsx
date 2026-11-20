@@ -17,7 +17,7 @@ const getEditorialHealth = vi.fn();
 const getEditorialChecksRunStatus = vi.fn();
 const patchEditorialCheck = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   listPipelineSeries: (...a) => listPipelineSeries(...a),
   updatePipelineSeries: vi.fn(),
   getEditorialChecks: (...a) => getEditorialChecks(...a),
@@ -33,7 +33,6 @@ vi.mock('../services/api', () => ({
   getPipelineManuscriptReview: (...a) => getPipelineManuscriptReview(...a),
   getEditorialHealth: (...a) => getEditorialHealth(...a),
   setEditorialReadinessGate: vi.fn(),
-  // Touched transitively by the triage → ManuscriptCommentCard tree.
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
   undoPipelineManuscriptFix: vi.fn(),

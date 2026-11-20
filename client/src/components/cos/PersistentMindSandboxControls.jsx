@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
-import * as api from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 
 const emptyConfig = { workers: [], evaluator: null };
@@ -16,7 +17,7 @@ export default function PersistentMindSandboxControls({ capabilities, disabled, 
     setEnabled(capabilities?.delegateSandbox === true);
   }, [capabilities?.sandboxDelegation, capabilities?.delegateSandbox]);
   useEffect(() => {
-    api.getProviders({ silent: true }).then((result) => setProviders((result.providers || [])
+    getProviders({ silent: true }).then((result) => setProviders((result.providers || [])
       .filter((provider) => provider.type === 'api' && provider.enabled !== false)))
       .catch((failure) => setError(failure.message || 'Could not load API models'));
   }, []);
@@ -44,7 +45,7 @@ export default function PersistentMindSandboxControls({ capabilities, disabled, 
     onSavingChange?.(true);
     try {
       const patch = { delegateSandbox: enabled, sandboxDelegation: config };
-      const result = await api.updateCosConfig({ persistentMindCapabilities: patch }, { silent: true });
+      const result = await updateCosConfig({ persistentMindCapabilities: patch }, { silent: true });
       onSaved?.(result.persistentMindCapabilities || { ...capabilities, ...patch });
     } catch (failure) {
       setError(failure.message || 'Could not save delegation access');

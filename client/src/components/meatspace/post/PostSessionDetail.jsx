@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Loader, AlertCircle } from 'lucide-react';
-import { getPostSession } from '../../../services/api';
+import { getPostSession } from '../../../services/apiMeatspace.js';
 import PostSessionSummary from './PostSessionSummary';
 
 // Deep-linkable view of ANY saved session (/post/session/:id). Reached after a

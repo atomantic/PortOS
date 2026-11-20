@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+}));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
   providers: [
     { id: 'local-api', name: 'Local example', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', models: ['example-model'] },
@@ -10,7 +13,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
 }) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
 
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel';
 
 beforeEach(() => {

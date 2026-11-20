@@ -32,9 +32,9 @@ vi.mock('../songs/MidiVisualization.jsx', () => ({
   default: ({ url, model }) => <div data-testid="midi-viz" data-url={url} data-model={model} />,
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiTracks.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   listTracks: vi.fn(),
-  listAlbums: vi.fn(),
   createTrack: vi.fn(),
   updateTrack: vi.fn(),
   deleteTrack: vi.fn(),
@@ -47,10 +47,21 @@ vi.mock('../../services/api', () => ({
   TRACK_LYRICS_MAX: 10000,
   TRACK_PROMPT_MAX: 2000,
 }));
+vi.mock('../../services/apiAlbums.js', () => ({
+  listAlbums: vi.fn(),
+}));
 vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoMidiSources: vi.fn() }));
 
 import TracksManager from './TracksManager.jsx';
-import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack, uploadTrackAudio, listMusicLibrary } from '../../services/api';
+import {
+  listTracks,
+  createTrack,
+  deleteTrack,
+  updateTrack,
+  uploadTrackAudio,
+  listMusicLibrary,
+} from '../../services/apiTracks.js';
+import { listAlbums } from '../../services/apiAlbums.js';
 import { listMusicVideoMidiSources } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };

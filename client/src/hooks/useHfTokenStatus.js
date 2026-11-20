@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getHfTokenStatus } from '../services/api';
+import { getHfTokenStatus } from '../services/apiImageVideo.js';
 import useMounted from './useMounted';
 
 const UNKNOWN = { present: null, source: null };

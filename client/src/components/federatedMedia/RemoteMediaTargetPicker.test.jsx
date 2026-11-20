@@ -10,7 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const getInstances = vi.fn();
-vi.mock('../../services/api', () => ({ getInstances: (...args) => getInstances(...args) }));
+vi.mock('../../services/apiSystem.js', () => ({
+  getInstances: (...args) => getInstances(...args),
+}));
 
 const { useFederatedMediaTarget } = await import('../../hooks/useFederatedMediaTarget.js');
 const { default: RemoteMediaTargetPicker } = await import('./RemoteMediaTargetPicker.jsx');

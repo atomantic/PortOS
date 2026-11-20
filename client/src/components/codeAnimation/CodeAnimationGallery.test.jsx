@@ -5,13 +5,13 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../hooks/useSocketSubscription', () => ({ useSocketSubscription: vi.fn() }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCodeAnimation.js', () => ({
   listCodeAnimationJobPage: vi.fn(),
   deleteCodeAnimationJob: vi.fn(),
   requestCodeAnimationPoster: vi.fn(),
   codeAnimationPosterUrl: (id) => `/posters/${id}.jpg`,
 }));
-import { deleteCodeAnimationJob, listCodeAnimationJobPage } from '../../services/api';
+import { deleteCodeAnimationJob, listCodeAnimationJobPage } from '../../services/apiCodeAnimation.js';
 import socket from '../../services/socket';
 import { useSocketSubscription } from '../../hooks/useSocketSubscription';
 import toast from '../ui/Toast';

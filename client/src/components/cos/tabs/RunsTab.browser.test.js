@@ -42,7 +42,7 @@ describe.skipIf(!chrome && !auditCdp)('run actions without hover', () => {
           resolveId(id, importer) {
             if (id === '/runs-fixture.jsx') return '\0runs-fixture.jsx';
             if (importer?.endsWith('/RunsTab.jsx')) {
-              if (id === '../../../services/api') return '\0runs-api';
+              if (id === '../../../services/apiRuns.js') return '\0runs-api';
               if (id === '../../ui/ProcessLogModal') return '\0runs-log-modal';
             }
           },

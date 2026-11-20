@@ -5,9 +5,7 @@ import { Download, FileText, Loader2, Lock, LockOpen, Paperclip, Video } from 'l
 import toast from '../../ui/Toast';
 import { useLockToggle } from '../../../hooks/useLockToggle';
 import { formatBytes } from '../../../utils/formatters';
-import {
-  beeperAttachmentUrl, fetchBeeperAttachment, setBeeperAttachmentKeep,
-} from '../../../services/api';
+import { beeperAttachmentUrl, fetchBeeperAttachment, setBeeperAttachmentKeep } from '../../../services/apiBeeper.js';
 
 /**
  * One attachment inside a mirrored Beeper message (#37, decided on #13).

@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import { RefreshCw, ScrollText, Wrench } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getRunEventStats,
+  getRunEventProjections,
+  getRunReconciliation,
+  getRunEventDiagnostic,
+  repairRunRecords,
+} from '../../../services/apiAgents.js';
 import { formatCount, formatDateTime, formatRuntime, formatBytes, timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -129,9 +135,9 @@ export default function RunEventsTab() {
     // ledger. Collapsing the two would render "no runs recorded" for a server
     // that is simply unreachable.
     const [nextStats, nextProjections, nextReconcile] = await Promise.all([
-      api.getRunEventStats({ silent: true }).catch(() => null),
-      api.getRunEventProjections({ limit: 100 }, { silent: true }).catch(() => null),
-      api.getRunReconciliation({ limit: 100 }, { silent: true }).catch(() => null)
+      getRunEventStats({ silent: true }).catch(() => null),
+      getRunEventProjections({ limit: 100 }, { silent: true }).catch(() => null),
+      getRunReconciliation({ limit: 100 }, { silent: true }).catch(() => null)
     ]);
     setStats(nextStats);
     setProjections(Array.isArray(nextProjections) ? nextProjections : []);
@@ -154,7 +160,7 @@ export default function RunEventsTab() {
     // `null` is the same could-not-fetch sentinel the list uses. Falling back to
     // an empty diagnostic would render "this run has no events" — a statement
     // about the ledger — for what is actually a statement about the network.
-    api.getRunEventDiagnostic(selectedId, { silent: true })
+    getRunEventDiagnostic(selectedId, { silent: true })
       .catch(() => null)
       .then((next) => {
         if (cancelled) return;
@@ -170,7 +176,7 @@ export default function RunEventsTab() {
   const repair = async () => {
     setConfirmingRepair(false);
     setRepairing(true);
-    const result = await api.repairRunRecords({ limit: 100 }).catch(() => null);
+    const result = await repairRunRecords({ limit: 100 }).catch(() => null);
     setRepairResult(result);
     setRepairing(false);
     if (result) await loadLedger();

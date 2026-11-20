@@ -10,8 +10,8 @@ import {
   setGitHubSecret,
   syncGitHubSecret,
   archiveGitHubRepo,
-  unarchiveGitHubRepo
-} from '../../services/api';
+  unarchiveGitHubRepo,
+} from '../../services/apiGithub.js';
 import { timeAgo } from '../../utils/formatters';
 import PageSkeleton from '../ui/PageSkeleton';
 import Modal from '../ui/Modal';

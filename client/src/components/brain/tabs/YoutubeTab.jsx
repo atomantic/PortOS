@@ -13,7 +13,7 @@ import {
   syncYoutube,
   getYoutubePlaylists,
   syncYoutubePlaylists,
-} from '../../../services/api';
+} from '../../../services/apiYoutube.js';
 
 const NEEDS_OPERATOR_NOTE = 'Setup check needs an operator session, or a local connection when no password is set.';
 

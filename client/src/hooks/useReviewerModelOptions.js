@@ -7,7 +7,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import * as api from '../services/api';
+import { getLocalLlmStatus } from '../services/apiLocalLlm.js';
+import { getProviders } from '../services/apiProviders.js';
 import { filterSelectableModels, selectableModelsForProvider } from '../utils/providers';
 // THE reviewer -> provider-record table, shared with the retired-pin audit so the
 // picker and the audit cannot drift on what counts as a retired tier.
@@ -73,8 +74,8 @@ export default function useReviewerModelOptions() {
     let cancelled = false;
     // Secondary controls — a failed fetch degrades to free-text, not a toast.
     Promise.all([
-      api.getLocalLlmStatus({ silent: true }).catch(() => null),
-      api.getProviders({ silent: true }).catch(() => null),
+      getLocalLlmStatus({ silent: true }).catch(() => null),
+      getProviders({ silent: true }).catch(() => null),
     ]).then(([status, providerData]) => {
       if (cancelled) return;
       setLocalStatus(status || null);

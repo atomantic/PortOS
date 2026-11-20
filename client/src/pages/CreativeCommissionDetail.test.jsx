@@ -24,13 +24,16 @@ const fireSocket = async (event, payload) => act(async () => {
   for (const fn of socketHandlers.get(event) || []) fn(payload);
 });
 
-vi.mock('../services/api', async (importOriginal) => ({
+vi.mock('../services/apiCreativeCommission.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getCommission: vi.fn(),
   updateCommission: vi.fn(),
   deleteCommission: vi.fn(),
   submitCommissionFeedback: vi.fn(),
   runCommissionNow: vi.fn(),
+}));
+vi.mock('../services/apiCreativeDirector.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   getCreativeDirectorProjectsByIds: vi.fn(() => Promise.resolve([])),
   listCreativeDirectorProjects: vi.fn(() => Promise.resolve([])),
 }));
@@ -51,7 +54,13 @@ vi.mock('../components/creative-director/ProjectPreview.jsx', () => ({
   default: ({ project }) => <div data-testid={`preview-${project.id}`}>{project.status}</div>,
 }));
 
-import * as api from '../services/api';
+import {
+  getCommission,
+  runCommissionNow,
+  updateCommission,
+  deleteCommission,
+} from '../services/apiCreativeCommission.js';
+import { getCreativeDirectorProjectsByIds, listCreativeDirectorProjects } from '../services/apiCreativeDirector.js';
 import toast from '../components/ui/Toast';
 import CreativeCommissionDetail from './CreativeCommissionDetail';
 
@@ -81,39 +90,39 @@ const renderPage = async () => {
 describe('CreativeCommissionDetail render-history project resolution (#4148)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCommission.mockResolvedValue(COMMISSION);
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+    getCommission.mockResolvedValue(COMMISSION);
+    getCreativeDirectorProjectsByIds.mockResolvedValue([]);
   });
 
   it('fetches only the projects its runs reference, never the whole list', async () => {
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([
+    getCreativeDirectorProjectsByIds.mockResolvedValue([
       { id: 'cd-1', name: 'P1' }, { id: 'cd-2', name: 'P2' },
     ]);
     await renderPage();
 
-    await waitFor(() => expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalled());
-    const [ids] = api.getCreativeDirectorProjectsByIds.mock.calls[0];
+    await waitFor(() => expect(getCreativeDirectorProjectsByIds).toHaveBeenCalled());
+    const [ids] = getCreativeDirectorProjectsByIds.mock.calls[0];
     expect([...ids].sort()).toEqual(['cd-1', 'cd-2']);
-    expect(api.listCreativeDirectorProjects).not.toHaveBeenCalled();
+    expect(listCreativeDirectorProjects).not.toHaveBeenCalled();
 
     await waitFor(() => expect(screen.getAllByTestId('preview-cd-1')).toHaveLength(2));
     expect(screen.getAllByTestId('preview-cd-2')).toHaveLength(1);
   });
 
   it('skips the request entirely when no run references a project', async () => {
-    api.getCommission.mockResolvedValue({
+    getCommission.mockResolvedValue({
       ...COMMISSION,
       runs: [{ id: 'run-9', projectId: null, status: 'skipped', ranAt: '2026-05-04T10:00:00.000Z' }],
     });
     await renderPage();
 
     await screen.findByText('no render');
-    expect(api.getCreativeDirectorProjectsByIds).not.toHaveBeenCalled();
-    expect(api.listCreativeDirectorProjects).not.toHaveBeenCalled();
+    expect(getCreativeDirectorProjectsByIds).not.toHaveBeenCalled();
+    expect(listCreativeDirectorProjects).not.toHaveBeenCalled();
   });
 
   it('degrades a run whose project the batch could not resolve to a status-only card', async () => {
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([{ id: 'cd-1', name: 'P1' }]);
+    getCreativeDirectorProjectsByIds.mockResolvedValue([{ id: 'cd-1', name: 'P1' }]);
     await renderPage();
 
     await waitFor(() => expect(screen.getAllByTestId('preview-cd-1')).toHaveLength(2));
@@ -148,54 +157,54 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCommission.mockResolvedValue(COMMISSION);
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+    getCommission.mockResolvedValue(COMMISSION);
+    getCreativeDirectorProjectsByIds.mockResolvedValue([]);
   });
   afterEach(() => { vi.useRealTimers(); });
 
   it('swaps a still-generating run to its finished render without a reload', async () => {
     vi.useFakeTimers();
-    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
-    api.getCreativeDirectorProjectsByIds
+    getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    getCreativeDirectorProjectsByIds
       .mockResolvedValueOnce([{ id: 'cd-1', status: 'rendering' }])
       .mockResolvedValue([{ id: 'cd-1', status: 'complete', finalVideoId: 'job-1' }]);
 
     await mountLoaded();
     expect(screen.getByTestId('preview-cd-1').textContent).toBe('rendering');
-    const beforePoll = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+    const beforePoll = getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
     await fireSocket('creative-director:project:changed', { id: 'unrelated' });
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
-    const commissionCalls = api.getCommission.mock.calls.length;
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
+    const commissionCalls = getCommission.mock.calls.length;
     await fireSocket('creative-director:project:changed', { id: 'cd-1' });
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll + 1);
-    expect(api.getCommission).toHaveBeenCalledTimes(commissionCalls);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll + 1);
+    expect(getCommission).toHaveBeenCalledTimes(commissionCalls);
     expect(screen.getByTestId('preview-cd-1').textContent).toBe('complete');
   });
 
   it('reconciles a terminal project once per tab re-show', async () => {
     vi.useFakeTimers();
-    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([
+    getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    getCreativeDirectorProjectsByIds.mockResolvedValue([
       { id: 'cd-1', status: 'complete', finalVideoId: 'job-1' },
     ]);
 
     await mountLoaded();
-    const settledCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+    const settledCalls = getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
-    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(settledCalls);
+    expect(getCreativeDirectorProjectsByIds.mock.calls.length).toBe(settledCalls);
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
     fireEvent(document, new Event('visibilitychange'));
     await fireSocket('creative-director:project:changed', { id: 'cd-1' });
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls);
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
     await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
   });
 
   it('does not poll even when a project remains rendering', async () => {
@@ -203,45 +212,45 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
     // A run whose project stalled mid-render hours ago: polling it forever would
     // burn a request every 5s on any tab left open, and no poll can rescue it.
     const stale = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
-    api.getCommission.mockResolvedValue(withRun(stale));
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([{ id: 'cd-1', status: 'rendering' }]);
+    getCommission.mockResolvedValue(withRun(stale));
+    getCreativeDirectorProjectsByIds.mockResolvedValue([{ id: 'cd-1', status: 'rendering' }]);
 
     await mountLoaded();
-    const initialCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+    const initialCalls = getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
-    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(initialCalls);
+    expect(getCreativeDirectorProjectsByIds.mock.calls.length).toBe(initialCalls);
   });
 
   it('treats a project the batch resolved as pruned as settled, not in flight', async () => {
     vi.useFakeTimers();
     // The batch answered for this exact id set and omitted cd-1 — the project is
     // gone. Polling can never resurrect it, so the page must not keep asking.
-    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+    getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    getCreativeDirectorProjectsByIds.mockResolvedValue([]);
 
     await mountLoaded();
     expect(screen.getByText('1 older render is no longer available')).toBeTruthy();
-    const prunedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+    const prunedCalls = getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
-    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(prunedCalls);
+    expect(getCreativeDirectorProjectsByIds.mock.calls.length).toBe(prunedCalls);
   });
 
   it('retries a failed project batch on reconnect without recurring reads', async () => {
     vi.useFakeTimers();
     // A FAILED fetch is not an authoritative "pruned" answer — an unresolved id
     // still means "not known yet"; reconnect must retry the read.
-    api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
-    api.getCreativeDirectorProjectsByIds.mockRejectedValue(new Error('offline'));
+    getCommission.mockResolvedValue(withRun(new Date().toISOString()));
+    getCreativeDirectorProjectsByIds.mockRejectedValue(new Error('offline'));
 
     await mountLoaded();
-    const failedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
+    const failedCalls = getCreativeDirectorProjectsByIds.mock.calls.length;
 
     await settle(30000);
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls);
     await fireSocket('connect');
-    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls + 1);
+    expect(getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls + 1);
   });
 
   it('refetches the render batch for a new run and drops the reload advice', async () => {
@@ -249,8 +258,8 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
       id: 'run-new', projectId: 'cd-new', status: 'started', trigger: 'manual',
       ranAt: new Date().toISOString(),
     };
-    api.getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
-    api.runCommissionNow.mockResolvedValue({
+    getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
+    runCommissionNow.mockResolvedValue({
       status: 'started', commission: { ...COMMISSION, runs: [started] },
     });
     render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
@@ -260,7 +269,7 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
       fireEvent.click(screen.getByRole('button', { name: /Run commission .* now/i }));
     });
 
-    await waitFor(() => expect(api.getCreativeDirectorProjectsByIds)
+    await waitFor(() => expect(getCreativeDirectorProjectsByIds)
       .toHaveBeenCalledWith(['cd-new'], { silent: true }));
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('appears below'));
     expect(toast.success).toHaveBeenCalledWith(expect.not.stringContaining('reload'));
@@ -271,8 +280,8 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
   // derives from persisted run ids stays empty — promising a render 'appears
   // below' is the one thing the page must not do here.
   it('does not promise a gallery render when the run-history write was lost', async () => {
-    api.getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
-    api.runCommissionNow.mockResolvedValue({
+    getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
+    runCommissionNow.mockResolvedValue({
       status: 'started',
       projectId: 'cd-orphan',
       run: null,
@@ -313,10 +322,10 @@ describe('CreativeCommissionDetail stop controls', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCommission.mockResolvedValue(COMMISSION);
-    api.getCreativeDirectorProjectsByIds.mockResolvedValue([]);
-    api.updateCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
-    api.deleteCommission.mockResolvedValue({ ok: true });
+    getCommission.mockResolvedValue(COMMISSION);
+    getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+    updateCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
+    deleteCommission.mockResolvedValue({ ok: true });
   });
 
   it('tells the user that pausing also stops generation already in flight', async () => {
@@ -326,12 +335,12 @@ describe('CreativeCommissionDetail stop controls', () => {
       fireEvent.click(screen.getByRole('button', { name: /Pause commission/i }));
     });
 
-    expect(api.updateCommission).toHaveBeenCalledWith('cc-1', { enabled: false }, { silent: true });
+    expect(updateCommission).toHaveBeenCalledWith('cc-1', { enabled: false }, { silent: true });
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('still in flight'));
   });
 
   it('says nothing about in-flight work when RESUMING the schedule', async () => {
-    api.getCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
+    getCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
     await renderRouted();
 
     await act(async () => {
@@ -351,7 +360,7 @@ describe('CreativeCommissionDetail stop controls', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     });
 
-    expect(api.deleteCommission).toHaveBeenCalledWith('cc-1', { silent: true });
+    expect(deleteCommission).toHaveBeenCalledWith('cc-1', { silent: true });
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('still in flight'));
   });
 });
@@ -359,8 +368,8 @@ describe('CreativeCommissionDetail stop controls', () => {
 it('reconciles commission events and rejects project batches from a prior route', async () => {
   let resolveOld;
   const other = { ...COMMISSION, id: 'cc-other', name: 'Other commission', runs: [{ id: 'other-run', projectId: 'cd-other', status: 'started' }] };
-  api.getCommission.mockImplementation(id => Promise.resolve(id === 'cc-other' ? other : COMMISSION));
-  api.getCreativeDirectorProjectsByIds.mockImplementation(ids => ids.includes('cd-other')
+  getCommission.mockImplementation(id => Promise.resolve(id === 'cc-other' ? other : COMMISSION));
+  getCreativeDirectorProjectsByIds.mockImplementation(ids => ids.includes('cd-other')
     ? Promise.resolve([{ id: 'cd-other', status: 'complete' }])
     : new Promise(resolve => { resolveOld = resolve; }));
   render(<MemoryRouter initialEntries={['/creative-commission/cc-1']}>
@@ -374,10 +383,10 @@ it('reconciles commission events and rejects project batches from a prior route'
   await act(async () => resolveOld([{ id: 'cd-1', status: 'rendering' }]));
   expect(screen.queryByTestId('preview-cd-1')).not.toBeInTheDocument();
   expect(screen.getByTestId('preview-cd-other')).toHaveTextContent('complete');
-  const calls = api.getCommission.mock.calls.length;
+  const calls = getCommission.mock.calls.length;
   await fireSocket('commission:changed', { id: 'cc-1' });
-  expect(api.getCommission).toHaveBeenCalledTimes(calls);
-  api.getCommission.mockResolvedValue({ ...other, name: 'Renamed commission' });
+  expect(getCommission).toHaveBeenCalledTimes(calls);
+  getCommission.mockResolvedValue({ ...other, name: 'Renamed commission' });
   await fireSocket('commission:changed', { id: 'cc-other' });
   expect(screen.getByRole('heading', { name: 'Renamed commission' })).toBeInTheDocument();
 });

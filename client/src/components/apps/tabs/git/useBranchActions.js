@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import toast from '../../../ui/Toast';
-import * as api from '../../../../services/api';
+import { triggerCosOnDemandTask, forceCosEvaluate } from '../../../../services/apiAgents.js';
+import {
+  checkoutBranch,
+  pushBranch,
+  syncBranch,
+  mergeBranch,
+  deleteBranch,
+  checkoutRemoteBranch,
+  cleanupMergedBranches,
+  getBranches,
+} from '../../../../services/apiGit.js';
 
 // Per-row branch actions for the Local and Remote Branches panels: in-flight
 // markers (the branch name being acted on), the open inline confirm, and the
@@ -26,21 +36,21 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
   const handleReconcileBranches = async () => {
     if (!appId || reconciling) return;
     setReconciling(true);
-    const result = await api.triggerCosOnDemandTask('branch-reconcile', appId, { silent: true }).catch((err) => {
+    const result = await triggerCosOnDemandTask('branch-reconcile', appId, { silent: true }).catch((err) => {
       toast.error(`Could not queue branch reconcile: ${err.message}`);
       return null;
     });
     setReconciling(false);
     if (result) {
       toast.success(`Branch reconcile queued for ${appName} — check CoS Agents`);
-      await api.forceCosEvaluate().catch(() => null);
+      await forceCosEvaluate().catch(() => null);
     }
   };
 
   const handleCheckout = async (branchName) => {
     if (!repoPath || checkingOut) return;
     setCheckingOut(branchName);
-    const result = await api.checkoutBranch(repoPath, branchName).catch(() => null);
+    const result = await checkoutBranch(repoPath, branchName).catch(() => null);
     setCheckingOut(null);
     if (result?.success) {
       toast.success(`Switched to ${branchName}`);
@@ -51,7 +61,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
   const handlePush = async (branchName) => {
     if (!repoPath || pushing) return;
     setPushing(branchName);
-    const result = await api.pushBranch(repoPath, branchName).catch(() => null);
+    const result = await pushBranch(repoPath, branchName).catch(() => null);
     setPushing(null);
     if (result?.success) {
       toast.success(`Pushed ${branchName}`);
@@ -62,7 +72,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
   const handleSync = async (branchName) => {
     if (!repoPath || syncing) return;
     setSyncing(branchName);
-    const result = await api.syncBranch(repoPath, branchName).catch(() => null);
+    const result = await syncBranch(repoPath, branchName).catch(() => null);
     setSyncing(null);
     if (result?.success) {
       toast.success(`Synced ${branchName}`);
@@ -76,7 +86,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
     if (!repoPath || merging) return;
     setMerging(branchName);
     setMergeConfirm(null);
-    const result = await api.mergeBranch(repoPath, branchName, { silent: true }).catch((err) => {
+    const result = await mergeBranch(repoPath, branchName, { silent: true }).catch((err) => {
       toast.error(`Merge failed: ${err.message}`);
       return null;
     });
@@ -91,7 +101,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
     if (!repoPath || deleting) return;
     setDeleting(branchName);
     setDeleteConfirm(null);
-    const result = await api.deleteBranch(repoPath, branchName, { local, remote }, { silent: true }).catch((err) => {
+    const result = await deleteBranch(repoPath, branchName, { local, remote }, { silent: true }).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return null;
     });
@@ -126,7 +136,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
   const handleCheckoutRemote = async (branchName) => {
     if (!repoPath || checkingOutRemote) return;
     setCheckingOutRemote(branchName);
-    const result = await api.checkoutRemoteBranch(repoPath, branchName, { silent: true }).catch((err) => {
+    const result = await checkoutRemoteBranch(repoPath, branchName, { silent: true }).catch((err) => {
       toast.error(`Checkout failed: ${err.message}`);
       return null;
     });
@@ -147,7 +157,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
     setCleaningUp(branchName || true);
     setCleanupConfirm(false);
     setMergedDeleteConfirm(null);
-    const result = await api.cleanupMergedBranches(repoPath, { silent: true, ...(branchName && { branches: [branchName] }) }).catch((err) => {
+    const result = await cleanupMergedBranches(repoPath, { silent: true, ...(branchName && { branches: [branchName] }) }).catch((err) => {
       toast.error(`${branchName ? `Delete ${branchName}` : 'Cleanup'} failed: ${err.message}`);
       return null;
     });
@@ -186,7 +196,7 @@ export default function useBranchActions({ appId, appName, repoPath, setBranches
       // the branches instead of filtering the stale list. Only the branch list
       // can have changed — no need for the full loadGitInfo fan-out.
       if (removedWorktrees > 0) {
-        const refreshed = await api.getBranches(repoPath).catch(() => null);
+        const refreshed = await getBranches(repoPath).catch(() => null);
         if (refreshed) setBranches(refreshed.branches || []);
       } else {
         const deletedLocals = new Set(deleted.filter(d => d.local === 'deleted').map(d => d.name));

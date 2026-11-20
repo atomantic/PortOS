@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 const getSettings = vi.fn();
 const updateSettings = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getSettings: (...args) => getSettings(...args),
   updateSettings: (...args) => updateSettings(...args),
 }));

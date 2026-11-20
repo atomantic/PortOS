@@ -10,7 +10,7 @@ import {
   primaryRepositorySource,
   repositoryForkNeedsSync,
 } from '../../lib/managedAppSources';
-import { getAppRepositorySources } from '../../services/api';
+import { getAppRepositorySources } from '../../services/apiApps.js';
 
 // Keyed by app id so a reinstall — which mints a new managed-app record —
 // drops a dismissal that was about the old checkout.

@@ -7,10 +7,12 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 vi.mock('../../hooks/useInstallStream.js', () => ({
   useInstallStream: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   checkImageGenSetup: vi.fn(),
   detectImageGenPython: vi.fn(),
   createImageGenVenv: vi.fn(),
+}));
+vi.mock('../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
@@ -20,7 +22,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import { useInstallStream } from '../../hooks/useInstallStream.js';
-import { checkImageGenSetup } from '../../services/api';
+import { checkImageGenSetup } from '../../services/apiImageVideo.js';
 import LocalSetupPanel from './LocalSetupPanel';
 
 const streamState = (overrides = {}) => ({

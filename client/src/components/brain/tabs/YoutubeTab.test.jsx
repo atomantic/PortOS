@@ -9,7 +9,13 @@ const api = vi.hoisted(() => ({
   syncYoutubePlaylists: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiYoutube.js', () => ({
+  getYoutubeStatus: api.getYoutubeStatus,
+  getYoutubeSetupCheck: api.getYoutubeSetupCheck,
+  syncYoutube: api.syncYoutube,
+  getYoutubePlaylists: api.getYoutubePlaylists,
+  syncYoutubePlaylists: api.syncYoutubePlaylists,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 vi.mock('../../../hooks/useSyncSourceSettings', () => ({
   useSyncSourceSettings: () => ({

@@ -3,7 +3,7 @@ import { Music, Pause, Play, SkipBack, SkipForward, Trash2, Upload } from 'lucid
 import FilePickerButton from '../ui/FilePickerButton';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
-import { getUploadUrl, uploadFile } from '../../services/api';
+import { getUploadUrl, uploadFile } from '../../services/apiMedia.js';
 import { formatTimecode } from '../../utils/formatters';
 import { storyboardTimeline } from '../../../../server/lib/storyboardSongBrief.js';
 import SongMarkers from './SongMarkers';

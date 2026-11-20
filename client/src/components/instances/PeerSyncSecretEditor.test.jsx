@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PeerSyncSecretEditor from './PeerSyncSecretEditor';
-import { pairPeerSyncSecret } from '../../services/api';
-vi.mock('../../services/api', () => ({ pairPeerSyncSecret: vi.fn() }));
+import { pairPeerSyncSecret } from '../../services/apiSystem.js';
+vi.mock('../../services/apiSystem.js', () => ({
+  pairPeerSyncSecret: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
 
 describe('peer record push pairing', () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTribeMemoryLinks, linkTribeMemory, unlinkTribeMemory } from '../../services/apiTribe.js';
+import { getMemories } from '../../services/apiMemory.js';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 
@@ -24,10 +25,10 @@ export default function MemoryLinksPanel({ personId }) {
     setMemoriesError(null);
     const asError = (err) => (err instanceof Error ? err : new Error('Request failed'));
     Promise.all([
-      api.getTribeMemoryLinks(personId, { silent: true })
+      getTribeMemoryLinks(personId, { silent: true })
         .then((result) => { if (!cancelled) setLinks(result?.links || []); })
         .catch((err) => { if (!cancelled) setLinksError(asError(err)); }),
-      api.getMemories({ limit: 25, sortBy: 'updatedAt', sortOrder: 'desc' }, { silent: true })
+      getMemories({ limit: 25, sortBy: 'updatedAt', sortOrder: 'desc' }, { silent: true })
         .then((result) => { if (!cancelled) setMemories(result?.memories || []); })
         .catch((err) => { if (!cancelled) setMemoriesError(asError(err)); }),
     ]).finally(() => {
@@ -39,7 +40,7 @@ export default function MemoryLinksPanel({ personId }) {
 
   const linkMemory = async () => {
     if (!memoryId) return;
-    const result = await api.linkTribeMemory(personId, { memoryId, note }, { silent: true }).catch((err) => {
+    const result = await linkTribeMemory(personId, { memoryId, note }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to link memory');
       return null;
     });
@@ -50,7 +51,7 @@ export default function MemoryLinksPanel({ personId }) {
   };
 
   const unlinkMemory = async (id) => {
-    const result = await api.unlinkTribeMemory(personId, id, { silent: true }).catch((err) => {
+    const result = await unlinkTribeMemory(personId, id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to unlink memory');
       return null;
     });

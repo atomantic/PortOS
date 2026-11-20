@@ -7,11 +7,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatDateTime } from '../../utils/formatters';
 import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
-import {
-  getSignalStatus,
-  checkSignalSetup,
-  syncSignal,
-} from '../../services/api';
+import { getSignalStatus, checkSignalSetup, syncSignal } from '../../services/apiSignal.js';
 
 const SIGNAL_DISABLED_MESSAGE = 'Enable Signal sync and save before checking setup or syncing.';
 

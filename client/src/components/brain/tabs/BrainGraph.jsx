@@ -2,7 +2,21 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass, Info} from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getBrainPerson,
+  getBrainProject,
+  getBrainIdea,
+  getBrainAdminItem,
+  getBrainMemory,
+  getBrainGoal,
+  getBrainJournalEntry,
+  getBrainGraph,
+  getBrainGraphSearchIndex,
+  getEmbeddingsStatus,
+  syncBrainData,
+} from '../../../services/apiBrain.js';
+import { getSong } from '../../../services/apiSongbook.js';
+import { getThread } from '../../../services/apiBrainThreads.js';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
 import { chipColors } from '../../../lib/chipContrast';
 import { useThemeContext } from '../../ThemeContext';
@@ -54,15 +68,15 @@ const brainTypeChipStyle = (brainType, mode) => chipColors(BRAIN_TYPE_HEX[brainT
 
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
-  people: api.getBrainPerson,
-  projects: api.getBrainProject,
-  ideas: api.getBrainIdea,
-  admin: api.getBrainAdminItem,
-  memories: api.getBrainMemory,
-  goals: api.getBrainGoal,
-  journals: api.getBrainJournalEntry,
-  songs: api.getSong,
-  threads: api.getThread
+  people: getBrainPerson,
+  projects: getBrainProject,
+  ideas: getBrainIdea,
+  admin: getBrainAdminItem,
+  memories: getBrainMemory,
+  goals: getBrainGoal,
+  journals: getBrainJournalEntry,
+  songs: getSong,
+  threads: getThread
 };
 
 // Prose body for the detail panel, in the order the panel prefers it. Every
@@ -125,7 +139,7 @@ export default function BrainGraph() {
     setLoading(true);
     setOverviewError(false);
     try {
-      const graph = await api.getBrainGraph({}, { silent: true });
+      const graph = await getBrainGraph({}, { silent: true });
       if (request === overviewRequest.current) setGraphData(graph);
     } catch {
       if (request === overviewRequest.current) setOverviewError(true);
@@ -152,7 +166,7 @@ export default function BrainGraph() {
     const request = ++searchRequest.current;
     setSearchError(false);
     try {
-      const index = await api.getBrainGraphSearchIndex({ silent: true });
+      const index = await getBrainGraphSearchIndex({ silent: true });
       if (request === searchRequest.current) setSearchIndex(index?.nodes || []);
     } catch {
       if (request === searchRequest.current) setSearchError(true);
@@ -163,7 +177,7 @@ export default function BrainGraph() {
     const request = ++embeddingRequest.current;
     setEmbeddingError(false);
     try {
-      const status = await api.getEmbeddingsStatus({ silent: true });
+      const status = await getEmbeddingsStatus({ silent: true });
       if (request === embeddingRequest.current) setEmbeddingStatus(status);
     } catch {
       if (request === embeddingRequest.current) setEmbeddingError(true);
@@ -184,7 +198,7 @@ export default function BrainGraph() {
   const loadView = useCallback(async (targetFocusId, { trail } = {}) => {
     const request = ++viewRequest.current;
     setSubLoading(true);
-    const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}, { silent: true }).catch(() => null);
+    const data = await getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}, { silent: true }).catch(() => null);
     if (request !== viewRequest.current) return false;
     setSubLoading(false);
     if (!data || data.notFound) {
@@ -316,7 +330,7 @@ export default function BrainGraph() {
       { id: toastId }
     );
     // silent:true — this catch owns the error toast (AGENTS.md: custom catch ⇒ silent).
-    const stats = await api.syncBrainData({ refresh, onlyMissing }, { silent: true }).catch(err => {
+    const stats = await syncBrainData({ refresh, onlyMissing }, { silent: true }).catch(err => {
       toast.error(err.message || 'Sync failed', { id: toastId });
       return null;
     });
@@ -327,7 +341,7 @@ export default function BrainGraph() {
       // Refresh the missing-embeddings count and reload the current view to pick
       // up the new edges.
       loadEmbeddingStatus();
-      const fresh = await api.getBrainGraph(focusAtStart ? { focus: focusAtStart } : {}).catch(() => null);
+      const fresh = await getBrainGraph(focusAtStart ? { focus: focusAtStart } : {}).catch(() => null);
       if (fresh && viewAtStart === viewRequest.current) setGraphData(fresh);
     }
   };

@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import KeyFileButton from './KeyFileButton';
-import { getCredentialInventory, saveCredential } from '../../services/api';
+import { getCredentialInventory, saveCredential } from '../../services/apiSystem.js';
 
 const SOURCE_LABEL = {
   settings: 'Settings',

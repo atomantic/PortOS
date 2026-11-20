@@ -21,7 +21,15 @@ import useUrlParams from '../hooks/useUrlParams';
 import { formatCount } from '../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useActionQueue } from '../hooks/useActionQueue';
-import * as api from '../services/api';
+import {
+  getReviewItems,
+  getReviewCounts,
+  getReviewBriefing,
+  resolveReviewQueueItem,
+  triageReviewQueueItem,
+  promoteAskReviewQueueItem,
+} from '../services/apiReview.js';
+import { createThread } from '../services/apiBrainThreads.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 
 const HARNESS_WARNING_KEY = 'portos-harness-release-warning-days';
@@ -96,21 +104,21 @@ export default function Review() {
   // The stored list is keyed by the status filter; global counts are one read independent of it.
   // Gate legacy item fetching and socket subscriptions on the fallback surface being active.
   const { data: itemsData, loading, error: itemsError, refetch: fetchItems } = useSocketResource(
-    () => api.getReviewItems(filter === 'all' ? {} : { status: filter }, { silent: true }),
+    () => getReviewItems(filter === 'all' ? {} : { status: filter }, { silent: true }),
     { events: REVIEW_ITEM_EVENTS, resourceKey: filter, enabled: Boolean(showLegacyReviewSurface) }
   );
   const items = itemsData ?? EMPTY_ITEMS;
-  const { data: counts } = useSocketResource(() => api.getReviewCounts({ silent: true }), { events: REVIEW_ITEM_EVENTS });
+  const { data: counts } = useSocketResource(() => getReviewCounts({ silent: true }), { events: REVIEW_ITEM_EVENTS });
 
   useEffect(() => {
-    api.getReviewBriefing().catch(() => null).then(setBriefing);
+    getReviewBriefing().catch(() => null).then(setBriefing);
   }, []);
 
   const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
     // Failure toasts via the shared request wrapper; keep the typed text so it can be retried.
-    const thread = await api.createThread({ title: newTodo.trim() }).catch(() => null);
+    const thread = await createThread({ title: newTodo.trim() }).catch(() => null);
     if (!thread) return;
     setNewTodo('');
     await fetchQueue();
@@ -149,7 +157,7 @@ export default function Review() {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.resolveReviewQueueItem(
+    const ok = await resolveReviewQueueItem(
       item.id,
       operation ? { operation, ...input } : {},
     ).then(() => true).catch(() => false);
@@ -172,7 +180,7 @@ export default function Review() {
   const handleQueueTriage = async (item, operation, input = {}) => {
     if (resolvingQueueIds.has(item.id)) return false;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
-    const ok = await api.triageReviewQueueItem(item.id, { operation, ...input })
+    const ok = await triageReviewQueueItem(item.id, { operation, ...input })
       .then(() => true)
       .catch(() => false);
     setResolvingQueueIds(prev => {
@@ -192,7 +200,7 @@ export default function Review() {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.promoteAskReviewQueueItem(item.id, target, goalId ? { goalId } : {}).then(() => true).catch(() => false);
+    const ok = await promoteAskReviewQueueItem(item.id, target, goalId ? { goalId } : {}).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
       next.delete(item.id);

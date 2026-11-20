@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
-import * as api from '../services/api';
+import { moltworldWsStatus, moltworldWsConnect, moltworldWsDisconnect } from '../services/apiAccounts.js';
 import { useSocketSubscription } from './useSocketSubscription';
 
 const MAX_FEED_ITEMS = 200;
@@ -89,7 +89,7 @@ export default function useMoltworldWs() {
 
     // Fetch initial WS status
     const abortCtrl = new AbortController();
-    api.moltworldWsStatus({ signal: abortCtrl.signal, silent: true }).then(data => {
+    moltworldWsStatus({ signal: abortCtrl.signal, silent: true }).then(data => {
       if (data?.status) setConnectionStatus(data.status);
     }).catch(() => {});
 
@@ -107,12 +107,12 @@ export default function useMoltworldWs() {
 
   const connect = useCallback(async (accountId) => {
     setConnectionStatus('connecting');
-    const result = await api.moltworldWsConnect(accountId).catch(() => null);
+    const result = await moltworldWsConnect(accountId).catch(() => null);
     if (result?.status) setConnectionStatus(result.status);
   }, []);
 
   const disconnect = useCallback(async () => {
-    await api.moltworldWsDisconnect().catch(() => null);
+    await moltworldWsDisconnect().catch(() => null);
     setConnectionStatus('disconnected');
   }, []);
 

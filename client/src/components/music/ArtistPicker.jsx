@@ -9,7 +9,7 @@
  */
 
 import { Link } from 'react-router';
-import { listArtists } from '../../services/api';
+import { listArtists } from '../../services/apiArtists.js';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';

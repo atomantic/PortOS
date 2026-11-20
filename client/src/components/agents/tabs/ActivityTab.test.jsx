@@ -1,11 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAgents.js', () => ({
   getAgentActivityTimeline: vi.fn(),
 }));
 
-import * as api from '../../../services/api';
+import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
 import ActivityTab from './ActivityTab.jsx';
 
 const page = (action, count, prefix = 'a') => Array.from({ length: count }, (_, i) => ({
@@ -18,25 +18,25 @@ describe('ActivityTab', () => {
   });
 
   it('sends the selected action for the first page and for Load More', async () => {
-    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, before) => page('post', 50, before ? 'more' : 'a'));
+    getAgentActivityTimeline.mockImplementation(async (_l, _a, before) => page('post', 50, before ? 'more' : 'a'));
 
     render(<ActivityTab agentId="agent-1" />);
     await screen.findByText('Activity Log');
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
+    expect(getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'post' } });
     });
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, 'post', { silent: true });
+    expect(getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, 'post', { silent: true });
 
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Load More' })); });
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(
+    expect(getAgentActivityTimeline).toHaveBeenLastCalledWith(
       50, ['agent-1'], '2026-08-23T00:10:00.000Z', 'post'
     );
   });
 
   it('shows a retryable error instead of an endless spinner when the activity load fails', async () => {
-    api.getAgentActivityTimeline
+    getAgentActivityTimeline
       .mockRejectedValueOnce(new Error('network unavailable'))
       .mockResolvedValueOnce([]);
 
@@ -44,18 +44,18 @@ describe('ActivityTab', () => {
 
     expect(await screen.findByText(/Could not load activity log/)).toBeInTheDocument();
     expect(screen.queryByText('Loading activity')).not.toBeInTheDocument();
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
+    expect(getAgentActivityTimeline).toHaveBeenLastCalledWith(50, ['agent-1'], null, null, { silent: true });
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     });
 
     expect(await screen.findByRole('heading', { name: 'Activity Log' })).toBeInTheDocument();
-    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(2);
+    expect(getAgentActivityTimeline).toHaveBeenCalledTimes(2);
   });
   it('keeps the newest filter when an earlier filter answers late', async () => {
     let resolvePost;
-    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
+    getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
       if (action === 'post') return new Promise((resolve) => { resolvePost = resolve; });
       if (action === 'comment') return page('comment', 1, 'c');
       return page('vote', 1, 'v');
@@ -75,7 +75,7 @@ describe('ActivityTab', () => {
 
   it('drops a Load More page that resolves after the filter changed', async () => {
     let resolveMore;
-    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
+    getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
       if (before) return new Promise((resolve) => { resolveMore = resolve; });
       return action === 'comment' ? page('comment', 1, 'c') : page('vote', 50, 'v');
     });
@@ -93,7 +93,7 @@ describe('ActivityTab', () => {
   });
 
   it('lets Load More run for the new filter while the previous filter\'s Load More is still pending', async () => {
-    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
+    getAgentActivityTimeline.mockImplementation(async (_l, _a, before, action) => {
       if (before && action === null) return new Promise(() => {});
       if (before) return page('comment', 1, 'more');
       return action === 'comment' ? page('comment', 50, 'c') : page('vote', 50, 'v');
@@ -106,13 +106,13 @@ describe('ActivityTab', () => {
       fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'comment' } });
     });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Load More' })); });
-    expect(api.getAgentActivityTimeline).toHaveBeenLastCalledWith(
+    expect(getAgentActivityTimeline).toHaveBeenLastCalledWith(
       50, ['agent-1'], '2026-08-23T00:10:00.000Z', 'comment'
     );
   });
   it('does not page the new filter with the previous filter\'s cursor before its first page arrives', async () => {
     let resolveComment;
-    api.getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
+    getAgentActivityTimeline.mockImplementation(async (_l, _a, _before, action) => {
       if (action === 'comment') return new Promise((resolve) => { resolveComment = resolve; });
       return page('vote', 50, 'v');
     });
@@ -122,9 +122,9 @@ describe('ActivityTab', () => {
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Filter by action'), { target: { value: 'comment' } });
     });
-    const callsBeforeClick = api.getAgentActivityTimeline.mock.calls.length;
+    const callsBeforeClick = getAgentActivityTimeline.mock.calls.length;
     await act(async () => { fireEvent.click(loadMoreButton); });
-    expect(api.getAgentActivityTimeline).toHaveBeenCalledTimes(callsBeforeClick);
+    expect(getAgentActivityTimeline).toHaveBeenCalledTimes(callsBeforeClick);
 
     await act(async () => { resolveComment(page('comment', 1, 'c')); });
     expect(screen.getByText('comment')).toBeInTheDocument();

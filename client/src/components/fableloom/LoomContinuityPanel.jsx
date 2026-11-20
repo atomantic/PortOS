@@ -3,7 +3,7 @@ import {
   AlertTriangle, CheckCircle2, CircleAlert, Film, Info, Loader2, Sparkles,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { reviewLoomEpisodeContinuity } from '../../services/api';
+import { reviewLoomEpisodeContinuity } from '../../services/apiFableLoom.js';
 
 const severityIcon = (severity) => {
   if (severity === 'error' || severity === 'high') {

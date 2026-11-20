@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   updatePostConfig: vi.fn(),
   getMemoryItems: vi.fn(),
 }));
@@ -13,7 +13,7 @@ vi.mock('../../ui/Toast', () => ({
 
 import PracticePlan from './PracticePlan';
 import { POST_TOPICS } from './constants';
-import { updatePostConfig, getMemoryItems } from '../../../services/api';
+import { updatePostConfig, getMemoryItems } from '../../../services/apiMeatspace.js';
 import toast from '../../ui/Toast';
 
 const drillTypesForModule = (module) => [...new Set(

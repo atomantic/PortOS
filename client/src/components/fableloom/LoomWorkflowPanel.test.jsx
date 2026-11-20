@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import * as api from '../../services/api';
+import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/apiFableLoom.js';
 import socket from '../../services/socket';
 import LoomWorkflowPanel from './LoomWorkflowPanel';
 
-vi.mock('../../services/api');
+vi.mock('../../services/apiFableLoom.js');
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
@@ -29,13 +29,13 @@ const loom = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getLoomEditorialAutopilotStatus.mockResolvedValue({
+  getLoomEditorialAutopilotStatus.mockResolvedValue({
     run: {
       id: 'run-1', loomId: 'loom-1', createdAt: '2026-08-30T12:00:00.000Z',
       status: 'failed', round: 1, maxRounds: 3, stepIndex: 1, stepCount: 6,
     },
   });
-  api.updateLoom.mockResolvedValue({
+  updateLoom.mockResolvedValue({
     ...loom,
     productionStatus: {
       editorialApprovedAt: '2026-08-30T12:00:00.000Z',
@@ -78,7 +78,7 @@ describe('LoomWorkflowPanel', () => {
     );
 
     await user.click(await screen.findByRole('button', { name: /Mark manual editorial review complete/i }));
-    expect(api.updateLoom).toHaveBeenCalledWith('loom-1', {
+    expect(updateLoom).toHaveBeenCalledWith('loom-1', {
       productionStatus: expect.objectContaining({
         editorialApprovedAt: expect.any(String),
         editorialApprovalSource: 'manual',
@@ -101,7 +101,7 @@ describe('LoomWorkflowPanel', () => {
       expect(await screen.findByText(/Latest autopilot: failed · step 1\/6/i)).toBeInTheDocument();
 
       await act(async () => { vi.advanceTimersByTime(30_000); });
-      expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
+      expect(getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
 
       act(() => editorialEvent({
         id: 'run-2', loomId: 'loom-1', createdAt: '2026-08-30T12:05:00.000Z',

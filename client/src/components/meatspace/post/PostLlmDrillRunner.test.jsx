@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   scorePostLlmDrill: vi.fn(),
 }));
 
 import PostLlmDrillRunner, { getPrompts, buildLlmResponseObj, combineTrainingScoreResults } from './PostLlmDrillRunner';
-import { scorePostLlmDrill } from '../../../services/api';
+import { scorePostLlmDrill } from '../../../services/apiMeatspace.js';
 import { LLM_DRILL_TYPES } from './constants';
 
 const noop = () => {};

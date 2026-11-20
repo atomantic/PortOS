@@ -73,7 +73,7 @@ import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
 import { useModelInputPreview } from '../hooks/useModelInputPreview';
 import useListResource from '../hooks/useListResource';
-import { generateVideo, listLorasFull, previewVideoPrompt } from '../services/api';
+import { generateVideo, listLorasFull, previewVideoPrompt } from '../services/apiImageVideo.js';
 import { musicVideoFilingFields } from '../lib/musicVideoFiling';
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.

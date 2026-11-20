@@ -17,7 +17,16 @@ const api = vi.hoisted(() => ({
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), loading: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosJobs: api.getCosJobs,
+  triggerCosJob: api.triggerCosJob,
+  updateCosJob: api.updateCosJob,
+  toggleCosJob: api.toggleCosJob,
+  deleteCosJob: api.deleteCosJob,
+}));
+vi.mock('../../../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const mockJob = {

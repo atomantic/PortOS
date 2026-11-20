@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
 import ProgressBar from '../../ui/ProgressBar';
-import { scorePostLlmDrill } from '../../../services/api';
+import { scorePostLlmDrill } from '../../../services/apiMeatspace.js';
 import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
 import { pluralize } from '../../../lib/textUtils';
 import { shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard.js';

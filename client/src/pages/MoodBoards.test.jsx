@@ -3,14 +3,14 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiMoodBoard.js', () => ({
   listMoodBoards: vi.fn(),
   createMoodBoard: vi.fn(),
   deleteMoodBoard: vi.fn(),
 }));
 
 import MoodBoards from './MoodBoards';
-import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
+import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/apiMoodBoard.js';
 
 const renderPage = async () => {
   const result = render(<MemoryRouter><MoodBoards /></MemoryRouter>);

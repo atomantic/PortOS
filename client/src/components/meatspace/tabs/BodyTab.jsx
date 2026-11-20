@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Scale, Eye, Plus, Pencil, Trash2, Check, X } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getEyeExams, addEyeExam, updateEyeExam, removeEyeExam } from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -46,7 +46,7 @@ export default function BodyTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchEyes = useCallback(async () => {
-    const eyes = await api.getEyeExams({ silent: true }).catch(() => null);
+    const eyes = await getEyeExams({ silent: true }).catch(() => null);
     setEyeFailed(eyes === null);
     setEyeData(eyes);
     setEyeLoading(false);
@@ -58,7 +58,7 @@ export default function BodyTab() {
 
   const handleAddEye = async () => {
     if (!eyeForm.date) return;
-    const exam = await api.addEyeExam(buildEyePayload(eyeForm));
+    const exam = await addEyeExam(buildEyePayload(eyeForm));
     setEyeData(prev => ({ ...prev, exams: sortEyeExams([...(prev?.exams || []), exam]) }));
     setEyeForm(EMPTY_EYE_FORM);
     setShowEyeForm(false);
@@ -79,7 +79,7 @@ export default function BodyTab() {
 
   const handleUpdateEye = async () => {
     if (editingEyeId == null) return;
-    const updated = await api.updateEyeExam(editingEyeId, buildEyePayload(eyeForm));
+    const updated = await updateEyeExam(editingEyeId, buildEyePayload(eyeForm));
     setEyeData(prev => ({
       ...prev,
       exams: sortEyeExams(prev.exams.map(e => e.id === editingEyeId ? updated : e))
@@ -89,7 +89,7 @@ export default function BodyTab() {
   };
 
   const handleDeleteEye = async (id) => {
-    await api.removeEyeExam(id);
+    await removeEyeExam(id);
     setEyeData(prev => ({ ...prev, exams: prev.exams.filter(e => e.id !== id) }));
   };
 

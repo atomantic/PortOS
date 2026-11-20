@@ -12,7 +12,7 @@ import GitHubAgentPinForm from './GitHubAgentPinForm';
 import GitHubPullRequestActions from './GitHubPullRequestActions';
 import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, REASON_WHY, TONE_EDGE, TRUST_VIEW, subjectStatusChip } from './githubTriageLabels';
 import { timeAgo } from '../../utils/formatters';
-import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent } from '../../services/api';
+import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent } from '../../services/apiGithub.js';
 
 // GitHub's `reason` vocabulary, phrased for a glance.
 const REASON_LABELS = {

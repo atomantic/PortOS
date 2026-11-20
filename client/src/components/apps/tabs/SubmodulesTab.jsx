@@ -5,7 +5,7 @@ import Pill from '../../ui/Pill';
 import ListLoadError from '../../ui/ListLoadError';
 import ToggleSwitch from '../../ToggleSwitch';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import { getSubmodules, updateSubmodule } from '../../../services/apiGit.js';
 import { parseRepoUrl, repoBrowseUrl } from '../../../lib/repoUrl';
 
 /** Whether a submodule's pointer differs from what its remote default branch has. */
@@ -69,7 +69,7 @@ export default function SubmodulesTab({ repoPath }) {
     // One call carries both the list and the branch a commit would land on, so
     // the toggle names the same branch the server's commit guard checks.
     let failure = null;
-    const data = await api.getSubmodules(repoPath, { silent: true }).catch((error) => { failure = error; return null; });
+    const data = await getSubmodules(repoPath, { silent: true }).catch((error) => { failure = error; return null; });
     if (generation !== loadGenerationRef.current) return;
     setLoading(false);
     setRefreshing(false);
@@ -88,8 +88,7 @@ export default function SubmodulesTab({ repoPath }) {
 
   const handleUpdate = async (subPath) => {
     setUpdating(subPath);
-    const result = await api
-      .updateSubmodule(subPath, { repoPath, commit: commitAfterUpdate, silent: true })
+    const result = await updateSubmodule(subPath, { repoPath, commit: commitAfterUpdate, silent: true })
       .catch(() => null);
     if (result?.success) {
       // The note comes from the server's own outcome, not from the toggle — the

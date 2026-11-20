@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ updateSubscriptionCosts: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ updateSubscriptionCosts: api.updateSubscriptionCosts }));
 
 const { default: SubscriptionSavingsCard, buildCostPatch, parseCostInput } =
   await import('./SubscriptionSavingsCard');

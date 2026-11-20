@@ -7,7 +7,33 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import * as api from '../../services/api';
+import { getActivities } from '../../services/apiMeatspace.js';
+import { getCalendarAccounts } from '../../services/apiCalendar.js';
+import {
+  updateGoal,
+  generateGoalPhases,
+  acceptGoalPhases,
+  decomposeGoal,
+  acceptGoalDecomposition,
+  completeMilestoneTask,
+  checkInGoal,
+  scheduleGoalTimeBlocks,
+  removeGoalSchedule,
+  rescheduleGoalTimeBlocks,
+  deleteGoal,
+  addGoalMilestone,
+  completeGoalMilestone,
+  linkGoalActivity,
+  addGoalProgress,
+  deleteGoalProgress,
+  unlinkGoalActivity,
+  linkGoalCalendar,
+  unlinkGoalCalendar,
+  updateGoalProgress,
+  addGoalTodo,
+  updateGoalTodo,
+  deleteGoalTodo,
+} from '../../services/apiGoals.js';
 import useListResource from '../../hooks/useListResource';
 import useUserTimezone from '../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone } from '../../utils/timezone.js';
@@ -15,9 +41,9 @@ import { MAX_TAGS, MAX_TAG_LENGTH } from './goalConstants';
 
 // Module-level so useListResource sees a stable fetcher. silent: the pickers
 // render their own inline error + Retry, so the default toast would duplicate it.
-const fetchActivities = () => api.getActivities({ silent: true });
+const fetchActivities = () => getActivities({ silent: true });
 const fetchSubcalendars = async () => {
-  const accounts = await api.getCalendarAccounts({ silent: true });
+  const accounts = await getCalendarAccounts({ silent: true });
   const scs = [];
   for (const account of (accounts || [])) {
     for (const sc of (account.subcalendars || [])) {
@@ -121,7 +147,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     }
     setSaving(true);
     try {
-      await api.updateGoal(goal.id, payload);
+      await updateGoal(goal.id, payload);
     } catch {
       return;
     } finally {
@@ -142,7 +168,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setGeneratingPhases(true);
     setProposedPhases(null);
     try {
-      setProposedPhases(await api.generateGoalPhases(goal.id));
+      setProposedPhases(await generateGoalPhases(goal.id));
     } catch {
       // Deliberately swallowed — see the single-layer note above.
     } finally {
@@ -152,7 +178,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleAcceptPhases = async () => {
     if (!proposedPhases?.length) return;
-    await api.acceptGoalPhases(goal.id, proposedPhases);
+    await acceptGoalPhases(goal.id, proposedPhases);
     setProposedPhases(null);
     onRefresh();
   };
@@ -162,7 +188,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setDecomposing(true);
     setProposedDecomposition(null);
     try {
-      const milestones = await api.decomposeGoal(goal.id);
+      const milestones = await decomposeGoal(goal.id);
       // Stamp a stable client key so the reorderable/editable proposal list keys
       // on identity, not array index (index keys mis-associate controlled-input
       // state across a swap). `_key` is stripped by the accept Zod schema.
@@ -176,7 +202,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleAcceptDecomposition = async () => {
     if (!proposedDecomposition?.length) return;
-    await api.acceptGoalDecomposition(goal.id, proposedDecomposition);
+    await acceptGoalDecomposition(goal.id, proposedDecomposition);
     setProposedDecomposition(null);
     onRefresh();
   };
@@ -186,7 +212,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     if (milestoneActions.has(actionKey)) return;
     setMilestoneActions(prev => new Set(prev).add(actionKey));
     try {
-      await api.completeMilestoneTask(goal.id, milestoneId, taskId);
+      await completeMilestoneTask(goal.id, milestoneId, taskId);
       onRefresh();
     } catch {
       // The request helper owns the toast; keep the task available for retry.
@@ -212,7 +238,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setCheckingIn(true);
     let checkIn = null;
     try {
-      checkIn = await api.checkInGoal(goal.id);
+      checkIn = await checkInGoal(goal.id);
     } catch {
       // Deliberately swallowed — see the single-layer note above.
     } finally {
@@ -245,20 +271,20 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     }
   };
 
-  const handleSchedule = () => runSchedulingAction(api.scheduleGoalTimeBlocks);
+  const handleSchedule = () => runSchedulingAction(scheduleGoalTimeBlocks);
 
-  const handleRemoveSchedule = () => runSchedulingAction(api.removeGoalSchedule);
+  const handleRemoveSchedule = () => runSchedulingAction(removeGoalSchedule);
 
-  const handleReschedule = () => runSchedulingAction(api.rescheduleGoalTimeBlocks);
+  const handleReschedule = () => runSchedulingAction(rescheduleGoalTimeBlocks);
 
   const handleDelete = async () => {
-    await api.deleteGoal(goal.id);
+    await deleteGoal(goal.id);
     onClose();
     onRefresh();
   };
 
   const handleComplete = async () => {
-    await api.updateGoal(goal.id, { status: 'completed' });
+    await updateGoal(goal.id, { status: 'completed' });
     onRefresh();
   };
 
@@ -267,7 +293,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     milestoneSubmittingRef.current = true;
     setMilestoneSubmitting(true);
     try {
-      await api.addGoalMilestone(goal.id, {
+      await addGoalMilestone(goal.id, {
         title: newMilestone.title,
         ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
       });
@@ -286,7 +312,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     if (milestoneActions.has(actionKey)) return;
     setMilestoneActions(prev => new Set(prev).add(actionKey));
     try {
-      await api.completeGoalMilestone(goal.id, milestoneId);
+      await completeGoalMilestone(goal.id, milestoneId);
       onRefresh();
     } catch {
       // The request helper owns the toast; keep the milestone available for retry.
@@ -301,7 +327,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleLinkActivity = async () => {
     if (!selectedActivity) return;
-    await api.linkGoalActivity(goal.id, { activityName: selectedActivity });
+    await linkGoalActivity(goal.id, { activityName: selectedActivity });
     setSelectedActivity('');
     onRefresh();
   };
@@ -311,7 +337,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     progressSubmittingRef.current = true;
     setProgressSubmitting(true);
     try {
-      await api.addGoalProgress(goal.id, {
+      await addGoalProgress(goal.id, {
         date: progressForm.date,
         note: progressForm.note,
         ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
@@ -333,12 +359,12 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleDeleteProgress = async (entryId) => {
-    await api.deleteGoalProgress(goal.id, entryId);
+    await deleteGoalProgress(goal.id, entryId);
     onRefresh();
   };
 
   const handleUnlinkActivity = async (activityName) => {
-    await api.unlinkGoalActivity(goal.id, activityName);
+    await unlinkGoalActivity(goal.id, activityName);
     onRefresh();
   };
 
@@ -346,7 +372,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     if (!selectedCalendar) return;
     const sc = subcalendars.find(s => s.calendarId === selectedCalendar);
     if (!sc) return;
-    await api.linkGoalCalendar(goal.id, {
+    await linkGoalCalendar(goal.id, {
       subcalendarId: sc.calendarId,
       subcalendarName: sc.name,
       matchPattern: calendarMatchPattern
@@ -357,7 +383,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleUnlinkCalendar = async (subcalendarId) => {
-    await api.unlinkGoalCalendar(goal.id, subcalendarId);
+    await unlinkGoalCalendar(goal.id, subcalendarId);
     onRefresh();
   };
 
@@ -370,7 +396,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   // would skip the catch and report a save that never happened.
   const handleProgressChange = async (value) => {
     try {
-      await api.updateGoalProgress(goal.id, value);
+      await updateGoalProgress(goal.id, value);
     } catch {
       return false;
     }
@@ -383,7 +409,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     todoSubmittingRef.current = true;
     setTodoSubmitting(true);
     try {
-      await api.addGoalTodo(goal.id, {
+      await addGoalTodo(goal.id, {
         title: newTodoTitle,
         priority: newTodoPriority,
         ...(newTodoEstimate ? { estimateMinutes: parseInt(newTodoEstimate, 10) } : {})
@@ -402,12 +428,12 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleToggleTodo = async (todo) => {
     const nextStatus = todo.status === 'done' ? 'pending' : 'done';
-    await api.updateGoalTodo(goal.id, todo.id, { status: nextStatus });
+    await updateGoalTodo(goal.id, todo.id, { status: nextStatus });
     onRefresh();
   };
 
   const handleDeleteTodo = async (todoId) => {
-    await api.deleteGoalTodo(goal.id, todoId);
+    await deleteGoalTodo(goal.id, todoId);
     onRefresh();
   };
 

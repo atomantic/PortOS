@@ -16,8 +16,10 @@ const {
   mockUpdateBoard: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiProviders.js', () => ({
   getProviders: (...args) => mockProviders(...args),
+}));
+vi.mock('../../services/apiMoodBoard.js', () => ({
   composeMoodBoardPrompt: (...args) => mockCompose(...args),
   startMoodBoardAnalyze: (...args) => mockStart(...args),
   getMoodBoardAnalyze: (...args) => mockGetJob(...args),

@@ -15,7 +15,7 @@ import {
   syncSpotify,
   getSpotifyPlaylists,
   syncSpotifyPlaylists,
-} from '../../../services/api';
+} from '../../../services/apiSpotify.js';
 
 // Brain → Spotify (#2152). Opt-in, machine-local ingestion of Spotify
 // listening history (recently-played) into the activity timeline. OFF by

@@ -32,7 +32,7 @@ const saveMediaSketch = vi.fn();
 const getRegenAvailability = vi.fn();
 const rerenderWithAnnotations = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   getMediaSketch: (...a) => getMediaSketch(...a),
   saveMediaSketch: (...a) => saveMediaSketch(...a),
   getRegenAvailability: (...a) => getRegenAvailability(...a),

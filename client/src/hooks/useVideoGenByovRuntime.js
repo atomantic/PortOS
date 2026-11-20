@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { getVideoGenRuntimeStatus } from '../services/api';
+import { getVideoGenRuntimeStatus } from '../services/apiImageVideo.js';
 
 export function useVideoGenByovRuntime({ currentModel, status }) {
   // Probe the per-runtime status BEFORE the user hits Generate — without

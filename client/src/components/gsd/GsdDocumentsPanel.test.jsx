@@ -6,7 +6,10 @@ const api = vi.hoisted(() => ({
   saveGsdDocument: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiGSD.js', () => ({
+  getGsdDocument: api.getGsdDocument,
+  saveGsdDocument: api.saveGsdDocument,
+}));
 
 import GsdDocumentsPanel from './GsdDocumentsPanel';
 

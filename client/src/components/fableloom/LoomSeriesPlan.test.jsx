@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { useState } from 'react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   feedbackLoomSeriesPlan: vi.fn(),
   generateLoomSeriesPlan: vi.fn(),
   reviewLoomSeriesPlan: vi.fn(),
@@ -21,7 +21,14 @@ vi.mock('./LoomEditorialAutomation', () => ({
   default: () => <div>Editorial automation</div>,
 }));
 
-import * as api from '../../services/api';
+import {
+  updateLoom,
+  reviewLoomSeriesPlan,
+  feedbackLoomSeriesPlan,
+  generateLoomSeriesPlan,
+  reviewLoomTeleplay,
+  validateLoomSeriesOutlines,
+} from '../../services/apiFableLoom.js';
 import LoomSeriesPlan from './LoomSeriesPlan';
 
 const loom = (fields = {}) => ({
@@ -53,7 +60,7 @@ describe('LoomSeriesPlan', () => {
   it('edits and saves the series-level plan as one patch', async () => {
     const onLoomUpdate = vi.fn();
     const updated = loom({ seriesPlan: { ...loom().seriesPlan, storyArc: 'A stronger arc.' } });
-    api.updateLoom.mockResolvedValue(updated);
+    updateLoom.mockResolvedValue(updated);
     renderPlan({ loom: loom(), onLoomUpdate });
 
     fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), { target: { value: 'A stronger arc.' } });
@@ -62,7 +69,7 @@ describe('LoomSeriesPlan', () => {
     expect(screen.getByRole('button', { name: /analyze series/i })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledWith('loom-1', {
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledWith('loom-1', {
       seriesPlan: expect.objectContaining({ storyArc: 'A stronger arc.' }),
     }, { silent: true }));
     expect(onLoomUpdate).toHaveBeenCalledWith(updated);
@@ -70,7 +77,7 @@ describe('LoomSeriesPlan', () => {
 
   it('authors and clears the shared series-design brief without adding it to legacy saves', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockImplementation(async (_id, { seriesPlan }) => loom({ seriesPlan }));
+    updateLoom.mockImplementation(async (_id, { seriesPlan }) => loom({ seriesPlan }));
     render(<RouterProvider router={createMemoryRouter([
       { path: '/', element: <StatefulPlan initial={loom()} /> },
     ], { initialEntries: ['/'] })} />);
@@ -80,8 +87,8 @@ describe('LoomSeriesPlan', () => {
     await user.type(screen.getByRole('textbox', { name: 'Continuing tensions' }), 'Each relay hides another sender.');
     await user.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledTimes(1));
-    expect(api.updateLoom.mock.calls[0][1].seriesPlan.seriesDesign).toEqual(expect.objectContaining({
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledTimes(1));
+    expect(updateLoom.mock.calls[0][1].seriesPlan.seriesDesign).toEqual(expect.objectContaining({
       mode: 'renewable',
       episodeActivity: 'Decode a dangerous signal.',
       continuingTensions: 'Each relay hides another sender.',
@@ -89,13 +96,13 @@ describe('LoomSeriesPlan', () => {
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Story intent' }), '');
     await user.click(screen.getByRole('button', { name: /save plan/i }));
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledTimes(2));
-    expect(api.updateLoom.mock.calls[1][1].seriesPlan).not.toHaveProperty('seriesDesign');
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledTimes(2));
+    expect(updateLoom.mock.calls[1][1].seriesPlan).not.toHaveProperty('seriesDesign');
   });
 
   it('adds a playable challenge as an episode-mapped plot-point contract', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockResolvedValue(loom());
+    updateLoom.mockResolvedValue(loom());
     renderPlan({ loom: loom(), onLoomUpdate: vi.fn() });
 
     await user.click(screen.getByRole('tab', { name: 'Plot & challenges' }));
@@ -122,7 +129,7 @@ describe('LoomSeriesPlan', () => {
   });
 
   it('shows AI series analysis and recommendations for the outline', async () => {
-    api.reviewLoomSeriesPlan.mockResolvedValue({
+    reviewLoomSeriesPlan.mockResolvedValue({
       analysis: {
         summary: 'The spine works.',
         strengths: ['Clear protagonist goal'],
@@ -148,7 +155,7 @@ describe('LoomSeriesPlan', () => {
         sideQuests: [],
       },
     });
-    api.feedbackLoomSeriesPlan.mockResolvedValue({ loom: updated, changes: ['Shifted plot point turn'] });
+    feedbackLoomSeriesPlan.mockResolvedValue({ loom: updated, changes: ['Shifted plot point turn'] });
     renderPlan({ loom: loom(), onLoomUpdate });
 
     fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
@@ -158,7 +165,7 @@ describe('LoomSeriesPlan', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /apply guidance to plan/i }));
 
-    await waitFor(() => expect(api.feedbackLoomSeriesPlan).toHaveBeenCalledWith(
+    await waitFor(() => expect(feedbackLoomSeriesPlan).toHaveBeenCalledWith(
       'loom-1',
       expect.objectContaining({
         feedback: 'Move the turn to episode 1 and raise stakes.',
@@ -178,16 +185,16 @@ describe('LoomSeriesPlan', () => {
         sideQuests: [{ id: 'quest-new', title: 'Lost map', description: 'Find it.', status: 'planned', startEpisodeId: 'ep-1', endEpisodeId: null }],
       },
     });
-    api.generateLoomSeriesPlan.mockResolvedValue({ loom: generated, runId: 'run-draft' });
+    generateLoomSeriesPlan.mockResolvedValue({ loom: generated, runId: 'run-draft' });
     renderPlan({ loom: loom(), onLoomUpdate });
 
     fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
     fireEvent.click(screen.getByText('Manual AI plan tools'));
     fireEvent.click(screen.getByRole('button', { name: /regenerate full plan/i }));
-    expect(api.generateLoomSeriesPlan).not.toHaveBeenCalled();
+    expect(generateLoomSeriesPlan).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }));
 
-    await waitFor(() => expect(api.generateLoomSeriesPlan).toHaveBeenCalledWith(
+    await waitFor(() => expect(generateLoomSeriesPlan).toHaveBeenCalledWith(
       'loom-1', { operationId: expect.any(String) }, { silent: true },
     ));
     expect(onLoomUpdate).toHaveBeenCalledWith(generated);
@@ -195,7 +202,7 @@ describe('LoomSeriesPlan', () => {
 
   it('adopts a generated plan over typing performed while the provider call is in flight', async () => {
     let finishDraft;
-    api.generateLoomSeriesPlan.mockImplementation(() => new Promise((resolve) => { finishDraft = resolve; }));
+    generateLoomSeriesPlan.mockImplementation(() => new Promise((resolve) => { finishDraft = resolve; }));
     render(<RouterProvider router={createMemoryRouter([
       { path: '/', element: <StatefulPlan initial={loom()} /> },
     ], { initialEntries: ['/'] })} />);
@@ -221,7 +228,7 @@ describe('LoomSeriesPlan', () => {
 
   it('keeps typing performed while a save response is in flight', async () => {
     let resolveSave;
-    api.updateLoom.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
+    updateLoom.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
     render(<RouterProvider router={createMemoryRouter([
       { path: '/', element: <StatefulPlan initial={loom()} /> },
     ], { initialEntries: ['/'] })} />);
@@ -237,7 +244,7 @@ describe('LoomSeriesPlan', () => {
   });
 
   it('reviews the complete expanded teleplay only when every episode has scenes', async () => {
-    api.reviewLoomTeleplay.mockResolvedValue({
+    reviewLoomTeleplay.mockResolvedValue({
       analysis: {
         summary: 'The full teleplay escalates cleanly.',
         strengths: ['The handoff is earned.'],
@@ -258,11 +265,11 @@ describe('LoomSeriesPlan', () => {
     expect(screen.getByRole('button', { name: 'Review full teleplay' })).toBeEnabled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Review full teleplay' }));
     expect(await screen.findByText('The full teleplay escalates cleanly.')).toBeInTheDocument();
-    expect(api.reviewLoomTeleplay).toHaveBeenCalledWith('loom-1', { operationId: expect.any(String) }, { silent: true });
+    expect(reviewLoomTeleplay).toHaveBeenCalledWith('loom-1', { operationId: expect.any(String) }, { silent: true });
   });
 
   it('validates the complete ordered beat arc and links blocking issues to episodes', async () => {
-    api.validateLoomSeriesOutlines.mockResolvedValue({
+    validateLoomSeriesOutlines.mockResolvedValue({
       stats: { ready: false, errorCount: 1 },
       issues: [{ code: 'MISSING_EPISODE_OUTLINE', episodeId: 'ep-1', message: 'Draft Episode 1 first.' }],
     });
@@ -274,7 +281,7 @@ describe('LoomSeriesPlan', () => {
 
     expect(await screen.findByText(/Draft Episode 1 first\./)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Episode 1' })).toHaveAttribute('href', '/fableloom/loom-1/ep-1');
-    expect(api.validateLoomSeriesOutlines).toHaveBeenCalledWith('loom-1', { silent: true });
+    expect(validateLoomSeriesOutlines).toHaveBeenCalledWith('loom-1', { silent: true });
   });
 
   it('authors configured overnight handoffs and a finale teaser in the series plan', async () => {
@@ -297,7 +304,7 @@ describe('LoomSeriesPlan', () => {
     await user.type(screen.getByRole('textbox', { name: 'Teaser / cliffhanger' }), 'Something answers from beyond the relay.');
     await user.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledWith(
       'loom-1',
       expect.objectContaining({
         seriesPlan: expect.objectContaining({
@@ -347,7 +354,7 @@ const renderCastPlan = (props, entry = '/?section=cast') => render(<RouterProvid
   { path: '/', element: <LoomSeriesPlan universe={castUniverse} onLoomUpdate={vi.fn()} {...props} /> },
 ], { initialEntries: [entry] })} />);
 
-const savedPlan = () => api.updateLoom.mock.calls.at(-1)[1].seriesPlan;
+const savedPlan = () => updateLoom.mock.calls.at(-1)[1].seriesPlan;
 
 describe('LoomSeriesPlan — cast evolution lens', () => {
   it('deep-links straight to the cast section and offers the linked universe cast', () => {
@@ -359,14 +366,14 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
   });
 
   it('sends a plan with no lens as a body byte-identical to the pre-lens one', async () => {
-    api.updateLoom.mockResolvedValue(castLoom());
+    updateLoom.mockResolvedValue(castLoom());
     renderCastPlan({ loom: castLoom() });
 
     fireEvent.click(screen.getByRole('tab', { name: 'Story arc' }));
     fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), { target: { value: 'A stronger arc.' } });
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
     expect(Object.keys(savedPlan())).toEqual([
       'storyArc', 'plotPoints', 'sideQuests', 'deliveryOptions', 'interEpisodeVoicemails', 'nextSeasonTeaser',
     ]);
@@ -374,7 +381,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
 
   it('authors a full five-stage lens against episode and scene evidence', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockResolvedValue(castLoom());
+    updateLoom.mockResolvedValue(castLoom());
     renderCastPlan({ loom: castLoom() });
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Add cast member' }), 'chr-1111');
@@ -388,7 +395,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'final proof — Evidence scene' }), 'the-cost');
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
     const [lens] = savedPlan().characterEvolutions;
     expect(lens).toMatchObject({ characterId: 'chr-1111', characterName: 'Vale' });
     expect(lens.evolution.outcome).toBe('full-change');
@@ -400,7 +407,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
 
   it('keeps a sparse lens sparse and treats a declared flat arc as complete, not a defect', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockResolvedValue(castLoom());
+    updateLoom.mockResolvedValue(castLoom());
     renderCastPlan({ loom: castLoom() });
 
     await user.selectOptions(screen.getByRole('combobox', { name: 'Add cast member' }), 'chr-2222');
@@ -416,7 +423,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
     expect(screen.getByRole('button', { name: /save plan/i })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
     const [lens] = savedPlan().characterEvolutions;
     expect(lens.evolution.outcome).toBe('flat-testing');
     expect(lens.evolution.stages.map((s) => s.stageId))
@@ -425,7 +432,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
 
   it('marks an unresolvable evidence anchor stale and re-picks it in one click', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockResolvedValue(castLoom());
+    updateLoom.mockResolvedValue(castLoom());
     renderCastPlan({
       loom: castLoom({
         characterEvolutions: [{
@@ -457,14 +464,14 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'cost tested — Evidence episode' }), 'ep-1');
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
     expect(savedPlan().characterEvolutions[0].evolution.stages[0].evidence)
       .toMatchObject({ episodeId: 'ep-1' });
   });
 
   it('persists a fully cleared lens as a clear rather than a no-op', async () => {
     const user = userEvent.setup();
-    api.updateLoom.mockResolvedValue(castLoom());
+    updateLoom.mockResolvedValue(castLoom());
     renderCastPlan({
       loom: castLoom({
         characterEvolutions: [{
@@ -492,7 +499,7 @@ describe('LoomSeriesPlan — cast evolution lens', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'final proof — Belief under test' }), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
-    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
     expect(savedPlan().characterEvolutions[0].evolution).toBeNull();
   });
 

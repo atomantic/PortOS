@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { declarePrivacyChange } from '../../services/api';
+import { declarePrivacyChange } from '../../services/apiPrivacy.js';
 import toast from '../ui/Toast';
 import { VAULT_TYPES, CHANGE_KINDS, KIND_FOR_TYPE, INPUT_CLS, labelFor } from './constants';
 

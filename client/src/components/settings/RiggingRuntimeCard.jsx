@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import BrailleSpinner from '../BrailleSpinner';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import { riggingReasonLabel } from '../../lib/riggingReasons.js';
-import { getRiggingReadiness } from '../../services/api';
+import { getRiggingReadiness } from '../../services/apiRigging.js';
 
 // The rigging runtime's honest status, rendered inside the rigging row of
 // Settings > Features. It fetches `GET /api/rigging/readiness` from HERE rather than

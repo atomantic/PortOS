@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
-import * as api from '../../../services/api';
+import { getProviders } from '../../../services/apiProviders.js';
+import { getBrainSettings, syncBrainData, updateBrainSettings } from '../../../services/apiBrain.js';
+import { getCosConfig, updateCosConfig } from '../../../services/apiAgents.js';
+import { getEmbeddingStatus } from '../../../services/apiMemory.js';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { formatDateTime, formatPercent } from '../../../utils/formatters';
@@ -31,7 +34,7 @@ const DAYS_OF_WEEK = [
 ];
 
 // Module-level so useListResource sees a stable fetcher; the pickers own the error UI.
-const fetchProviders = async () => (await api.getProviders({ silent: true }))?.providers || [];
+const fetchProviders = async () => (await getProviders({ silent: true }))?.providers || [];
 
 const EMBEDDING_INITIAL = { embeddingProvider: '', embeddingModel: '' };
 
@@ -67,9 +70,9 @@ export default function ConfigTab({ onRefresh }) {
 
   const fetchData = async () => {
     const [settingsData, cosConfig, embStatus] = await Promise.all([
-      api.getBrainSettings({ silent: true }).catch(() => null),
-      api.getCosConfig({ silent: true }).catch(() => null),
-      api.getEmbeddingStatus().catch(() => null)
+      getBrainSettings({ silent: true }).catch(() => null),
+      getCosConfig({ silent: true }).catch(() => null),
+      getEmbeddingStatus().catch(() => null)
     ]);
 
     setSettingsFailed(!settingsData);
@@ -95,7 +98,7 @@ export default function ConfigTab({ onRefresh }) {
   };
 
   const refreshEmbeddingStatus = async () => {
-    const embStatus = await api.getEmbeddingStatus().catch(() => null);
+    const embStatus = await getEmbeddingStatus().catch(() => null);
     if (embStatus) setEmbeddingStatus(embStatus);
   };
 
@@ -132,8 +135,7 @@ export default function ConfigTab({ onRefresh }) {
 
   const handleSaveEmbedding = async () => {
     setSavingEmbedding(true);
-    const result = await api
-      .updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel }, { silent: true })
+    const result = await updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel }, { silent: true })
       .catch(err => { toast.error(err.message || 'Failed to save embedding config'); return null; });
     setSavingEmbedding(false);
     if (result) {
@@ -146,8 +148,7 @@ export default function ConfigTab({ onRefresh }) {
 
   const handleReprocess = async () => {
     setReprocessing(true);
-    const result = await api
-      .syncBrainData({ refresh: true }, { silent: true })
+    const result = await syncBrainData({ refresh: true }, { silent: true })
       .catch(err => { toast.error(err.message || 'Reprocess failed'); return null; });
     setReprocessing(false);
     if (result) {
@@ -168,7 +169,7 @@ export default function ConfigTab({ onRefresh }) {
       weeklyReviewTime
     };
 
-    const result = await api.updateBrainSettings(updatedSettings, { silent: true }).catch(err => {
+    const result = await updateBrainSettings(updatedSettings, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to save settings');
       return null;
     });

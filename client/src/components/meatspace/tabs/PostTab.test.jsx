@@ -21,25 +21,19 @@ const settle = () => act(async () => { await new Promise((resolve) => setTimeout
 // PostTab pulls config/sessions/stats on mount and drives a session hook; stub
 // both so the component renders in isolation. The Morse tab doesn't depend on
 // any of this data — it's the pure routing surface under test here.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostConfig: () => Promise.resolve(null),
   getPostRecommendations,
   getPostSessions: () => Promise.resolve([]),
   getPostStats: () => Promise.resolve(null),
-  // MorseTrainer (rendered by the 'morse' tab) fetches/logs training stats on
-  // mount — stub both so its effects resolve without hitting the network.
   getTrainingStats: () => Promise.resolve({ currentStreak: 0, byDrill: {} }),
   submitTrainingEntry: () => Promise.resolve({}),
-  // MorseTrainer + its progress panel read server-side Morse progress on mount.
   getMorseProgress: () => Promise.resolve({
     days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
     series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
   }),
   submitMorseRound: () => Promise.resolve({}),
   updateMorseLevel: () => Promise.resolve({ kochLevel: 2, kochLevelSet: true, adopted: false, settings: null }),
-  // Memory tab (MemoryBuilder / MemoryPractice / ElementsSong) — issue #3249.
-  // `getMemoryItem` resolves the seeded item and returns null for anything else,
-  // which is what drives the not-found fallback.
   getMemoryItems: () => Promise.resolve([MEMORY_ITEM, ELEMENTS_ITEM]),
   getMemoryItem: (id) => Promise.resolve([MEMORY_ITEM, ELEMENTS_ITEM].find(i => i.id === id) || null),
   getMemoryMastery: () => Promise.resolve(null),

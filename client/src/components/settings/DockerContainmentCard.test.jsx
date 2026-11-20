@@ -2,7 +2,10 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mock = vi.hoisted(() => ({ getDockerContainmentStatus: vi.fn(), pullDockerContainmentImage: vi.fn() }));
-vi.mock('../../services/api', () => mock);
+vi.mock('../../services/apiDockerContainment.js', () => ({
+  getDockerContainmentStatus: mock.getDockerContainmentStatus,
+  pullDockerContainmentImage: mock.pullDockerContainmentImage,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import DockerContainmentCard from './DockerContainmentCard';

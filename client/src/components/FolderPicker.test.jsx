@@ -3,15 +3,15 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 
 // FolderPicker imports `* as api` and only calls getDirectories once its
 // picker opens.
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiScaffold.js', () => ({
   getDirectories: vi.fn(),
 }));
 
-import * as api from '../services/api';
+import { getDirectories } from '../services/apiScaffold.js';
 import FolderPicker from './FolderPicker';
 
 beforeEach(() => {
-  api.getDirectories.mockResolvedValue({
+  getDirectories.mockResolvedValue({
     currentPath: '/Users/example/projects',
     parentPath: '/Users/example',
     directories: [{ name: 'my-app', path: '/Users/example/projects/my-app' }],
@@ -47,7 +47,7 @@ describe('FolderPicker responsive overlay', () => {
 describe('FolderPicker navigation', () => {
   it('selects the folder the user navigated to when an earlier listing answers late', async () => {
     let resolveSlow;
-    api.getDirectories.mockImplementation((path) => {
+    getDirectories.mockImplementation((path) => {
       if (path === '/Volumes/slow/archive') return new Promise((resolve) => { resolveSlow = resolve; });
       return Promise.resolve({ currentPath: '/Users/example', parentPath: '/Users', directories: [], drives: null });
     });

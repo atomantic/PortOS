@@ -7,7 +7,12 @@ import AnnotationCanvas from '../components/media/AnnotationCanvas';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { uuidv4 } from '../lib/uuid';
 import { undoStrokes, clampSize, DEFAULT_COLOR, DEFAULT_SIZE, MIN_SIZE, MAX_SIZE } from '../lib/sketchCanvas';
-import { getMediaSketch, saveMediaSketch, getRegenAvailability, rerenderWithAnnotations } from '../services/api';
+import {
+  getMediaSketch,
+  saveMediaSketch,
+  getRegenAvailability,
+  rerenderWithAnnotations,
+} from '../services/apiImageVideo.js';
 import { clamp } from '../utils/formatters.js';
 
 // Default denoise for an annotation re-render — high enough that the drawn marks

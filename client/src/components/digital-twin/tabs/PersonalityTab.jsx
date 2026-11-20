@@ -15,7 +15,13 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend, Tooltip, ResponsiveContainer
 } from 'recharts';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  getModelPersonalityHistory,
+  getModelPersonalitySettings,
+  runModelPersonalityTest,
+  deleteModelPersonalityResult,
+  updateModelPersonalitySettings,
+} from '../../../services/apiModelPersonality.js';
 import toast from '../../ui/Toast';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
@@ -230,8 +236,8 @@ export default function PersonalityTab() {
     const [historyData, settingsData] = await Promise.all([
       // No limit — fetch the full retained history (server-capped) so every
       // kept record is reachable for compare/delete.
-      api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => null),
-      api.getModelPersonalitySettings({ silent: true }).catch(() => null)
+      getModelPersonalityHistory(undefined, { silent: true }).catch(() => null),
+      getModelPersonalitySettings({ silent: true }).catch(() => null)
     ]);
     setHistoryError(!Array.isArray(historyData));
     setSettingsError(!settingsData);
@@ -266,8 +272,7 @@ export default function PersonalityTab() {
       const { providerId, model } = selectedProviders[i];
       setRunning({ current: i + 1, total: selectedProviders.length, model });
       // The api helper toasts the error; a failed model doesn't abort the rest.
-      const record = await api
-        .runModelPersonalityTest({ providerId, ...(model ? { model } : {}), includeAlignment })
+      const record = await runModelPersonalityTest({ providerId, ...(model ? { model } : {}), includeAlignment })
         .catch(() => null);
       if (record) {
         setResults((prev) => [...prev, record]);
@@ -278,14 +283,13 @@ export default function PersonalityTab() {
     // Re-sync with the server's capped history — appending at the cap evicts
     // the oldest record server-side, which the optimistic prepends above
     // don't reflect (ghost rows would 404 on delete).
-    const fresh = await api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => null);
+    const fresh = await getModelPersonalityHistory(undefined, { silent: true }).catch(() => null);
     if (Array.isArray(fresh)) setHistory(fresh);
     setRunning(null);
   };
 
   const deleteRun = async (runId) => {
-    const ok = await api
-      .deleteModelPersonalityResult(runId)
+    const ok = await deleteModelPersonalityResult(runId)
       .then(() => true)
       .catch(() => false);
     if (!ok) return;
@@ -302,8 +306,7 @@ export default function PersonalityTab() {
   const saveSettings = async () => {
     if (settingsError) return;
     setSavingSettings(true);
-    const saved = await api
-      .updateModelPersonalitySettings({
+    const saved = await updateModelPersonalitySettings({
         scorerProviderId: scorerProviderId || null,
         scorerModel: scorerModel || null,
         historyCap: Number(historyCap) || 200,

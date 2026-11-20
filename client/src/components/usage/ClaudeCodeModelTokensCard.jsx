@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import * as api from '../../services/api';
+import { getClaudeCodeModelUsage } from '../../services/apiSystem.js';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatUsd, timeAgo } from '../../utils/formatters';
 
@@ -66,7 +66,7 @@ export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom, 
   useEffect(() => {
     let cancelled = false;
     setReport(undefined);
-    api.getClaudeCodeModelUsage(isCustom ? { from, to } : { period }, { silent: true })
+    getClaudeCodeModelUsage(isCustom ? { from, to } : { period }, { silent: true })
       .catch(() => null)
       .then((data) => {
         if (!cancelled) {

@@ -8,7 +8,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import socket from '../services/socket';
-import { getMediaUsages } from '../services/api';
+import { getMediaUsages } from '../services/apiMediaUsage.js';
 
 // One shared usage map for every mounted card and viewer: fetched when the
 // first consumer mounts (each visit to a media page), on reconnect, and after

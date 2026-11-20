@@ -16,7 +16,7 @@ import {
   remediateLoomEditorial,
   reviewLoomPlaythroughs,
   startLoomEditorialAutopilot,
-} from '../../services/api';
+} from '../../services/apiFableLoom.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import LoomAiRunStatus from './LoomAiRunStatus';
 

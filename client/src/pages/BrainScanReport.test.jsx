@@ -8,7 +8,7 @@ vi.mock('../services/socket', async () => {
 });
 import socket from '../services/socket';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiBrain.js', () => ({
   getBrainLink: vi.fn(),
   getBrainScanReport: vi.fn(),
 }));
@@ -17,7 +17,7 @@ vi.mock('../components/cos/MarkdownOutput', () => ({
   default: ({ content }) => <div data-testid="markdown">{content}</div>,
 }));
 
-import * as api from '../services/api';
+import { getBrainLink, getBrainScanReport } from '../services/apiBrain.js';
 import BrainScanReport from './BrainScanReport';
 
 const mountPage = () => render(
@@ -54,8 +54,8 @@ describe('BrainScanReport', () => {
   });
 
   it('scrolls its own content in the loaded state', async () => {
-    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com', malwareScan: { verdict: 'CLEAN' } });
-    api.getBrainScanReport.mockResolvedValue('# Report\n\nlong body');
+    getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com', malwareScan: { verdict: 'CLEAN' } });
+    getBrainScanReport.mockResolvedValue('# Report\n\nlong body');
 
     const { container } = await renderPage();
     await waitFor(() => expect(screen.getByText('Example Link')).toBeInTheDocument());
@@ -65,8 +65,8 @@ describe('BrainScanReport', () => {
   });
 
   it('scrolls its own content in the loading state', async () => {
-    api.getBrainLink.mockReturnValue(new Promise(() => {}));
-    api.getBrainScanReport.mockReturnValue(new Promise(() => {}));
+    getBrainLink.mockReturnValue(new Promise(() => {}));
+    getBrainScanReport.mockReturnValue(new Promise(() => {}));
 
     const { container } = mountPage();
     expectOwnScrollContainer(container);
@@ -76,10 +76,10 @@ describe('BrainScanReport', () => {
   });
 
   it('shows the read error and retries both resources without a toast', async () => {
-    api.getBrainLink.mockRejectedValueOnce(new Error('link read failed'));
-    api.getBrainScanReport.mockRejectedValueOnce(new Error('report read failed'));
-    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com', malwareScan: { verdict: 'CLEAN' } });
-    api.getBrainScanReport.mockResolvedValue('# Recovered report');
+    getBrainLink.mockRejectedValueOnce(new Error('link read failed'));
+    getBrainScanReport.mockRejectedValueOnce(new Error('report read failed'));
+    getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com', malwareScan: { verdict: 'CLEAN' } });
+    getBrainScanReport.mockResolvedValue('# Recovered report');
 
     const { container } = await renderPage();
     const alert = await screen.findByRole('alert');
@@ -93,15 +93,15 @@ describe('BrainScanReport', () => {
     expect(await screen.findByText('Example Link', { selector: 'h1' })).toBeInTheDocument();
     expect(screen.getByText('CLEAN')).toBeInTheDocument();
     expect(screen.getByTestId('markdown')).toHaveTextContent('Recovered report');
-    expect(api.getBrainLink).toHaveBeenCalledTimes(2);
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(2);
-    expect(api.getBrainLink).toHaveBeenLastCalledWith('abc', { silent: true });
-    expect(api.getBrainScanReport).toHaveBeenLastCalledWith('abc', { silent: true });
+    expect(getBrainLink).toHaveBeenCalledTimes(2);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(2);
+    expect(getBrainLink).toHaveBeenLastCalledWith('abc', { silent: true });
+    expect(getBrainScanReport).toHaveBeenLastCalledWith('abc', { silent: true });
   });
 
   it('reserves unavailable copy for a successful response without a report body', async () => {
-    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
-    api.getBrainScanReport.mockResolvedValue(null);
+    getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+    getBrainScanReport.mockResolvedValue(null);
 
     await renderPage();
     expect(await screen.findByText('This scan report is unavailable.')).toBeInTheDocument();
@@ -109,8 +109,8 @@ describe('BrainScanReport', () => {
   });
 
   it('shows a report read failure even when the link read succeeds', async () => {
-    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
-    api.getBrainScanReport.mockRejectedValue(new Error('report read failed'));
+    getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+    getBrainScanReport.mockRejectedValue(new Error('report read failed'));
 
     await renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent('report read failed');
@@ -120,11 +120,11 @@ describe('BrainScanReport', () => {
   it('fetches the new link immediately and ignores a late response from the previous link', async () => {
     let resolveFirstReport;
     let resolveSecondReport;
-    api.getBrainLink.mockImplementation((id) => Promise.resolve({
+    getBrainLink.mockImplementation((id) => Promise.resolve({
       title: id === 'abc' ? 'First link' : 'Second link',
       url: `https://example.com/${id}`,
     }));
-    api.getBrainScanReport.mockImplementation((id) => new Promise((resolve) => {
+    getBrainScanReport.mockImplementation((id) => new Promise((resolve) => {
       if (id === 'abc') resolveFirstReport = resolve;
       else resolveSecondReport = resolve;
     }));
@@ -137,10 +137,10 @@ describe('BrainScanReport', () => {
         </Routes>
       </MemoryRouter>
     );
-    await waitFor(() => expect(api.getBrainScanReport).toHaveBeenCalledWith('abc', { silent: true }));
+    await waitFor(() => expect(getBrainScanReport).toHaveBeenCalledWith('abc', { silent: true }));
 
     await act(async () => { screen.getByRole('button', { name: 'Second link' }).click(); });
-    await waitFor(() => expect(api.getBrainScanReport).toHaveBeenCalledWith('def', { silent: true }));
+    await waitFor(() => expect(getBrainScanReport).toHaveBeenCalledWith('def', { silent: true }));
     expect(screen.getByRole('status', { name: 'Loading scan report' })).toBeInTheDocument();
     expect(screen.queryByText('First link')).not.toBeInTheDocument();
 
@@ -153,36 +153,36 @@ describe('BrainScanReport', () => {
 });
 
 it('filters scan events, coalesces mid-read changes, and reconciles without polling', async () => {
-  api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
-  api.getBrainScanReport.mockResolvedValue('Initial report');
+  getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+  getBrainScanReport.mockResolvedValue('Initial report');
   await renderPage();
   vi.useFakeTimers();
   try {
     await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(1);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(1);
     await act(async () => { socket.emit('brain:links:changed', { id: 'other' }); });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(1);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(1);
     let resolveRead;
-    api.getBrainScanReport.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    getBrainScanReport.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
     await act(async () => { socket.emit('brain:links:changed', { id: 'abc' }); });
-    api.getBrainScanReport.mockResolvedValue('Completed report');
+    getBrainScanReport.mockResolvedValue('Completed report');
     await act(async () => {
       socket.emit('brain:links:changed', { id: 'abc' });
       socket.emit('brain:links:changed', { id: 'abc' });
     });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(2);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(2);
     await act(async () => { resolveRead('Earlier report'); });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(3);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId('markdown')).toHaveTextContent('Completed report');
-    api.getBrainScanReport.mockRejectedValueOnce(new Error('Unavailable'));
+    getBrainScanReport.mockRejectedValueOnce(new Error('Unavailable'));
     await act(async () => { socket.emit('connect'); });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(4);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(4);
     expect(screen.getByTestId('markdown')).toHaveTextContent('Completed report');
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(api.getBrainScanReport).toHaveBeenCalledTimes(5);
+    expect(getBrainScanReport).toHaveBeenCalledTimes(5);
     visibility.mockRestore();
   } finally {
     vi.useRealTimers();

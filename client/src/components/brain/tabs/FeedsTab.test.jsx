@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ getFeeds: vi.fn(), getFeedItems: vi.fn() }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiMessages.js', () => ({ getFeeds: api.getFeeds, getFeedItems: api.getFeedItems }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 import FeedsTab from './FeedsTab';

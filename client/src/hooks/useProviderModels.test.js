@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({ getProviders: vi.fn(), getProviderCatalog: vi.fn() }));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
+  getProviderCatalog: vi.fn(),
+}));
 
-import * as api from '../services/api';
+import { getProviders, getProviderCatalog } from '../services/apiProviders.js';
 import useProviderModels from './useProviderModels';
 import { __resetProviderCatalogCache } from './useProviderCatalog.js';
 
@@ -37,7 +40,7 @@ const CODEX = {
 // `withEffort` is what opts a picker into base models — it declares that the
 // caller also renders an effort control, so the tiers aren't lost.
 const mountWith = async (providers, options = { withEffort: true }) => {
-  api.getProviders.mockResolvedValue({ providers });
+  getProviders.mockResolvedValue({ providers });
   const hook = renderHook(() => useProviderModels(options));
   await waitFor(() => expect(hook.result.current.loading).toBe(false));
   return hook;
@@ -47,7 +50,7 @@ describe('useProviderModels — Antigravity base models', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('preselects the active provider default for session overrides and preserves deliberate Auto', async () => {
-    api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [AGY, CODEX] });
+    getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [AGY, CODEX] });
     const { result } = renderHook(() => useProviderModels({ allowDefault: true, preselectDefaults: true }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('codex');
@@ -61,7 +64,7 @@ describe('useProviderModels — Antigravity base models', () => {
   // default instead of whichever provider the registry happens to list first.
   it('opens a required picker on the configured default provider and its default model', async () => {
     const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', enabled: true, defaultModel: 'example-model', models: ['example-model'] };
-    api.getProviders.mockResolvedValue({ activeProvider: 'claude-code-tui', providers: [CODEX, CLAUDE_TUI] });
+    getProviders.mockResolvedValue({ activeProvider: 'claude-code-tui', providers: [CODEX, CLAUDE_TUI] });
     const { result } = renderHook(() => useProviderModels());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('claude-code-tui');
@@ -70,14 +73,14 @@ describe('useProviderModels — Antigravity base models', () => {
 
   it('falls back to a TUI provider, not list order, when a required picker filters out the default', async () => {
     const TUI = { id: 'example-tui', type: 'tui', enabled: true, defaultModel: 'm', models: ['m'] };
-    api.getProviders.mockResolvedValue({ activeProvider: 'example-api', providers: [CODEX, TUI] });
+    getProviders.mockResolvedValue({ activeProvider: 'example-api', providers: [CODEX, TUI] });
     const { result } = renderHook(() => useProviderModels());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('example-tui');
   });
 
   it('does not substitute another provider when the active default is filtered out', async () => {
-    api.getProviders.mockResolvedValue({ activeProvider: 'missing', providers: [CODEX] });
+    getProviders.mockResolvedValue({ activeProvider: 'missing', providers: [CODEX] });
     const { result } = renderHook(() => useProviderModels({ allowDefault: true, preselectDefaults: true }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('');
@@ -133,7 +136,7 @@ describe('useProviderModels — provider envelope metadata', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('exposes the configured active provider alongside the catalog', async () => {
-    api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [CODEX] });
+    getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [CODEX] });
     const { result } = renderHook(() => useProviderModels({ allowDefault: true }));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.activeProviderId).toBe('codex');
@@ -144,18 +147,18 @@ describe('useProviderModels — lazy loading', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('does not fetch while disabled and fetches when enabled', async () => {
-    api.getProviders.mockResolvedValue({ providers: [CODEX] });
+    getProviders.mockResolvedValue({ providers: [CODEX] });
     const hook = renderHook(
       ({ enabled }) => useProviderModels({ allowDefault: true, enabled }),
       { initialProps: { enabled: false } },
     );
 
     expect(hook.result.current.loading).toBe(false);
-    expect(api.getProviders).not.toHaveBeenCalled();
+    expect(getProviders).not.toHaveBeenCalled();
 
     hook.rerender({ enabled: true });
     await waitFor(() => expect(hook.result.current.loading).toBe(false));
-    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    expect(getProviders).toHaveBeenCalledTimes(1);
     expect(hook.result.current.providers).toEqual([CODEX]);
   });
 
@@ -167,18 +170,18 @@ describe('useProviderModels — lazy loading', () => {
     };
     const first = deferred();
     const second = deferred();
-    api.getProviders.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    getProviders.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const replacement = { ...CODEX, id: 'replacement', name: 'Replacement' };
     const hook = renderHook(
       ({ enabled }) => useProviderModels({ allowDefault: true, enabled }),
       { initialProps: { enabled: true } },
     );
 
-    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getProviders).toHaveBeenCalledTimes(1));
     hook.rerender({ enabled: false });
     await waitFor(() => expect(hook.result.current.loading).toBe(false));
     hook.rerender({ enabled: true });
-    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getProviders).toHaveBeenCalledTimes(2));
 
     await act(async () => { first.resolve({ providers: [CODEX] }); });
     expect(hook.result.current.providers).toEqual([]);
@@ -209,7 +212,7 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
   const matchesBandC = (id) => id === 'vlm-b' || id === 'vlm-c';
 
   const mountFiltered = async (modelFilter, providers = [LOCAL], extra = {}) => {
-    api.getProviders.mockResolvedValue({ providers });
+    getProviders.mockResolvedValue({ providers });
     const hook = renderHook(
       ({ filterFn }) => useProviderModels({ modelFilter: filterFn, ...extra }),
       { initialProps: { filterFn: modelFilter } },
@@ -241,11 +244,11 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
 
   it('does not refetch the provider list for a filter identity change', async () => {
     const { rerender, result } = await mountFiltered(matchesNothing);
-    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    expect(getProviders).toHaveBeenCalledTimes(1);
 
     rerender({ filterFn: matchesB });
     await waitFor(() => expect(result.current.selectedModel).toBe('vlm-b'));
-    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    expect(getProviders).toHaveBeenCalledTimes(1);
   });
 
   it('leaves a deliberate user clear alone when the filter widens', async () => {
@@ -305,20 +308,20 @@ describe('useProviderModels — composite selection', () => {
 
   beforeEach(() => {
     __resetProviderCatalogCache();
-    api.getProviderCatalog.mockReset().mockResolvedValue(CATALOG);
+    getProviderCatalog.mockReset().mockResolvedValue(CATALOG);
   });
 
   it('fetches the catalog only once a composite is selected, then lists the resolved record with its service models', async () => {
     const preset = { id: 'other-backend', name: 'Other', type: 'api', enabled: true, models: ['text-a'] };
-    api.getProviders.mockResolvedValue({ activeProvider: 'other-backend', providers: [preset] });
+    getProviders.mockResolvedValue({ activeProvider: 'other-backend', providers: [preset] });
     const { result } = renderHook(() => useProviderModels({ allowDefault: true }));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(api.getProviderCatalog).not.toHaveBeenCalled();
+    expect(getProviderCatalog).not.toHaveBeenCalled();
     expect(result.current.providers.map((p) => p.id)).toEqual(['other-backend']);
 
     act(() => result.current.setSelectedProviderId('pi.tui@nvidia-nim-free'));
     await waitFor(() => expect(result.current.providers.map((p) => p.id)).toEqual(['other-backend', 'pi.tui@nvidia-nim-free']));
-    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(getProviderCatalog).toHaveBeenCalledTimes(1);
     expect(result.current.availableModels).toEqual(['nvidia/example', 'nvidia/other']);
     expect(result.current.resolveRef('pi.tui@nvidia-nim-free')).toMatchObject({ harnessId: 'pi', method: 'tui', composite: true });
 

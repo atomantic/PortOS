@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import PromptRefineModal from './PromptRefineModal';
 import { normalizeVideo } from './normalize';
-import * as api from '../../services/api';
+import { refineMediaPrompt } from '../../services/apiMediaJobs.js';
+import { generateVideo } from '../../services/apiImageVideo.js';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 vi.mock('../../hooks/useProviderModels', () => ({
@@ -17,9 +18,13 @@ vi.mock('../../hooks/useProviderModels', () => ({
   }),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   generateImage: vi.fn(),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
   generateVideo: vi.fn(),
+}));
+vi.mock('../../services/apiMediaJobs.js', () => ({
   refineMediaPrompt: vi.fn(),
 }));
 
@@ -34,12 +39,12 @@ const videoRecord = (tiling) => normalizeVideo({
 describe('PromptRefineModal video queue payload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+    vi.mocked(refineMediaPrompt).mockResolvedValue({
       prompt: 'a paper boat drifting downstream',
       negativePrompt: '',
       rationale: 'Added motion.',
     });
-    vi.mocked(api.generateVideo).mockResolvedValue({ position: 1 });
+    vi.mocked(generateVideo).mockResolvedValue({ position: 1 });
   });
 
   async function refineAndQueue(item) {
@@ -48,20 +53,20 @@ describe('PromptRefineModal video queue payload', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refine Prompt' }));
     await findEnabledByRole('button', { name: 'Queue Render' });
     fireEvent.click(screen.getByRole('button', { name: 'Queue Render' }));
-    await waitFor(() => expect(api.generateVideo).toHaveBeenCalled());
+    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
   }
 
   it('omits legacy boolean tiling before queueing a refined saved video', async () => {
     await refineAndQueue(videoRecord(true));
 
-    expect(api.generateVideo).toHaveBeenCalledWith(expect.not.objectContaining({ tiling: true }));
-    expect(api.generateVideo.mock.calls[0][0]).not.toHaveProperty('tiling');
+    expect(generateVideo).toHaveBeenCalledWith(expect.not.objectContaining({ tiling: true }));
+    expect(generateVideo.mock.calls[0][0]).not.toHaveProperty('tiling');
   });
 
   it('retains a recognized tiling mode in the queue payload', async () => {
     await refineAndQueue(videoRecord('spatial'));
 
-    expect(api.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ tiling: 'spatial' }));
+    expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ tiling: 'spatial' }));
   });
 });
 
@@ -69,7 +74,7 @@ describe('PromptRefineModal video queue payload', () => {
 // record's sent prompt on another (#11317).
 describe('PromptRefineModal sent prompt', () => {
   it('lists what Refine sent and clears it when the record changes', async () => {
-    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+    vi.mocked(refineMediaPrompt).mockResolvedValue({
       prompt: 'a paper boat drifting', negativePrompt: '', rationale: 'Added motion.',
       sentPrompt: 'policy\n\nUSER FEEDBACK:\nAdd motion',
       promptAdditions: [{ id: 'refine-instructions', label: 'Refine instructions', text: 'USER FEEDBACK:\n[your feedback]' }],

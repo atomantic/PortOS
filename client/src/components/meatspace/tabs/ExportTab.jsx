@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Printer, ClipboardCopy, FileText } from 'lucide-react';
 
-import * as api from '../../../services/api';
+import { getBloodTests, getMeatspaceConfig } from '../../../services/apiMeatspace.js';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { buildClinicianReport, reportToMarkdown, formatRange, STATUS_LABELS } from '../../../lib/clinicianReport';
 import { STATUS_COLORS } from '../constants';
@@ -17,8 +17,8 @@ export default function ExportTab() {
   const fetchData = useCallback(async () => {
     const seq = ++loadSeq.current;
     const [blood, config] = await Promise.all([
-      api.getBloodTests({ silent: true }).catch(() => null),
-      api.getMeatspaceConfig({ silent: true }).catch(() => null),
+      getBloodTests({ silent: true }).catch(() => null),
+      getMeatspaceConfig({ silent: true }).catch(() => null),
     ]);
     // A repeated Retry must not let an older attempt replace a newer result.
     if (seq !== loadSeq.current) return;

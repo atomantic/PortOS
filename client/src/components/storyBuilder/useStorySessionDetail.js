@@ -6,11 +6,17 @@ import { useLockToggle } from '../../hooks/useLockToggle';
 import { useArcCanvasSync } from '../../hooks/useArcCanvasSync';
 import { capImageRefs } from '../../lib/bibleLimits';
 import {
-  getStoryBuilderSteps, getStorySession, updateStorySession,
-  setStoryCurrentStep, lockStoryStep, unlockStoryStep,
-  setStorySessionSync, reconcileStorySession,
-  getUniverse, getPipelineSeries, listPipelineIssues,
-} from '../../services/api';
+  getStoryBuilderSteps,
+  getStorySession,
+  updateStorySession,
+  setStoryCurrentStep,
+  lockStoryStep,
+  unlockStoryStep,
+  setStorySessionSync,
+  reconcileStorySession,
+} from '../../services/apiStoryBuilder.js';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { getPipelineSeries, listPipelineIssues } from '../../services/apiPipeline.js';
 import { useStoryRunMonitor } from './useStoryStepRuns.jsx';
 
 // Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.

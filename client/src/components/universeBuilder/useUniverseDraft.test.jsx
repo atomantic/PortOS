@@ -33,7 +33,26 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../services/api', () => apiMocks);
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
+  addUniverseStyleReference: apiMocks.addUniverseStyleReference,
+  createUniverse: apiMocks.createUniverse,
+  deleteUniverse: apiMocks.deleteUniverse,
+  getUniverse: apiMocks.getUniverse,
+  listUniverses: apiMocks.listUniverses,
+  listWorldRuns: apiMocks.listWorldRuns,
+  removeUniverseStyleReference: apiMocks.removeUniverseStyleReference,
+  updateUniverse: apiMocks.updateUniverse,
+  WORLD_CATEGORY_KEY_MAX: apiMocks.WORLD_CATEGORY_KEY_MAX,
+  WORLD_CATEGORIES: apiMocks.WORLD_CATEGORIES,
+  WORLD_LOCKABLE_FIELDS: apiMocks.WORLD_LOCKABLE_FIELDS,
+  ensureInfluences: apiMocks.ensureInfluences,
+}));
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: apiMocks.getProviders }));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: apiMocks.getSettings }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listImageModels: apiMocks.listImageModels,
+  listLorasFull: apiMocks.listLorasFull,
+}));
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import useUniverseDraft from './useUniverseDraft.js';

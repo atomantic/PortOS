@@ -4,13 +4,17 @@ import { MemoryRouter } from 'react-router';
 import EditorialFindingsTriage from './EditorialFindingsTriage';
 import { toast } from '../../ui/Toast';
 import { findingManuscriptLink } from '../../../lib/editorialChecks';
-import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment, undoPipelineManuscriptFix } from '../../../services/api';
+import {
+  acceptPipelineManuscriptFix,
+  patchPipelineManuscriptComment,
+  undoPipelineManuscriptFix,
+} from '../../../services/apiPipeline.js';
 
 // Mock the whole api barrel — include every export the component tree touches.
 // EditorialFindingsTriage transitively imports ManuscriptCommentCard, which also
 // pulls in generatePipelineManuscriptFix; stub it too so the mock stays a
 // complete stand-in for the barrel rather than dropping that named export.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
   undoPipelineManuscriptFix: vi.fn(),

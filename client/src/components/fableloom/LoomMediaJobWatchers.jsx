@@ -9,7 +9,7 @@
 
 import { useEffect, useRef } from 'react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { getLoomFalVideo } from '../../services/api';
+import { getLoomFalVideo } from '../../services/apiFableLoom.js';
 import socket from '../../services/socket';
 import { subscribeVisibility } from '../../hooks/useVisibilityEvent';
 

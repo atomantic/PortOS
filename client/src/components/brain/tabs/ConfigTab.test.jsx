@@ -14,7 +14,17 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   syncBrainData: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainSettings: api.getBrainSettings,
+  updateBrainSettings: api.updateBrainSettings,
+  syncBrainData: api.syncBrainData,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosConfig: api.getCosConfig,
+  updateCosConfig: api.updateCosConfig,
+}));
+vi.mock('../../../services/apiMemory.js', () => ({ getEmbeddingStatus: api.getEmbeddingStatus }));
 
 import ConfigTab from './ConfigTab.jsx';
 

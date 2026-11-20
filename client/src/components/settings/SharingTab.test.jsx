@@ -2,12 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { awaitEnabled } from '../../test/enabledBarrier.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAuth.js', () => ({
   getAuthStatus: vi.fn(),
+}));
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
-  listMusicEngines: vi.fn(),
   updateSettings: vi.fn(),
   getMediaShareCandidates: vi.fn(),
+}));
+vi.mock('../../services/apiMusic.js', () => ({
+  listMusicEngines: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
@@ -18,7 +22,9 @@ vi.mock('../ui/Toast', () => ({
   }),
 }));
 
-import { getAuthStatus, getMediaShareCandidates, getSettings, listMusicEngines, updateSettings } from '../../services/api';
+import { getAuthStatus } from '../../services/apiAuth.js';
+import { getMediaShareCandidates, getSettings, updateSettings } from '../../services/apiSystem.js';
+import { listMusicEngines } from '../../services/apiMusic.js';
 import toast from '../ui/Toast';
 import { SharingTab } from './SharingTab';
 

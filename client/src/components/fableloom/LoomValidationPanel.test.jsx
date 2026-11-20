@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import * as api from '../../services/api';
+import { validateLoomEpisode, reviewLoomEpisodeContinuity } from '../../services/apiFableLoom.js';
 import LoomValidationPanel from './LoomValidationPanel';
 
-vi.mock('../../services/api');
+vi.mock('../../services/apiFableLoom.js');
 vi.mock('./LoomWorkflowPanel', () => ({
   default: () => <div>Ordered production workflow</div>,
 }));
@@ -27,14 +27,14 @@ const episode = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.validateLoomEpisode.mockResolvedValue({
+  validateLoomEpisode.mockResolvedValue({
     stats: {
       errorCount: 0, automaticCutCount: 0, decisionCount: 0,
       reachableEndingCount: 1, endingCount: 1, maxDepth: 1,
     },
     issues: [],
   });
-  api.reviewLoomEpisodeContinuity.mockResolvedValue({ passed: true, findings: [], summary: {} });
+  reviewLoomEpisodeContinuity.mockResolvedValue({ passed: true, findings: [], summary: {} });
 });
 
 describe('LoomValidationPanel', () => {
@@ -77,8 +77,8 @@ describe('LoomValidationPanel', () => {
     expect(screen.getByText('Dedicated render workspace')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Render' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => {
-      expect(api.validateLoomEpisode).toHaveBeenCalled();
-      expect(api.reviewLoomEpisodeContinuity).toHaveBeenCalled();
+      expect(validateLoomEpisode).toHaveBeenCalled();
+      expect(reviewLoomEpisodeContinuity).toHaveBeenCalled();
     });
   });
 });

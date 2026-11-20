@@ -1,10 +1,7 @@
 import { useState } from 'react';
 import { Loader2, Plus, Sparkles, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import {
-  WORLD_CATEGORIES,
-  WORLD_CATEGORY_KEY_MAX,
-} from '../../services/api';
+import { WORLD_CATEGORIES, WORLD_CATEGORY_KEY_MAX } from '../../services/apiUniverseBuilder.js';
 import {
   BUCKET_CANON,
   normalizeCategoryKey,

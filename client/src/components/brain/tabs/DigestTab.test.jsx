@@ -7,7 +7,14 @@ const api = vi.hoisted(() => ({
   getBrainDigests: vi.fn(), getBrainReviews: vi.fn(),
   runBrainDigest: vi.fn(), runBrainReview: vi.fn()
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainLatestDigest: api.getBrainLatestDigest,
+  getBrainLatestReview: api.getBrainLatestReview,
+  getBrainDigests: api.getBrainDigests,
+  getBrainReviews: api.getBrainReviews,
+  runBrainDigest: api.runBrainDigest,
+  runBrainReview: api.runBrainReview,
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 const digest = { id: 'example-digest', digestText: 'Example saved digest', generatedAt: '2026-01-01' };
 const review = { id: 'example-review', reviewText: 'Example saved review', generatedAt: '2026-01-01' };

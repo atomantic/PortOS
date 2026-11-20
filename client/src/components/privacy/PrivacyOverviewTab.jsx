@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { ShieldCheck, ShieldAlert, KeyRound, Building2, ArrowRight, ShieldOff } from 'lucide-react';
-import { getPrivacyStatus, getPrivacyOrgs, getPrivacyScanStatus } from '../../services/api';
+import { getPrivacyStatus, getPrivacyOrgs, getPrivacyScanStatus } from '../../services/apiPrivacy.js';
 import {
   VAULT_TYPES, ORG_TRUST_LEVELS, TRUST_TONE, labelFor, CASE_STATES, CASE_STATE_TONE,
   privacyTabPath,

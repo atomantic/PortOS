@@ -7,7 +7,11 @@ const api = vi.hoisted(() => ({
   getCosTodayActivity: vi.fn(),
   backfillCosLearning: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosLearning: api.getCosLearning,
+  getCosTodayActivity: api.getCosTodayActivity,
+  backfillCosLearning: api.backfillCosLearning,
+}));
 vi.mock('./ProviderStatusCard', () => ({ default: () => null }));
 
 import HealthTab from './HealthTab';

@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Film, Save, Trash2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getNotesVaults } from '../../services/apiNotes.js';
+import {
+  getYoutubeIngestSettings,
+  getYoutubeIngests,
+  deleteYoutubeIngest,
+  updateYoutubeIngestSettings,
+} from '../../services/apiBrain.js';
 import { INGEST_OPTIONS } from '../../lib/youtubeUrl';
 import { formatDurationMs, timeAgo } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
@@ -14,7 +20,7 @@ const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 const INGESTS_PAGE_SIZE = 50;
 
 // Module-level so useListResource sees a stable fetcher; the picker owns its error UI.
-const fetchVaults = () => api.getNotesVaults({ silent: true });
+const fetchVaults = () => getNotesVaults({ silent: true });
 
 /**
  * Settings for the YouTube → Brain ingest, plus the list of what has been
@@ -35,7 +41,7 @@ export default function YoutubeIngestSettings() {
   const [armedDelete, setArmedDelete] = useState(null);
 
   useEffect(() => {
-    api.getYoutubeIngestSettings({ silent: true }).catch(() => null).then((loaded) => {
+    getYoutubeIngestSettings({ silent: true }).catch(() => null).then((loaded) => {
       setSettings(loaded);
       setLoading(false);
     });
@@ -46,7 +52,7 @@ export default function YoutubeIngestSettings() {
   // failed fetch must reject rather than resolve empty, or `usePagedCollection`
   // reads it as "no more records" and InfiniteScrollFooter's retry never shows.
   const fetchIngestsPage = useCallback(async ({ cursor, signal }) => {
-    const res = await api.getYoutubeIngests({ limit: INGESTS_PAGE_SIZE, cursor, silent: true, signal });
+    const res = await getYoutubeIngests({ limit: INGESTS_PAGE_SIZE, cursor, silent: true, signal });
     return {
       items: (res.ingests || []).map((record) => ({ ...record, id: record.videoId })),
       nextCursor: res.nextCursor ?? null,
@@ -61,7 +67,7 @@ export default function YoutubeIngestSettings() {
       return;
     }
     setArmedDelete(null);
-    const ok = await api.deleteYoutubeIngest(videoId, { silent: true }).catch((err) => {
+    const ok = await deleteYoutubeIngest(videoId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to remove the ingest');
       return null;
     });
@@ -74,7 +80,7 @@ export default function YoutubeIngestSettings() {
 
   const handleSave = async () => {
     setSaving(true);
-    const saved = await api.updateYoutubeIngestSettings({
+    const saved = await updateYoutubeIngestSettings({
       obsidianVaultId: settings.obsidianVaultId || null,
       obsidianFolder: settings.obsidianFolder || '',
       autoSync: !!settings.autoSync,

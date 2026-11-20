@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Lightbulb, RefreshCw, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { studyBrainLink } from '../../services/apiBrain.js';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import RepoStudyFields from './RepoStudyFields';
@@ -30,7 +30,7 @@ export default function RepoRestudyPanel({ link, onClose, onQueued }) {
   const [pull, setPull] = useState(true);
 
   const [handleSubmit, submitting] = useAsyncAction(async () => {
-    const result = await api.studyBrainLink(link.id, { pull, ...study.studyPayload() }, { silent: true });
+    const result = await studyBrainLink(link.id, { pull, ...study.studyPayload() }, { silent: true });
 
     // A pull failure does not stop the study — say so, or the user has no way to
     // know the agent is reading a checkout that never got refreshed.

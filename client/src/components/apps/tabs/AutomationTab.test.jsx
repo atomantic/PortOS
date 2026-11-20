@@ -33,7 +33,25 @@ const api = vi.hoisted(() => ({
   deleteCosJob: vi.fn(),
   getSettings: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiApps.js', () => ({
+  getAppTaskTypes: api.getAppTaskTypes,
+  updateAppTaskTypeOverride: api.updateAppTaskTypeOverride,
+  toggleAllAppTaskTypes: api.toggleAllAppTaskTypes,
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosSchedule: api.getCosSchedule,
+  getCosStatus: api.getCosStatus,
+  triggerCosOnDemandTask: api.triggerCosOnDemandTask,
+  resumeCos: api.resumeCos,
+  getCosJobs: api.getCosJobs,
+  createCosJob: api.createCosJob,
+  updateCosJob: api.updateCosJob,
+  toggleCosJob: api.toggleCosJob,
+  triggerCosJob: api.triggerCosJob,
+  deleteCosJob: api.deleteCosJob,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../../services/apiSystem.js', () => ({ getSettings: api.getSettings }));
 
 const AutomationTab = (await import('./AutomationTab')).default;
 

@@ -4,7 +4,15 @@ import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
-import * as api from '../../services/api';
+import {
+  listReferenceRepos,
+  addReferenceRepo,
+  deleteReferenceRepo,
+  checkReferenceRepo,
+  markReferenceRepoReviewed,
+  updateReferenceRepo,
+} from '../../services/apiReferenceRepos.js';
+import { getAppWorkTracker } from '../../services/apiApps.js';
 import { formatDateTime, formatDurationMs } from '../../utils/formatters';
 
 // The add-reference form is dense, so its labels sit a step below FormField's
@@ -67,7 +75,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
   const [fetchError, setFetchError] = useState(null);
   const loadRefs = useCallback(async () => {
     setRefreshing(true);
-    const res = await api.listReferenceRepos(appId).catch((e) => ({ __error: e?.message || 'Failed to load references' }));
+    const res = await listReferenceRepos(appId).catch((e) => ({ __error: e?.message || 'Failed to load references' }));
     if (res && res.__error) {
       setFetchError(res.__error);
     } else {
@@ -84,14 +92,14 @@ export default function ReferenceReposPanel({ appId, appName }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.getAppWorkTracker(appId)
+    getAppWorkTracker(appId)
       .then((info) => { if (!cancelled) setWorkTracker(info?.resolved || null); })
       .catch(() => { if (!cancelled) setWorkTracker(null); });
     return () => { cancelled = true; };
   }, [appId]);
 
   const handleAdd = async (form) => {
-    const created = await api.addReferenceRepo(appId, form, { silent: true }).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
+    const created = await addReferenceRepo(appId, form, { silent: true }).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
     if (!created) return;
     toast.success(`Added "${created.name}"`);
     setShowAdd(false);
@@ -107,7 +115,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     setConfirmingDeleteId(null);
     // Only mutate local state on success — otherwise the row vanishes from
     // the UI while the server still has the ref.
-    const ok = await api.deleteReferenceRepo(appId, ref.id, { silent: true })
+    const ok = await deleteReferenceRepo(appId, ref.id, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(e.message || 'Delete failed'); return false; });
     if (!ok) return;
@@ -124,7 +132,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // Add this ref's id to the in-flight set so its spinner stays on
     // while it runs, even if a different ref's check completes first.
     setCheckingIds((prev) => { const n = new Set(prev); n.add(ref.id); return n; });
-    const snap = await api.checkReferenceRepo(appId, ref.id, { silent: true }).catch((e) => {
+    const snap = await checkReferenceRepo(appId, ref.id, { silent: true }).catch((e) => {
       toast.error(e.message || 'Check failed');
       return null;
     });
@@ -171,7 +179,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // PATCH. Otherwise the UI claims the ref was reviewed while the server
     // still has the old lastReviewedSha — which gets confusing fast since
     // the next "Check" rediscovers the same commits.
-    const updated = await api.markReferenceRepoReviewed(appId, ref.id, sha, { silent: true })
+    const updated = await markReferenceRepoReviewed(appId, ref.id, sha, { silent: true })
       .catch((e) => { toast.error(e.message || 'Mark reviewed failed'); return null; });
     if (!updated) return;
     applyRef(updated);
@@ -183,7 +191,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // Keep the editor open on a failed PATCH — losing the user's draft on
     // a transient network blip is the worst possible outcome here. They
     // can re-click Save, or click Cancel to discard.
-    const updated = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes }, { silent: true })
+    const updated = await updateReferenceRepo(appId, ref.id, { notes: nextNotes }, { silent: true })
       .catch((e) => { toast.error(e.message || 'Update failed'); return null; });
     if (!updated) return;
     applyRef(updated);

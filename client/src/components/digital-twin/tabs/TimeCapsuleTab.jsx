@@ -13,7 +13,13 @@ import {Archive,
   ChevronUp,
   X} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  listTimeCapsuleSnapshots,
+  createTimeCapsuleSnapshot,
+  deleteTimeCapsuleSnapshot,
+  getTimeCapsuleSnapshot,
+  compareTimeCapsuleSnapshots,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import FormField from '../../ui/FormField';
@@ -22,7 +28,7 @@ import useListResource from '../../../hooks/useListResource';
 import { formatBytes, formatDateTime, timeAgo } from '../../../utils/formatters';
 
 // Silent: a failed read renders <ListLoadError>, so a toast would double up.
-const fetchSnapshots = () => api.listTimeCapsuleSnapshots({ silent: true });
+const fetchSnapshots = () => listTimeCapsuleSnapshots({ silent: true });
 
 export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
   const { items: snapshots, state, error, retry, setItems: setSnapshots } = useListResource(fetchSnapshots);
@@ -50,7 +56,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
   const handleCreate = async () => {
     if (!label.trim()) return;
     setCreating(true);
-    const snapshot = await api.createTimeCapsuleSnapshot(label.trim(), description.trim()).catch(() => null);
+    const snapshot = await createTimeCapsuleSnapshot(label.trim(), description.trim()).catch(() => null);
     setCreating(false);
     if (!snapshot) return;
     setSnapshots(prev => [snapshot, ...prev]);
@@ -62,7 +68,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
 
   const handleDelete = async (id) => {
     const snap = snapshots.find(s => s.id === id);
-    const ok = await api.deleteTimeCapsuleSnapshot(id).then(() => true).catch(() => false);
+    const ok = await deleteTimeCapsuleSnapshot(id).then(() => true).catch(() => false);
     if (!ok) return;
     setSnapshots(prev => prev.filter(s => s.id !== id));
     setConfirmDelete(null);
@@ -76,7 +82,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
       return;
     }
     setViewLoading(true);
-    const data = await api.getTimeCapsuleSnapshot(id).catch(() => null);
+    const data = await getTimeCapsuleSnapshot(id).catch(() => null);
     setViewLoading(false);
     if (data) setViewingSnapshot(data);
   };
@@ -93,7 +99,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
   const handleCompare = async () => {
     if (compareIds.length !== 2) return;
     setComparing(true);
-    const result = await api.compareTimeCapsuleSnapshots(compareIds[0], compareIds[1]).catch(() => null);
+    const result = await compareTimeCapsuleSnapshots(compareIds[0], compareIds[1]).catch(() => null);
     setComparing(false);
     if (result) setCompareResult(result);
   };

@@ -7,9 +7,12 @@ import Pill from '../ui/Pill';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
 import {
-  createPrivacySubject, deletePrivacySubject, getPrivacySubjectConsents,
-  grantPrivacySubjectConsent, revokePrivacySubjectConsent,
-} from '../../services/api';
+  createPrivacySubject,
+  deletePrivacySubject,
+  getPrivacySubjectConsents,
+  grantPrivacySubjectConsent,
+  revokePrivacySubjectConsent,
+} from '../../services/apiPrivacy.js';
 import toast from '../ui/Toast';
 import { formatDateShort } from '../../utils/formatters';
 import {

@@ -9,7 +9,7 @@ vi.mock('../services/apiVideoDownload.js', () => ({
   deleteVideoDownload: vi.fn(),
 }));
 vi.mock('../services/apiImageVideo.js', () => ({ cancelVideoPendingDelete: vi.fn().mockResolvedValue({}) }));
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn().mockResolvedValue({ peers: [{ id: 'rec-peer', name: 'Example Peer' }] }),
 }));
 const download = vi.hoisted(() => ({ onComplete: null }));

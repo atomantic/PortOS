@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router';
 // user's time or auto-submit the drill. The real PostLlmDrillRunner is used
 // here, with its import held open until the test releases it.
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostConfig: () => Promise.resolve({}),
   getPostRecommendations: () => Promise.resolve({ recommendations: [] }),
   getPostSessions: () => Promise.resolve([]),

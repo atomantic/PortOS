@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
 
-vi.mock('../../services/api', () => ({
-  getAppLayeredIntelligenceOutcomes: vi.fn()
+vi.mock('../../services/apiApps.js', () => ({
+  getAppLayeredIntelligenceOutcomes: vi.fn(),
 }));
 
-import { getAppLayeredIntelligenceOutcomes } from '../../services/api';
+import { getAppLayeredIntelligenceOutcomes } from '../../services/apiApps.js';
 
 const ready = (overrides = {}) => ({
   read: true,

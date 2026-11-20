@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Brain, ArrowRight, Compass } from 'lucide-react';
-import * as api from '../services/api';
+import { getPostStats, getPostConfig, getPostRecommendations } from '../services/apiMeatspace.js';
 import { streakGlyph } from '../lib/streakGlyph.js';
 import { computeGoalProgress } from './meatspace/post/constants';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -36,10 +36,10 @@ export default function DailyPostWidget() {
     // Recommendations/config/week-stats are best-effort — a failure just hides
     // the extra rows; the streak card still renders from `stats`.
     Promise.all([
-      api.getPostStats().catch(() => null),
-      api.getPostStats(7).catch(() => null),
-      api.getPostConfig().catch(() => null),
-      api.getPostRecommendations(1).catch(() => null),
+      getPostStats().catch(() => null),
+      getPostStats(7).catch(() => null),
+      getPostConfig().catch(() => null),
+      getPostRecommendations(1).catch(() => null),
     ]).then(([data, week, cfg, recs]) => {
       if (!active) return;
       setStats(data);

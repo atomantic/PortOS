@@ -33,9 +33,13 @@ import {
   COMMISSION_STOP_COPY,
 } from '../components/creative-commission/commissionForm.js';
 import {
-  getCommission, updateCommission, deleteCommission,
-  submitCommissionFeedback, runCommissionNow, getCreativeDirectorProjectsByIds,
-} from '../services/api';
+  getCommission,
+  updateCommission,
+  deleteCommission,
+  submitCommissionFeedback,
+  runCommissionNow,
+} from '../services/apiCreativeCommission.js';
+import { getCreativeDirectorProjectsByIds } from '../services/apiCreativeDirector.js';
 
 const PROJECT_EVENTS = ['creative-director:project:changed'];
 const COMMISSION_EVENTS = ['commission:changed'];

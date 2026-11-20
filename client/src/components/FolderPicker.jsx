@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { File, Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
-import * as api from '../services/api';
+import { getDirectories } from '../services/apiScaffold.js';
 import BrailleSpinner from './BrailleSpinner';
 import Modal from './ui/Modal.jsx';
 
@@ -47,7 +47,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
       setDrives(result.drives ?? null);
     };
     let lastError = null;
-    let result = await api.getDirectories(path, { includeFiles: mode === 'file' }).catch((err) => {
+    let result = await getDirectories(path, { includeFiles: mode === 'file' }).catch((err) => {
       lastError = err;
       return null;
     });
@@ -55,7 +55,7 @@ export default function FolderPicker({ value, onChange, defaultPath, mode = 'dir
     if (!result && fallbackToDefault && path != null && isPathAbsentError(lastError)) {
       defaultPathUnavailableRef.current = true;
       lastError = null;
-      result = await api.getDirectories(null, { includeFiles: mode === 'file' }).catch((err) => {
+      result = await getDirectories(null, { includeFiles: mode === 'file' }).catch((err) => {
         lastError = err;
         return null;
       });

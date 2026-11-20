@@ -1,7 +1,7 @@
 import { Suspense, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
-import * as api from '../services/api';
+import { getCalendarAccounts } from '../services/apiCalendar.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
@@ -40,7 +40,7 @@ const TAB_PRESENTATION = {
 const CALENDAR_EVENTS = ['calendar:changed'];
 
 const fetchAccountList = async () => {
-  const data = await api.getCalendarAccounts({ silent: true });
+  const data = await getCalendarAccounts({ silent: true });
   if (!Array.isArray(data)) throw new Error('Invalid calendar accounts response');
   return data;
 };

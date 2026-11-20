@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getMorseProgress: vi.fn(),
 }));
 
 import MorseProgressPanel from './MorseProgressPanel';
-import { getMorseProgress } from '../../../services/api';
+import { getMorseProgress } from '../../../services/apiMeatspace.js';
 
 const EMPTY = {
   days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,

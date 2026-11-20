@@ -32,11 +32,13 @@ import {
   generatePipelineSceneImagePrompts,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
-  createBlankSketch,
+} from '../../../services/apiPipeline.js';
+import { createBlankSketch } from '../../../services/apiImageVideo.js';
+import {
   openStoryboardForPipelineIssue,
   getPipelineStoryboardChanges,
   updatePipelineShotsFromBoard,
-} from '../../../services/api';
+} from '../../../services/apiStoryboards.js';
 import useUniverse from '../../../hooks/useUniverse';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import useMounted from '../../../hooks/useMounted';

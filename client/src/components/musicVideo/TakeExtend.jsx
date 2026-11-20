@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { Clapperboard, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { extendVideoHistoryItem, getVideoHistoryItem } from '../../services/api.js';
+import { extendVideoHistoryItem, getVideoHistoryItem } from '../../services/apiImageVideo.js';
 import { falExtendModel } from '../../lib/falVideoModels.js';
 import { formatUsd } from '../../utils/formatters.js';
 

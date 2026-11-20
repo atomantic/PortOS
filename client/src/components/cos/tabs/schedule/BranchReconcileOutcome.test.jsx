@@ -3,7 +3,10 @@ import { act, render, screen, fireEvent, waitFor, within } from '@testing-librar
 
 const retire = vi.hoisted(() => vi.fn());
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock('../../../../services/api', () => ({ retireBranchReconcileCheckout: retire, refreshBranchReconcileInventory: refresh }));
+vi.mock('../../../../services/apiAgents.js', () => ({
+  retireBranchReconcileCheckout: retire,
+  refreshBranchReconcileInventory: refresh,
+}));
 
 import BranchReconcileOutcome from './BranchReconcileOutcome';
 

@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import OrchestrationTab from './OrchestrationTab';
-import * as api from '../../services/api';
+import {
+  getOrchestrationProfiles,
+  saveOrchestrationProfile,
+  deleteOrchestrationProfile,
+} from '../../services/apiAgents.js';
+import { getProviders } from '../../services/apiProviders.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   getOrchestrationProfiles: vi.fn(),
-  getProviders: vi.fn(),
   saveOrchestrationProfile: vi.fn(),
   updateOrchestrationProfile: vi.fn(),
   deleteOrchestrationProfile: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 
 describe('OrchestrationTab', () => {
@@ -44,9 +51,9 @@ describe('OrchestrationTab', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getOrchestrationProfiles.mockResolvedValue(mockProfiles);
+    getOrchestrationProfiles.mockResolvedValue(mockProfiles);
     // Real shape of getProviders(): { activeProvider, providers } — a bare array here hid a crash.
-    api.getProviders.mockResolvedValue({ activeProvider: 'anthropic', providers: mockProviders });
+    getProviders.mockResolvedValue({ activeProvider: 'anthropic', providers: mockProviders });
   });
 
   it('renders orchestration profiles list', async () => {
@@ -69,7 +76,7 @@ describe('OrchestrationTab', () => {
   });
 
   it('distinguishes an unavailable inventory from a successful empty retry', async () => {
-    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce([]);
+    getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce([]);
     render(<OrchestrationTab />);
     expect(await screen.findByText('Orchestration profiles are unavailable.')).toBeTruthy();
     expect(screen.queryByText('No orchestration profiles configured.')).toBeNull();
@@ -81,7 +88,7 @@ describe('OrchestrationTab', () => {
   });
 
   it('offers a single create action for an empty inventory and none while the form is open', async () => {
-    api.getOrchestrationProfiles.mockResolvedValue([]);
+    getOrchestrationProfiles.mockResolvedValue([]);
     render(<OrchestrationTab />);
     expect(await screen.findByText('Create your first profile')).toBeTruthy();
     expect(screen.queryByText('New Profile')).toBeNull();
@@ -93,8 +100,8 @@ describe('OrchestrationTab', () => {
   });
 
   it('recovers profiles on retry while provider metadata fails independently', async () => {
-    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce(mockProfiles);
-    api.getProviders.mockRejectedValue(new Error('Unavailable'));
+    getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce(mockProfiles);
+    getProviders.mockRejectedValue(new Error('Unavailable'));
     render(<OrchestrationTab />);
     await screen.findByText('Orchestration profiles are unavailable.');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -105,17 +112,17 @@ describe('OrchestrationTab', () => {
   });
 
   it('retains profiles and provider names when a refresh fails, then clears stale notices on recovery', async () => {
-    api.getProviders.mockRejectedValueOnce(new Error('Unavailable'));
+    getProviders.mockRejectedValueOnce(new Error('Unavailable'));
     render(<OrchestrationTab />);
     await screen.findByText('Custom Team');
-    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable'));
+    getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/Showing previously loaded profiles/)).toBeTruthy();
     expect(screen.getByText('Custom Team')).toBeTruthy();
     expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
     expect(screen.queryByText('No orchestration profiles configured.')).toBeNull();
 
-    api.getProviders.mockRejectedValueOnce(new Error('Unavailable'));
+    getProviders.mockRejectedValueOnce(new Error('Unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.queryByText(/Showing previously loaded profiles/)).toBeNull());
     expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
@@ -125,7 +132,7 @@ describe('OrchestrationTab', () => {
   });
 
   it('opens create profile form and saves', async () => {
-    api.saveOrchestrationProfile.mockResolvedValue({
+    saveOrchestrationProfile.mockResolvedValue({
       id: 'new-profile',
       name: 'New Profile',
       profile: {},
@@ -142,28 +149,28 @@ describe('OrchestrationTab', () => {
 
     fireEvent.click(screen.getByText('Save Profile'));
     await waitFor(() => {
-      expect(api.saveOrchestrationProfile).toHaveBeenCalledWith(expect.objectContaining({
+      expect(saveOrchestrationProfile).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Test Profile',
       }));
     });
     // Saved record is applied locally: no follow-up list read, no spinner flash.
-    expect(api.getOrchestrationProfiles).toHaveBeenCalledTimes(1);
+    expect(getOrchestrationProfiles).toHaveBeenCalledTimes(1);
   });
 
   it('confirms inline before deleting a non-builtin profile', async () => {
-    api.deleteOrchestrationProfile.mockResolvedValue({ success: true });
+    deleteOrchestrationProfile.mockResolvedValue({ success: true });
 
     render(<OrchestrationTab />);
     await waitFor(() => expect(screen.getByText('Custom Team')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText('Delete profile Custom Team'));
-    expect(api.deleteOrchestrationProfile).not.toHaveBeenCalled();
+    expect(deleteOrchestrationProfile).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => {
-      expect(api.deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team');
+      expect(deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team');
     });
     await waitFor(() => expect(screen.queryByText('Custom Team')).toBeNull());
-    expect(api.getOrchestrationProfiles).toHaveBeenCalledTimes(1);
+    expect(getOrchestrationProfiles).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,7 +7,7 @@ vi.mock('react-router', () => ({
 }));
 
 // Mock the API surface GitTab calls on mount + when opening the diff modal.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiGit.js', () => ({
   getGitInfo: vi.fn(),
   getBranches: vi.fn(),
   getBranchComparison: vi.fn(),
@@ -18,6 +18,8 @@ vi.mock('../../../services/api', () => ({
   getGitDiff: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
   createSlashdoTask: vi.fn(),
   forceCosEvaluate: vi.fn(),
   triggerCosOnDemandTask: vi.fn(),
@@ -30,7 +32,19 @@ vi.mock('./RepositorySourcePanel', () => ({
   ),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getGitInfo,
+  getBranches,
+  getBranchComparison,
+  getRemoteBranches,
+  updateBranches,
+  getGitDiff,
+  cleanupMergedBranches,
+  resetToDefaultBranch,
+  rebaseAndPushDefaultBranch,
+  pushAllBranches,
+} from '../../../services/apiGit.js';
+import { createSlashdoTask, forceCosEvaluate, triggerCosOnDemandTask } from '../../../services/apiAgents.js';
 import GitTab from './GitTab';
 
 const GIT_INFO = {
@@ -49,17 +63,17 @@ const COMPARISON = {
 };
 
 beforeEach(() => {
-  api.getGitInfo.mockResolvedValue(GIT_INFO);
-  api.getBranches.mockResolvedValue({ branches: [] });
-  api.getBranchComparison.mockResolvedValue(COMPARISON);
-  api.getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
-  api.updateBranches.mockResolvedValue({ currentBranch: 'main', main: 'up to date' });
-  api.getGitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new' });
-  api.cleanupMergedBranches.mockResolvedValue({ deleted: [], skipped: [] });
-  api.resetToDefaultBranch.mockResolvedValue({ success: true, branch: 'main', previousBranch: 'main', previousHead: 'b'.repeat(40), head: 'a'.repeat(40), discardedFiles: 1, fetched: true });
-  api.createSlashdoTask.mockResolvedValue({ id: 'task-pr-1' });
-  api.forceCosEvaluate.mockResolvedValue({ success: true });
-  api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
+  getGitInfo.mockResolvedValue(GIT_INFO);
+  getBranches.mockResolvedValue({ branches: [] });
+  getBranchComparison.mockResolvedValue(COMPARISON);
+  getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
+  updateBranches.mockResolvedValue({ currentBranch: 'main', main: 'up to date' });
+  getGitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new' });
+  cleanupMergedBranches.mockResolvedValue({ deleted: [], skipped: [] });
+  resetToDefaultBranch.mockResolvedValue({ success: true, branch: 'main', previousBranch: 'main', previousHead: 'b'.repeat(40), head: 'a'.repeat(40), discardedFiles: 1, fetched: true });
+  createSlashdoTask.mockResolvedValue({ id: 'task-pr-1' });
+  forceCosEvaluate.mockResolvedValue({ success: true });
+  triggerCosOnDemandTask.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -73,16 +87,16 @@ describe('GitTab rebase and push', () => {
   };
 
   it('rebases and pushes a clean diverged default branch and refreshes the source counts', async () => {
-    api.getGitInfo.mockResolvedValue(aheadDefault);
+    getGitInfo.mockResolvedValue(aheadDefault);
     let finish;
-    api.rebaseAndPushDefaultBranch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    rebaseAndPushDefaultBranch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
     const button = await screen.findByRole('button', { name: 'Rebase & push' });
     await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
     expect(await screen.findByRole('button', { name: 'Rebasing & pushing...' })).toBeDisabled();
-    expect(api.rebaseAndPushDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true });
-    api.getGitInfo.mockResolvedValue({ ...aheadDefault, originComparison: { ahead: 0, behind: 0 } });
+    expect(rebaseAndPushDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true });
+    getGitInfo.mockResolvedValue({ ...aheadDefault, originComparison: { ahead: 0, behind: 0 } });
     await act(async () => finish({ success: true, branch: 'main' }));
     await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
     expect(screen.getByRole('button', { name: 'Rebase & push' })).toBeDisabled();
@@ -94,7 +108,7 @@ describe('GitTab rebase and push', () => {
     { originComparison: { ahead: 0, behind: 3 } },
     { originComparison: null },
   ])('does not enable recovery outside a clean ahead default branch: %j', async (override) => {
-    api.getGitInfo.mockResolvedValue({ ...aheadDefault, ...override });
+    getGitInfo.mockResolvedValue({ ...aheadDefault, ...override });
     render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
     await screen.findByText('View Diff');
     expect(screen.getByRole('button', { name: 'Rebase & push' })).toBeDisabled();
@@ -107,7 +121,7 @@ describe('GitTab managed repository sources', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open PR with agent' }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'push',
       'app-example',
       expect.objectContaining({
@@ -125,7 +139,7 @@ describe('GitTab managed repository sources', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
 
-    await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(triggerCosOnDemandTask).toHaveBeenCalledWith(
       'branch-reconcile',
       'app-example',
       { silent: true },
@@ -161,19 +175,19 @@ describe('GitTab managed repository sources', () => {
     expect(await screen.findByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '0');
     fireEvent.click(screen.getByRole('button', { name: 'Fetch branches' }));
 
-    await waitFor(() => expect(api.updateBranches).toHaveBeenCalledWith('/repo'));
+    await waitFor(() => expect(updateBranches).toHaveBeenCalledWith('/repo'));
     await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
   });
 
   it('refreshes repository sources after pushing so the ahead count clears', async () => {
-    api.getBranches.mockResolvedValue({ branches: [{ name: 'dev', tracking: 'origin/dev', ahead: 1, behind: 0 }] });
-    api.pushAllBranches.mockResolvedValue({ success: true, pushed: 1, results: {} });
+    getBranches.mockResolvedValue({ branches: [{ name: 'dev', tracking: 'origin/dev', ahead: 1, behind: 0 }] });
+    pushAllBranches.mockResolvedValue({ success: true, pushed: 1, results: {} });
     render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
 
     expect(await screen.findByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '0');
     fireEvent.click(screen.getAllByRole('button', { name: /^Push$/ })[0]);
 
-    await waitFor(() => expect(api.pushAllBranches).toHaveBeenCalledWith('/repo'));
+    await waitFor(() => expect(pushAllBranches).toHaveBeenCalledWith('/repo'));
     await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
   });
 });
@@ -225,13 +239,13 @@ describe('GitTab modal accessibility (issue #1090)', () => {
 
 describe('GitTab merged-branch cleanup scoping', () => {
   beforeEach(() => {
-    api.getBranches.mockResolvedValue({
+    getBranches.mockResolvedValue({
       branches: [
         { name: 'main', current: true, tracking: 'origin/main', ahead: 0, behind: 0, isDefault: true, merged: false },
         { name: 'feature/done', current: false, tracking: 'origin/feature/done', ahead: 0, behind: 0, isDefault: false, merged: true },
       ],
     });
-    api.getRemoteBranches.mockResolvedValue({
+    getRemoteBranches.mockResolvedValue({
       branches: [
         { name: 'main', fullRef: 'origin/main', merged: false, hasLocal: true, isDefault: true },
         { name: 'old/one', fullRef: 'origin/old/one', merged: true, hasLocal: false, isDefault: false },
@@ -257,8 +271,8 @@ describe('GitTab merged-branch cleanup scoping', () => {
   });
 
   it('hides remote cleanup and row deletion when only protected branches are merged', async () => {
-    api.getBranches.mockResolvedValue({ branches: [] });
-    api.getRemoteBranches.mockResolvedValue({
+    getBranches.mockResolvedValue({ branches: [] });
+    getRemoteBranches.mockResolvedValue({
       branches: [
         { name: 'trunk', fullRef: 'origin/trunk', merged: true, hasLocal: true, isDefault: true, isProtected: true },
         { name: 'release', fullRef: 'origin/release', merged: true, hasLocal: false, isDefault: false, isProtected: true },
@@ -274,8 +288,8 @@ describe('GitTab merged-branch cleanup scoping', () => {
   });
 
   it('counts only eligible merged remote branches while keeping their delete action available', async () => {
-    api.getBranches.mockResolvedValue({ branches: [] });
-    api.getRemoteBranches.mockResolvedValue({
+    getBranches.mockResolvedValue({ branches: [] });
+    getRemoteBranches.mockResolvedValue({
       branches: [
         { name: 'release', fullRef: 'origin/release', merged: true, hasLocal: false, isDefault: false, isProtected: true },
         { name: 'feature/done', fullRef: 'origin/feature/done', merged: true, hasLocal: false, isDefault: false, isProtected: false },
@@ -294,14 +308,14 @@ describe('GitTab merged branches checked out in worktrees', () => {
   beforeEach(() => {
     // Both merged branches are checked out in worktrees, which cleanup now tears
     // down as well — the disclosure names the one condition that preserves one.
-    api.getBranches.mockResolvedValue({
+    getBranches.mockResolvedValue({
       branches: [
         { name: 'main', current: true, tracking: 'origin/main', ahead: 0, behind: 0, isDefault: true, merged: false, worktree: false },
         { name: 'claim/issue-1', current: false, tracking: null, ahead: 0, behind: 0, isDefault: false, merged: true, worktree: true },
         { name: 'claim/issue-2', current: false, tracking: null, ahead: 0, behind: 0, isDefault: false, merged: true, worktree: true },
       ],
     });
-    api.getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
+    getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
   });
 
   it('keeps the local cleanup button visible and discloses worktree-held branches', async () => {
@@ -326,7 +340,7 @@ describe('GitTab merged branches checked out in worktrees', () => {
   });
 
   it('re-reads the branches after a cleanup that removed a worktree, so stale worktree badges clear', async () => {
-    api.cleanupMergedBranches.mockResolvedValue({
+    cleanupMergedBranches.mockResolvedValue({
       deleted: [{ name: 'claim/issue-1', local: 'deleted', remote: null, worktree: 'removed' }],
       skipped: []
     });
@@ -335,11 +349,11 @@ describe('GitTab merged branches checked out in worktrees', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Clean 2 merged' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' }));
 
-    await waitFor(() => expect(api.getBranches.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(getBranches.mock.calls.length).toBeGreaterThan(1));
   });
 
   it('deletes one merged branch and its worktree from its row through the scoped cleanup', async () => {
-    api.cleanupMergedBranches.mockResolvedValue({
+    cleanupMergedBranches.mockResolvedValue({
       deleted: [{ name: 'claim/issue-1', local: 'deleted', remote: null, worktree: 'removed' }],
       skipped: []
     });
@@ -350,12 +364,12 @@ describe('GitTab merged branches checked out in worktrees', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete claim/issue-1 and its worktree' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Delete branch + worktree' }));
 
-    await waitFor(() => expect(api.cleanupMergedBranches).toHaveBeenCalledWith('/repo', expect.objectContaining({ branches: ['claim/issue-1'] })));
-    await waitFor(() => expect(api.getBranches.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(cleanupMergedBranches).toHaveBeenCalledWith('/repo', expect.objectContaining({ branches: ['claim/issue-1'] })));
+    await waitFor(() => expect(getBranches.mock.calls.length).toBeGreaterThan(1));
   });
 
   it('names why a row delete was refused when the worktree is held', async () => {
-    api.cleanupMergedBranches.mockResolvedValue({
+    cleanupMergedBranches.mockResolvedValue({
       deleted: [],
       skipped: ['claim/issue-2 (local: uncommitted changes)']
     });
@@ -389,13 +403,13 @@ describe('GitTab reset to origin', () => {
     expect(dialog).toHaveTextContent('Discards 1 uncommitted file change');
     expect(dialog).toHaveTextContent('Keeps untracked files');
     // Opening the dialog alone must not touch the repo.
-    expect(api.resetToDefaultBranch).not.toHaveBeenCalled();
+    expect(resetToDefaultBranch).not.toHaveBeenCalled();
   });
 
   it('does not count untracked files among what it says it will discard', async () => {
     // The dialog promises "Keeps untracked files" two rows below this number,
     // so counting them there contradicts the same dialog.
-    api.getGitInfo.mockResolvedValue({
+    getGitInfo.mockResolvedValue({
       ...GIT_INFO,
       status: {
         files: [
@@ -420,19 +434,19 @@ describe('GitTab reset to origin', () => {
     fireEvent.click(await screen.findByText('Cancel'));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(api.resetToDefaultBranch).not.toHaveBeenCalled();
+    expect(resetToDefaultBranch).not.toHaveBeenCalled();
   });
 
   it('refreshes the dirty-file count when the dialog opens', async () => {
     render(<GitTab appId="x" appName="App" repoPath="/repo" />);
     await screen.findByText('Reset to origin');
-    const onMount = api.getGitInfo.mock.calls.length;
+    const onMount = getGitInfo.mock.calls.length;
 
     fireEvent.click(screen.getByText('Reset to origin'));
 
     // The dialog names how many files it will destroy, so it must not quote a
     // count from whenever the tab last polled.
-    await waitFor(() => expect(api.getGitInfo.mock.calls.length).toBeGreaterThan(onMount));
+    await waitFor(() => expect(getGitInfo.mock.calls.length).toBeGreaterThan(onMount));
   });
 
   it('resets on confirm and reloads git state', async () => {
@@ -440,13 +454,13 @@ describe('GitTab reset to origin', () => {
 
     fireEvent.click(await screen.findByText('Reset to origin'));
     await screen.findByRole('dialog');
-    const beforeConfirm = api.getGitInfo.mock.calls.length;
+    const beforeConfirm = getGitInfo.mock.calls.length;
 
     fireEvent.click(screen.getByText('Discard and reset'));
 
-    await waitFor(() => expect(api.resetToDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true }));
+    await waitFor(() => expect(resetToDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true }));
     // The tab re-reads git state rather than trusting its pre-reset snapshot.
-    await waitFor(() => expect(api.getGitInfo.mock.calls.length).toBeGreaterThan(beforeConfirm));
+    await waitFor(() => expect(getGitInfo.mock.calls.length).toBeGreaterThan(beforeConfirm));
   });
 });
 
@@ -471,14 +485,14 @@ describe('GitTab shell terminal integration', () => {
 
 describe('GitTab branch read failure', () => {
   it('shows an error row with Retry instead of "No branches found", then recovers', async () => {
-    api.getBranches.mockRejectedValueOnce(new Error('boom'));
+    getBranches.mockRejectedValueOnce(new Error('boom'));
     render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Could not load branches');
     expect(screen.queryByText('No branches found')).toBeNull();
 
-    api.getBranches.mockResolvedValue({ branches: [{ name: 'main', current: true }] });
+    getBranches.mockResolvedValue({ branches: [{ name: 'main', current: true }] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByText('main');
     expect(screen.queryByRole('alert')).toBeNull();
@@ -491,7 +505,7 @@ describe('GitTab branch read failure', () => {
   });
 
   it('shows an error row with Retry for remote branches instead of "No remote branches found", then recovers', async () => {
-    api.getRemoteBranches.mockRejectedValueOnce(new Error('remote unreachable'));
+    getRemoteBranches.mockRejectedValueOnce(new Error('remote unreachable'));
     render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
 
     const alerts = await screen.findAllByRole('alert');
@@ -500,7 +514,7 @@ describe('GitTab branch read failure', () => {
     expect(remoteAlert).toHaveTextContent('Could not load remote branches — remote unreachable');
     expect(screen.queryByText('No remote branches found')).toBeNull();
 
-    api.getRemoteBranches.mockResolvedValue({ branches: [{ name: 'origin/main', fullRef: 'refs/remotes/origin/main', isDefault: true }], defaultBranch: 'main' });
+    getRemoteBranches.mockResolvedValue({ branches: [{ name: 'origin/main', fullRef: 'refs/remotes/origin/main', isDefault: true }], defaultBranch: 'main' });
     const retryBtn = remoteAlert.querySelector('button');
     fireEvent.click(retryBtn);
     await screen.findByText('origin/main');

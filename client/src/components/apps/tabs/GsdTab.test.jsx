@@ -11,7 +11,13 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiApps.js', () => ({ getAppDocuments: api.getAppDocuments }));
+vi.mock('../../../services/apiGSD.js', () => ({
+  getGsdProject: api.getGsdProject,
+  getGsdPhases: api.getGsdPhases,
+  triggerGsdPhaseAction: api.triggerGsdPhaseAction,
+}));
+vi.mock('../../../services/apiAgents.js', () => ({ addCosTask: api.addCosTask }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 vi.mock('../../../hooks/useInstanceFeatures.js', () => ({
   useInstanceFeatures: () => ({ isFeatureEnabled: () => false }),

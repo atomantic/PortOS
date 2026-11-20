@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react';
 import { Link } from 'react-router';
 import { ChevronRight, AlertTriangle, Target } from 'lucide-react';
-import * as api from '../services/api';
+import { getGoals } from '../services/apiGoals.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalListByKeys } from '../lib/compareHelpers';
@@ -31,7 +31,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
   // Let errors throw — `useSocketResource` preserves the last-good goal set on
   // transient failures rather than wiping the widget.
   const { data: goalsData, loading } = useSocketResource(
-    () => api.getGoals({ silent: true }),
+    () => getGoals({ silent: true }),
     {
       events: RESOURCE_EVENTS,
       // Goal invalidations can leave the rendered values unchanged. Skip the re-render (and the

@@ -11,7 +11,8 @@ const apiLocalLlm = vi.hoisted(() => ({
   getVisionModels: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

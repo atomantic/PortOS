@@ -13,7 +13,8 @@ import {
 } from '@dnd-kit/core';
 import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
-import * as api from '../services/api';
+import { createJiraTicketTask } from '../services/apiAgents.js';
+import { getJiraBoardColumns, getJiraTicketTransitions, transitionJiraTicket } from '../services/apiSystem.js';
 import { FALLBACK_COLUMNS, ticketInColumn, bucketTickets } from '../lib/kanbanColumns.js';
 
 const TICKET_DROP_PREFIX = 'ticket:';
@@ -223,7 +224,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
   const handleQueue = async () => {
     setQueuing(true);
     // silent: this caller owns its own success/error toasts (see AGENTS.md).
-    await api.createJiraTicketTask(appId, ticket.key, { silent: true })
+    await createJiraTicketTask(appId, ticket.key, { silent: true })
       .then(() => toast.success(`Queued agent task for ${ticket.key}`))
       .catch((err) => toast.error(`Failed to queue ${ticket.key}: ${err.message}`))
       .finally(() => setQueuing(false));
@@ -392,7 +393,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
       return;
     }
     let cancelled = false;
-    api.getJiraBoardColumns(instanceId, projectKey, boardId, { silent: true })
+    getJiraBoardColumns(instanceId, projectKey, boardId, { silent: true })
       .then(res => { if (!cancelled) setBoardColumns(res?.columns?.length ? res.columns : null); })
       .catch(() => { if (!cancelled) setBoardColumns(null); });
     return () => { cancelled = true; };
@@ -467,7 +468,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
 
     try {
       // Fetch available transitions and find one that lands in the target column.
-      const transitions = await api.getJiraTicketTransitions(instanceId, ticket.key, { silent: true });
+      const transitions = await getJiraTicketTransitions(instanceId, ticket.key, { silent: true });
       const match = transitions.find(t =>
         targetColumn.statuses.length
           ? targetColumn.statuses.includes(t.to)
@@ -482,7 +483,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
         return;
       }
 
-      await api.transitionJiraTicket(instanceId, ticket.key, match.id, { silent: true });
+      await transitionJiraTicket(instanceId, ticket.key, match.id, { silent: true });
       // Update the status name + category from the resolved transition.
       const nextTickets = optimistic.map(t =>
         t.key === ticket.key ? { ...t, status: match.to, statusCategory: match.toCategory } : t

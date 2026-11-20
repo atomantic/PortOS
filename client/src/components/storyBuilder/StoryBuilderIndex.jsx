@@ -13,10 +13,9 @@ import useStoryImportIntake from '../../hooks/useStoryImportIntake';
 import { useCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { getCatalogType, payloadSnippet } from '../../lib/catalogTypes';
 import { formatCount } from '../../utils/formatters';
-import {
-  listStorySessions, createStorySession, listCatalogIngredientsByIds,
-  IMPORTER_CONTENT_TYPES,
-} from '../../services/api';
+import { listStorySessions, createStorySession } from '../../services/apiStoryBuilder.js';
+import { listCatalogIngredientsByIds } from '../../services/apiCatalog.js';
+import { IMPORTER_CONTENT_TYPES } from '../../services/apiImporter.js';
 import ProviderModelPicker from './ProviderModelPicker';
 
 // Intake tabs on the index view. The active one lives in `?intake=` (via

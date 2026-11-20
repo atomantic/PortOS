@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Copy, Lightbulb } from 'lucide-react';
-import * as api from '../../services/api';
+import { getUsageTips, dismissUsageTip } from '../../services/apiSystem.js';
 import Banner from '../ui/Banner';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -15,7 +15,7 @@ export default function UsageRetentionTips() {
 
   useEffect(() => {
     let live = true;
-    api.getUsageTips({ silent: true })
+    getUsageTips({ silent: true })
       .then((res) => { if (live) setTips(res?.tips || []); })
       .catch(() => {});
     return () => { live = false; };
@@ -23,7 +23,7 @@ export default function UsageRetentionTips() {
 
   const dismiss = (id) => {
     setDismissing(id);
-    api.dismissUsageTip(id)
+    dismissUsageTip(id)
       .then((res) => setTips(res?.tips || []))
       .catch(() => {})
       .finally(() => setDismissing(null));

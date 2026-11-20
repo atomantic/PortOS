@@ -9,7 +9,12 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../services/api', () => apiMocks);
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  listWorldRuns: apiMocks.listWorldRuns,
+  renderWorld: apiMocks.renderWorld,
+  WORLD_CATEGORY_KEY_MAX: apiMocks.WORLD_CATEGORY_KEY_MAX,
+  WORLD_CATEGORIES: apiMocks.WORLD_CATEGORIES,
+}));
 vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
 
 import useUniverseRender from './useUniverseRender.js';

@@ -18,7 +18,7 @@ import { io } from 'socket.io-client';
 import { Loader2, RotateCcw, Send, Flag, Volume2, Mic, CheckCircle2, AlertCircle, QrCode, Smartphone, X } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { playLoomTurn } from '../../services/api';
+import { playLoomTurn } from '../../services/apiFableLoom.js';
 import { sceneProseClass } from './fieldStyles';
 import toast from '../ui/Toast';
 import LoomHostedSessionModal from './LoomHostedSessionModal';

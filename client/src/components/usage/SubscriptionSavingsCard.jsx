@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { PiggyBank, Save } from 'lucide-react';
-import * as api from '../../services/api';
+import { updateSubscriptionCosts } from '../../services/apiSystem.js';
 import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatUsd } from '../../utils/formatters';
@@ -135,7 +135,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
   const dirty = Object.keys(patch).length > 0;
 
   const [save, saving] = useAsyncAction(async () => {
-    await api.updateSubscriptionCosts(patch, { silent: true });
+    await updateSubscriptionCosts(patch, { silent: true });
     await onSaved?.();
     // Cleared only after the refetch lands: dropping the drafts first would
     // flash the pre-save prices back onto the rows in between.

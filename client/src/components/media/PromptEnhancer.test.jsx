@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import PromptEnhancer from './PromptEnhancer';
-import * as api from '../../services/api';
+import { refineMediaPrompt } from '../../services/apiMediaJobs.js';
 import toast from '../ui/Toast';
 
 vi.mock('../../hooks/useProviderModels', () => ({
@@ -19,7 +19,7 @@ vi.mock('../../hooks/useProviderModels', () => ({
   })),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMediaJobs.js', () => ({
   refineMediaPrompt: vi.fn(),
 }));
 
@@ -35,7 +35,7 @@ describe('PromptEnhancer', () => {
   it('renders enhance button and handles click to enhance prompt', async () => {
     const setPrompt = vi.fn();
     const setNegativePrompt = vi.fn();
-    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+    vi.mocked(refineMediaPrompt).mockResolvedValue({
       prompt: 'an enhanced detailed prompt',
       negativePrompt: 'low resolution',
       rationale: 'Enhanced details.',
@@ -57,7 +57,7 @@ describe('PromptEnhancer', () => {
     fireEvent.click(enhanceBtn);
 
     await waitFor(() => {
-      expect(api.refineMediaPrompt).toHaveBeenCalledWith({
+      expect(refineMediaPrompt).toHaveBeenCalledWith({
         kind: 'image',
         prompt: 'a simple cat',
         negativePrompt: '',
@@ -75,7 +75,7 @@ describe('PromptEnhancer', () => {
   // Uniquely catches the AI's instructions and policy clause staying hidden
   // after an Enhance (#11317).
   it('lists what the last Enhance sent the AI as chips with the full prompt', async () => {
-    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+    vi.mocked(refineMediaPrompt).mockResolvedValue({
       prompt: 'an enhanced detailed prompt',
       sentPrompt: '## Creative latitude (operator policy)\n\nEnhance: a simple cat',
       promptAdditions: [
@@ -97,7 +97,7 @@ describe('PromptEnhancer', () => {
   // be told the budget rather than handing back a richer, unrenderable prompt.
   it('forwards the render backend prompt cap and reports a trimmed result', async () => {
     const setPrompt = vi.fn();
-    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+    vi.mocked(refineMediaPrompt).mockResolvedValue({
       prompt: 'an enhanced detailed prompt',
       negativePrompt: '',
       truncated: true,
@@ -115,7 +115,7 @@ describe('PromptEnhancer', () => {
     fireEvent.click(screen.getByRole('button', { name: /^enhance$/i }));
 
     await waitFor(() => {
-      expect(api.refineMediaPrompt).toHaveBeenCalledWith(expect.objectContaining({ maxPromptLength: 785 }));
+      expect(refineMediaPrompt).toHaveBeenCalledWith(expect.objectContaining({ maxPromptLength: 785 }));
     });
     expect(setPrompt).toHaveBeenCalledWith('an enhanced detailed prompt');
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('785'));

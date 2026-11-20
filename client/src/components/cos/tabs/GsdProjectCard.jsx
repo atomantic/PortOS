@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getGsdProject } from '../../../services/apiGSD.js';
 import GsdConcernsPanel from './GsdConcernsPanel';
 import PhaseTimeline from '../../gsd/PhaseTimeline';
 
@@ -14,7 +14,7 @@ export default function GsdProjectCard({ project, onRefresh }) {
   const loadDetail = async () => {
     if (detail) return;
     setLoading(true);
-    const data = await api.getGsdProject(project.appId, { silent: true }).catch(err => {
+    const data = await getGsdProject(project.appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

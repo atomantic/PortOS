@@ -16,7 +16,7 @@ import {
   syncGitHubNotifications,
   undoGitHubAutomationAction,
   updateGitHubAccount,
-} from '../../services/api';
+} from '../../services/apiGithub.js';
 import { ACTION_LABELS, AGENT_RULE_KINDS, LEARNED_DECISION_LABELS } from './githubTriageLabels';
 import GitHubAgentRules from './GitHubAgentRules';
 import GitHubAgentPinForm, { describeAgentPin } from './GitHubAgentPinForm';

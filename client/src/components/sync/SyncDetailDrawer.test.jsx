@@ -16,10 +16,16 @@ const mockSyncRecordToPeer = vi.fn();
 const mockPullRecordFromPeer = vi.fn();
 const mockPullMissingMetadata = vi.fn();
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   getMediaCollection: (...args) => mockGetMediaCollection(...args),
+}));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   getUniverse: (...args) => mockGetUniverse(...args),
+}));
+vi.mock('../../services/apiPipeline.js', () => ({
   getPipelineSeries: (...args) => mockGetPipelineSeries(...args),
+}));
+vi.mock('../../services/apiPeerSync.js', () => ({
   syncRecordToPeer: (...args) => mockSyncRecordToPeer(...args),
   pullRecordFromPeer: (...args) => mockPullRecordFromPeer(...args),
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),

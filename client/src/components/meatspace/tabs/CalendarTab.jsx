@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Calendar, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getLifeCalendar,
+  addActivity,
+  removeActivity,
+  addLifeEvent,
+  updateLifeEvent,
+  removeLifeEvent,
+} from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import { IconForName } from './calendar/icons';
 import { CADENCE_LABELS } from './calendar/lifeGridMath';
@@ -52,7 +59,7 @@ export default function CalendarTab() {
   const fetchData = useCallback(async () => {
     const generation = ++generationRef.current;
     readsInFlightRef.current++;
-    const result = await api.getLifeCalendar().catch(err => {
+    const result = await getLifeCalendar().catch(err => {
       if (generation === generationRef.current) setError(err.message);
       return null;
     });
@@ -67,7 +74,7 @@ export default function CalendarTab() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleAddActivity = async (activity) => {
-    const result = await api.addActivity(activity).catch(() => null);
+    const result = await addActivity(activity).catch(() => null);
     if (result) {
       toast.success(`Added ${activity.name}`);
       fetchData();
@@ -82,7 +89,7 @@ export default function CalendarTab() {
     if (removingRef.current.has(key)) return;
     removingRef.current.add(key);
     setRemovingKeys([...removingRef.current]);
-    const result = await api.removeActivity(index, target, { silent: true }).catch(err => {
+    const result = await removeActivity(index, target, { silent: true }).catch(err => {
       if (err?.code === 'ACTIVITY_MOVED') {
         toast.error(`${label} moved; the list was refreshed`);
         fetchData();
@@ -119,7 +126,7 @@ export default function CalendarTab() {
   };
 
   const handleAddEvent = async (event) => {
-    const result = await api.addLifeEvent(event).catch(() => null);
+    const result = await addLifeEvent(event).catch(() => null);
     if (result) {
       toast.success(`Added ${event.name}`);
       fetchData();
@@ -127,13 +134,13 @@ export default function CalendarTab() {
   };
 
   const handleToggleEvent = async (id, enabled) => {
-    const result = await api.updateLifeEvent(id, { enabled }).catch(() => null);
+    const result = await updateLifeEvent(id, { enabled }).catch(() => null);
     if (result) fetchData();
   };
 
   const handleRemoveEvent = async (id) => {
     const event = data?.events?.find(e => e.id === id);
-    const result = await api.removeLifeEvent(id).catch(() => null);
+    const result = await removeLifeEvent(id).catch(() => null);
     if (result) {
       toast.success(`Removed ${event?.name || 'event'}`);
       fetchData();

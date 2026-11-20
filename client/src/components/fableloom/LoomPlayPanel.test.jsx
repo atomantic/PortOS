@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({ playLoomTurn: vi.fn() }));
+vi.mock('../../services/apiFableLoom.js', () => ({
+  playLoomTurn: vi.fn(),
+}));
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt="" {...props} /> }));
 vi.mock('socket.io-client', () => ({
   io: vi.fn(() => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() })),
@@ -21,7 +23,7 @@ vi.mock('./LoomHostedSessionModal', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
-import { playLoomTurn } from '../../services/api';
+import { playLoomTurn } from '../../services/apiFableLoom.js';
 import { io } from 'socket.io-client';
 import toast from '../ui/Toast';
 import LoomPlayPanel from './LoomPlayPanel';

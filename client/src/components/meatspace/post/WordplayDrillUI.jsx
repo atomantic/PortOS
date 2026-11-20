@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Loader } from 'lucide-react';
-import { scorePostLlmDrill } from '../../../services/api';
+import { scorePostLlmDrill } from '../../../services/apiMeatspace.js';
 import { getDifficultyColor } from './constants';
 import { pluralize } from '../../../lib/textUtils';
 

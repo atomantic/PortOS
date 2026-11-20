@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, Clock, ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import { getDatadogInstances, searchDatadogErrors } from '../../../services/apiSystem.js';
 import { formatDateTime } from '../../../utils/formatters';
 
 const TIME_RANGES = [
@@ -28,7 +28,7 @@ export default function DatadogTab({ app }) {
     setDdSite(null);
     if (!dd?.instanceId) return;
     let cancelled = false;
-    api.getDatadogInstances().then(res => {
+    getDatadogInstances().then(res => {
       if (cancelled) return;
       const inst = (res.instances || {})[dd.instanceId];
       if (inst?.site) setDdSite(inst.site);
@@ -45,7 +45,7 @@ export default function DatadogTab({ app }) {
     setFetchFailed(false);
     const range = TIME_RANGES.find(r => r.value === timeRange);
     const fromTime = new Date(Date.now() - range.ms).toISOString();
-    const result = await api.searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment, fromTime, { signal: controller.signal, silent: true }).catch(err => {
+    const result = await searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment, fromTime, { signal: controller.signal, silent: true }).catch(err => {
       if (err.name === 'AbortError') return 'aborted';
       return null;
     });

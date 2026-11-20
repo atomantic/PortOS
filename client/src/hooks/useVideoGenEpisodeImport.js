@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { getLoom } from '../services/api';
+import { getLoom } from '../services/apiFableLoom.js';
 import { loomEpisodeToDraftScenes } from '../lib/episodeSceneImport.js';
 
 export function useVideoGenEpisodeImport({ searchParams, setSearchParams }) {

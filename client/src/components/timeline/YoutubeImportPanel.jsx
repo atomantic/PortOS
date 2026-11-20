@@ -1,5 +1,5 @@
 import { MonitorPlay } from 'lucide-react';
-import * as api from '../../services/api';
+import { importYoutubeHistory } from '../../services/apiTimeline.js';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
 // Bulk-backfill importer for Google Takeout YouTube watch history (#2153), built
@@ -11,7 +11,7 @@ export default function YoutubeImportPanel({ onImported }) {
       icon={MonitorPlay}
       title="Import YouTube watch history"
       noun="watch"
-      importFn={api.importYoutubeHistory}
+      importFn={importYoutubeHistory}
       onImported={onImported}
       help={(
         <>

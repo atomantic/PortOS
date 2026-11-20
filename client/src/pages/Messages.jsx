@@ -1,7 +1,7 @@
 import { useNavigate, useParams } from 'react-router';
 import { Mail, RefreshCw, Settings, MessageSquare, MessageCircle, Users } from 'lucide-react';
 import { Suspense, useState, useEffect, useCallback } from 'react';
-import * as api from '../services/api';
+import { getMessageAccounts } from '../services/apiMessages.js';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -75,7 +75,7 @@ export default function Messages() {
   const [loading, setLoading] = useState(true);
 
   const fetchAccounts = useCallback(async () => {
-    const data = await api.getMessageAccounts().catch(() => null);
+    const data = await getMessageAccounts().catch(() => null);
     setAccounts(Array.isArray(data) ? data : null);
     setLoading(false);
   }, []);

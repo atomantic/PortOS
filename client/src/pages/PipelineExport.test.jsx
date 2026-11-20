@@ -13,7 +13,18 @@ const api = vi.hoisted(() => ({
   getGalleryImages: vi.fn(),
   listVideoHistory: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiPipeline.js', () => ({
+  getPipelineSeries: api.getPipelineSeries,
+  updatePipelineSeries: api.updatePipelineSeries,
+  proseExportManuscriptUrl: api.proseExportManuscriptUrl,
+  proseExportEpubUrl: api.proseExportEpubUrl,
+  proseExportPdfUrl: api.proseExportPdfUrl,
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
+  listMediaCollections: api.listMediaCollections,
+  getGalleryImages: api.getGalleryImages,
+  listVideoHistory: api.listVideoHistory,
+}));
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
 }));

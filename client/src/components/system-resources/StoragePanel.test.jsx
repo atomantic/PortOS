@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({ triageSystemResources: vi.fn() }));
-vi.mock('../../services/api.js', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ triageSystemResources: api.triageSystemResources }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
   default: () => ({
     providers: [{ id: 'codex', name: 'Codex' }],

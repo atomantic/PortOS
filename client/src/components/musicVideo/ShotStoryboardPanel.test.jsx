@@ -4,7 +4,10 @@ import { MemoryRouter } from 'react-router';
 import ShotStoryboardPanel from './ShotStoryboardPanel';
 
 const api = vi.hoisted(() => ({ updateShotFromStoryboardPanel: vi.fn(), sendShotStillToStoryboardPanel: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiStoryboards.js', () => ({
+  updateShotFromStoryboardPanel: api.updateShotFromStoryboardPanel,
+  sendShotStillToStoryboardPanel: api.sendShotStillToStoryboardPanel,
+}));
 
 const panel = { id: 'panel-1', action: 'She steps off the night bus', takes: [], selectedTakeId: null };
 const scene = { sceneId: 'mvs-1', panelId: 'panel-1', panelRev: 'old', referenceImageId: '/data/images/still-a.png' };

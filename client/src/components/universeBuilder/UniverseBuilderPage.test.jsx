@@ -21,7 +21,8 @@ const hookMocks = vi.hoisted(() => ({
   useUniverseNav: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiUniverseBuilder.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   ...apiMocks,
   WORLD_CATEGORY_KEY_MAX: 64,
 }));

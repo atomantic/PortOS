@@ -4,7 +4,7 @@ import DataManager from './DataManager';
 import { formatBytes } from '../utils/formatters';
 vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
 import socket from '../services/socket';
-import { getTombstoneSweepStatus } from '../services/api';
+import { getTombstoneSweepStatus } from '../services/apiPeerSync.js';
 
 // A directory with no server-side CATEGORIES entry comes back `classified: false`
 // with both permission flags off. The row must explain *why* Archive/Purge are
@@ -13,13 +13,15 @@ const getDataOverview = vi.fn();
 const getDataCategory = vi.fn();
 const purgeDataCategory = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getDataOverview: (...a) => getDataOverview(...a),
   getDataBackups: vi.fn(() => Promise.resolve([])),
   getDataCategory: (...a) => getDataCategory(...a),
   archiveDataCategory: vi.fn(),
   purgeDataCategory: (...a) => purgeDataCategory(...a),
   deleteDataBackup: vi.fn(),
+}));
+vi.mock('../services/apiPeerSync.js', () => ({
   getTombstoneSweepStatus: vi.fn(() => Promise.resolve({ refused: [] })),
   sweepTombstonesNow: vi.fn(),
 }));
@@ -545,7 +547,7 @@ describe('DataManager backup deletion (#8922)', () => {
   let deleteDataBackup;
 
   beforeEach(async () => {
-    const api = await import('../services/api');
+    const api = await import('../services/apiSystem.js');
     getDataBackups = api.getDataBackups;
     deleteDataBackup = api.deleteDataBackup;
     getDataOverview.mockReset().mockResolvedValue(overview);
@@ -672,7 +674,7 @@ describe('DataManager independent read failures (#9446)', () => {
   let getDataBackups;
   const archive = { name: 'example-backup.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' };
   beforeEach(async () => {
-    getDataBackups = (await import('../services/api')).getDataBackups;
+    getDataBackups = (await import('../services/apiSystem.js')).getDataBackups;
     getDataBackups.mockReset().mockResolvedValue([archive]);
     getDataOverview.mockReset().mockResolvedValue(overview);
   });

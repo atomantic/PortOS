@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal, RefreshCw } from 'lucide-react';
-import * as api from '../../services/api';
+import { getFeatureAgentOutput } from '../../services/apiAgents.js';
 import socket from '../../services/socket';
 
 const MAX_LIVE_LINES = 500;
@@ -19,7 +19,7 @@ export default function OutputTab({ agent }) {
 
   const loadOutput = useCallback((id) => {
     const seq = ++requestSeqRef.current;
-    api.getFeatureAgentOutput(id).then(data => {
+    getFeatureAgentOutput(id).then(data => {
       if (seq !== requestSeqRef.current || !data) return;
       setOutput(data.output || '');
       setAgentId(data.agentId);

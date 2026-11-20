@@ -7,7 +7,14 @@ import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import AgentKeyCard from './AgentKeyCard';
-import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession, revokeAllAgentSessions } from '../../services/api';
+import {
+  getAuthStatus,
+  setAuthPassword,
+  clearAuthPassword,
+  listAuthSessions,
+  revokeAuthSession,
+  revokeAllAgentSessions,
+} from '../../services/apiAuth.js';
 import { formatDateShort } from '../../utils/formatters';
 
 const fetchAgentSessions = () => listAuthSessions({ silent: true })

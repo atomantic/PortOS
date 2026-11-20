@@ -10,7 +10,12 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSystem.js', () => ({
+  getJiraBoardColumns: api.getJiraBoardColumns,
+  getJiraTicketTransitions: api.getJiraTicketTransitions,
+  transitionJiraTicket: api.transitionJiraTicket,
+}));
+vi.mock('../services/apiAgents.js', () => ({ createJiraTicketTask: api.createJiraTicketTask }));
 vi.mock('./ui/Toast', () => ({ default: toast }));
 vi.mock('@dnd-kit/core', () => ({
   DndContext: ({ children, ...props }) => {

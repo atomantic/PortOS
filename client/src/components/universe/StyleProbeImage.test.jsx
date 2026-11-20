@@ -5,9 +5,11 @@ import { render, screen, act } from '@testing-library/react';
 // so the async setState lands inside act() and the test output stays clean.
 const flushEffects = () => act(async () => { await Promise.resolve(); });
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(() => Promise.resolve({})),
   generateImage: vi.fn(() => Promise.resolve(null)),
+}));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   updateUniverse: vi.fn(() => Promise.resolve(null)),
 }));
 

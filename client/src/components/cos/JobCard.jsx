@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { updateCosJob } from '../../services/apiAgents.js';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
 import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL, scheduleAnchorKindForInterval } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
@@ -407,7 +407,7 @@ export default function JobCard({
       ...(fixedType ? { type: fixedType } : {})
     };
     const payload = normalizeJobPayload(constrained);
-    const result = await api.updateCosJob(job.id, payload, { silent: true }).catch(err => {
+    const result = await updateCosJob(job.id, payload, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

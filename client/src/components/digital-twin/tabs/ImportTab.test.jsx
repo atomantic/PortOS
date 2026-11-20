@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinImportSources: vi.fn(),
-  getProviders: vi.fn(),
   analyzeDigitalTwinImport: vi.fn(),
   openDigitalTwinSpotifyBrowser: vi.fn(),
   importDigitalTwinSpotifyBrowser: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('../TwinProviderPicker.jsx', () => ({
@@ -17,7 +19,8 @@ vi.mock('../TwinProviderPicker.jsx', () => ({
 }));
 
 import ImportTab from './ImportTab';
-import * as api from '../../../services/api';
+import { getDigitalTwinImportSources } from '../../../services/apiDigitalTwin.js';
+import { getProviders } from '../../../services/apiProviders.js';
 
 const SOURCE = { id: 'spotify', name: 'Spotify', format: 'zip', description: 'Listening history' };
 const PROVIDER = { id: 'example-provider', enabled: true, defaultModel: 'example-model' };
@@ -25,12 +28,12 @@ const PROVIDER = { id: 'example-provider', enabled: true, defaultModel: 'example
 describe('ImportTab failed loads', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinImportSources.mockResolvedValue({ sources: [SOURCE] });
-    api.getProviders.mockResolvedValue({ providers: [PROVIDER, { id: 'off', enabled: false }] });
+    getDigitalTwinImportSources.mockResolvedValue({ sources: [SOURCE] });
+    getProviders.mockResolvedValue({ providers: [PROVIDER, { id: 'off', enabled: false }] });
   });
 
   it('shows a retryable error instead of an empty source grid, then the sources after Retry', async () => {
-    api.getDigitalTwinImportSources.mockRejectedValueOnce(new Error('boom'));
+    getDigitalTwinImportSources.mockRejectedValueOnce(new Error('boom'));
     const user = userEvent.setup();
     render(<ImportTab />);
 
@@ -43,7 +46,7 @@ describe('ImportTab failed loads', () => {
   });
 
   it('shows a provider load error with Retry, keeps Spotify import blocked, and seeds the first enabled provider on retry', async () => {
-    api.getProviders.mockRejectedValueOnce(new Error('providers down'));
+    getProviders.mockRejectedValueOnce(new Error('providers down'));
     const user = userEvent.setup();
     render(<ImportTab />);
 

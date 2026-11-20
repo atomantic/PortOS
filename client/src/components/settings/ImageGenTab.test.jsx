@@ -2,21 +2,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   patchSettingsSlice: vi.fn(),
   getImageGenStatus: vi.fn(),
-  getVideoGenModelContext: vi.fn(),
   generateImage: vi.fn(),
   registerTool: vi.fn(),
   updateTool: vi.fn(),
   getToolsList: vi.fn(),
-  saveHfToken: vi.fn(),
-  clearHfToken: vi.fn(),
   getCredentialInventory: vi.fn(),
   saveCredential: vi.fn(),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getVideoGenModelContext: vi.fn(),
+  saveHfToken: vi.fn(),
+  clearHfToken: vi.fn(),
   listAgyImageModels: vi.fn(),
   listImageModels: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 vi.mock('../../hooks/useHfTokenStatus', () => ({
@@ -36,9 +40,17 @@ vi.mock('./LocalSetupPanel', () => ({
 vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 import {
-  getSettings, getToolsList, patchSettingsSlice, listAgyImageModels, listImageModels, getImageGenStatus,
-  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders, registerTool, updateTool,
-} from '../../services/api';
+  getSettings,
+  getToolsList,
+  patchSettingsSlice,
+  getImageGenStatus,
+  generateImage,
+  getCredentialInventory,
+  registerTool,
+  updateTool,
+} from '../../services/apiSystem.js';
+import { listAgyImageModels, listImageModels, getVideoGenModelContext } from '../../services/apiImageVideo.js';
+import { getProviders } from '../../services/apiProviders.js';
 import toast from '../ui/Toast';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';

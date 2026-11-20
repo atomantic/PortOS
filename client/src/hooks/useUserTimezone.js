@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { getSettings } from '../services/api';
+import { getSettings } from '../services/apiSystem.js';
 import { isValidTimezone } from '../utils/timezone.js';
 
 /**

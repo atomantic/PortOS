@@ -18,7 +18,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import * as api from '../../../services/api';
+import { getCosTasks, getCosLearningDurations, reorderCosTasks } from '../../../services/apiAgents.js';
 import TaskItem, { taskRowId } from './TaskItem';
 import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
@@ -75,8 +75,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
-  const fetchUserHistory = useCallback(({ cursor, signal }) => api.getCosTasks({ view: 'completed', source: 'user', limit: 25, cursor, signal, silent: true }), []);
-  const fetchSystemHistory = useCallback(({ cursor, signal }) => api.getCosTasks({ view: 'completed', source: 'internal', limit: 25, cursor, signal, silent: true }), []);
+  const fetchUserHistory = useCallback(({ cursor, signal }) => getCosTasks({ view: 'completed', source: 'user', limit: 25, cursor, signal, silent: true }), []);
+  const fetchSystemHistory = useCallback(({ cursor, signal }) => getCosTasks({ view: 'completed', source: 'internal', limit: 25, cursor, signal, silent: true }), []);
   const userHistory = usePagedCollection(fetchUserHistory, { enabled: showCompletedUserTasks && tasks.user?.completedCount != null });
   const systemHistory = usePagedCollection(fetchSystemHistory, { enabled: showCompletedSystemTasks && tasks.cos?.completedCount != null });
   const refreshHistory = () => { userHistory.reload(); systemHistory.reload(); onRefresh(); };
@@ -109,7 +109,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
 
   // Fetch task duration estimates
   useEffect(() => {
-    api.getCosLearningDurations()
+    getCosLearningDurations()
       .then(setDurations)
       .catch(() => setDurations(null));
   }, []);
@@ -282,7 +282,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
 
     // Persist to server
     const taskIds = newOrder.map(t => t.id);
-    const result = await api.reorderCosTasks(taskIds, { silent: true }).catch(err => {
+    const result = await reorderCosTasks(taskIds, { silent: true }).catch(err => {
       toast.error(err.message);
       setUserTasksLocal(userTasks); // Revert on error
       return null;

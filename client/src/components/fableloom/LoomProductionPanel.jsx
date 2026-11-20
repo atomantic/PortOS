@@ -29,13 +29,12 @@ import ListLoadError from '../ui/ListLoadError';
 import {
   cancelLoomEpisodeProductionBatch,
   getLoomEpisodeProductionBatchStatus,
-  listImageModels,
-  listVideoModels,
   planLoomEpisodeProduction,
   resumeLoomEpisodeProductionBatch,
   startLoomEpisodeProductionBatch,
   updateLoom,
-} from '../../services/api';
+} from '../../services/apiFableLoom.js';
+import { listImageModels, listVideoModels } from '../../services/apiImageVideo.js';
 import { fableLoomStoryReadiness } from '../../lib/fableLoomReadiness';
 import {
   asFableLoomRenderPreferences,

@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as api from '../services/api';
+import { getNote } from '../services/apiNotes.js';
 
 /** Read the note named by the URL, discarding responses from older selections. */
 export default function useVaultNote(vaultId, notePath, { onReset, onLoad } = {}) {
@@ -35,7 +35,7 @@ export default function useVaultNote(vaultId, notePath, { onReset, onLoad } = {}
     setLoading(Boolean(vaultId && notePath));
     callbacks.current.onReset?.();
     if (vaultId && notePath) {
-      api.getNote(vaultId, notePath, { silent: true }).then(data => {
+      getNote(vaultId, notePath, { silent: true }).then(data => {
         if (sequence !== sequenceRef.current) return;
         if (data && !data.error && data.path === notePath) {
           setLoadedNote(data);

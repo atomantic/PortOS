@@ -38,7 +38,7 @@ import {
   addMediaModelFromHf,
   patchCustomMediaModel,
   removeCustomMediaModel,
-} from '../services/api';
+} from '../services/apiImageVideo.js';
 
 const DESTRUCTIVE_BTN = 'px-3 py-1.5 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded disabled:opacity-50 flex items-center gap-1';
 

@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPeerAdminSetup, savePeerAdminGrant, previewPeerAdministration, savePeerExecutionGrant, previewPeerExecution, dispatchPeerExecution, getPeerExecutionStatus } from '../../services/api';
+import {
+  getPeerAdminSetup,
+  savePeerAdminGrant,
+  previewPeerAdministration,
+  savePeerExecutionGrant,
+  previewPeerExecution,
+  dispatchPeerExecution,
+  getPeerExecutionStatus,
+} from '../../services/apiSystem.js';
 import { safeReadJsonStorage, safeWriteJsonStorage, safeReadStorage } from '../../lib/safeStorage';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import PeerCatalogControls from './PeerCatalogControls';

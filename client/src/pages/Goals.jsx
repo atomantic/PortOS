@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {Target, TreePine, List} from 'lucide-react';
-import * as api from '../services/api';
+import { getGoalsTree } from '../services/apiGoals.js';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -44,7 +44,7 @@ export default function Goals() {
   // read that fails renders a retry instead of "No goals yet".
   const loadData = useCallback(async () => {
     const generation = ++loadGeneration.current;
-    const result = await api.getGoalsTree().then((tree) => ({ tree }), (error) => ({ error }));
+    const result = await getGoalsTree().then((tree) => ({ tree }), (error) => ({ error }));
     if (generation !== loadGeneration.current) return;
     if (result.error) {
       setLoadError(result.error);

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   getLoadedLlmModels: vi.fn(),
@@ -18,7 +18,12 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import LocalLlmPlayground from './LocalLlmPlayground';
-import { getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import {
+  getLoadedLlmModels,
+  getLocalLlmCatalog,
+  getLocalLlmStatus,
+  streamLocalLlmTest,
+} from '../services/apiLocalLlm.js';
 
 const renderPlayground = (entry = '/local-llm/playground?backend=ollama&model=command-r-plus%3A104b') => render(
   <MemoryRouter initialEntries={[entry]}>

@@ -11,14 +11,17 @@ import toast from '../../ui/Toast';
 import InlineDiff from '../../ui/InlineDiff';
 import ProseEditor from '../../ui/ProseEditor';
 import {
-  generatePipelineStage, updatePipelineIssue, getPipelineStageRecovery, recoverPipelineStage,
+  generatePipelineStage,
+  updatePipelineIssue,
+  getPipelineStageRecovery,
+  recoverPipelineStage,
   pipelineStageProgressUrl,
   PIPELINE_STAGE_LABELS,
   PIPELINE_TEXT_STAGES,
   PIPELINE_DEFAULT_FORWARD_SOURCE as DEFAULT_FORWARD_SOURCE,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSseProgress, isTerminalSseFrame } from '../../../hooks/useSseProgress';
 import { formatCount, formatDurationMs } from '../../../utils/formatters';

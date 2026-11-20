@@ -24,7 +24,16 @@ import {
   Eye,
   Target
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  hydrateCosAgentDescription,
+  getCosAgentPrompt,
+  addCosTask,
+  submitCosAgentFeedback,
+  sendCosAgentBtw,
+  getCosAgentStats,
+  getCosAgent,
+} from '../../../services/apiAgents.js';
+import { normalizeBrainScanReportPath } from '../../../services/apiBrain.js';
 import OutputBlocks from '../OutputBlocks';
 import MarkdownOutput from '../MarkdownOutput';
 import Modal from '../../ui/Modal';
@@ -214,7 +223,7 @@ function TaskDescription({ agent, remote }) {
   const clipped = Boolean(agent.metadata?.taskDescriptionTruncated) && !remote;
 
   const hydrate = useCallback(async () => {
-    const full = await api.hydrateCosAgentDescription(agent);
+    const full = await hydrateCosAgentDescription(agent);
     setHydrated(full.metadata?.taskDescription ?? null);
   }, [agent]);
 
@@ -286,9 +295,9 @@ function InvestigateFindingsButton({ agent }) {
     if (pending || task) return;
     setPending(true);
     setError(null);
-    await api.getCosAgentPrompt(agent.id, { silent: true }).then(async ({ prompt }) => {
+    await getCosAgentPrompt(agent.id, { silent: true }).then(async ({ prompt }) => {
       if (!prompt) throw new Error('The original agent prompt is unavailable');
-      const created = await api.addCosTask({
+      const created = await addCosTask({
         description: `Investigate goal-fidelity findings for ${agent.id}: ${agent.metadata?.taskDescription || agent.taskId}`,
         app: agent.metadata?.taskApp || undefined,
         type: 'user',
@@ -465,7 +474,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (submittingFeedback) return;
     setSubmittingFeedback(true);
 
-    const result = await api.submitCosAgentFeedback(agent.id, {
+    const result = await submitCosAgentFeedback(agent.id, {
       rating,
       comment: feedbackComment || undefined
     }, { silent: true }).catch(err => {
@@ -492,7 +501,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (promptContent !== null || loadingPrompt) return;
     setLoadingPrompt(true);
     setPromptError(null);
-    const result = await api.getCosAgentPrompt(agent.id).catch(err => {
+    const result = await getCosAgentPrompt(agent.id).catch(err => {
       setPromptError(err.message);
       return null;
     });
@@ -509,7 +518,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (sendingBtw || !message) return;
     setSendingBtw(true);
 
-    const result = await api.sendCosAgentBtw(agent.id, message, { silent: true }).catch(err => {
+    const result = await sendCosAgentBtw(agent.id, message, { silent: true }).catch(err => {
       toast.error(`Failed to send: ${err.message}`);
       return null;
     });
@@ -532,7 +541,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // in-flight responses after collapsing, switching agents, or going inactive.
   const statsEnabled = expanded && !inactive && !remote;
   const { data: processStats } = useSocketResource(
-    () => statsEnabled ? api.getCosAgentStats(agent.id, { silent: true }) : null,
+    () => statsEnabled ? getCosAgentStats(agent.id, { silent: true }) : null,
     {
       namespace: 'cos',
       enabled: statsEnabled,
@@ -575,7 +584,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     const req = ++outputRequestRef.current;
     const current = () => req === outputRequestRef.current;
     setLoadingOutput(true);
-    api.getCosAgent(agent.id, { silent: true })
+    getCosAgent(agent.id, { silent: true })
       .then(data => {
         if (current()) {
           setFullOutput(toTranscript(data));
@@ -740,7 +749,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     setLoadingStageIds(new Set(stageInFlightRef.current));
     setStageErrors(({ [stageAgentId]: _cleared, ...rest }) => rest);
     let failure = null;
-    const data = await api.getCosAgent(stageAgentId, { silent: true }).catch(err => {
+    const data = await getCosAgent(stageAgentId, { silent: true }).catch(err => {
       failure = err?.message || 'Request failed';
       return null;
     });
@@ -1227,7 +1236,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
         {completed && agent.metadata?.malwareScan?.reportUrl && (
           <a
-            href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
+            href={normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
             className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
           >
             {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}

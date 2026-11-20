@@ -2,7 +2,18 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import {
+  saveGoogleAuthCredentials,
+  getGoogleAuthUrl,
+  clearGoogleAuth,
+  updateCalendarAccount,
+  startGoogleAutoConfig,
+  createCalendarAccount,
+  deleteCalendarAccount,
+  updateSubcalendars,
+  apiDiscoverCalendars,
+  mcpDiscoverCalendars,
+} from '../../services/apiCalendar.js';
 import { formatDateTime, formatDateNumeric } from '../../utils/formatters';
 import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -55,12 +66,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleSaveOAuthCredentials = async () => {
     if (!oauthForm.clientId || !oauthForm.clientSecret) return toast.error('Both Client ID and Client Secret are required');
     setSavingOAuth(true);
-    const result = await api.saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
+    const result = await saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
     setSavingOAuth(false);
     if (!result) return toast.error('Failed to save credentials');
     toast.success('OAuth credentials saved');
     fetchGoogleAuth();
-    const authResult = await api.getGoogleAuthUrl().catch(() => null);
+    const authResult = await getGoogleAuthUrl().catch(() => null);
     if (authResult?.url) {
       window.open(authResult.url, '_blank');
       toast.success('Complete authorization in the opened browser tab');
@@ -68,7 +79,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleStartOAuth = async () => {
-    const result = await api.getGoogleAuthUrl({ silent: true }).catch(() => null);
+    const result = await getGoogleAuthUrl({ silent: true }).catch(() => null);
     if (result?.url) {
       window.open(result.url, '_blank');
       toast.success('Complete authorization in the opened browser tab');
@@ -80,7 +91,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleClearGoogleAuth = async () => {
     if (clearingGoogleAuth) return;
     setClearingGoogleAuth(true);
-    const cleared = await api.clearGoogleAuth().then(() => true).catch(() => false);
+    const cleared = await clearGoogleAuth().then(() => true).catch(() => false);
     setClearingGoogleAuth(false);
     if (!cleared) return;
     toast.success('Google auth cleared');
@@ -88,14 +99,14 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleSyncMethodChange = async (account, method) => {
-    const result = await api.updateCalendarAccount(account.id, { syncMethod: method }, { silent: true }).catch(() => null);
+    const result = await updateCalendarAccount(account.id, { syncMethod: method }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update sync method');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, syncMethod: method } : a));
     toast.success(`Sync method set to ${method === 'google-api' ? 'Google API' : 'Claude MCP'}`);
   };
 
   const handleAutoConfigStart = async () => {
-    const result = await api.startGoogleAutoConfig({ silent: true }).catch(() => null);
+    const result = await startGoogleAutoConfig({ silent: true }).catch(() => null);
     if (!result || result.error) {
       return toast.error(result?.error || 'Failed to open browser');
     }
@@ -130,7 +141,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    const result = await api.createCalendarAccount(form, { silent: true }).catch(() => null);
+    const result = await createCalendarAccount(form, { silent: true }).catch(() => null);
     setSaving(false);
     if (!result) return toast.error('Failed to create account');
     setShowForm(false);
@@ -145,7 +156,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const handleDelete = async (id) => {
     setDeleting(id);
-    const ok = await api.deleteCalendarAccount(id).then(() => true).catch(() => false);
+    const ok = await deleteCalendarAccount(id).then(() => true).catch(() => false);
     setDeleting(null);
     if (!ok) return;
     toast.success('Account deleted');
@@ -153,7 +164,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleToggle = async (account) => {
-    const result = await api.updateCalendarAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
+    const result = await updateCalendarAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
@@ -178,7 +189,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
     );
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
     setSavingSubcals(account.id);
-    const result = await api.updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
+    const result = await updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
     setSavingSubcals(null);
     if (!result) {
       // Rollback on failure
@@ -191,8 +202,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
     setDiscovering(account.id);
     const useApi = (account.syncMethod || 'claude-mcp') === 'google-api';
     const result = useApi
-      ? await api.apiDiscoverCalendars(account.id).catch(() => null)
-      : await api.mcpDiscoverCalendars(account.id).catch(() => null);
+      ? await apiDiscoverCalendars(account.id).catch(() => null)
+      : await mcpDiscoverCalendars(account.id).catch(() => null);
     setDiscovering(null);
     // Failures arrive as throws (the API helper already toasted the server's
     // error message) — the .catch above turns them into null.
@@ -204,7 +215,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleEnableAll = async (account) => {
     const subcalendars = (account.subcalendars || []).map(sc => ({ ...sc, enabled: true, dormant: false }));
     setSavingSubcals(account.id);
-    const result = await api.updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
+    const result = await updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
     setSavingSubcals(null);
     if (!result) return toast.error('Failed to update');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));

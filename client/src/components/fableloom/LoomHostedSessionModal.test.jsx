@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
-import * as api from '../../services/api';
+import { preflightHostedLoomSession } from '../../services/apiFableLoom.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   preflightHostedLoomSession: vi.fn(),
   createHostedLoomSession: vi.fn(),
   endHostedLoomSession: vi.fn(),
@@ -16,7 +16,7 @@ describe('LoomHostedSessionModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.preflightHostedLoomSession.mockResolvedValue({
+    preflightHostedLoomSession.mockResolvedValue({
       ready: true,
       checks: {
         https: { ok: true },

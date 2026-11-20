@@ -9,7 +9,12 @@ const api = vi.hoisted(() => ({
   syncGitHubNotifications: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiGithub.js', () => ({
+  clearFinishedGitHubNotifications: api.clearFinishedGitHubNotifications,
+  getGitHubAccounts: api.getGitHubAccounts,
+  getGitHubNotifications: api.getGitHubNotifications,
+  syncGitHubNotifications: api.syncGitHubNotifications,
+}));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('./GitHubThreadDrawer', () => ({ default: () => null }));
 

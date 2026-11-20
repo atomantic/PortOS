@@ -17,7 +17,13 @@ const api = vi.hoisted(() => ({
   createSlashdoTask: vi.fn()
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../services/apiApps.js', () => ({
+  getAppWorkItems: api.getAppWorkItems,
+  getAppClaimReviewers: api.getAppClaimReviewers,
+}));
+vi.mock('../../services/apiAgents.js', () => ({ createSlashdoTask: api.createSlashdoTask }));
 
 // The drawer's `highlightToolUse` picker fetches the backends' authoritative
 // tool-use capabilities from apiLocalLlm directly (not through services/api),
@@ -26,6 +32,7 @@ vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => ({
   getToolUseModels: vi.fn(() => new Promise(() => {})),
   getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
+  getLocalLlmStatus: api.getLocalLlmStatus,
 }));
 
 // Routed: the override note links to the panel that owns the pin, so the drawer

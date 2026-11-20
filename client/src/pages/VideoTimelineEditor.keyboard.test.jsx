@@ -26,17 +26,17 @@ vi.mock('../hooks/useSseProgress', () => ({
 
 const api = vi.hoisted(() => ({ project: null, saved: [] }));
 
-vi.mock('../services/api', () => ({
-  getTimelineProject: async () => api.project,
-  listVideoHistory: async () => [],
-  getGalleryImages: async () => [{ filename: 'first.png' }, { filename: 'second.png' }],
+vi.mock('../services/apiTracks.js', () => ({
   listMusicLibrary: async () => ({ tracks: [] }),
-  updateTimelineProject: async (_id, patch) => { api.saved.push(patch); return { updatedAt: 'u2' }; },
-  renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
 
 vi.mock('../services/apiImageVideo', () => ({
   listImageGalleryPage: async () => ({ items: [], total: 0, offset: 0, limit: 24 }),
+  getTimelineProject: async () => api.project,
+  listVideoHistory: async () => [],
+  getGalleryImages: async () => [{ filename: 'first.png' }, { filename: 'second.png' }],
+  updateTimelineProject: async (_id, patch) => { api.saved.push(patch); return { updatedAt: 'u2' }; },
+  renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;

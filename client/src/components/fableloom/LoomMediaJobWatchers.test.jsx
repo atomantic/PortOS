@@ -6,7 +6,7 @@ const hookState = vi.hoisted(() => ({
 }));
 vi.mock('../../hooks/useMediaJobProgress', () => ({ default: () => hookState.value }));
 const apiMocks = vi.hoisted(() => ({ getLoomFalVideo: vi.fn() }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   getLoomFalVideo: (...args) => apiMocks.getLoomFalVideo(...args),
 }));
 

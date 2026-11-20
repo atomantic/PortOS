@@ -2,12 +2,8 @@
 // test-memo: never (tree-wide scanner)
 
 // Every module statically reachable from `main.jsx` ships in the cold-load
-// preload set. `services/api.js` re-exports every API wrapper (music video,
-// pipeline, the Runway catalog snapshot, ...), so one barrel import anywhere in
-// the app shell puts the whole API surface on every first paint (#16562).
-// Shell code imports the specific `apiX.js` module instead; pages are lazy and
-// may keep using the barrel. The large page modules are listed too: the sidebar
-// reads their name lists through `services/apiNavNames.js`.
+// preload set. Large page API modules stay out of this set (#16562). The
+// sidebar reads their name lists through `services/apiNavNames.js`.
 //
 // The voice stack is held out the same way (#16563): voice is off by default,
 // so `components/voice/VoiceWidgetGate.jsx` is the only voice code the shell
@@ -22,7 +18,7 @@ import { stripComments } from './test/stripComments.js';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 const ENTRY = resolve(SRC, 'main.jsx');
-const PAGE_ONLY_MODULES = ['services/api.js', 'services/apiMusicVideo.js', 'services/apiPipeline.js'];
+const PAGE_ONLY_MODULES = ['services/apiMusicVideo.js', 'services/apiPipeline.js'];
 const VOICE_STACK_MODULES = [
   'components/voice/VoiceWidget.jsx',
   'services/voiceClient.js',
@@ -45,9 +41,8 @@ const LAZY_SHELL_MODULES = [
   '../../server/lib/greyboxVocabulary.js',
   '../../server/lib/bibleLimits.js',
 ];
-// The landing Dashboard page and its widgets are in the same first-paint path as the
-// shell, so they follow the same barrel rule (#16813). Each is a separate root: the
-// walk from every one must stay clear of the api barrel.
+// The landing Dashboard page and its widgets contribute to first paint too
+// (#16813), so each is a separate root for the page-only API checks.
 const DASHBOARD_ROOTS = [
   'pages/Dashboard.jsx',
   ...readdirSync(resolve(SRC, 'components/dashboard'), { recursive: true })
@@ -113,12 +108,14 @@ describe('cold-load entry closure (#16562)', () => {
     ).toBeNull();
   });
 
-  it.each(DASHBOARD_ROOTS)('%s never statically reaches the api barrel (#16813)', (root) => {
-    const chain = findStaticPath(resolve(SRC, root), resolve(SRC, 'services/api.js'));
-    expect(
-      chain && chain.map((file) => file.slice(SRC.length + 1)).join(' -> '),
-      'import the specific services/apiX.js module the component uses, not the barrel',
-    ).toBeFalsy();
+  it.each(DASHBOARD_ROOTS)('%s never statically reaches page-only api modules (#16813)', (root) => {
+    for (const mod of PAGE_ONLY_MODULES) {
+      const chain = findStaticPath(resolve(SRC, root), resolve(SRC, mod));
+      expect(
+        chain && chain.map((file) => file.slice(SRC.length + 1)).join(' -> '),
+        `import a narrower services/apiX.js module instead of ${mod}`,
+      ).toBeFalsy();
+    }
   });
 
   it.each(LAZY_SHELL_MODULES)('main.jsx never statically reaches lazy shell or domain module %s (#17007)', (module) => {

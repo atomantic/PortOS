@@ -6,7 +6,13 @@ import FormField from '../ui/FormField';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import ProviderModelSelector from '../ProviderModelSelector';
-import * as api from '../../services/api';
+import {
+  getOrchestrationProfiles,
+  saveOrchestrationProfile,
+  updateOrchestrationProfile,
+  deleteOrchestrationProfile,
+} from '../../services/apiAgents.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { effortAwareModelOptions, effortSurvivingModel } from '../../utils/providers';
 
 const ROLES = [
@@ -46,8 +52,8 @@ export default function OrchestrationTab() {
     const generation = ++loadGeneration.current;
     setLoading(true);
     const [profileResult, providerResult] = await Promise.allSettled([
-      api.getOrchestrationProfiles({ silent: true }),
-      api.getProviders({ silent: true, fresh: true }),
+      getOrchestrationProfiles({ silent: true }),
+      getProviders({ silent: true, fresh: true }),
     ]);
     if (generation !== loadGeneration.current) return;
     setProfileError(profileResult.status === 'rejected');
@@ -126,8 +132,8 @@ export default function OrchestrationTab() {
       };
 
       const saved = isNew
-        ? await api.saveOrchestrationProfile(payload)
-        : await api.updateOrchestrationProfile(id, payload);
+        ? await saveOrchestrationProfile(payload)
+        : await updateOrchestrationProfile(id, payload);
       toast.success(`Profile "${payload.name}" ${isNew ? 'created' : 'updated'}`);
 
       // Apply the server's saved record in place: a full reload flips `loading`
@@ -147,7 +153,7 @@ export default function OrchestrationTab() {
   const handleDelete = async (id, name) => {
     setDeletingId(id);
     try {
-      await api.deleteOrchestrationProfile(id);
+      await deleteOrchestrationProfile(id);
       toast.success(`Profile "${name}" deleted`);
       setProfiles((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {

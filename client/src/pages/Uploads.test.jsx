@@ -8,7 +8,13 @@ const api = vi.hoisted(() => ({
   deleteAllUploads: vi.fn(),
   getUploadUrl: vi.fn(name => `/uploads/${name}`),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiMedia.js', () => ({
+  listUploads: api.listUploads,
+  uploadFile: api.uploadFile,
+  deleteUpload: api.deleteUpload,
+  deleteAllUploads: api.deleteAllUploads,
+  getUploadUrl: api.getUploadUrl,
+}));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import Uploads from './Uploads';

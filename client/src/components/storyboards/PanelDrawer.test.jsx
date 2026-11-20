@@ -5,7 +5,7 @@ import PanelDrawer from './PanelDrawer';
 
 const listCatalogIngredientsByIds = vi.fn();
 const listCatalogIngredientMedia = vi.fn();
-vi.mock('../../services/api', async (importOriginal) => {
+vi.mock('../../services/apiCatalog.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,

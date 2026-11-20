@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
 import PageHeader from '../components/PageHeader';
 import { RefreshCw, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
-import * as api from '../services/api';
+import { getAgents, killAgent } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
@@ -16,7 +16,7 @@ export function AgentsPage() {
   const [expandedPid, setExpandedPid] = useState(null);
   const mounted = useMounted();
 
-  const loadAgents = useCallback(() => api.getAgents({ silent: true }), []);
+  const loadAgents = useCallback(() => getAgents({ silent: true }), []);
   const { data, loading, error, refetch, updateData } = useSocketResource(loadAgents, {
     namespace: 'agent-processes', events: AGENT_EVENTS,
   });
@@ -33,7 +33,7 @@ export function AgentsPage() {
 
   const handleKill = async (pid) => {
     setKilling(prev => ({ ...prev, [pid]: true }));
-    const result = await api.killAgent(pid).catch(() => null);
+    const result = await killAgent(pid).catch(() => null);
     if (!mounted.current) return;
     if (result?.success) updateData(previous => (previous ?? []).filter(agent => agent.pid !== pid));
     setKilling(prev => ({ ...prev, [pid]: false }));

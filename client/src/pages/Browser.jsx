@@ -9,11 +9,18 @@ import {
   Mail, MessageSquare, Download, FolderOpen, Trash2
 } from 'lucide-react';
 import {
-  getBrowserStatus, getBrowserConfig, updateBrowserConfig, getBrowserUpdatePreflight,
-  launchBrowser, stopBrowser, restartBrowser,
-  getBrowserLogs, navigateBrowser,
-  browserDownloadUrl, deleteBrowserDownload
-} from '../services/api';
+  getBrowserStatus,
+  getBrowserConfig,
+  updateBrowserConfig,
+  getBrowserUpdatePreflight,
+  launchBrowser,
+  stopBrowser,
+  restartBrowser,
+  getBrowserLogs,
+  navigateBrowser,
+  browserDownloadUrl,
+  deleteBrowserDownload,
+} from '../services/apiSystem.js';
 import FolderPicker from '../components/FolderPicker';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';

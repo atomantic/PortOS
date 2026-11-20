@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { MessageCircle, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTribePerson, unlinkBeeperIdentity } from '../../services/apiTribe.js';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
@@ -62,13 +62,13 @@ function BeeperIdentityChip({ identity, onUnlink }) {
 // Beeper claims (no empty heading).
 export default function BeeperIdentitiesPanel({ personId }) {
   const fetchIdentities = useCallback(
-    () => api.getTribePerson(personId, { silent: true }).then((person) => person?.identities || []),
+    () => getTribePerson(personId, { silent: true }).then((person) => person?.identities || []),
     [personId],
   );
   const { items: identities, state, error, retry, setItems: setIdentities } = useListResource(fetchIdentities, { enabled: !!personId });
 
   const unlink = async (identityId) => {
-    const result = await api.unlinkBeeperIdentity(identityId, { silent: true }).catch((err) => {
+    const result = await unlinkBeeperIdentity(identityId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to unlink Beeper identity');
       return null;
     });

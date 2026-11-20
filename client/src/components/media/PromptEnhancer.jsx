@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Sparkles, Wand2, ChevronDown, ChevronUp } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
-import { refineMediaPrompt } from '../../services/api';
+import { refineMediaPrompt } from '../../services/apiMediaJobs.js';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import SentPromptPanel from './SentPromptPanel';

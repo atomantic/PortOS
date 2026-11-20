@@ -2,7 +2,22 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
-import * as api from '../../../services/api';
+import {
+  moltworldGetQueue,
+  getPlatformAccounts,
+  moltworldStatus,
+  moltworldRateLimits,
+  moltworldWsMove,
+  moltworldExplore,
+  moltworldWsThink,
+  moltworldThink,
+  moltworldBuild,
+  moltworldWsInteract,
+  moltworldSay,
+  moltworldAddToQueue,
+  moltworldRemoveFromQueue,
+} from '../../../services/apiAccounts.js';
+import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
 import { useSocketResource } from '../../../hooks/useSocketResource';
@@ -141,7 +156,7 @@ export default function WorldTab({ agentId }) {
 
   // Action Queue state
   const { data: queueData, loading: queueLoading, error: queueError, refetch: refetchQueue } = useSocketResource(
-    () => api.moltworldGetQueue(agentId),
+    () => moltworldGetQueue(agentId),
     { events: QUEUE_EVENTS, resourceKey: agentId, enabled: Boolean(accountId) }
   );
   const queue = queueData ?? [];
@@ -163,7 +178,7 @@ export default function WorldTab({ agentId }) {
   // Auto-resolve the moltworld account for this agent
   useEffect(() => {
     let live = true;
-    api.getPlatformAccounts(agentId, 'moltworld').then(data => {
+    getPlatformAccounts(agentId, 'moltworld').then(data => {
       if (!live) return;
       const active = data.filter(a => a.status === 'active');
       if (active.length > 0) {
@@ -178,14 +193,14 @@ export default function WorldTab({ agentId }) {
   const fetchStatus = useCallback(async () => {
     if (!accountId) return;
     setStatusLoading(true);
-    const data = await api.moltworldStatus(accountId).catch(() => null);
+    const data = await moltworldStatus(accountId).catch(() => null);
     if (data) setStatus(data);
     setStatusLoading(false);
   }, [accountId]);
 
   const fetchRateLimits = useCallback(async () => {
     if (!accountId) return;
-    const data = await api.moltworldRateLimits(accountId).catch(() => null);
+    const data = await moltworldRateLimits(accountId).catch(() => null);
     if (data) setRateLimits(data);
   }, [accountId]);
 
@@ -197,8 +212,8 @@ export default function WorldTab({ agentId }) {
     const mwActions = historyFilter || MW_HISTORY_ACTIONS;
     // A first page owns its failure UI (ListLoadError below); Load More keeps the helper's toast.
     const data = await (append
-      ? api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions)
-      : api.getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions, { silent: true })
+      ? getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions)
+      : getAgentActivityTimeline(HISTORY_PAGE_SIZE, [agentId], before, mwActions, { silent: true })
     ).catch(() => null);
     if (generation !== historyGenerationRef.current) return;
     if (data) {
@@ -273,14 +288,14 @@ export default function WorldTab({ agentId }) {
     const y = random ? undefined : (moveY !== '' ? parseInt(moveY, 10) : undefined);
 
     if (wsConnected && !random && x != null && y != null) {
-      await api.moltworldWsMove({ x, y, thought: moveThinking || undefined }).catch(() => null);
+      await moltworldWsMove({ x, y, thought: moveThinking || undefined }).catch(() => null);
       setMoving(false);
       toast.success(`Move sent via WS to (${x}, ${y})`);
       refreshAfterAction();
       return;
     }
 
-    const result = await api.moltworldExplore({
+    const result = await moltworldExplore({
       accountId, agentId, x, y, thinking: moveThinking || undefined
     }).catch(() => null);
     setMoving(false);
@@ -296,7 +311,7 @@ export default function WorldTab({ agentId }) {
     setThinking(true);
 
     if (wsConnected) {
-      await api.moltworldWsThink(thought).catch(() => null);
+      await moltworldWsThink(thought).catch(() => null);
       setThinking(false);
       toast.success('Thought sent via WS');
       setThought('');
@@ -304,7 +319,7 @@ export default function WorldTab({ agentId }) {
       return;
     }
 
-    const result = await api.moltworldThink({ accountId, agentId, thought }).catch(() => null);
+    const result = await moltworldThink({ accountId, agentId, thought }).catch(() => null);
     setThinking(false);
     if (!result) { fetchRateLimits(); return; }
     toast.success('Thought sent');
@@ -315,7 +330,7 @@ export default function WorldTab({ agentId }) {
   const handleBuild = async () => {
     if (!accountId || buildX === '' || buildY === '') return;
     setBuilding(true);
-    const result = await api.moltworldBuild({
+    const result = await moltworldBuild({
       accountId, agentId,
       x: parseInt(buildX, 10), y: parseInt(buildY, 10), z: parseInt(buildZ || '0', 10),
       type: blockType, action: buildAction
@@ -331,7 +346,7 @@ export default function WorldTab({ agentId }) {
     setSaying(true);
 
     if (wsConnected && sayTo) {
-      await api.moltworldWsInteract(sayTo, { message: sayMessage }).catch(() => null);
+      await moltworldWsInteract(sayTo, { message: sayMessage }).catch(() => null);
       setSaying(false);
       toast.success('DM sent via WS');
       setSayMessage('');
@@ -340,7 +355,7 @@ export default function WorldTab({ agentId }) {
       return;
     }
 
-    const result = await api.moltworldSay({
+    const result = await moltworldSay({
       accountId, agentId, message: sayMessage, sayTo: sayTo || undefined
     }).catch(() => null);
     setSaying(false);
@@ -365,14 +380,14 @@ export default function WorldTab({ agentId }) {
     if (params.y != null) params.y = parseInt(params.y, 10);
     if (params.z != null) params.z = parseInt(params.z, 10);
 
-    await api.moltworldAddToQueue({ agentId, actionType: newActionType, params }).catch(() => null);
+    await moltworldAddToQueue({ agentId, actionType: newActionType, params }).catch(() => null);
     setShowAddForm(false);
     setNewActionParams({});
     toast.success('Action queued');
   };
 
   const handleRemoveFromQueue = async (id) => {
-    await api.moltworldRemoveFromQueue(id).catch(() => null);
+    await moltworldRemoveFromQueue(id).catch(() => null);
   };
 
   const getCooldownMs = (action) => {

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({ getMemoryRuns: vi.fn() }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiMemory.js', () => ({ getMemoryRuns: api.getMemoryRuns }));
 
 import MemoryRunsUsedBy from './MemoryRunsUsedBy';
 

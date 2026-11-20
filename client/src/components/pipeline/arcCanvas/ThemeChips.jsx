@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Plus, Loader2, X } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { updatePipelineSeries } from '../../../services/api';
+import { updatePipelineSeries } from '../../../services/apiPipeline.js';
 import { ARC_LIMITS } from '../../../../../server/lib/storyArcLimits.js';
 
 const THEME_COLORS = [

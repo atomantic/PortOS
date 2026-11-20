@@ -7,7 +7,11 @@ const api = vi.hoisted(() => ({
   getMortalLoomStatus: vi.fn(),
   importMortalLoom: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
+vi.mock('../../services/apiMortalLoom.js', () => ({
+  getMortalLoomStatus: api.getMortalLoomStatus,
+  importMortalLoom: api.importMortalLoom,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import MortalLoomTab from './MortalLoomTab.jsx';

@@ -20,7 +20,13 @@ import useRunWithPicker from '../../../hooks/useRunWithPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../../hooks/useCodeReviewDefaults';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../lib/reviewerModels';
-import * as api from '../../../services/api';
+import {
+  resolveAppPullRequest,
+  reviewAppPullRequest,
+  doReviewAppPullRequest,
+  getAppPullRequests,
+  mergeAppPullRequest,
+} from '../../../services/apiApps.js';
 import { timeAgo } from '../../../utils/formatters';
 import RunActionButton from './RunActionButton';
 import { DEFAULT_MERGE_METHOD, MergeAction, PullRequestReviewButton, ACTION_STATUS_LABEL, actionStatusForTask } from './PullRequestActionControls';
@@ -49,11 +55,8 @@ const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blo
 // live on its own stages and whose review roster is that pipeline's, not this
 // panel's — so it takes only the provider pin, and only when the user opts in.
 //
-// `call` stays a lambda around each api function rather than a reference to it:
-// a reference is READ at module evaluation, and several suites that reach this
-// module transitively mock `services/api` with only the exports they use — so a
-// bare `call: api.resolveAppPullRequest` fails their import with "no export is
-// defined on the mock" before a single test runs.
+// Defer reading each action until it is invoked so suites can mock the app API
+// methods they exercise without resolving every action at module evaluation.
 const wholePanelBody = ({ providerSettings, reviewSettings }) => ({ ...providerSettings, ...reviewSettings });
 
 const ACTION_KINDS = {
@@ -66,7 +69,7 @@ const ACTION_KINDS = {
     // named after its field.
     queued: result => result.task && { taskId: result.task.id, status: result.task.status },
     body: wholePanelBody,
-    call: (appId, number, body) => api.resolveAppPullRequest(appId, number, body),
+    call: (appId, number, body) => resolveAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Start a CoS agent now to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
@@ -82,7 +85,7 @@ const ACTION_KINDS = {
     // explicitly opts the page-level pin in.
     body: ({ providerSettings, applyRunWithToPrReview }) =>
       (applyRunWithToPrReview ? providerSettings : {}),
-    call: (appId, number, body) => api.reviewAppPullRequest(appId, number, body),
+    call: (appId, number, body) => reviewAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Run the pr-reviewer scheduled task against ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
@@ -96,7 +99,7 @@ const ACTION_KINDS = {
     field: 'doReviewAction',
     eligibleField: 'doReviewEligible',
     body: wholePanelBody,
-    call: (appId, number, body) => api.doReviewAppPullRequest(appId, number, body),
+    call: (appId, number, body) => doReviewAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Run the /do:review workflow against ${forgeLabel} request #${number} for ${appName} and post an inline review`,
     // Shares `targetPullRequest` with the pr-reviewer match above — one
@@ -374,7 +377,7 @@ export default function PullRequestsTab({ appId, appName }) {
 
     setLoading(true);
     setError('');
-    const result = await api.getAppPullRequests(appId).catch(err => {
+    const result = await getAppPullRequests(appId).catch(err => {
       if (isCurrent()) setError(err?.message || 'Failed to load pull requests');
       return null;
     });
@@ -495,7 +498,7 @@ export default function PullRequestsTab({ appId, appName }) {
   const confirmMerge = async pullRequest => {
     const { number } = pullRequest;
     setMerging(true);
-    const result = await api.mergeAppPullRequest(appId, number, {
+    const result = await mergeAppPullRequest(appId, number, {
       method: mergeMethod,
       deleteBranch: deleteBranchOnMerge,
     }).catch(err => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bot, Check, Clock, GitBranch, Loader, Tag } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getAutoUpdateStatus, patchSettingsSlice } from '../../../services/apiSystem.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatDateTime, timeAgo } from '../../../utils/formatters';
 
@@ -37,7 +37,7 @@ const CHANNELS = [
  */
 export default function AutoUpdatePanel() {
   const { data: status, refetch, updateData } = useSocketResource(
-    () => api.getAutoUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
+    () => getAutoUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
   );
   const config = status?.config;
   const runtime = status?.runtime;
@@ -73,7 +73,7 @@ export default function AutoUpdatePanel() {
     next.minIntervalHours = Math.min(bounds.max, Math.max(bounds.min, Number(next.minIntervalHours) || bounds.min));
     setDraft(next);
     setSaving(true);
-    const saved = await api.patchSettingsSlice('autoUpdate', next, { silent: true }).catch((err) => {
+    const saved = await patchSettingsSlice('autoUpdate', next, { silent: true }).catch((err) => {
       toast.error(`Could not save automatic updates: ${err.message}`);
       return null;
     });

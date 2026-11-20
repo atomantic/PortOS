@@ -20,7 +20,7 @@ import {
   pipelineSeriesFixSseUrl,
   getPipelineSeries,
   listPipelineIssues,
-} from '../../services/api';
+} from '../../services/apiPipeline.js';
 import { severityColor } from './constants.js';
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error']);

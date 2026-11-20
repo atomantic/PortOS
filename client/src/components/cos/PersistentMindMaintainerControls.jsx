@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import * as api from '../../services/api';
+import { getPersistentMindMaintainer, updateCosConfig } from '../../services/apiAgents.js';
 
 export default function PersistentMindMaintainerControls() {
   const id = useId();
@@ -10,7 +10,7 @@ export default function PersistentMindMaintainerControls() {
   const [saved, setSaved] = useState(false);
   useEffect(() => {
     let active = true;
-    api.getPersistentMindMaintainer({ silent: true }).then(next => {
+    getPersistentMindMaintainer({ silent: true }).then(next => {
       if (active) { setData(next); setDraft(next.role); }
     }).catch(err => { if (active) setError(err?.message || 'Could not load maintainer settings'); });
     return () => { active = false; };
@@ -21,12 +21,12 @@ export default function PersistentMindMaintainerControls() {
     event.preventDefault();
     if (saving || !dirty) return;
     setSaving(true); setError(null); setSaved(false);
-    await api.updateCosConfig({ persistentMindMaintainer: draft }, { silent: true }).then(async config => {
+    await updateCosConfig({ persistentMindMaintainer: draft }, { silent: true }).then(async config => {
       const role = config.persistentMindMaintainer;
       setDraft(role);
       setData(current => ({ ...current, role }));
       setSaved(true);
-      await api.getPersistentMindMaintainer({ silent: true }).then(next => setData(next));
+      await getPersistentMindMaintainer({ silent: true }).then(next => setData(next));
     }).catch(err => setError(err?.message || 'Could not save maintainer settings')).finally(() => setSaving(false));
   };
   const apps = [...(data?.availableApps || [])];

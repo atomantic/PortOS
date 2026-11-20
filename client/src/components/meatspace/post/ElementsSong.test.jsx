@@ -14,7 +14,7 @@ const attestMemoryMastery = vi.fn(() => Promise.resolve({
   mastery: { overallPct: 100, chunks: {}, elements: {}, retention: { status: 'attested', spotCheckAt: '2026-09-01T00:00:00.000Z' } },
 }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   submitMemoryPractice: (...args) => submitMemoryPractice(...args),
   getMemoryMastery: () => Promise.resolve(null),
   getMemoryItem: () => Promise.resolve(null),

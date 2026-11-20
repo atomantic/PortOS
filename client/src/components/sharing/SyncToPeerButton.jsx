@@ -30,12 +30,8 @@ import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
-import {
-  getInstances,
-  listPeerSubscriptions,
-  subscribeToPeer,
-  unsubscribeFromPeer,
-} from '../../services/api';
+import { getInstances } from '../../services/apiSystem.js';
+import { listPeerSubscriptions, subscribeToPeer, unsubscribeFromPeer } from '../../services/apiPeerSync.js';
 
 const MENU_WIDTH = 288; // w-72
 

@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiCore.js', () => ({
   default: {
     get: vi.fn(async () => ({ video: [{ id: 'cam-1', name: 'Camera 1' }], audio: [{ id: 'mic-1', name: 'Mic 1' }] })),
     post: vi.fn(async () => ({})),
@@ -213,7 +213,7 @@ describe('Security monitor toggle posts the new flag value', () => {
   });
 
   it('posts /media/start with the NEW audio flag when toggling while streaming', async () => {
-    const api = (await import('../services/api')).default;
+    const api = (await import('../services/apiCore.js')).default;
     render(<Security />);
     await act(async () => {});
 
@@ -231,7 +231,7 @@ describe('Security monitor toggle posts the new flag value', () => {
   });
 
   it('shows unwrapped devices on mount and refresh', async () => {
-    const api = (await import('../services/api')).default;
+    const api = (await import('../services/apiCore.js')).default;
     render(<Security />);
     await act(async () => {});
     const devicesButton = screen.getByRole('button', { name: 'Devices' });
@@ -245,7 +245,7 @@ describe('Security monitor toggle posts the new flag value', () => {
   });
 
   it('allows another start after a failed start request', async () => {
-    const api = (await import('../services/api')).default;
+    const api = (await import('../services/apiCore.js')).default;
     api.post.mockRejectedValueOnce(new Error('Example start refusal'));
     render(<Security />);
     await act(async () => {});
@@ -258,7 +258,7 @@ describe('Security monitor toggle posts the new flag value', () => {
   });
 
   it('cleans up local playback when the server stop fails and preserves the microphone preference', async () => {
-    const api = (await import('../services/api')).default;
+    const api = (await import('../services/apiCore.js')).default;
     const { container } = await startMonitor();
     api.post.mockRejectedValueOnce(new Error('Example stop failure'));
     fireEvent.click(screen.getByRole('button', { name: /Stop Media/i }));

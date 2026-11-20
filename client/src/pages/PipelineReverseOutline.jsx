@@ -20,7 +20,7 @@ import {
   cancelReverseOutline,
   getReverseOutlineStatus,
   pipelineReverseOutlineSseUrl,
-} from '../services/api';
+} from '../services/apiPipeline.js';
 import { useSeriesRunLifecycle } from '../hooks/useSeriesRunLifecycle';
 import RunRecoveryBanner from '../components/pipeline/RunRecoveryBanner';
 import useUrlParams from '../hooks/useUrlParams';

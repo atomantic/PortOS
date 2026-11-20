@@ -16,14 +16,16 @@ const listPipelineIssues = vi.fn();
 const listUniverses = vi.fn();
 const discoverSeriesVoice = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...args) => getPipelineSeries(...args),
   updatePipelineSeries: vi.fn(),
   listPipelineIssues: (...args) => listPipelineIssues(...args),
-  listUniverses: (...args) => listUniverses(...args),
   generateSeriesTitleLogo: vi.fn(),
   discoverSeriesVoice: (...args) => discoverSeriesVoice(...args),
   SERIES_TITLE_LOGO_MAX: 1_000,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  listUniverses: (...args) => listUniverses(...args),
 }));
 
 vi.mock('../hooks/useArcCanvasSync', () => ({

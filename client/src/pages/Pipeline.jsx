@@ -22,19 +22,21 @@ import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
+import { listLooms } from '../services/apiFableLoom.js';
 import {
-  listLooms,
   listPipelineSeriesSummaries,
   createPipelineSeries,
   deletePipelineSeries,
   generateSeriesTitleLogo,
   generateSeriesConcepts,
+} from '../services/apiPipeline.js';
+import {
   listUniverseNames,
   getUniverse,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
-} from '../services/api';
+} from '../services/apiUniverseBuilder.js';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
 import MoodBoardReferenceStrip from '../components/moodBoard/MoodBoardReferenceStrip';

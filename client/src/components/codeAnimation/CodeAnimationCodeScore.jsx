@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import CodePanel from '../music/CodePanel';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
-import { ensureCodeAnimationSoundtrackTrack } from '../../services/api';
+import { ensureCodeAnimationSoundtrackTrack } from '../../services/apiCodeAnimation.js';
 import { formatCount } from '../../utils/formatters';
 
 // Mirrors MAX_SCENE in server/services/musicCode.js.

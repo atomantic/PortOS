@@ -4,7 +4,6 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import ConfigTab from './ConfigTab';
 
-vi.mock('../../services/api', async () => import('../../services/apiCalendar.js'));
 vi.mock('../FeatureProviderPicker', () => ({ default: () => null }));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));

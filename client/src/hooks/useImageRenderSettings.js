@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { getSettings } from '../services/api';
+import { getSettings } from '../services/apiSystem.js';
 import { resolveRenderCfg } from '../lib/pipelineImageDefaults';
 import { deriveAvailableBackends } from '../lib/imageGenBackends';
 

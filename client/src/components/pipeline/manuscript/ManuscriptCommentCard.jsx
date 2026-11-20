@@ -20,9 +20,11 @@ import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
 import Kbd from '../../ui/Kbd';
 import {
-  patchPipelineManuscriptComment, generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
+  patchPipelineManuscriptComment,
+  generatePipelineManuscriptFix,
+  acceptPipelineManuscriptFix,
   undoPipelineManuscriptFix,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import { SEVERITY_TONE, CATEGORY_LABEL, subtypeLabel } from './constants';
 
 // Truncated comment id + copy button — so a note that looks wrong can be quoted

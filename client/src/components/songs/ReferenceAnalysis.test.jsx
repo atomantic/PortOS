@@ -11,7 +11,7 @@ vi.mock('./ScoreSheet.jsx', () => ({
   default: ({ text }) => <pre data-testid="scoresheet">{text}</pre>,
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMedia.js', () => ({
   uploadFile: vi.fn(() => Promise.resolve({ filename: 'up.wav' })),
   getUploadUrl: (f) => `/api/uploads/${f}`,
 }));

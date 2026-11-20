@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ updateNote: vi.fn() }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiNotes.js', () => ({ updateNote: api.updateNote }));
 
 const { useNoteSave } = await import('./useNoteSave.js');
 

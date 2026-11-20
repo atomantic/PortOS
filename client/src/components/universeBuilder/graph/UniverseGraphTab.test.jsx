@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMocks = vi.hoisted(() => ({ getUniverseGraph: vi.fn() }));
-vi.mock('../../../services/api', () => apiMocks);
+vi.mock('../../../services/apiUniverseBuilder.js', () => ({ getUniverseGraph: apiMocks.getUniverseGraph }));
 
 const { default: UniverseGraphTab } = await import('./UniverseGraphTab');
 

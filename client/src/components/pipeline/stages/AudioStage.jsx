@@ -36,7 +36,7 @@ import {
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
 // The whole-episode audio strategy (#863). 'per-clip' keeps each stitched
 // clip's own soundtrack (today's default); 'silent' strips it; 'generated'

@@ -22,7 +22,7 @@ import {
   cancelContinuityBible,
   getContinuityBibleStatus,
   pipelineContinuityBibleSseUrl,
-} from '../services/api';
+} from '../services/apiPipeline.js';
 import { useSeriesRunLifecycle } from '../hooks/useSeriesRunLifecycle';
 import RunRecoveryBanner from '../components/pipeline/RunRecoveryBanner';
 

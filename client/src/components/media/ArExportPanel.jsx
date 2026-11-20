@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { AlertTriangle, Box, Loader2, QrCode, Smartphone } from 'lucide-react';
-import { imageTo3dUsdzUrl, uploadImageTo3dUsdz } from '../../services/api';
+import { imageTo3dUsdzUrl, uploadImageTo3dUsdz } from '../../services/apiImageTo3d.js';
 import {
   AR_TRIANGLE_BUDGET,
   countSceneTriangles,

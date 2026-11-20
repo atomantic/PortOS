@@ -4,15 +4,13 @@ import EpisodeComposer from './EpisodeComposer';
 import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import { awaitEnabled } from '../../test/enabledBarrier.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiContinuousVideo.js', () => ({
   lintContinuousVideoEpisode: vi.fn(),
   generateContinuousVideoEpisode: vi.fn(),
   continuousVideoEpisodeEventsUrl: (jobId) => `/api/continuous-video/${jobId}/events`,
 }));
 
-import {
-  lintContinuousVideoEpisode, generateContinuousVideoEpisode,
-} from '../../services/api';
+import { lintContinuousVideoEpisode, generateContinuousVideoEpisode } from '../../services/apiContinuousVideo.js';
 
 const FAILING_PREVIEW = {
   clips: [{

@@ -1,8 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight, Sparkles } from 'lucide-react';
 import {
-  generatePostDrill, getPostDrillCacheStatus, fillPostDrillCache, updatePostConfig, submitTrainingEntry,
-} from '../../../services/api';
+  generatePostDrill,
+  getPostDrillCacheStatus,
+  fillPostDrillCache,
+  updatePostConfig,
+  submitTrainingEntry,
+} from '../../../services/apiMeatspace.js';
 import { enabledApiProviderFilter } from '../../../utils/providers';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';

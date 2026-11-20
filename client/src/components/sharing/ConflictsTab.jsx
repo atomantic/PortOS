@@ -9,7 +9,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Loader2, GitMerge, RotateCcw, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import InlineDiff from '../ui/InlineDiff';
-import { listConflicts, getConflict, resolveConflict, deleteConflict } from '../../services/api';
+import { listConflicts, getConflict, resolveConflict, deleteConflict } from '../../services/apiSyncReview.js';
 import LoadFailedState from '../ui/LoadFailedState';
 import { formatDateTime } from '../../utils/formatters';
 

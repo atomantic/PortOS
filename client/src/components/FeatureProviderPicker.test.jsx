@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({
   updateSettings: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
 vi.mock('./ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 describe('FeatureProviderPicker', () => {

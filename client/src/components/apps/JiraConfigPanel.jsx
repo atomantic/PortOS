@@ -1,7 +1,15 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Save, Loader2 } from 'lucide-react';
-import * as api from '../../services/api';
+import {
+  getJiraInstances,
+  getJiraProjects,
+  getJiraBoards,
+  getJiraBoardSprints,
+  getJiraIssue,
+  searchJiraEpics,
+} from '../../services/apiSystem.js';
+import { updateApp } from '../../services/apiApps.js';
 import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import ListLoadError from '../ui/ListLoadError';
@@ -14,7 +22,7 @@ const EPIC_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
 
 const EMPTY = Object.freeze([]);
 
-const fetchJiraInstances = () => api.getJiraInstances({ silent: true })
+const fetchJiraInstances = () => getJiraInstances({ silent: true })
   .then(data => (data?.instances ? Object.values(data.instances) : []));
 
 /** Flatten the app record's stored `jira` object into flat form fields. */
@@ -48,7 +56,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
   // Keyed reads: a failed one renders an error row + Retry, never "no projects" /
   // "no boards" / "no active sprint". Items are ignored while the key is unset.
   const fetchProjects = useCallback(
-    () => api.getJiraProjects(form.instanceId, { silent: true }),
+    () => getJiraProjects(form.instanceId, { silent: true }),
     [form.instanceId]
   );
   const { items: projectItems, state: projectsState, error: projectsError, retry: retryProjects } =
@@ -58,7 +66,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const [projectSearch, setProjectSearch] = useState('');
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
   const fetchBoards = useCallback(
-    () => api.getJiraBoards(form.instanceId, form.projectKey, { silent: true }),
+    () => getJiraBoards(form.instanceId, form.projectKey, { silent: true }),
     [form.instanceId, form.projectKey]
   );
   const boardsEnabled = !!form.instanceId && !!form.projectKey;
@@ -67,7 +75,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
   const boards = boardsEnabled ? boardItems : EMPTY;
   const loadingBoards = boardsEnabled && boardsState === 'loading';
   const fetchSprints = useCallback(
-    () => api.getJiraBoardSprints(form.instanceId, form.boardId, { silent: true }),
+    () => getJiraBoardSprints(form.instanceId, form.boardId, { silent: true }),
     [form.instanceId, form.boardId]
   );
   const sprintsEnabled = !!form.instanceId && !!form.boardId;
@@ -96,7 +104,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
     let cancelled = false;
     setEpicValidation({ state: 'checking' });
     const t = setTimeout(() => {
-      api.getJiraIssue(form.instanceId, key, { silent: true })
+      getJiraIssue(form.instanceId, key, { silent: true })
         .then(issue => {
           if (cancelled) return;
           const isEpic = (issue.issueType || '').toLowerCase() === 'epic';
@@ -116,7 +124,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      api.searchJiraEpics(form.instanceId, form.projectKey, q, { silent: true })
+      searchJiraEpics(form.instanceId, form.projectKey, q, { silent: true })
         .then(results => { if (!cancelled) setEpicResults(results || []); })
         .catch(() => { if (!cancelled) setEpicResults([]); });
     }, 300);
@@ -175,7 +183,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
       createPR: form.createPR
     } : { enabled: false };
     // Custom error UI below, so silence the helper's toast (one layer wins).
-    const updated = await api.updateApp(app.id, { jira }, { silent: true }).catch(err => {
+    const updated = await updateApp(app.id, { jira }, { silent: true }).catch(err => {
       setError(err.message);
       return null;
     });

@@ -7,7 +7,11 @@ const api = {
   updateAppTaskTypeOverride: vi.fn(),
   bulkUpdateAppTaskTypeOverride: vi.fn(),
 };
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({ getCosWorkflow: api.getCosWorkflow }));
+vi.mock('../../../services/apiApps.js', () => ({
+  updateAppTaskTypeOverride: api.updateAppTaskTypeOverride,
+  bulkUpdateAppTaskTypeOverride: api.bulkUpdateAppTaskTypeOverride,
+}));
 
 const WorkflowTab = (await import('./WorkflowTab')).default;
 

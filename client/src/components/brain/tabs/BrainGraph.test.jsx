@@ -28,7 +28,7 @@ vi.mock('../../ThemeContext', () => ({
   useThemeContext: () => ({ theme: { mode: themeMode.current } }),
 }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiBrain.js', () => ({
   getBrainGraph: vi.fn(),
   getBrainGraphSearchIndex: vi.fn(),
   getEmbeddingsStatus: vi.fn(),
@@ -40,11 +40,28 @@ vi.mock('../../../services/api', () => ({
   getBrainMemory: vi.fn(),
   getBrainGoal: vi.fn(),
   getBrainJournalEntry: vi.fn(),
+}));
+vi.mock('../../../services/apiSongbook.js', () => ({
   getSong: vi.fn(),
+}));
+vi.mock('../../../services/apiBrainThreads.js', () => ({
   getThread: vi.fn(),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getBrainGraph,
+  getBrainGraphSearchIndex,
+  getEmbeddingsStatus,
+  getBrainPerson,
+  getBrainProject,
+  getBrainIdea,
+  getBrainAdminItem,
+  getBrainMemory,
+  getBrainGoal,
+  getBrainJournalEntry,
+  syncBrainData,
+} from '../../../services/apiBrain.js';
+import { getSong } from '../../../services/apiSongbook.js';
 import { chipColors, parseColor } from '../../../lib/chipContrast';
 import { BRAIN_TYPE_HEX } from '../constants';
 import BrainGraph, { recordBody, brainEdgeColor, brainEdgeIntensity } from './BrainGraph';
@@ -68,15 +85,15 @@ const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getBrainGraph.mockResolvedValue(GRAPH);
-  api.getBrainGraphSearchIndex.mockResolvedValue({ nodes: [] });
-  api.getEmbeddingsStatus.mockResolvedValue({ missing: 0, total: 2 });
+  getBrainGraph.mockResolvedValue(GRAPH);
+  getBrainGraphSearchIndex.mockResolvedValue({ nodes: [] });
+  getEmbeddingsStatus.mockResolvedValue({ missing: 0, total: 2 });
   // Selecting a node calls its per-type getter and chains `.then` on the
   // result — a bare vi.fn() returns undefined and throws, so give every getter
   // a resolved default and let individual tests override the one they assert.
   for (const getter of [
-    api.getBrainPerson, api.getBrainProject, api.getBrainIdea, api.getBrainAdminItem,
-    api.getBrainMemory, api.getBrainGoal, api.getBrainJournalEntry, api.getSong,
+    getBrainPerson, getBrainProject, getBrainIdea, getBrainAdminItem,
+    getBrainMemory, getBrainGoal, getBrainJournalEntry, getSong,
   ]) getter.mockResolvedValue(null);
 });
 
@@ -88,26 +105,26 @@ describe('overview loading outcomes', () => {
   it('keeps a failed read visible and retries once without reloading optional data', async () => {
     const user = userEvent.setup();
     let resolveRetry;
-    api.getBrainGraph.mockRejectedValueOnce(new Error('Unavailable'))
+    getBrainGraph.mockRejectedValueOnce(new Error('Unavailable'))
       .mockImplementationOnce(() => new Promise(resolve => { resolveRetry = resolve; }));
     await renderGraph();
 
     expect(screen.getByRole('alert')).toHaveTextContent('Could not load the Brain graph');
     expect(screen.queryByText(/No brain entities/)).not.toBeInTheDocument();
-    expect(api.getBrainGraph).toHaveBeenCalledWith({}, { silent: true });
+    expect(getBrainGraph).toHaveBeenCalledWith({}, { silent: true });
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-    expect(api.getBrainGraph).toHaveBeenCalledTimes(2);
+    expect(getBrainGraph).toHaveBeenCalledTimes(2);
     await act(async () => { resolveRetry(GRAPH); });
 
     expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(api.getBrainGraphSearchIndex).toHaveBeenCalledTimes(1);
-    expect(api.getEmbeddingsStatus).toHaveBeenCalledTimes(1);
+    expect(getBrainGraphSearchIndex).toHaveBeenCalledTimes(1);
+    expect(getEmbeddingsStatus).toHaveBeenCalledTimes(1);
   });
 
   it('shows the empty message only for a successful empty overview', async () => {
-    api.getBrainGraph.mockResolvedValue({ nodes: [], edges: [] });
+    getBrainGraph.mockResolvedValue({ nodes: [], edges: [] });
     await renderGraph();
     expect(screen.getByText(/No brain entities to graph/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -116,8 +133,8 @@ describe('overview loading outcomes', () => {
 
   it('renders the overview while optional reads are pending and preserves it when they reject', async () => {
     let rejectIndex, rejectStatus;
-    api.getBrainGraphSearchIndex.mockImplementation(() => new Promise((_, reject) => { rejectIndex = reject; }));
-    api.getEmbeddingsStatus.mockImplementation(() => new Promise((_, reject) => { rejectStatus = reject; }));
+    getBrainGraphSearchIndex.mockImplementation(() => new Promise((_, reject) => { rejectIndex = reject; }));
+    getEmbeddingsStatus.mockImplementation(() => new Promise((_, reject) => { rejectStatus = reject; }));
     await renderGraph();
     expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
     await act(async () => {
@@ -130,7 +147,7 @@ describe('overview loading outcomes', () => {
 
   it('shows a retryable search error instead of an empty index when the search read fails', async () => {
     const user = userEvent.setup();
-    api.getBrainGraphSearchIndex
+    getBrainGraphSearchIndex
       .mockRejectedValueOnce(new Error('Unavailable'))
       .mockResolvedValueOnce({ nodes: [{ id: 'n1', label: 'Alpha', brainType: 'ideas' }] });
     await renderGraph();
@@ -145,7 +162,7 @@ describe('overview loading outcomes', () => {
   });
 
   it('offers a retry instead of hiding the missing count when the embeddings status read fails', async () => {
-    api.getEmbeddingsStatus
+    getEmbeddingsStatus
       .mockRejectedValueOnce(new Error('Unavailable'))
       .mockResolvedValueOnce({ missing: 3, total: 5 });
     await renderGraph();
@@ -168,7 +185,7 @@ describe('overview loading outcomes', () => {
 
   it('drops an obsolete mount response after effect cleanup', async () => {
     let resolveObsolete;
-    api.getBrainGraph.mockImplementationOnce(() => new Promise(resolve => { resolveObsolete = resolve; }))
+    getBrainGraph.mockImplementationOnce(() => new Promise(resolve => { resolveObsolete = resolve; }))
       .mockResolvedValueOnce(GRAPH);
     render(<StrictMode><BrainGraph /></StrictMode>);
     await act(async () => {});
@@ -305,12 +322,12 @@ describe('detail panel', () => {
 
   it('keeps "Explore connections" above the unbounded record body', async () => {
     const user = userEvent.setup();
-    api.getBrainGraphSearchIndex.mockResolvedValue({
+    getBrainGraphSearchIndex.mockResolvedValue({
       nodes: [{ id: 'n1', label: 'Alpha', brainType: 'ideas' }],
     });
     // A journal/memory body is unclamped `whitespace-pre-wrap` — it can run for
     // screens, so the touch stand-in for double-click must precede it.
-    api.getBrainGoal.mockResolvedValue({ content: 'long body '.repeat(400) });
+    getBrainGoal.mockResolvedValue({ content: 'long body '.repeat(400) });
     await renderGraph();
     await selectConnectedNode(user);
 
@@ -327,7 +344,7 @@ describe('detail panel', () => {
   it.each(['day', 'night'])('grades the brain-type badge for the %s theme mode', async (mode) => {
     themeMode.current = mode;
     const user = userEvent.setup();
-    api.getBrainGraphSearchIndex.mockResolvedValue({
+    getBrainGraphSearchIndex.mockResolvedValue({
       nodes: [{ id: 'n1', label: 'Alpha', brainType: 'ideas' }],
     });
     await renderGraph();
@@ -386,8 +403,8 @@ describe('recordBody (SongBook nodes, #4105)', () => {
 describe('selection detail identity', () => {
   it('removes previous body, tags and dates while another record loads or fails', async () => {
     let rejectNext;
-    api.getBrainIdea.mockResolvedValue({ content: 'Alpha private body', tags: ['alpha-tag'], createdAt: '2026-01-02' });
-    api.getBrainGoal.mockImplementation(() => new Promise((_resolve, reject) => { rejectNext = reject; }));
+    getBrainIdea.mockResolvedValue({ content: 'Alpha private body', tags: ['alpha-tag'], createdAt: '2026-01-02' });
+    getBrainGoal.mockImplementation(() => new Promise((_resolve, reject) => { rejectNext = reject; }));
     await renderGraph();
     await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
     expect(screen.getByText('Alpha private body')).toBeInTheDocument();
@@ -403,12 +420,12 @@ describe('selection detail identity', () => {
 
   it('invalidates detail when the same id resolves to a different Brain type', async () => {
     const user = userEvent.setup();
-    api.getBrainGraph.mockResolvedValueOnce(GRAPH).mockResolvedValue({
+    getBrainGraph.mockResolvedValueOnce(GRAPH).mockResolvedValue({
       ...GRAPH, nodes: [{ ...GRAPH.nodes[0], brainType: 'goals', summary: 'Goal summary' }], edges: [],
     });
-    api.getBrainGraphSearchIndex.mockResolvedValue({ nodes: [GRAPH.nodes[0]] });
-    api.getBrainIdea.mockResolvedValue({ content: 'Original idea body' });
-    api.getBrainGoal.mockImplementation(() => new Promise(() => {}));
+    getBrainGraphSearchIndex.mockResolvedValue({ nodes: [GRAPH.nodes[0]] });
+    getBrainIdea.mockResolvedValue({ content: 'Original idea body' });
+    getBrainGoal.mockImplementation(() => new Promise(() => {}));
     await renderGraph();
     await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
     expect(screen.getByText('Original idea body')).toBeInTheDocument();
@@ -420,8 +437,8 @@ describe('selection detail identity', () => {
 
   it('discards a superseded late response after selection changes', async () => {
     let resolveIdea;
-    api.getBrainIdea.mockImplementation(() => new Promise(resolve => { resolveIdea = resolve; }));
-    api.getBrainGoal.mockResolvedValue({ content: 'Goal detail' });
+    getBrainIdea.mockImplementation(() => new Promise(resolve => { resolveIdea = resolve; }));
+    getBrainGoal.mockResolvedValue({ content: 'Goal detail' });
     await renderGraph();
     await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
     await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[1]); });
@@ -442,7 +459,7 @@ describe('neighborhood load ownership', () => {
     const a = deferred();
     const b = deferred();
     await renderGraph();
-    api.getBrainGraph.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    getBrainGraph.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
     await act(async () => { sceneElement.props.onFocus({ id: 'a', label: 'Node A' }); });
     await act(async () => { sceneElement.props.onFocus({ id: 'b', label: 'Node B' }); });
     await act(async () => { b.resolve(hood('b')); });
@@ -455,12 +472,12 @@ describe('neighborhood load ownership', () => {
   it('does not let a Sync reload overwrite a focus chosen during the sync', async () => {
     const sync = deferred();
     const reload = deferred();
-    api.getBrainGraph.mockResolvedValueOnce({ ...GRAPH, hasEmbeddings: false });
-    api.syncBrainData.mockReturnValue(sync.promise);
+    getBrainGraph.mockResolvedValueOnce({ ...GRAPH, hasEmbeddings: false });
+    syncBrainData.mockReturnValue(sync.promise);
     const user = userEvent.setup();
     await renderGraph();
     await user.click(screen.getAllByRole('button', { name: /sync now/i })[0]);
-    api.getBrainGraph.mockResolvedValueOnce(hood("b")).mockReturnValueOnce(reload.promise);
+    getBrainGraph.mockResolvedValueOnce(hood("b")).mockReturnValueOnce(reload.promise);
     await act(async () => { sceneElement.props.onFocus({ id: 'b', label: 'Node B' }); });
     await act(async () => { sync.resolve({ synced: 1, skipped: 0 }); });
     await act(async () => { reload.resolve(hood('stale')); });
@@ -469,7 +486,7 @@ describe('neighborhood load ownership', () => {
 
   it('toasts and keeps the previous graph when a neighborhood load fails', async () => {
     await renderGraph();
-    api.getBrainGraph.mockRejectedValueOnce(new Error('down'));
+    getBrainGraph.mockRejectedValueOnce(new Error('down'));
     await act(async () => { sceneElement.props.onFocus({ id: 'a', label: 'Node A' }); });
     expect(sceneElement.props.graph.simNodes.map(n => n.id)).toEqual(['n1', 'n2']);
   });

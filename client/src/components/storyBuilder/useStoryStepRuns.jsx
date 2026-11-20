@@ -10,7 +10,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { storyStepProgressSseUrl } from '../../services/api';
+import { storyStepProgressSseUrl } from '../../services/apiStoryBuilder.js';
 import { usePipelineProgress } from '../../hooks/usePipelineProgress';
 
 // Story Builder generate/refine runs, hoisted OUT of the step panel that starts

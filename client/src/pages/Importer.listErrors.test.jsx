@@ -6,7 +6,8 @@ const api = vi.hoisted(() => ({
   listUniverseSummaries: vi.fn(),
   listPipelineSeriesSummaries: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseSummaries: api.listUniverseSummaries }));
+vi.mock('../services/apiPipeline.js', () => ({ listPipelineSeriesSummaries: api.listPipelineSeriesSummaries }));
 
 const importerApi = vi.hoisted(() => ({
   analyzeImport: vi.fn(), classifyImport: vi.fn(), commitImport: vi.fn(), retryImporterIssues: vi.fn(),

@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Plus, FolderPlus, X } from 'lucide-react';
-import * as api from '../../../services/api';
+import { createBrainBucket, updateBrainBucket, deleteBrainBucket } from '../../../services/apiBrain.js';
 import toast from '../../ui/Toast';
 import BucketCard from './BucketCard';
 
@@ -20,7 +20,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     e.preventDefault();
     const name = newName.trim();
     if (!name) return;
-    const bucket = await api.createBrainBucket({ name }, { silent: true }).catch(err => {
+    const bucket = await createBrainBucket({ name }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to create bucket');
       return null;
     });
@@ -32,7 +32,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   };
 
   const handleUpdate = useCallback(async (id, patch) => {
-    const updated = await api.updateBrainBucket(id, patch, { silent: true }).catch(err => {
+    const updated = await updateBrainBucket(id, patch, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update bucket');
       return null;
     });
@@ -40,7 +40,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   }, [setBuckets]);
 
   const handleDelete = useCallback(async (id) => {
-    const ok = await api.deleteBrainBucket(id, { silent: true }).catch(err => {
+    const ok = await deleteBrainBucket(id, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete bucket');
       return null;
     });

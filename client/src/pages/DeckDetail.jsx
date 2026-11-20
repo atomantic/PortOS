@@ -42,9 +42,17 @@ import useListResource from '../hooks/useListResource';
 import { useSseProgress } from '../hooks/useSseProgress';
 import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
-  deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
-  renderDeckCard, renderDeckCards, updateDeck, updateDeckCard, deckPromptsProgressUrl,
-} from '../services/api';
+  deleteDeck,
+  generateDeckPrompts,
+  getDeck,
+  removeDeckSample,
+  renderDeckCard,
+  renderDeckCards,
+  updateDeck,
+  updateDeckCard,
+  deckPromptsProgressUrl,
+} from '../services/apiDecks.js';
+import { listUniverseSummaries } from '../services/apiUniverseBuilder.js';
 
 const TABS = [{ id: 'cards', label: 'Cards' }, { id: 'style', label: 'Style & samples' }];
 

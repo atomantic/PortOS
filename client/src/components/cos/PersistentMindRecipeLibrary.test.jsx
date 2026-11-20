@@ -8,7 +8,15 @@ const api = vi.hoisted(() => ({
   getMindRecipes: vi.fn(), getMindRecipe: vi.fn(), createMindRecipe: vi.fn(),
   updateMindRecipe: vi.fn(), validateMindRecipe: vi.fn(), archiveMindRecipe: vi.fn(), restoreMindRecipe: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({
+  getMindRecipes: api.getMindRecipes,
+  getMindRecipe: api.getMindRecipe,
+  createMindRecipe: api.createMindRecipe,
+  updateMindRecipe: api.updateMindRecipe,
+  validateMindRecipe: api.validateMindRecipe,
+  archiveMindRecipe: api.archiveMindRecipe,
+  restoreMindRecipe: api.restoreMindRecipe,
+}));
 const definition = { schemaVersion: 1, name: 'recipe.project-checkin', purpose: 'Project summary', parameters: { type: 'object', properties: {}, additionalProperties: false }, steps: [{ id: 'goals', tool: 'goals.list', arguments: {} }], outputs: { goals: { step: 'goals', path: [] } } };
 const recipe = (overrides = {}) => ({ id: 'first', name: definition.name, activeRevision: 1, definition, archived: false, available: true, updatedAt: '2026-09-12T00:00:00Z', ...overrides });
 const detail = (entry) => ({ recipe: entry, versions: [{ revision: entry.activeRevision, definition: entry.definition, author: 'user', createdAt: entry.updatedAt }] });

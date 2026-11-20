@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 
 const updateAppTaskTypeOverride = vi.fn();
 const bulkUpdateAppTaskTypeOverride = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiApps.js', () => ({
   updateAppTaskTypeOverride: (...args) => updateAppTaskTypeOverride(...args),
   bulkUpdateAppTaskTypeOverride: (...args) => bulkUpdateAppTaskTypeOverride(...args),
 }));

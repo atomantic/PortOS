@@ -3,14 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import DraftsTab from './DraftsTab.jsx';
 import { buildIndex } from '../../services/domIndex.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMessages.js', () => ({
   getMessageDrafts: vi.fn(),
   sendMessageDraft: vi.fn(),
   reconcileMessageDraft: vi.fn(),
   approveMessageDraft: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+import {
+  getMessageDrafts,
+  sendMessageDraft,
+  reconcileMessageDraft,
+  approveMessageDraft,
+} from '../../services/apiMessages.js';
 beforeEach(() => vi.clearAllMocks());
 
 // jsdom doesn't do layout, so domIndex's isVisible() geometry checks would
@@ -35,7 +40,7 @@ const makeVisible = () => {
 // label — is covered in server/services/voice/tools.test.js.
 describe('DraftsTab — voice confirmation annotation on Send (#5907)', () => {
   it('renders data-voice-guard="confirm" on the Send button for an approved draft', async () => {
-    api.getMessageDrafts.mockResolvedValue([
+    getMessageDrafts.mockResolvedValue([
       { id: 'd1', status: 'approved', sendVia: 'gmail', accountId: 'acc1', subject: 'Hi', body: 'text' },
     ]);
     makeVisible();
@@ -55,12 +60,12 @@ describe('DraftsTab — voice confirmation annotation on Send (#5907)', () => {
 
 describe('DraftsTab pending sends', () => {
   it('immediately disables only the sending draft and clears pending on failure', async () => {
-    api.getMessageDrafts.mockResolvedValue([
+    getMessageDrafts.mockResolvedValue([
       { id: 'd1', status: 'approved', sendVia: 'api', subject: 'First' },
       { id: 'd2', status: 'approved', sendVia: 'api', subject: 'Second' }
     ]);
     let rejectSend;
-    api.sendMessageDraft.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSend = reject; }));
+    sendMessageDraft.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSend = reject; }));
     render(<DraftsTab accounts={[]} />);
     const [first, second] = await screen.findAllByRole('button', { name: 'Send' });
     fireEvent.click(first);
@@ -68,15 +73,15 @@ describe('DraftsTab pending sends', () => {
     expect(first).toBeDisabled();
     expect(first).toHaveAttribute('aria-busy', 'true');
     expect(second).toBeEnabled();
-    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
     await act(async () => { rejectSend(new Error('Example send failure')); });
     await waitFor(() => expect(first).toBeEnabled());
-    api.sendMessageDraft.mockResolvedValueOnce({ success: true });
+    sendMessageDraft.mockResolvedValueOnce({ success: true });
     fireEvent.click(first);
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1));
     expect(screen.getByText('sent')).toBeInTheDocument();
     // The initial load plus the one reload after the failed send; the successful retry applies its response locally.
-    expect(api.getMessageDrafts).toHaveBeenCalledTimes(2);
+    expect(getMessageDrafts).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -87,9 +92,9 @@ describe('DraftsTab interrupted delivery', () => {
   };
 
   it('requires a mailbox check, records nondelivery once, and requires fresh approval', async () => {
-    api.getMessageDrafts.mockResolvedValue([unknown]);
+    getMessageDrafts.mockResolvedValue([unknown]);
     let finish;
-    api.reconcileMessageDraft.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    reconcileMessageDraft.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     render(<DraftsTab accounts={[]} />);
     const confirmNotSent = await screen.findByRole('button', { name: 'Confirm not sent' });
     expect(screen.getByText(/It may already have reached the recipient/)).toBeInTheDocument();
@@ -101,41 +106,41 @@ describe('DraftsTab interrupted delivery', () => {
     fireEvent.click(confirmNotSent);
     expect(confirmNotSent).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Confirm sent' })).toBeDisabled();
-    expect(api.reconcileMessageDraft).toHaveBeenCalledTimes(1);
-    expect(api.reconcileMessageDraft).toHaveBeenCalledWith('d1', {
+    expect(reconcileMessageDraft).toHaveBeenCalledTimes(1);
+    expect(reconcileMessageDraft).toHaveBeenCalledWith('d1', {
       attemptId: 'attempt-1', outcome: 'not_sent'
     }, { silent: true });
     await act(async () => finish({ ...unknown, status: 'draft' }));
     expect(screen.queryByText('Delivery unknown')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
-    api.approveMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'approved' });
+    approveMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
-    expect(api.sendMessageDraft).not.toHaveBeenCalled();
-    expect(api.getMessageDrafts).toHaveBeenCalledTimes(1);
+    expect(sendMessageDraft).not.toHaveBeenCalled();
+    expect(getMessageDrafts).toHaveBeenCalledTimes(1);
   });
 
   it('keeps uncertainty visible on conflict and makes confirmed delivery terminal', async () => {
-    api.getMessageDrafts.mockResolvedValue([unknown]);
-    api.reconcileMessageDraft.mockRejectedValueOnce(new Error('Draft state conflict'));
+    getMessageDrafts.mockResolvedValue([unknown]);
+    reconcileMessageDraft.mockRejectedValueOnce(new Error('Draft state conflict'));
     render(<DraftsTab accounts={[]} />);
     await screen.findByText('Delivery unknown');
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm sent' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Draft state conflict');
     expect(screen.getByText('Delivery unknown')).toBeInTheDocument();
-    api.reconcileMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'sent' });
+    reconcileMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'sent' });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm sent' }));
     expect(await screen.findByText('sent')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
-    expect(api.sendMessageDraft).not.toHaveBeenCalled();
+    expect(sendMessageDraft).not.toHaveBeenCalled();
   });
 });
 
 describe('DraftsTab send capabilities', () => {
   it('offers approval and send for browser-delivered accounts the server reports as sendable', async () => {
-    api.getMessageDrafts.mockResolvedValue([
+    getMessageDrafts.mockResolvedValue([
       { id: 'outlook-draft', status: 'draft', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' },
       { id: 'teams-draft', status: 'approved', accountId: 'teams', sendVia: 'playwright', body: 'Teams text' }
     ]);
@@ -149,13 +154,13 @@ describe('DraftsTab send capabilities', () => {
   });
 
   it('reloads drafts after a failed send so a provider-unconfirmed draft shows its reconciliation state', async () => {
-    api.getMessageDrafts.mockResolvedValueOnce([
+    getMessageDrafts.mockResolvedValueOnce([
       { id: 'd1', status: 'approved', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' }
     ]);
-    api.getMessageDrafts.mockResolvedValueOnce([
+    getMessageDrafts.mockResolvedValueOnce([
       { id: 'd1', status: 'delivery_unknown', accountId: 'outlook', sendVia: 'playwright', sendAttemptId: 'attempt-1', body: 'Outlook text' }
     ]);
-    api.sendMessageDraft.mockRejectedValueOnce(new Error('Example provider did not confirm delivery'));
+    sendMessageDraft.mockRejectedValueOnce(new Error('Example provider did not confirm delivery'));
     render(<DraftsTab accounts={[{ id: 'outlook', name: 'Outlook', canSend: true }]} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
     expect(await screen.findByText(/the provider never\s+confirmed it/)).toBeInTheDocument();
@@ -163,7 +168,7 @@ describe('DraftsTab send capabilities', () => {
   });
 
   it('offers copy instead of approval/send for Outlook and Teams while Gmail still sends', async () => {
-    api.getMessageDrafts.mockResolvedValue([
+    getMessageDrafts.mockResolvedValue([
       { id: 'outlook-draft', status: 'draft', accountId: 'outlook', sendVia: 'playwright', body: 'Outlook text' },
       { id: 'teams-draft', status: 'approved', accountId: 'teams', sendVia: 'playwright', body: 'Teams text' },
       { id: 'gmail-draft', status: 'approved', accountId: 'gmail', sendVia: 'api', body: 'Gmail text' }
@@ -177,9 +182,9 @@ describe('DraftsTab send capabilities', () => {
     expect(screen.getAllByRole('button', { name: 'Copy message' })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1);
-    api.sendMessageDraft.mockResolvedValueOnce({ success: true });
+    sendMessageDraft.mockResolvedValueOnce({ success: true });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledWith('gmail-draft'));
+    await waitFor(() => expect(sendMessageDraft).toHaveBeenCalledWith('gmail-draft'));
   });
 
   it('displays a loading spinner while drafts are loading and shows empty state when done', async () => {
@@ -187,7 +192,7 @@ describe('DraftsTab send capabilities', () => {
     const draftsPromise = new Promise((resolve) => {
       resolveDrafts = resolve;
     });
-    api.getMessageDrafts.mockReturnValueOnce(draftsPromise);
+    getMessageDrafts.mockReturnValueOnce(draftsPromise);
 
     render(<DraftsTab accounts={[]} />);
 
@@ -205,13 +210,13 @@ describe('DraftsTab send capabilities', () => {
 
 describe('DraftsTab — failed read', () => {
   it('shows an error with Retry instead of "No drafts", then the drafts after Retry', async () => {
-    api.getMessageDrafts.mockRejectedValueOnce(new Error('drafts down'));
+    getMessageDrafts.mockRejectedValueOnce(new Error('drafts down'));
     render(<DraftsTab accounts={[]} />);
 
     expect(await screen.findByText(/Could not load drafts — drafts down/)).toBeTruthy();
     expect(screen.queryByText('No drafts')).toBeNull();
 
-    api.getMessageDrafts.mockResolvedValueOnce([
+    getMessageDrafts.mockResolvedValueOnce([
       { id: 'd1', status: 'draft', sendVia: 'api', subject: 'Recovered draft' },
     ]);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));

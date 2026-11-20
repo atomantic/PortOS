@@ -13,14 +13,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
+}));
+vi.mock('../../../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 
 import { VisualGenSettingsPanel } from './VisualGenSettings';
-import { getSettings, listImageModels, getProviders } from '../../../services/api';
+import { getSettings } from '../../../services/apiSystem.js';
+import { listImageModels } from '../../../services/apiImageVideo.js';
+import { getProviders } from '../../../services/apiProviders.js';
 
 const CODEX_ONLY = { mode: 'codex', codex: { enabled: true }, local: { pythonPath: '/usr/bin/python3' } };
 

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/api';
+import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/apiSystem.js';
 import useMounted from '../../hooks/useMounted';
 import { formatBytes } from '../../utils/formatters';
 

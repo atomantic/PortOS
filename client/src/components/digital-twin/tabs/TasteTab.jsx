@@ -21,7 +21,16 @@ import {Palette,
   ThumbsDown,
   Minus} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  getTasteProfile,
+  getTasteNextQuestion,
+  submitTasteAnswer,
+  getPersonalizedTasteQuestion,
+  getTasteSectionResponses,
+  resetTasteSection,
+  generateTasteSummary,
+  submitBehavioralFeedback,
+} from '../../../services/apiDigitalTwin.js';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
@@ -128,7 +137,7 @@ export default function TasteTab({ onRefresh }) {
   const [expandedSummary, setExpandedSummary] = useState(null);
 
   const loadProfile = useCallback(async () => {
-    const data = await api.getTasteProfile().catch(() => null);
+    const data = await getTasteProfile().catch(() => null);
     if (data) setProfile(data);
     setLoading(false);
   }, []);
@@ -148,7 +157,7 @@ export default function TasteTab({ onRefresh }) {
   const startSection = async (sectionId) => {
     setActiveSection(sectionId);
     setLoadingQuestion(true);
-    const question = await api.getTasteNextQuestion(sectionId).catch(() => null);
+    const question = await getTasteNextQuestion(sectionId).catch(() => null);
     setCurrentQuestion(question);
     setAnswer('');
     setLoadingQuestion(false);
@@ -163,7 +172,7 @@ export default function TasteTab({ onRefresh }) {
       generatedQuestion: currentQuestion.text,
       identityContextUsed: currentQuestion.identityContextUsed
     } : {};
-    const result = await api.submitTasteAnswer(
+    const result = await submitTasteAnswer(
       activeSection,
       currentQuestion.questionId,
       answer.trim(),
@@ -205,7 +214,7 @@ export default function TasteTab({ onRefresh }) {
     // shouldReportGoDeeperError). A 200 always resolves to `{ question, reason }`, so a
     // missing question names its own cause instead of being guessed at here (#2733).
     // The request is silenced so that reporting stays a single layer's job.
-    const result = await api.getPersonalizedTasteQuestion(
+    const result = await getPersonalizedTasteQuestion(
       activeSection,
       selectedProvider.providerId,
       selectedProvider.model,
@@ -253,7 +262,7 @@ export default function TasteTab({ onRefresh }) {
     setLoadingReview(true);
     setReviewError(null);
     setReviewResponses([]);
-    const outcome = await api.getTasteSectionResponses(sectionId, { silent: true })
+    const outcome = await getTasteSectionResponses(sectionId, { silent: true })
       .then(data => ({ responses: Array.isArray(data) ? data : [], error: null }))
       .catch(err => ({ responses: [], error: err instanceof Error ? err : new Error('Request failed') }));
     if (reviewRequestRef.current !== request) return;
@@ -265,7 +274,7 @@ export default function TasteTab({ onRefresh }) {
   const handleResetSection = async (sectionId) => {
     // request() owns the failure toast; bail before the success toast so a
     // failed reset doesn't report "Section reset" on top of that error.
-    const ok = await api.resetTasteSection(sectionId).then(() => true).catch(() => false);
+    const ok = await resetTasteSection(sectionId).then(() => true).catch(() => false);
     if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
@@ -282,7 +291,7 @@ export default function TasteTab({ onRefresh }) {
     setGeneratingSummary(true);
     // apiCore.request already shows a toast on non-OK responses, so swallow
     // the rejection here instead of re-toasting the same error.
-    const result = await api.generateTasteSummary(
+    const result = await generateTasteSummary(
       selectedProvider.providerId,
       selectedProvider.model,
       sectionId
@@ -297,7 +306,7 @@ export default function TasteTab({ onRefresh }) {
 
   const submitSummaryFeedback = async (sectionId, summary, validation) => {
     setSummaryFeedback(prev => ({ ...prev, [sectionId]: validation }));
-    await api.submitBehavioralFeedback({
+    await submitBehavioralFeedback({
       contentType: 'taste_summary',
       validation,
       contentSnippet: summary?.slice(0, 2000),
@@ -316,7 +325,7 @@ export default function TasteTab({ onRefresh }) {
       return;
     }
     setGeneratingSummary(true);
-    const result = await api.generateTasteSummary(
+    const result = await generateTasteSummary(
       selectedProvider.providerId,
       selectedProvider.model
     ).catch(() => null);
@@ -625,7 +634,7 @@ export default function TasteTab({ onRefresh }) {
                     // Skip current question by submitting empty — move to next
                     setAnswer('');
                     setLoadingQuestion(true);
-                    api.getTasteNextQuestion(activeSection).then(q => {
+                    getTasteNextQuestion(activeSection).then(q => {
                       // If same question returned (can't skip core), just clear loading
                       if (q?.questionId === currentQuestion?.questionId) {
                         toast('Core questions cannot be skipped', { icon: '⚠️' });

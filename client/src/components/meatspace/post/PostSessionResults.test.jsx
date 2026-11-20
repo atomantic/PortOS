@@ -3,11 +3,13 @@ import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PostSessionResults from './PostSessionResults';
 import PostSessionSummary from './PostSessionSummary';
 import { usePostSession } from './usePostSession';
-import { generatePostDrill, submitPostSession } from '../../../services/api';
+import { generatePostDrill, submitPostSession } from '../../../services/apiMeatspace.js';
 
-vi.mock('../../../services/api', () => ({
-  generatePostDrill: vi.fn(), submitPostSession: vi.fn(),
-  scorePostLlmDrill: vi.fn(), submitTrainingRun: vi.fn(),
+vi.mock('../../../services/apiMeatspace.js', () => ({
+  generatePostDrill: vi.fn(),
+  submitPostSession: vi.fn(),
+  scorePostLlmDrill: vi.fn(),
+  submitTrainingRun: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

@@ -2,7 +2,7 @@ import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { deriveProviderPreset, updateProvider, createProvider } from '../../services/apiProviders.js';
 import { mergeModelLists, mergeObservedContextWindows, withRuntimeContextWindow, isOllamaBackedProvider, generationControlsFor } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import Drawer from '../Drawer';
@@ -39,7 +39,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   const [converting, setConverting] = useState(false);
   const convertToDerived = async () => {
     setConverting(true);
-    const derived = await api.deriveProviderPreset(provider.id).catch(() => null);
+    const derived = await deriveProviderPreset(provider.id).catch(() => null);
     setConverting(false);
     if (!derived) return;
     toast.success(`Now derived from service "${derived.serviceId}"`);
@@ -130,9 +130,9 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
 
     const data = buildProviderPayload({ provider, formData, modelsText, showsNumCtx, generationControls, createsModePair, tuiArgs });
     if (provider) {
-      await api.updateProvider(provider.id, data);
+      await updateProvider(provider.id, data);
     } else {
-      await api.createProvider(data);
+      await createProvider(data);
     }
 
     onSave();

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Rocket, Lightbulb, FileInput, NotebookPen } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
-import { listUniverseNames } from '../services/api';
+import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import toast from '../components/ui/Toast';
 
 // The "Start a Story" onramp (issue #1633, Phase 1). One clear front door that

@@ -28,10 +28,16 @@ import DuplicatesTab from '../components/sharing/DuplicatesTab';
 import ConflictsTab from '../components/sharing/ConflictsTab';
 import socket from '../services/socket';
 import {
-  listShareBuckets, createShareBucket, updateShareBucket, deleteShareBucket,
-  listShareInbox, promoteShareInboxItem, dismissShareInboxItem,
-  listShareActivity, getSettings, updateSettings,
-} from '../services/api';
+  listShareBuckets,
+  createShareBucket,
+  updateShareBucket,
+  deleteShareBucket,
+  listShareInbox,
+  promoteShareInboxItem,
+  dismissShareInboxItem,
+  listShareActivity,
+} from '../services/apiSharing.js';
+import { getSettings, updateSettings } from '../services/apiSystem.js';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
