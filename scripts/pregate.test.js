@@ -481,10 +481,10 @@ describe('pregate hidden-content invocation', () => {
     for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
       const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain('server structural guards over the 3.0s per-guard target');
+      expect(result.stdout).toContain('server structural guards over the 2.5s per-guard target');
       const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
       expect(report.stages.find(stage => stage.guard)).toMatchObject({
-        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
+        status: 'passed', guardDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
       });
       const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
       expect(events.filter(event => event === 'catalog')).toHaveLength(runNumber);
@@ -1068,9 +1068,9 @@ describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
     const serverGuards = getAlwaysRunTests().slice(0, 3);
     const clientGuards = [
-      'client/src/asyncEffectDisposalConventions.guard.test.js',
       'client/src/components/ui/fooPanel.guard.test.jsx',
-      'client/src/hooks/mountedRefConventions.guard.test.js',
+      'client/src/test/guards/a11y.guard.test.js',
+      'client/src/test/guards/ui.guard.test.js',
     ];
     // A convention-sounding name without the suffix is not a tree guard.
     const tracked = [...serverGuards, ...clientGuards,
@@ -1807,6 +1807,20 @@ describe('focused local policy: referencing suites within two import hops', () =
     const local = await focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
     expect(local.relatedOverflow).toEqual([]);
+  });
+
+  it('hands a structural guard check to its runner, never to Vitest directly (#16996)', async () => {
+    const runner = 'client/src/test/guards/a11y.guard.test.js';
+    const files = {
+      'client/src/lib/x.js': 'export const x = 1;',
+      'client/src/test/guards/a11y/reader.test.js': "import { x } from '../../../lib/x.js';",
+      'client/src/test/guards/a11y/edited.test.js': 'export {};',
+      [runner]: 'export {};',
+    };
+    const { tracked, read } = plant(files);
+    const local = await focusedLocalPlan(plan(), tracked, ['client/src/lib/x.js', 'client/src/test/guards/a11y/edited.test.js'], read);
+    expect(local.client.files).toContain(runner);
+    expect(local.client.files.filter(path => path.startsWith('client/src/test/guards/a11y/'))).toEqual([]);
   });
 
   // The two pre-fix heads from #16863 whose failing suite sits two imports from the edit.

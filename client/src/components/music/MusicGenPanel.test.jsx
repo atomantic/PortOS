@@ -1005,7 +1005,7 @@ describe('MusicGenPanel', () => {
   // this passes either way — it is here for the end-to-end behaviour (the pick
   // survives an engine switch and every selected-snapshot gate follows it), NOT
   // as the guard for the stale-closure reset. That guard has to read the source,
-  // and lives in musicGenModelSelection.guard.test.js.
+  // and lives in client/src/test/guards/ui/musicGenModelSelection.test.js.
   it('follows a model picked right after an engine switch', async () => {
     const alpha = engine({
       id: 'alpha', name: 'Alpha', ready: true, customModels: false,

@@ -6,7 +6,7 @@
  * A `duration: Infinity` toast collapses to a corner pill after
  * COLLAPSE_AFTER_MS so it stops blocking clicks on the page beneath it. Such a
  * toast with render-prop content MUST pass `label` — the pill can't name itself
- * from JSX, and `a11y/fileInputsToasts.conventions.test.js` enforces it. Content that runs its
+ * from JSX, and `client/src/test/guards/a11y/fileInputsToasts.test.js` enforces it. Content that runs its
  * own dismiss timer passes `collapseAfter` to fold on its schedule instead.
  */
 

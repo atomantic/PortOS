@@ -14,8 +14,9 @@
  * cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
@@ -34,8 +35,9 @@ export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
  * Vitest configs exclude them, so a check runs only inside its runner, in one
  * worker over one shared corpus (guardCorpus.js). The server checks are split by
  * subject into three runners of similar cost, so they fill the pool's workers in
- * parallel (three locally under the agent budget, four on hosted CI); a new check
- * goes in the directory whose subject it scans, and its placement is its registration.
+ * parallel (three locally under the agent budget, four on hosted CI); the client
+ * pool has two workers and two runners. A new check goes in the directory whose
+ * subject it scans, and its placement is its registration.
  */
 export const GUARD_CHECK_DIRS = Object.freeze([
   // Conventions over runtime source: rejection ownership, logging, spawning, timers, parameters,
@@ -45,6 +47,10 @@ export const GUARD_CHECK_DIRS = Object.freeze([
   { dir: 'server/test/guards/modules', runner: 'server/test/guards/modules.guard.test.js' },
   // Repository text and test-suite hygiene: docs, scripts, CI, migrations, instruction files, test conventions.
   { dir: 'server/test/guards/repo', runner: 'server/test/guards/repo.guard.test.js' },
+  // Accessibility conventions over client markup, touch input included.
+  { dir: 'client/src/test/guards/a11y', runner: 'client/src/test/guards/a11y.guard.test.js' },
+  // Client UI conventions: layout and styling, effects and data fetching, module contracts, test timeouts.
+  { dir: 'client/src/test/guards/ui', runner: 'client/src/test/guards/ui.guard.test.js' },
 ].map(Object.freeze));
 
 const checkDirOf = (relPath) => GUARD_CHECK_DIRS.find(({ dir }) => relPath.startsWith(`${dir}/`)
@@ -58,22 +64,42 @@ export const guardCheckModules = (dir) => readdirSync(dir).filter((name) => /\.t
 
 /**
  * Register every check in `dir` (a file URL) with the calling runner's Vitest
- * `describe`/`it` (passed in: this module stays builtins-only). Each check is a
- * describe named after its module, so a failure reads `<runner> > <check> > …`
- * and `-t <check>` runs one check. A check that throws while loading fails as
- * its own `loads` test, so one broken module cannot hide the others' results.
+ * `describe`/`it` and its `load(name)` import (all passed in: this module stays
+ * builtins-only, and the runner owns the computed `import()` that moduleGraph.js
+ * bounds to its directory). Each check is a describe named after its module, so a
+ * failure reads `<runner> > <check> > …` and `-t <check>` runs one check. A check
+ * that throws while loading fails as its own `loads` test, so one broken module
+ * cannot hide the others' results.
+ *
+ * Loading a check runs its imports and module-scope work, which no test duration
+ * covers. When `PORTOS_GUARD_LOAD_LOG` names a file (scripts/run-ci-tests.js sets
+ * it), each load appends `{ runner, check, ms }` there, so the guard budget charges
+ * that time to the check (guardBudget.js).
  */
-export function registerGuardChecks(dir, { describe, it }) {
+export function registerGuardChecks(dir, { describe, it, load, env = process.env }) {
+  const runner = runnerOfDir(fileURLToPath(dir));
   for (const name of guardCheckModules(dir)) {
-    describe(name.replace(/\.test\.jsx?$/, ''), async () => {
+    const check = name.replace(/\.test\.jsx?$/, '');
+    describe(check, async () => {
+      const started = performance.now();
       try {
-        await import(new URL(name, dir).href);
+        await load(name);
       } catch (error) {
         it('loads', () => { throw error; });
+      }
+      if (env.PORTOS_GUARD_LOAD_LOG && runner) {
+        appendFileSync(env.PORTOS_GUARD_LOAD_LOG, `${JSON.stringify({ runner, check, ms: performance.now() - started })}\n`);
       }
     });
   }
 }
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** The runner (repo-relative) whose check directory is `absDir`, or null. */
+const runnerOfDir = (absDir) => {
+  const rel = relative(REPO_ROOT, absDir).split(sep).join('/').replace(/\/$/, '');
+  return GUARD_CHECK_DIRS.find(({ dir }) => dir === rel)?.runner ?? null;
+};
 
 /** Tracked guard tests (relative paths), by suffix alone: no source is read. */
 export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();

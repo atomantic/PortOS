@@ -97,7 +97,7 @@ The original, unabridged wording of rules whose one-sentence form now sits in `c
 
 **Fix missing prerequisites in place.** Show the missing tool or setting beside the blocked action with the existing setup/check controls, and preserve the user's work; for setup outside the app, give concrete steps and a retry. For linked records, locks or approvals, link to the exact place it's resolved (reachable for stale and already-approved records), not just a disabled control. Keep existing authority checks.
 
-**Mobile responsive, always.** A `grid-cols-N` with N > 3 and no `…:grid-cols-*` in the same class string is a bug: give text-bearing cards a phone default and widen by breakpoint (`grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4`); a wider gap is not a column breakpoint. Square thumbnail/heatmap grids may stay 4+ on a phone but still need a breakpoint. *Enforced:* `responsiveGridConventions.guard.test.js`.
+**Mobile responsive, always.** A `grid-cols-N` with N > 3 and no `…:grid-cols-*` in the same class string is a bug: give text-bearing cards a phone default and widen by breakpoint (`grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4`); a wider gap is not a column breakpoint. Square thumbnail/heatmap grids may stay 4+ on a phone but still need a breakpoint. *Enforced:* `client/src/test/guards/ui/responsiveGridConventions.test.js`.
 
 **List deletion preserves place** ([contract](UX_DESIGN_GUIDE.md#list-deletion-and-reading-position)): after the server confirms, collapse the row with `components/ui/CollapsibleListItem` (spacing inside the wrapper), then remove it from local state. Keep the list, scroll container, filters and pagination mounted, never swap in a loading placeholder, keep failures visible, guard duplicates, honor reduced motion, and move focus to a surviving row with `preventScroll`.
 
@@ -111,7 +111,7 @@ Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.js
 
 **Never `autoFocus` a control that appears in response to a key-submit**: the still-down Enter activates it the moment it mounts. Keep the submitting element focused (`readOnly`, not `disabled`) and filter `e.repeat` (`MorseTrainer.jsx`), or handle Enter-to-advance in a window handler gated on `shouldIgnoreGlobalKey` with the button unfocused (`PostDrillRunner.jsx`).
 
-**A sanctioned poll uses `useAutoRefetch(fetchFn, intervalMs, { enabled, pollOnly: true })`** (`hooks/useAutoRefetch.js`), never a hand-rolled `setInterval`; it pauses in hidden tabs (#5697). Pass the gate as `enabled`, not an early `return`, and `immediate: false` when another effect owns the first fetch. *Enforced:* `pollingConventions.guard.test.js`.
+**A sanctioned poll uses `useAutoRefetch(fetchFn, intervalMs, { enabled, pollOnly: true })`** (`hooks/useAutoRefetch.js`), never a hand-rolled `setInterval`; it pauses in hidden tabs (#5697). Pass the gate as `enabled`, not an early `return`, and `immediate: false` when another effect owns the first fetch. *Enforced:* `client/src/test/guards/ui/pollingConventions.test.js`.
 
 **Pick the right Layout scroll mode** by where the `<Route>` sits in `App.jsx`, never by pathname: `PageLayout` pages (`PageHeader` over an internally scrolling body) go under `<FullWidthMain />`, document/form routes (`/apps/create`) under `<PaddedMain />` (`components/PageShell.jsx`). Exceptions: `docs/research/PAGE_LAYOUT_AUDIT.md`.
 

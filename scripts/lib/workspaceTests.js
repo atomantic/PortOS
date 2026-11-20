@@ -53,7 +53,8 @@ export const SERVER_TEST_EXCLUDE = Object.freeze([
 ]);
 
 export const CLIENT_TEST_INCLUDE = Object.freeze(['src/**/*.{test,spec}.{js,jsx}']);
-export const CLIENT_TEST_EXCLUDE = Object.freeze(['**/node_modules/**', '**/.git/**']);
+/** Client guard checks run only inside their runner (`src/test/guards/<subject>.guard.test.js`, #16996). */
+export const CLIENT_TEST_EXCLUDE = Object.freeze(['**/node_modules/**', '**/.git/**', 'src/test/guards/*/**']);
 
 /**
  * Linux CI gives the registered browser contracts one browser-owner job. An

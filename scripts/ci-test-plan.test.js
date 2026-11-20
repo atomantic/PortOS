@@ -91,17 +91,10 @@ const TRACKED = [
   'server/lib/shellCd.test.js',
   'server/lib/shellCd.js',
   'server/services/agent/agentTuiSpawning.test.js',
-  'client/src/a11y/controlNames.conventions.test.js',
-  'client/src/a11y/dnd.conventions.test.js',
-  'client/src/a11y/fileInputsToasts.conventions.test.js',
-  'client/src/a11y/hitAreas.conventions.test.js',
-  'client/src/a11y/landmarks.conventions.test.js',
-  'client/src/a11y/overlays.conventions.test.js',
-  'client/src/a11y/routeHeadings.conventions.test.js',
-  'client/src/a11y/scanner.conventions.test.js',
+  'client/src/test/guards/a11y.guard.test.js',
+  'client/src/test/guards/ui.guard.test.js',
   'client/src/App.jsx',
   'client/src/App.test.jsx',
-  'client/src/hooks/mountedRefConventions.guard.test.js',
   'client/src/components/catalog/CatalogCard.jsx',
   'client/src/components/catalog/CatalogCard.test.jsx',
   'client/src/components/sprites/WalkWorkflow.test.jsx',
@@ -905,10 +898,10 @@ describe('CI test impact planner', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
       'scripts/node-version-drift.guard.test.js',
-      'client/src/a11y/overlays.conventions.test.js',
+      'client/src/test/guards/a11y.guard.test.js',
     ])).toEqual({
       server: ['server/services/taskPromptDefaults.test.js', 'scripts/node-version-drift.guard.test.js'],
-      client: ['client/src/a11y/overlays.conventions.test.js'],
+      client: ['client/src/test/guards/a11y.guard.test.js'],
     });
   });
 
@@ -1051,7 +1044,7 @@ describe('CI test impact planner', () => {
     { changed: 'client/src/hooks/useAsyncAction.js', runner: 'client', guards: ['client/src/hooks/moduleSummaries.test.js'] },
     { changed: 'client/src/utils/formatters.js', runner: 'client', guards: ['client/src/utils/moduleSummaries.test.js'] },
     { changed: 'client/src/services/apiSprites.js', runner: 'client', guards: ['client/src/services/moduleSummaries.test.js'] },
-    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/a11y/controlNames.conventions.test.js', 'client/src/a11y/dnd.conventions.test.js', 'client/src/a11y/fileInputsToasts.conventions.test.js', 'client/src/a11y/hitAreas.conventions.test.js', 'client/src/a11y/landmarks.conventions.test.js', 'client/src/a11y/overlays.conventions.test.js', 'client/src/a11y/routeHeadings.conventions.test.js', 'client/src/a11y/scanner.conventions.test.js'] },
+    { changed: 'client/src/components/catalog/CatalogCard.jsx', runner: 'client', guards: ['client/src/test/guards/a11y.guard.test.js', 'client/src/test/guards/ui.guard.test.js'] },
   ];
   it.each(STRUCTURAL_GUARD_ROWS)('schedules the structural guards for $changed in a mixed diff', ({ changed, runner, guards }) => {
     const trackedFiles = [...TRACKED, changed, ...STRUCTURAL_GUARD_ROWS.flatMap((row) => row.guards)];
@@ -1175,15 +1168,8 @@ describe('CI test impact planner', () => {
       'client/src/lib/catalogLinks.js',
     ]);
     expect(plan.client.files).toContain('client/src/lib/moduleSummaries.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/controlNames.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/dnd.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/hitAreas.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/landmarks.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/overlays.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/routeHeadings.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/a11y/scanner.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
+    expect(plan.client.files).toContain('client/src/test/guards/a11y.guard.test.js');
+    expect(plan.client.files).toContain('client/src/test/guards/ui.guard.test.js');
     expect(plan.lint).toEqual({
       mode: 'files',
       files: [
@@ -1194,21 +1180,13 @@ describe('CI test impact planner', () => {
     expect(plan.build).toBe(true);
   });
 
-  it('selects the mounted-ref guard for a plain-.js client change', () => {
-    // The a11y guard only triggers on `.jsx`, but the StrictMode mounted-ref bug
-    // reached 94 call sites through a `.js` hook — so this guard must be selected
-    // by a change that touches no `.jsx` at all.
+  it('selects the client guard runners for a plain-.js client change', () => {
+    // The StrictMode mounted-ref bug reached 94 call sites through a `.js` hook, so
+    // the runner holding that check must be selected by a change that touches no `.jsx`.
     const plan = buildCiTestPlan(['client/src/hooks/useAsyncAction.js'], { trackedFiles: TRACKED });
 
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/controlNames.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/dnd.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/hitAreas.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/landmarks.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/overlays.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/routeHeadings.conventions.test.js');
-    expect(plan.client.files).not.toContain('client/src/a11y/scanner.conventions.test.js');
+    expect(plan.client.files).toContain('client/src/test/guards/ui.guard.test.js');
+    expect(plan.client.files).toContain('client/src/test/guards/a11y.guard.test.js');
   });
 
   it('runs the DB suite when a database-backed adapter changes', () => {

@@ -1,0 +1,288 @@
+/**
+ * Rule: Every call `wrapper(…, { …silent… }, …)` to an export of `client/src/services/api*.js` must target a parameter that accepts/forwards `options`/`opts`/`...args` or destructures `silent`/`...rest`.
+ * Fix: Add an `options = {}` parameter to the wrapper and forward it to `request(endpoint, options)`.
+ * What this guard cannot see:
+ *   - Lexer-assisted scan: judges only literal object arguments (not `{ ...opts }` or variable options), resolves callees by exported name, and ignores re-export aliases (`export const a = b`).
+ */
+
+import { describe, it, expect } from 'vitest';
+import { join } from 'path';
+import { trackedSourceFiles } from '../../trackedFiles.js';
+import { blankLiterals, matchBracket } from '../../../../../server/lib/sourceScan.js';
+import { readText, REPO_ROOT } from '../../../../../scripts/lib/guardCorpus.js';
+
+const CLIENT_ROOT = join(REPO_ROOT, 'client');
+const SERVICE_FILE = /^src\/services\/api[^/]*\.js$/;
+const OPTIONS_NAMES = new Set(['options', 'opts']);
+
+// Opt-in stage evidence for workload-sensitive timeouts; normal runs stay quiet.
+const profile = process.env.PORTOS_PROFILE_API_WRAPPERS === '1' ? new Map() : null;
+const measure = (stage, run) => {
+  if (!profile) return run();
+  const start = performance.now();
+  const result = run();
+  profile.set(stage, (profile.get(stage) ?? 0) + performance.now() - start);
+  return result;
+};
+
+/** Argument/property spans in `text[start, end)`, split on commas in the blanked view. */
+function splitTopLevel(blanked, text, start, end) {
+  const parts = [];
+  let depth = 0;
+  let from = start;
+  for (let i = start; i < end; i++) {
+    const c = blanked[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === ',' && depth === 0) {
+      parts.push({ start: from, end: i });
+      from = i + 1;
+    }
+  }
+  if (text.slice(from, end).trim()) parts.push({ start: from, end });
+  return parts;
+}
+
+const WRAPPER_HEAD = /^[ \t]*export\s+(?:(?:async\s+)?function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*(?:async\s*)?\()/gm;
+
+/** Exported function wrappers in one service file: `[{ name, params, text }]`. */
+export function wrapperExports(src) {
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
+  const heads = [...blanked.matchAll(WRAPPER_HEAD)];
+  const allExports = [...blanked.matchAll(/^[ \t]*export\s/gm)].map((m) => m.index);
+  return heads.map((head) => {
+    const open = head.index + head[0].length - 1;
+    const close = matchBracket(blanked, open);
+    if (close === -1) return null;
+    const next = allExports.find((index) => index > head.index) ?? src.length;
+    return {
+      name: head[1] || head[2],
+      params: splitTopLevel(blanked, code, open + 1, close - 1)
+        .map(({ start, end }) => code.slice(start, end).trim()),
+      text: code.slice(close, next),
+    };
+  }).filter(Boolean);
+}
+
+/** The parameter text with its top-level `= default` dropped (a destructured default stays inside the pattern). */
+const stripDefault = (param) => {
+  let depth = 0;
+  for (let i = 0; i < param.length; i++) {
+    const c = param[i];
+    if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === '=' && depth === 0 && param[i + 1] !== '=' && param[i + 1] !== '>') return param.slice(0, i).trim();
+  }
+  return param.trim();
+};
+
+/** Does `wrapper` forward the argument it receives at `index` to `request`'s options? */
+export function forwardsOptionsAt(wrapper, index) {
+  if (wrapper.params.some((param) => param.startsWith('...')) && wrapper.params.findIndex((p) => p.startsWith('...')) <= index) return true;
+  if (index >= wrapper.params.length) return false;
+  const param = stripDefault(wrapper.params[index]);
+  if (param.startsWith('{')) return /\bsilent\b|\.\.\./.test(param);
+  if (OPTIONS_NAMES.has(param)) return true;
+  if (!/^[A-Za-z_$][\w$]*$/.test(param)) return false;
+  const escaped = param.replace(/\$/g, '\\$');
+  return new RegExp(`\\.\\.\\.${escaped}\\b|\\b${escaped}\\??\\.silent\\b|,\\s*${escaped}\\s*\\)`).test(wrapper.text);
+}
+
+const SILENT_KEY = /^(?:silent\s*(?::|$)|(['"])silent\1\s*:)/;
+
+/** Read keys only at property starts; literal values cannot invent those boundaries. */
+function hasSilentKey(blanked, code, start, end) {
+  while (start < end && /\s/.test(code[start])) start++;
+  if (blanked[start] !== '{') return false;
+  const close = matchBracket(blanked, start);
+  if (close === -1 || close > end) return false;
+  // Preserve the guard's conservative detection of keys in nested objects too.
+  for (let open = start; open !== -1 && open < close; open = blanked.indexOf('{', open + 1)) {
+    const objectEnd = matchBracket(blanked, open);
+    if (objectEnd === -1 || objectEnd > close) continue;
+    if (splitTopLevel(blanked, code, open + 1, objectEnd - 1)
+      .some((part) => SILENT_KEY.test(code.slice(part.start, part.end).trim()))) return true;
+  }
+  return false;
+}
+
+/**
+ * `{ line, name, index }` for every call of one of `names` that passes a literal
+ * object containing a `silent` key, with `index` the argument position. A bare
+ * `name(…)` counts only in a file that imports `name` (a hook handed the callback
+ * as a parameter owns its own contract); `api.name(…)` always counts.
+ */
+export function silentCalls(src, names) {
+  if (!src.includes('silent')) return [];
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
+  const imported = new Set([...code.matchAll(/import\s*\{([^}]*)\}\s*from/g)]
+    .flatMap((m) => m[1].split(',').map((part) => part.trim().split(/\s+as\s+/).pop())));
+  const hits = [];
+  for (const match of blanked.matchAll(/(?<![\w$.])(api\.)?([A-Za-z_$][\w$]*)\s*\(/g)) {
+    const [, namespace, name] = match;
+    if (!names.has(name) || (!namespace && !imported.has(name))) continue;
+    const open = match.index + match[0].length - 1;
+    const close = matchBracket(blanked, open);
+    if (close === -1) continue;
+    splitTopLevel(blanked, code, open + 1, close - 1).forEach(({ start, end }, index) => {
+      if (hasSilentKey(blanked, code, start, end)) {
+        hits.push({ line: src.slice(0, match.index).split('\n').length, name, index });
+      }
+    });
+  }
+  return hits;
+}
+
+/** Every `file: name(arg N)` where the wrapper at that position drops the options object. */
+export function findDroppedSilent(files, wrappers) {
+  const violations = [];
+  const byName = new Map();
+  for (const wrapper of wrappers) {
+    if (!byName.has(wrapper.name)) byName.set(wrapper.name, []);
+    byName.get(wrapper.name).push(wrapper);
+  }
+  const names = new Set(byName.keys());
+  for (const { file, src } of files) {
+    for (const { line, name, index } of silentCalls(src, names)) {
+      if (byName.get(name).some((wrapper) => !forwardsOptionsAt(wrapper, index))) {
+        violations.push(`${file}:${line} ${name}(…) passes { silent } as argument ${index + 1}`);
+      }
+    }
+  }
+  return violations;
+}
+
+const read = (file) => ({ file, src: readText(join(CLIENT_ROOT, file)) });
+
+describe('silent options reach the API wrapper that reads them (#9951)', () => {
+  it('has no { silent } passed to a position the wrapper drops', () => {
+    profile?.clear();
+    const tracked = measure('discovery', () => trackedSourceFiles(CLIENT_ROOT));
+    expect(tracked.length).toBeGreaterThan(100);
+    const files = measure('read', () => tracked.map(read));
+    const wrappers = measure('wrappers', () => files.filter(({ file }) => SERVICE_FILE.test(file)).flatMap(({ src }) => wrapperExports(src)));
+    // A broken parse would otherwise pass by judging nothing.
+    expect(wrappers.length).toBeGreaterThan(500);
+
+    const violations = measure('calls', () => findDroppedSilent(files, wrappers));
+    // Explicit profiling must survive CI's suppression of passing-test consoles.
+    if (profile) process.stdout.write(`⏱ API wrapper scan: files=${files.length}, wrappers=${wrappers.length}, ${[...profile].map(([stage, ms]) => `${stage}=${ms.toFixed(1)}ms`).join(', ')}\n`);
+    expect(
+      violations,
+      'These calls pass `{ silent: … }` to an API wrapper whose parameter at that position does not '
+      + 'forward it to `request()` — the toast still fires, or the object lands in the request body. Give the '
+      + 'wrapper an `options` parameter and spread it into `request(…, { …, ...options })`.\n'
+      + `Offenders:\n  ${violations.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  // Guards the guard: if the recognizer stops reading wrappers or call sites, the
+  // scan above goes vacuously green and the dropped-option class walks back in.
+  it('reads wrapper parameters and silent call sites', () => {
+    const wrappers = wrapperExports(`
+      export const noOptions = (id) => request(\`/x/\${id}\`);
+      export const named = (id, options) => request(\`/x/\${id}\`, options);
+      export const optsDefault = (id, opts = {}) => request(\`/x/\${id}\`, opts);
+      export const spreads = (id, data, extra) => request('/x', { method: 'PUT', body: JSON.stringify(data), ...extra });
+      export const destructured = (id, { silent, limit } = {}) => request('/x', { silent });
+      export const payloadOnly = (id, data) => request('/x', { method: 'POST', body: JSON.stringify(data) });
+      export async function restArgs(...args) { return request('/x', args[0]); }
+      export const passThrough = (id, o) => request('/x', o);
+    `);
+    const byName = Object.fromEntries(wrappers.map((w) => [w.name, w]));
+    expect(wrappers).toHaveLength(8);
+    expect(forwardsOptionsAt(byName.noOptions, 1)).toBe(false);
+    expect(forwardsOptionsAt(byName.named, 1)).toBe(true);
+    expect(forwardsOptionsAt(byName.optsDefault, 1)).toBe(true);
+    expect(forwardsOptionsAt(byName.spreads, 2)).toBe(true);
+    expect(forwardsOptionsAt(byName.spreads, 1)).toBe(false);
+    expect(forwardsOptionsAt(byName.destructured, 1)).toBe(true);
+    expect(forwardsOptionsAt(byName.payloadOnly, 1)).toBe(false);
+    expect(forwardsOptionsAt(byName.restArgs, 1)).toBe(true);
+    expect(forwardsOptionsAt(byName.passThrough, 1)).toBe(true);
+
+    const names = new Set(['noOptions', 'named']);
+    const imp = "import { noOptions, named } from './services/api';\n";
+    expect(silentCalls(`${imp}noOptions(id, { silent: true });`, names)).toEqual([{ line: 2, name: 'noOptions', index: 1 }]);
+    expect(silentCalls('api.noOptions(id, { retries: 1, silent });', names)).toHaveLength(1);
+    expect(silentCalls(`${imp}named(id, { silent: true });`, names)).toHaveLength(1);
+    // A callback handed in as a parameter (not imported) is the caller's contract.
+    expect(silentCalls('function f({ noOptions }) { noOptions(id, { silent: true }); }', names)).toEqual([]);
+    // A different callee, a method call, and a comment are not wrapper calls.
+    expect(silentCalls('other(id, { silent: true });', names)).toEqual([]);
+    expect(silentCalls(`${imp}thing.named(id, { silent: true });`, names)).toEqual([]);
+    expect(silentCalls(`${imp}// noOptions(id, { silent: true })`, names)).toEqual([]);
+  });
+
+  it('keeps dynamic endpoints, nested defaults, and calls inside template interpolation visible', () => {
+    const wrappers = wrapperExports(`
+      export const dynamic = (id, data = { label: \`item-\${id}\` }, extra) =>
+        request(\`/things/\${id ? 'nested)' : 'other'}\`, { body: JSON.stringify(data), ...extra });
+      export async function dropped(id = choose({ nested: [1, 2] })) {
+        return request(\`/things/\${id}\`);
+      }
+    `);
+    expect(wrappers.map(({ name, params }) => [name, params.length])).toEqual([
+      ['dynamic', 3], ['dropped', 1],
+    ]);
+    const files = [{ file: 'dynamic.jsx', src: `
+      import { dynamic } from './services/api';
+      dynamic(id, { value: 'literal }, separator' }, { silent: true });
+      dynamic(id, { silent: true });
+      const label = \`prefix \${api.dropped(choose({ nested: [1, 2] }), { silent: true })}\`;
+      // api.dropped(id, { silent: true });
+      const sample = 'api.dropped(id, { silent: true })';
+    ` }];
+    expect(findDroppedSilent(files, wrappers)).toEqual([
+      'dynamic.jsx:4 dynamic(…) passes { silent } as argument 2',
+      'dynamic.jsx:5 dropped(…) passes { silent } as argument 2',
+    ]);
+  });
+
+  it('flags a call whose position the wrapper drops and accepts a forwarding one', () => {
+    const wrappers = wrapperExports(`
+      export const noOptions = (id) => request(\`/x/\${id}\`);
+      export const named = (id, options) => request(\`/x/\${id}\`, options);
+    `);
+    const files = [
+      { file: 'a.jsx', src: "import { noOptions, named } from './services/api';\nnoOptions(1, { silent: true });\nnamed(1, { silent: true });" },
+    ];
+    expect(findDroppedSilent(files, wrappers)).toEqual(['a.jsx:2 noOptions(…) passes { silent } as argument 2']);
+  });
+
+  it('recognizes silent property keys without reading literal values as properties (#11535)', () => {
+    const wrappers = wrapperExports(`
+      export const dynamic = (id, data, extra) =>
+        request(\`/things/\${id}\`, { body: JSON.stringify(data), ...extra });
+    `);
+    const files = [{ file: 'literalPayload.jsx', src: `
+      import { dynamic } from './services/api';
+      dynamic(id, { value: 'literal }, silent: false' }, { silent: true });
+      dynamic(id, { value: "literal }, silent: false" }, { silent: true });
+      dynamic(id, { value: \`literal }, silent: false\` }, { silent: true });
+      dynamic(id, { value: /}, silent: false/ }, { silent: true });
+      dynamic(id, { /* }, silent: false */ value: choose({ nested: [1, 2] }) }, { silent: true });
+      const label = \`prefix \${dynamic(id, { value: 'literal }, silent: false' }, { silent: true })}\`;
+      dynamic(id, { value: 'literal }, silent: false', silent: false });
+      dynamic(id, { value: choose({ nested: [1, 2] }), silent });
+      dynamic(id, { 'silent': false });
+      dynamic(id, { "silent": false });
+      const dropped = \`prefix \${dynamic(id, { silent: true })}\`;
+      const shorthand = \`prefix \${dynamic(id, { silent })}\`;
+      dynamic(id, {}, { 'silent': true });
+      dynamic(id, { nested: [{ silent: true }] });
+      dynamic(id, { value: 'literal }, "silent": false', ['silent']: false });
+      dynamic(id, { value: choose({ nested: [1, 2] }), silent /* a real key */: false });
+    ` }];
+    expect(findDroppedSilent(files, wrappers)).toEqual([
+      'literalPayload.jsx:9 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:10 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:11 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:12 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:13 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:14 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:16 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:18 dynamic(…) passes { silent } as argument 2',
+    ]);
+  });
+});

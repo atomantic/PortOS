@@ -38,7 +38,7 @@ export function FormField({
   // the child's own id when present, otherwise inject the generated one.
   //
   // Keep the `cloneElement(child, { id: controlId, ... })` literal intact: the
-  // tree-wide scanner in a11y/controlNames.conventions.test.js proves this wrapper names its
+  // tree-wide scanner in client/src/test/guards/a11y/controlNames.test.js proves this wrapper names its
   // child by matching that exact shape, and a props object built in a variable
   // is invisible to it (#7525).
   let controlId = generatedId;

@@ -11,7 +11,7 @@ const FOCUS_RING = 'peer-focus-visible:outline-none peer-focus-visible:ring-2 pe
  * refuse to open the picker. Activating a `<label for>` is native, so every engine opens it.
  *
  * The input is visually hidden but stays focusable and in the a11y tree (it is the labelled control): do NOT use `className="hidden"` (`display: none`), `aria-hidden` or `tabIndex={-1}`. The label carries the focus ring via
- * `peer-focus-visible:`; `a11y/fileInputsToasts.conventions.test.js` enforces this.
+ * `peer-focus-visible:`; `client/src/test/guards/a11y/fileInputsToasts.test.js` enforces this.
  *
  * The input's value is cleared after every change (deferred until an async `onChange` settles, since clearing `value` empties `input.files`) so re-picking the SAME file fires `change` again; call sites must NOT clear `e.target.value`.
  *

@@ -22,7 +22,7 @@ import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib
 import { buildCiTestPlan, getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor, TOOLING_TESTS } from './ci-test-plan.js';
 import { EXCLUSIVE_TESTS } from './vitestCiPool.js';
 import { toRepoPath } from './lib/workspaceTests.js';
-import { isGuardTest } from './lib/guardScanners.js';
+import { guardRunnerFor, isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -556,8 +556,11 @@ export async function focusedLocalPlan(plan, trackedFiles, changedFiles, readTex
     const found = await textReaders(changedData, candidates, readWithTestMemo);
     for (const [source, tests] of found) addCapped(source, tests, 'text');
   }
+  // A structural guard check runs only inside its runner (#16996): the Vitest configs
+  // exclude its directory, so a changed or source-reading check selects the runner.
+  const runnable = [...focused].map(path => guardRunnerFor(path) ?? path).filter(path => tracked.has(path));
   for (const scope of ['server', 'client']) {
-    const files = [...new Set([...local[scope].files, ...[...focused].filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
+    const files = [...new Set([...local[scope].files, ...runnable.filter(path => scope === 'client' ? path.startsWith('client/') : !path.startsWith('client/'))])];
     local[scope] = { mode: files.length ? 'files' : 'skip', files, sources: [] };
   }
   local.relatedOverflow = relatedOverflow;
@@ -953,12 +956,13 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Name the guard files of a passed stage that ran over the per-file target.
+ * Name the guards of a passed stage over the per-guard target: each structural
+ * guard runner's checks, and every other guard file whole (scripts/lib/guardBudget.js).
  * Report only: local wall time measures this host's contention as much as the
  * guard, so the scheduled hosted run enforces the budget on its uniform runner (#16551, #16810).
  */
 function reportSlowGuards(result) {
-  const over = overBudgetGuards(result.fileDurations);
+  const over = overBudgetGuards(result.guardDurations);
   if (over.length > 0) {
     console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (the scheduled hosted run fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}; PR and push runs only warn).`);
   }
@@ -1192,7 +1196,7 @@ async function main() {
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
     if (durationsDir) {
-      result.fileDurations = readGuardDurations(durationsPath);
+      result.guardDurations = readGuardDurations(durationsPath);
       rmSync(durationsDir, { recursive: true, force: true });
     }
     const verdict = stageOutcomeVerdict(result, outcome);

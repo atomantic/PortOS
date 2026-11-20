@@ -8,4 +8,6 @@
 import { describe, it } from 'vitest';
 import { registerGuardChecks } from '../../../scripts/lib/guardScanners.js';
 
-registerGuardChecks(new URL('./modules/', import.meta.url), { describe, it });
+const CHECKS = new URL('./modules/', import.meta.url);
+
+registerGuardChecks(CHECKS, { describe, it, load: (name) => import(new URL(name, CHECKS).href) });

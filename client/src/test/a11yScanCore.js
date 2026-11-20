@@ -46,14 +46,14 @@
  * can't fail the suite.
  *
  * The scanner behind these guards is split across `src/test/a11yScan*.js`; the rules
- * live one family per file in `src/a11y/*.conventions.test.js`.
+ * live one family per file in `src/test/guards/a11y/`.
  */
 
 import { join, dirname } from 'path';
-import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles as trackedJsx, trackedSourceFiles as trackedSources } from '../test/trackedFiles.js';
 import { maskComments, } from './a11yScanNames.js';
+import { readText } from '../../../scripts/lib/guardCorpus.js';
 
 export const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -90,7 +90,7 @@ export const virtualSources = new Map();
 export function maskedSourceOf(file) {
   let masked = maskedSourceByFile.get(file);
   if (masked === undefined) {
-    const raw = virtualSources.get(file) ?? readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    const raw = virtualSources.get(file) ?? readText(join(CLIENT_ROOT, file));
     masked = maskComments(raw);
     maskedSourceByFile.set(file, masked);
   }
@@ -110,7 +110,7 @@ export const rawSourceByFile = new Map();
 export function rawSourceOf(file) {
   let raw = rawSourceByFile.get(file);
   if (raw === undefined) {
-    raw = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    raw = readText(join(CLIENT_ROOT, file));
     rawSourceByFile.set(file, raw);
   }
   return raw;
