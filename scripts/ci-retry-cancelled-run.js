@@ -53,26 +53,9 @@ const JOBS_PER_PAGE = 100;
 /** Newest-first; a successor, if one exists, is within the first few. */
 const SIBLING_RUNS_PER_PAGE = 5;
 
-/**
- * How long to idle before re-dispatching (issue 7439).
- *
- * The cancel this recovers from is caused by a saturated queue, so firing the
- * one-retry budget the instant the event arrives spends it at the moment it is
- * least likely to survive: on PR 7434 three re-runs of the IDENTICAL SHA were
- * each cancelled again while other runs were in flight, and that same SHA
- * passed on the first attempt made against an idle queue.
- *
- * Five minutes, because it is the smallest wait that plausibly outlives a
- * burst and the trade is lopsided: one job idling — not computing — for five
- * minutes against re-running twelve jobs straight into another cancel. It is
- * deliberately NOT "poll until the repository is quiet": on a busy repo that
- * can mean never retrying, which is worse than retrying into a cancel.
- *
- * Tune it from evidence, not intuition. Every recovery run's step summary
- * records the delay it used and whether the skip happened before or after the
- * wait, so the Actions history answers whether re-dispatched runs complete.
- */
-export const RETRY_DELAY_MS = 5 * 60_000;
+// A short grace period lets cancellation state settle without holding a hosted
+// runner for the duration of a busy queue. The step summary records the wait.
+export const RETRY_DELAY_MS = 60_000;
 
 /**
  * The longest one invocation can take: the wait, plus TWO full guard passes at
@@ -289,7 +272,7 @@ async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
  * Every guard that needs the API, in one pass.
  *
  * Extracted because it runs TWICE — once before the wait, so an obviously
- * ineligible run skips without occupying a runner for five minutes, and once
+ * ineligible run skips without idling a runner, and once
  * after it, because that is the reading the re-dispatch is actually made on.
  * Re-reading is not merely defensive: a supersession or a human re-run can
  * land during the wait, and the post-wait job listing is also the more
