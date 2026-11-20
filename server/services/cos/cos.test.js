@@ -1,3 +1,4 @@
+import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.js';
 /**
  * Tests for cos.js — focused on the two hot-spot internals that gate every
  * agent spawn but have no full-function test sibling:
@@ -64,7 +65,6 @@ const SPAWN_WINDOW_SRC = readFileSync(join(__dirname, '../../lib/cos/cosSpawnWin
 // listener) stays in cos.js. Source-level guards below read each invariant from
 // whichever module now owns it.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
-const IMP_SRC = readFileSync(join(__dirname, 'cosImprovementTasks.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
 // The pure capacity tracker + idle tier-eligibility predicate that
