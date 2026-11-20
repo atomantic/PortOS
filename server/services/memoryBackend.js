@@ -33,7 +33,7 @@ async function getBackend() {
   // `MEMORY_BACKEND=file` is an explicit, UNSUPPORTED-for-production escape
   // hatch — honored for development/tests only. PostgreSQL is the mandatory
   // backend for normal installs (the creative catalog has no file-backed
-  // equivalent). See docs/plans/2026-06-06-create-postgres-storage-inventory.md.
+  // equivalent). See docs/plans/archive/2026-06-06-create-postgres-storage-inventory.md.
   if (envBackend === 'file') {
     backend = await import('./memory.js');
     backendName = 'file';

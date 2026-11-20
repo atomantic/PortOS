@@ -1,6 +1,6 @@
 # Adversarial jamming as a quality-preserving SynthID-disruption vector — experiment
 
-**Date:** 2026-07-18 · **Area:** `server/lib/imageClean.js`, `server/services/imageGen/regen.js`, `client/src/pages/ImageClean.jsx` · **Issue:** #1764 · **Lineage:** #912, #970, #1763; builds on `docs/plans/2026-06-05-synthid-removal-eval.md`
+**Date:** 2026-07-18 · **Area:** `server/lib/imageClean.js`, `server/services/imageGen/regen.js`, `client/src/pages/ImageClean.jsx` · **Issue:** #1764 · **Lineage:** #912, #970, #1763; builds on `docs/plans/archive/2026-06-05-synthid-removal-eval.md`
 
 > **Update (2026-07-18, same day): the "no oracle" premise was relaxed.** OpenAI's
 > gpt-image ("codex") renders carry SynthID, and OpenAI exposes a **detector web

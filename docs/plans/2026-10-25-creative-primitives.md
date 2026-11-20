@@ -1,5 +1,7 @@
 # Creative catalog primitives and universe context
 
+Status: Active
+
 Tracking: #13609.
 
 ## Existing contracts

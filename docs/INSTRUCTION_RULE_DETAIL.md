@@ -114,3 +114,101 @@ Settings-over-a-feature surfaces use the shared `client/src/components/Drawer.js
 **A sanctioned poll uses `useAutoRefetch(fetchFn, intervalMs, { enabled, pollOnly: true })`** (`hooks/useAutoRefetch.js`), never a hand-rolled `setInterval`; it pauses in hidden tabs (#5697). Pass the gate as `enabled`, not an early `return`, and `immediate: false` when another effect owns the first fetch. *Enforced:* `pollingConventions.guard.test.js`.
 
 **Pick the right Layout scroll mode** by where the `<Route>` sits in `App.jsx`, never by pathname: `PageLayout` pages (`PageHeader` over an internally scrolling body) go under `<FullWidthMain />`, document/form routes (`/apps/create`) under `<PaddedMain />` (`components/PageShell.jsx`). Exceptions: `docs/research/PAGE_LAYOUT_AUDIT.md`.
+
+## Authentication and HTTPS detail
+
+- **Auth**: an optional instance password (`server/services/auth.js`, enforced by `server/services/authGate.js`) gates `/api/*` and `/data/*`, except `ALWAYS_PUBLIC_API_PATHS` in `server/lib/apiAccessPolicy.js` (`/api/auth/status`, `/api/auth/whoami`, `/api/auth/login`, `/api/auth/logout`, `/api/system/health`, `/api/eidoverse/travel/guest`). Paired peers use scoped pair credentials attached by `peerFetch` (`server/lib/peerHttpClient.js`); legacy Basic uses the instance password and is not scoped (`docs/PEER_PUSH_AUTH.md`).
+- **PortOS-spawned agents** authenticate with `PORTOS_API_TOKEN`, a loopback session token injected into their environment (`server/services/agent/agentApiAuth.js`). Any `curl` against this install's API carries `-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"`; on `401 AUTH_REQUIRED`, check for a missing, expired or invalid token before diagnosing availability. It is empty when no password is set and never given to a public-content review stage.
+- **Agents PortOS did not spawn** call the API with `node scripts/portos-api.js …` (`PORTOS_API_TOKEN` when set, else the opt-in key in `~/.portos/agent-key.json`); never ask for or type the instance password ([docs/AGENT_API_KEY.md](docs/AGENT_API_KEY.md), `portos-api` skill).
+- **HTTPS**: `npm run setup:cert` flips `:5555` to TLS with a loopback-only HTTP mirror on `:5553`. Peer hops set `rejectUnauthorized: false` because WireGuard authenticates tailnet nodes; a non-tailnet peer (plain LAN IP or non-`.ts.net` host, see `peerRequiresTailscale()`) gets no server authentication.
+
+Full federation rule (moved from root):
+
+**Federation between the user's own machines** is supported ([ADR](docs/decisions/2026-09-19-user-controlled-federation.md)), but reachability or an inbound announcement is never permission to publish to other people. Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [detail](docs/INSTRUCTION_RULE_DETAIL.md#federation-between-the-users-own-machines).
+
+## Security posture detail
+
+**Preserve delegated agent authority.** In the host-control gate an operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Genuine local callers keep host access when auth is disabled; network reachability and scoped peer credentials do not grant it. A Basic password holder can already exchange it for a session, so refusing Basic is credential-use policy, not isolation. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow (trace the real path, fallback and deferred work included). Authorized agent execution is an intended capability, not a vulnerability; a configured tool-capable provider still never lets an anonymous remote caller launch it.
+
+**Assess security findings against actual control, reachability and impact.** Follow [security risk assessment](docs/SECURITY_RISK_ASSESSMENT.md): distinguish owner-input reliability and conditional exposure from unauthorized harm, retain external-content and browser/network defenses, reuse the existing abuse guard only on paths it covers, and record dispositions with reevaluation conditions.
+
+**Audit the external boundary, not delegated autonomy.** Trusted local agents in a user-granted workflow are operators, not adversaries. Protect against malicious third-party code and dependencies, issue/PR/review content, retrieved pages and files, model output, and unauthorized LAN/tailnet callers; local execution does not sanitize them, and untrusted content cannot expand a grant, pick a new audience, change policy or gain host authority. Fix the actual crossing instead of adding human-only approvals, repeated passwords, blanket tool restrictions or per-step confirmations. Keep revision/evidence checks, data protection, budgets and explicit publication controls.
+
+**Creative review and public publication are separate.** Only public Suno publication and social-media posting need the human; review decisions bind to exact revisions and genuine inspection evidence. Provider permissions, quotas, budgets and purchase authorization still apply (the `portos-music-video-*` skills carry the delegated-review detail).
+
+## Distribution model detail
+
+**Distribution model (across installs).** Installs upgrade on their own schedules and often federate, so cross-install and cross-version compatibility is first-class:
+
+- **Never delete or skip migration/compatibility code because "there's only one install."**
+- On-disk format changes need a migration in `scripts/migrations/` (applied-list per install in `data/migrations.applied.json`). Seed files ship in `data.reference/`.
+- **A migration that DERIVES `data/<x>` from existing records ships NO `data.reference/<x>` seed and gates on its INPUT, never its output's absence**: `setup-data.js` copies missing seeds first, so a seeded output looks "already done" and the next write destroys the user's data (`scripts/migrations/340-cos-config-seed-repair.js`). Declare such a path in `scripts/lib/migrationOwnedPaths.js` and in the migration's `OWNED_OUTPUT_PATHS`; the guard checks both.
+- Prompt-default changes: edit the body, then run the integrity-snapshot regen, which bumps the version so other installs upgrade stored defaults (procedure: `server/AGENTS.md` "Prompt templates").
+- Cross-machine sync payloads stay version-gated (`server/lib/schemaVersions.js`).
+- Self-update stays fork-aware. **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits; the 409 `FORK_DIVERGED` message tells the user to run it themselves). The upstream slug lives only in `server/lib/gitRemote.js`; UI claiming "you are running PortOS" reads `remoteInfo.isUpstream` ([docs/SELF_UPDATE.md](docs/SELF_UPDATE.md)).
+
+## Privacy detail
+
+Use obviously fake placeholders (`example.com`, `alice@example.com`, `192.0.2.10`, `Acme Corp`, `host-XXXX`) and redact repro logs (`<hostname>`, `<user-email>`, `<tailscale-ip>`, `<record-id>`). Read `hostname`, `whoami`, `ifconfig`/`ip addr`, `tailscale status`, `env` or `git config user.*` only for in-session logic, never into an artifact. Scan your diff and prose before committing or posting; if real data was already committed, rewrite the branch before pushing, not a redaction commit. Prefer repo-relative paths (`~/…` or `<repo-root>/…` when absolute is unavoidable). **Never link AI conversation sessions** (`claude.ai`, `chatgpt.com` or any chat share URL) in PRs, commits, issues or reviews; reference issue/PR numbers, SHAs and file paths.
+
+## AI provider policy detail
+
+**No cold-bootstrap LLM calls.** PortOS never queues provider calls the user hasn't knowingly triggered: none from server boot or `server/index.js` init (warm-ups, pre-generation, backfills), and no background job that grows "what the user asked for" into "a batch for later." User-configured scheduled automations (`taskSchedule.js`, `backupScheduler.js`, autopilot gates, CoS agents) are the one exception; anything else needs a direct user action in the same request or an explicit consent/config step. For cache pre-generation, boot loads only what is on disk; the cold fill runs only from a user-triggered endpoint behind a prompt naming the provider/model that lets the user change or decline it; replenishing an item the user consumed may run silently. Reference: `meatspacePostDrillCache.js`.
+
+## Live Node inspector
+
+- **Live Node inspector**: no dynamic `import()` from an inspector-evaluated callback ([safe cleanup](docs/TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling)).
+
+## Moved from root (issue triage, findings, storage)
+
+- **Route to the owner.** Shared slashdo command, renderer or workflow defects go to [atomantic/slashdo](https://github.com/atomantic/slashdo/issues); PortOS behavior, integration, configuration and instructions go here; forks and managed apps use their configured remote. Use your own authorized GitHub identity, never the owner's (Pico-delegated work: `picodot`; the owner's local agents: `atomantic` when authorized).
+- **Search before filing.** Reuse an existing issue and add evidence; a new issue carries redacted evidence or repro steps, expected vs actual, affected files, a next step and acceptance criteria, and says whether a flake is suspected or reproduced. Batch one run's `model:light` + `effort:low` same-area findings into one checklist issue; bug, security and data-safety findings stay standalone. For PortOS, read [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and the label guidance in `server/lib/dispatchLabels.js`.
+
+A rule may be retired after reassessing its value and feasibility, with concise rationale; difficulty alone is not an exemption, and retiring never hides a known important defect. Never suppress findings, weaken tests, demote rules or disable useful checks to get green; invest in high-quality fixes. A hardware, permission or genuinely user-owned blocker stays explicitly unresolved with evidence, an owner and a tracked next step, never relabeled clean. Bounded audits may track remaining accepted work; severity alone never justifies deferral.
+
+**Storage backend.** PostgreSQL (system `:5432` or Docker `:5561`, `npm run setup:db`) is mandatory for every install and peer (`docs/STORAGE.md`). `MEMORY_BACKEND=file` is a dev/test escape hatch selected by `NODE_ENV=test`; with it unset, `server/services/memoryBackend.js` fails fast without a healthy DB, intentionally: add no silent fallback or file choice to `scripts/setup-db.js`.
+
+**API keys for free, non-monetary services are not security findings.** Host-allowlisting or redirect-stripping one (CivitAI, #2200) is won't-fix; the key is still never committed or logged. Paid/quota-billed keys and keys gating money-bearing or destructive actions are not exempt.
+
+## Moved from root (commands, worktrees, privacy lists)
+
+**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It skips imports past two hops and browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
+
+Use linked binaries (`server/node_modules/.bin/vitest run <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add` (pregate links too).
+
+- **Network info**: LAN/Tailscale/public IPs, MACs, subnets, port forwards, gateways, VPN keys, `.env` secrets, DB passwords other than the `portos` dev fallback, API tokens, cookies, auth headers.
+
+## Moved from root (platform, host control, changelog)
+
+macOS is the primary interactive app/browser target; Windows is secondary; Linux interactive browser compatibility is not a support target (Linux server support is unchanged), and headless Linux CI failures still get investigated. Linux-browser-only work needs a supported-target reproduction or concrete shared-code, server, security or data impact. Triage: [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md) and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#platform-support-and-issue-triage).
+
+**Host control is high stakes.** PortOS executes commands and reads private files with the host user's privileges, and a reachable or compromised LAN/tailnet peer can abuse password-free APIs. Encourage a strong, unique instance password. Password-free installs warn after upgrade until the operator accepts the risk or sets one; acceptance is machine-local and grants peers no execution authority.
+
+- **No changelog entries in PRs.** Commit messages are the record; `/do:release` writes `.changelog/RELEASE.md` from the log, so write subjects and bodies for a human reading release notes (`.changelog/README.md`).
+
+**Scope boundary**: work on managed apps outside PortOS (research, plans, docs, code) goes in that app's repository.
+
+## Moved from root (architecture, tests)
+
+The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`, `npm start` the built client from `:5555`. PM2 manages app lifecycles. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`; PostgreSQL 5432 system, 5561 Docker); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs` (re-exported by `server/lib/ports.js`).
+
+Test at the highest practical public boundary (route, service workflow, store adapter, socket exchange, rendered interaction); add focused unit tests only where that can't pin behavior precisely or cheaply (parsers, security/privacy/destructive-action guards, migrations, schema boundaries). Name the regression a new test uniquely catches. Full policy: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#test-strategy-value-over-assertion-count).
+
+A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/TEST_MEMO.md`).
+
+## Moved from root (claiming, docs, modules)
+
+**Revalidate issues before claiming** against the freshly fetched default branch, `ETHOS.md` and this security model; skip resolved, superseded or incompatible work with concrete evidence (an inconclusive check is not proof of resolution) and preserve active owners. Procedure: [portos-file-issue](.claude/skills/portos-file-issue/SKILL.md).
+
+[ETHOS.md](ETHOS.md) states why unsupervised agent operation is the design target; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/`.
+
+Every reusable-code directory (`server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, `client/src/services/`) is cataloged from module headers. **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match; before adding a file there, read [portos-add-module](.claude/skills/portos-add-module/SKILL.md). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
+
+## Moved from root (misc)
+
+**Preserve delegated agent authority.** An operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Network reachability and scoped peer credentials never grant host access. Security findings distinguish these principals and test both unauthorized refusal and the preserved authorized workflow. Authorized agent execution is an intended capability, not a vulnerability.
+
+- **Zod** route validation: domain `lib/*Validation.js`.
+- **Command allowlists**: preserve the policies in `server/lib/commandSecurity.js` and the agent guard.
+
+Before finishing, leave every problem you discovered (product bugs, broken expectations, workflow/process defects, flaky tests, concrete inefficiencies) either fixed and verified or filed in the owning project's tracker. "Pre-existing," "unrelated" and "out of scope" are reasons to file, not to drop it. No unrelated full-repository audit is required.

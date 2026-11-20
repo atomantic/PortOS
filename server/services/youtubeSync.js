@@ -7,7 +7,7 @@
  * historical path is the Takeout backfill (youtubeImport.js); this scrape keeps
  * the timeline fresh between backfills by reading the same page a human sees.
  *
- * Design constraints (docs/plans/2026-07-04-human-activity-tracking.md + #2153):
+ * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md + #2153):
  *
  * - **Conservative cadence.** The history page only shows DAY-bucketed entries
  *   (no per-watch clock time), so polling more than a few times a day buys

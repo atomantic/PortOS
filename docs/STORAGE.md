@@ -28,7 +28,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Where it lives.** PostgreSQL via `server/lib/db.js` + `server/scripts/init-db.sql`. Service modules own the storage adapter (e.g. `server/services/catalog/catalogDB.js`, `server/services/memoryDB.js`).
 
 
-**Postgres-First target.** Pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets where they remain in `data/` JSON; the Create-domain schema is designed in [`docs/plans/2026-06-07-create-relational-schema-design.md`](./plans/2026-06-07-create-relational-schema-design.md).
+**Postgres-First target.** Pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets where they remain in `data/` JSON; the Create-domain schema is designed in [`docs/plans/archive/2026-06-07-create-relational-schema-design.md`](./plans/archive/2026-06-07-create-relational-schema-design.md).
 
 ---
 

@@ -232,7 +232,7 @@ This is **read-time resolution only**: nothing on disk changes, sparse configura
 ## See also
 
 - [Storage Classification Contract](./STORAGE.md) — which data lives in Postgres vs files (and therefore which half of a snapshot captures it).
-- [`docs/plans/2026-06-05-verified-pg-backup-design.md`](./plans/2026-06-05-verified-pg-backup-design.md) — design rationale for verified, restorable DB backups.
+- [`docs/plans/archive/2026-06-05-verified-pg-backup-design.md`](./plans/archive/2026-06-05-verified-pg-backup-design.md) — design rationale for verified, restorable DB backups.
 
 - [Backup and restore runbooks](./BACKUP_RUNBOOKS.md) — database backend migration, older-snapshot restore, in-server store restores, maintenance admission.
 - [Shared backup publication admission](./BACKUP_PUBLICATION_ADMISSION.md) — how snapshots stay consistent while assets change.

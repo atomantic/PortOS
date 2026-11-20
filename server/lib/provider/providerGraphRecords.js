@@ -29,7 +29,7 @@ import { isNonBlankStr } from '../textUtils.js';
 
 /**
  * The DURABLE half of the provider connection graph (#6367, design record
- * `docs/plans/2026-09-06-provider-connections-and-harnesses.md`).
+ * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md`).
  *
  * `providerGraphPreview.js` (#6366) answers "what WOULD an import create?" from
  * provider records alone. This module owns the records that survive a restart:

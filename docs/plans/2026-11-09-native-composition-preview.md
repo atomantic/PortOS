@@ -1,5 +1,7 @@
 # Native playback for shipped-template composition previews
 
+Status: Active
+
 ## Context
 
 Decision record for #15618. The docked "Composition (live)" preview of a composition

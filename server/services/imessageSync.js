@@ -3,7 +3,7 @@
  * (`~/Library/Messages/chat.db`) and feed both the Tribe touchpoint log and the
  * machine-local human-activity timeline (#2150).
  *
- * Design constraints (see docs/plans/2026-07-04-human-activity-tracking.md):
+ * Design constraints (see docs/plans/archive/2026-07-04-human-activity-tracking.md):
  *
  * - **Zero new dependencies.** SQLite reads use Node's built-in `node:sqlite`
  *   (Node ≥22). The DB is opened `readOnly: true` — we NEVER write to Apple's DB.

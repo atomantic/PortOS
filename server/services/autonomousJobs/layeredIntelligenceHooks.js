@@ -5,7 +5,7 @@
  * call wrapped in `runLayeredIntelligenceForApp`, invisible to the CoS queue /
  * Active Agents and un-attachable in a TUI. It is now a NORMAL agent-backed
  * scheduled task with two programmatic slots (see taskTypeHooks.js +
- * docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md):
+ * docs/plans/archive/2026-07-09-programmatic-io-scheduled-tasks.md):
  *
  *   - `buildTaskInput({ app })` — the GATHER layer: park-check (skip if parked),
  *     gather the app's sources + open issues, and build the reasoning prompt the

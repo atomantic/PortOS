@@ -9,7 +9,7 @@
  * schema, a missing key, or a failed decryption surfaces an actionable sync-status
  * error and NEVER crashes or retry-loops.
  *
- * Design constraints (docs/plans/2026-07-04-human-activity-tracking.md, #11149):
+ * Design constraints (docs/plans/archive/2026-07-04-human-activity-tracking.md, #11149):
  *
  * - **Consistent snapshot, not a main-file copy.** Signal runs in WAL mode, so
  *   committed messages can live only in the WAL until the next checkpoint.

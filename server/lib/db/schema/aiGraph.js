@@ -1,6 +1,6 @@
 // AI provider connection graph DDL — `ai_connections`, `ai_harness_bindings`
 // and `ai_route_bindings` (#6367, design record
-// docs/plans/2026-09-06-provider-connections-and-harnesses.md).
+// docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md).
 //
 // The MANAGEMENT half of provider configuration: which backend a harness talks
 // to, which harness configurations exist on it, and which executable route each

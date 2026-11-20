@@ -1,5 +1,7 @@
 # Local-first merge gate: make pregate the authority for own-agent PRs
 
+Status: Active
+
 Approved 2026-10-18. Audit of the CI and test patterns behind PR merge latency,
 and the six changes that follow from it.
 

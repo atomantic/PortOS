@@ -1,5 +1,7 @@
 # Casting detail loading
 
+Status: Active
+
 Tracking: #13627. Builds on the canonical primitive model delivered in #13626.
 
 ## Baseline and limits
