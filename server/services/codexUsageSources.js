@@ -30,8 +30,9 @@ const CODEX_PREVIEW_LIMITS = Object.freeze({
   files: 10_000, entries: 100_000, decodedBytes: 256 * GIB,
   records: 100_000, lineBytes: 1024 * 1024, milliseconds: 30_000, depth: 16
 });
-// Routine accounting converges across passes, so only decoding spends a budget:
+// Routine accounting converges across passes by caching verified projections:
 // - cold*: decoding a pass admits. A source already started finishes; the rest wait.
+//   Reading coarse-timestamp sources to verify their bytes also spends cold time and bytes.
 // - records, decodedBytes, lineBytes: per source. Over them only that source is held.
 // - files, entries: ceilings on the walk and on per-source metadata held for a pass.
 const CODEX_ROUTINE_LIMITS = Object.freeze({
@@ -176,7 +177,47 @@ function unchanged(before, after) {
     && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
 }
 
-async function inspectFile(path, state, range, decompress) {
+const metadataRevision = info => info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : 'missing';
+// HFS+ has one-second timestamps. An explicitly set mtime can also land on a
+// whole second, but a precise ctime still distinguishes those writes.
+const coarseTimestamps = info => info?.isFile() && info.mtimeMs % 1000 === 0 && info.ctimeMs % 1000 === 0;
+
+async function readSourceFile(path, state, expected, consume) {
+  state.check();
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw problem('unsupported_entry');
+    if (expected && !unchanged(expected, before)) throw problem('source_changed');
+    // Read a fixed extent even if the file grows during the scan.
+    const input = before.size ? handle.createReadStream({ autoClose: false, end: before.size - 1, highWaterMark: 64 * 1024 }) : null;
+    await consume(input);
+    if ((input?.bytesRead ?? 0) !== before.size || !unchanged(before, await handle.stat()) || !unchanged(before, await lstat(path))) {
+      throw problem('source_changed');
+    }
+    state.check();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function hashSourceFile(path, state, info) {
+  if (info.size > state.limits.decodedBytes) throw problem('decoded_byte_limit');
+  const digest = createHash('sha256');
+  await readSourceFile(path, state, info, async input => {
+    if (!input) return;
+    await pipeline(input, async chunks => {
+      for await (const chunk of chunks) {
+        state.check();
+        state.revalidatedBytes += chunk.length;
+        digest.update(chunk);
+      }
+    }, { signal: state.signal });
+  });
+  return digest.digest('hex');
+}
+
+async function inspectFile(path, state, range, decompress, expected = null, expectedHash = null) {
   let cwd = null;
   const ids = new Set();
   const lineage = { forkedFrom: null };
@@ -205,17 +246,26 @@ async function inspectFile(path, state, range, decompress) {
       issues.add('malformed');
     }
   };
-  let handle;
   try {
     state.check();
     if (compressed && typeof decompress !== 'function') throw problem('unsupported_compression');
-    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    const before = await handle.stat();
-    if (!before.isFile()) throw problem('unsupported_entry');
-    if (before.size) {
-      // Read only the captured extent; appends cannot turn this into an endless
-      // scan. A second stat invalidates the source rather than trusting a prefix.
-      const input = handle.createReadStream({ autoClose: false, end: before.size - 1, highWaterMark: 64 * 1024 });
+    await readSourceFile(path, state, expected, async input => {
+      if (!input) {
+        if (compressed) issues.add('invalid_compression');
+        return;
+      }
+      const digest = expectedHash && createHash('sha256');
+      // On a coarse-volume cache miss, bind the projection to the bytes the
+      // decoder actually consumed. Metadata alone cannot detect a rewrite here.
+      async function* verifyInput(chunks) {
+        for await (const chunk of chunks) {
+          state.check();
+          state.revalidatedBytes += chunk.length;
+          digest.update(chunk);
+          yield chunk;
+        }
+        if (digest.digest('hex') !== expectedHash) throw problem('source_changed');
+      }
       const consume = async chunks => {
         let pending = Buffer.alloc(0);
         let skipping = false;
@@ -244,17 +294,13 @@ async function inspectFile(path, state, range, decompress) {
         }
         if (pending.length) addLine(pending);
       };
-      await pipeline(...[input, ...(compressed ? [decompress()] : []), consume], { signal: state.signal });
-    } else if (compressed) issues.add('invalid_compression');
-    const after = await lstat(path);
-    if (!unchanged(before, await handle.stat()) || !unchanged(before, after)) issues.add('source_changed');
+      await pipeline(...[input, ...(digest ? [verifyInput] : []), ...(compressed ? [decompress()] : []), consume], { signal: state.signal });
+    });
   } catch (error) {
     const reason = state.stopReason() || error.code;
     if (PASS_STOPS.includes(reason) || (!state.routine && BUDGET_STOPS.includes(reason))) state.stopped = reason;
-    issues.add([...PASS_STOPS, ...BUDGET_STOPS, 'line_limit', 'unsupported_compression', 'unsupported_entry'].includes(reason)
+    issues.add([...PASS_STOPS, ...BUDGET_STOPS, 'line_limit', 'source_changed', 'unsupported_compression', 'unsupported_entry'].includes(reason)
       ? reason : compressed ? 'invalid_compression' : 'unreadable_source');
-  } finally {
-    await handle?.close();
   }
   if (ids.size > 1) issues.add('conflicting_identity');
   else if (!ids.size && records.length) issues.add('missing_identity');
@@ -288,8 +334,8 @@ function storedSource(path, revision, { id, cwd, fingerprint }) {
   return source;
 }
 
-async function decodeAndStore(path, revision, info, state, decompress) {
-  const source = await inspectFile(path, state, null, decompress);
+async function decodeAndStore(path, revision, info, state, decompress, contentHash) {
+  const source = await inspectFile(path, state, null, decompress, info, contentHash);
   if (!source.valid) {
     sourceInventory.delete(path);
     return source;
@@ -298,7 +344,7 @@ async function decodeAndStore(path, revision, info, state, decompress) {
   if (!source.ids.size) return source;
   const [id] = source.ids;
   const projection = { revision, id, cwd: source.cwd, fingerprint: source.fingerprint };
-  if (await writeInventorySource(hash(path), { ...projection, records: source.records, sourceMtimeMs: info.mtimeMs })) {
+  if (info && await writeInventorySource(hash(path), { ...projection, records: source.records, sourceMtimeMs: info.mtimeMs })) {
     return storedSource(path, revision, projection);
   }
   state.retainedRecords += source.records.length;
@@ -306,11 +352,11 @@ async function decodeAndStore(path, revision, info, state, decompress) {
   return source;
 }
 
-const coldBudgetSpent = ({ coverage, limits, started }) => coverage.filesInspected - coverage.filesCached >= limits.coldFiles
-  || coverage.decodedBytes >= limits.coldBytes || performance.now() - started >= limits.coldMilliseconds;
+const coldWorkBytes = state => state.coverage.decodedBytes + state.revalidatedBytes;
+const coldTimeSpent = state => performance.now() - state.started >= state.limits.coldMilliseconds;
 
-/** A verified source, or null when this pass's cold budget leaves it for a later one. */
-async function readRoutineSource(path, revision, info, state, decompress) {
+/** A verified source revision, or null when this pass's cold budget leaves it for a later one. */
+async function readRoutineSource(path, revision, info, state, decompress, contentHash) {
   const { coverage, limits } = state;
   // A runtime without the decoder must report that, not coast on an earlier decode.
   if (!path.endsWith('.zst') || typeof decompress === 'function') {
@@ -335,11 +381,9 @@ async function readRoutineSource(path, revision, info, state, decompress) {
       return shared;
     }
   }
-  if (coldBudgetSpent(state)) {
-    coverage.filesPending++;
-    return null;
-  }
-  const result = decodeAndStore(path, revision, info, state, decompress);
+  if (coverage.filesInspected - coverage.filesCached >= limits.coldFiles
+    || coldWorkBytes(state) >= limits.coldBytes || coldTimeSpent(state)) return null;
+  const result = decodeAndStore(path, revision, info, state, decompress, contentHash);
   const entry = { revision, decompress, lineBytes: limits.lineBytes, records: limits.records, decodedBytes: limits.decodedBytes, result };
   decodesInFlight.set(path, entry);
   try {
@@ -347,6 +391,32 @@ async function readRoutineSource(path, revision, info, state, decompress) {
   } finally {
     if (decodesInFlight.get(path) === entry) decodesInFlight.delete(path);
   }
+}
+
+async function readRoutineRevision(path, info, state, decompress) {
+  let revision = metadataRevision(info);
+  let contentHash = null;
+  const revalidate = coarseTimestamps(info) && (!path.endsWith('.zst') || typeof decompress === 'function');
+  if (revalidate) {
+    const { limits } = state;
+    if (info.size > limits.coldBytes - coldWorkBytes(state) || coldTimeSpent(state)) {
+      state.unverifiedCoarseSources = true;
+      return null;
+    }
+    try {
+      contentHash = await hashSourceFile(path, state, info);
+    } catch (error) {
+      const reason = state.stopReason() || error.code;
+      if (PASS_STOPS.includes(reason)) state.stopped = reason;
+      const issue = [...PASS_STOPS, ...BUDGET_STOPS, 'source_changed', 'unsupported_entry'].includes(reason) ? reason : 'unreadable_source';
+      state.unverifiedCoarseSources = true;
+      return { revision, source: { ids: [], issues: [issue], valid: false, fingerprint: null } };
+    }
+    revision += `:${contentHash}`;
+  }
+  const source = await readRoutineSource(path, revision, info, state, decompress, contentHash);
+  if (revalidate && !source?.valid) state.unverifiedCoarseSources = true;
+  return source && { revision, source };
 }
 
 /** Explicit, read-only aggregate preview; no ledger or provider dependencies.
@@ -368,7 +438,8 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   const coverage = { complete: false, filesDiscovered: 0, filesInspected: 0, filesCached: 0, filesPending: 0, entriesVisited: 0,
     decodedBytes: 0, recordsRead: 0, logicalSessions: 0, resolvedSessions: 0, unresolvedSessions: 0, duplicateCopies: 0, issues: {} };
   const state = {
-    limits, coverage, routine, started, retainedRecords: 0, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    limits, coverage, routine, started, retainedRecords: 0, revalidatedBytes: 0, unverifiedCoarseSources: false,
+    signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     stopped: null,
     stopReason: () => signal?.aborted ? 'cancelled' : controller.signal.aborted || performance.now() - started >= limits.milliseconds ? 'time_limit' : null,
     check() { const reason = this.stopped || this.stopReason(); if (reason) throw problem(reason); },
@@ -391,11 +462,14 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
         if (info && floor != null && info.mtimeMs < floor) continue;
         if (coverage.filesDiscovered >= limits.files) throw problem('file_limit');
         coverage.filesDiscovered++;
-        const revision = info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : 'missing';
-        const source = routine
-          ? await readRoutineSource(path, revision, info, state, decompress)
-          : await inspectFile(path, state, range, decompress);
-        if (!source) continue;
+        const verified = routine
+          ? await readRoutineRevision(path, info, state, decompress)
+          : { revision: metadataRevision(info), source: await inspectFile(path, state, range, decompress) };
+        if (!verified) {
+          coverage.filesPending++;
+          continue;
+        }
+        const { revision, source } = verified;
         for (const issue of source.issues) state.issue(issue);
         revisions.push([hash(path), revision, source.fingerprint, source.valid]);
         coverage.filesInspected++;
@@ -446,6 +520,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   if (routine) await trimInventoryCache(limits.cacheBytes);
   if (accounting) return {
     sessions: [...sessions.values()].filter(session => session.valid), coverage, stopped: state.stopped, problemSources,
+    unverifiedCoarseSources: state.unverifiedCoarseSources,
     revision: hash(JSON.stringify([revisions.sort((a, b) => a[0].localeCompare(b[0])), coverage.issues]))
   };
   return { range: { from, to, timezone: 'UTC', inclusive: true }, limits,
