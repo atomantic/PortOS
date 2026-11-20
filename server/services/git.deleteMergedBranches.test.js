@@ -32,7 +32,7 @@ beforeEach(() => {
     if (args[0] === 'remote') return ok((args.includes('--push') ? pushEndpoints : fetchEndpoints).join('\n'));
     if (args[0] === 'symbolic-ref') return ok('origin/main\n');
     if (args[0] === 'rev-parse') return ok(HEAD);
-    if (args[0] === 'branch' && args.includes('--list')) return ok(local.join('\n'));
+    if (args[0] === 'for-each-ref' && args.includes('--format=%(refname:lstrip=2)')) return ok(local.join('\n'));
     if (args[0] === 'branch') return ok((args.includes('-r') ? remote : local).join('\n'));
     if (args[0] === 'fetch') return { ...ok(), exitCode: fetchFailed ? 1 : 0 };
     if (args[0] === 'ls-remote' && args.includes('--symref')) return ok(`ref: refs/heads/main\tHEAD\n${HEAD}\tHEAD\n`);
