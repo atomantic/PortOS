@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getSocialAccounts: vi.fn(),
   getSocialAccountPlatforms: vi.fn(),
   getSocialAccountStats: vi.fn(),
-  getSocialAccountOrgLinks: vi.fn(),
   createSocialAccount: vi.fn(),
   updateSocialAccount: vi.fn(),
   deleteSocialAccount: vi.fn(),
-  createPrivacyOrg: vi.fn()
+}));
+vi.mock('../../../services/apiPrivacy.js', () => ({
+  getSocialAccountOrgLinks: vi.fn(),
+  createPrivacyOrg: vi.fn(),
 }));
 
 vi.mock('../../ui/Toast', () => ({
@@ -18,7 +20,14 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import AccountsTab from './AccountsTab';
-import * as api from '../../../services/api';
+import {
+  getSocialAccounts,
+  getSocialAccountPlatforms,
+  getSocialAccountStats,
+  createSocialAccount,
+  updateSocialAccount,
+} from '../../../services/apiDigitalTwin.js';
+import { getSocialAccountOrgLinks } from '../../../services/apiPrivacy.js';
 
 const MOCK_PLATFORMS = {
   platforms: [
@@ -61,12 +70,12 @@ const MOCK_ACCOUNTS = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getSocialAccounts.mockResolvedValue(MOCK_ACCOUNTS);
-  api.getSocialAccountPlatforms.mockResolvedValue(MOCK_PLATFORMS);
-  api.getSocialAccountStats.mockResolvedValue(MOCK_STATS);
-  api.getSocialAccountOrgLinks.mockResolvedValue([]);
-  api.createSocialAccount.mockResolvedValue({ id: 'acc-3', platform: 'github', username: 'newuser' });
-  api.updateSocialAccount.mockResolvedValue({ id: 'acc-1', platform: 'github', username: 'octocat' });
+  getSocialAccounts.mockResolvedValue(MOCK_ACCOUNTS);
+  getSocialAccountPlatforms.mockResolvedValue(MOCK_PLATFORMS);
+  getSocialAccountStats.mockResolvedValue(MOCK_STATS);
+  getSocialAccountOrgLinks.mockResolvedValue([]);
+  createSocialAccount.mockResolvedValue({ id: 'acc-3', platform: 'github', username: 'newuser' });
+  updateSocialAccount.mockResolvedValue({ id: 'acc-1', platform: 'github', username: 'octocat' });
 });
 
 describe('AccountsTab', () => {
@@ -112,8 +121,8 @@ describe('AccountsTab', () => {
     const submitBtn = addButtons[addButtons.length - 1];
     await user.click(submitBtn);
 
-    await waitFor(() => expect(api.createSocialAccount).toHaveBeenCalledOnce());
-    const submittedPayload = api.createSocialAccount.mock.calls[0][0];
+    await waitFor(() => expect(createSocialAccount).toHaveBeenCalledOnce());
+    const submittedPayload = createSocialAccount.mock.calls[0][0];
 
     expect(submittedPayload.platform).toBe('github');
     expect(submittedPayload.username).toBe('newuser');
@@ -148,8 +157,8 @@ describe('AccountsTab', () => {
     const updateBtn = screen.getByRole('button', { name: /^update$/i });
     await user.click(updateBtn);
 
-    await waitFor(() => expect(api.updateSocialAccount).toHaveBeenCalledOnce());
-    const [id, submittedPayload] = api.updateSocialAccount.mock.calls[0];
+    await waitFor(() => expect(updateSocialAccount).toHaveBeenCalledOnce());
+    const [id, submittedPayload] = updateSocialAccount.mock.calls[0];
 
     expect(id).toBe('acc-1');
     expect(submittedPayload.displayName).toBe('Updated Octocat');
@@ -160,8 +169,8 @@ describe('AccountsTab', () => {
   });
 
   it('renders updated empty state without content-learning claims', async () => {
-    api.getSocialAccounts.mockResolvedValue({ accounts: [] });
-    api.getSocialAccountStats.mockResolvedValue({ total: 0, ingestionEnabled: 0 });
+    getSocialAccounts.mockResolvedValue({ accounts: [] });
+    getSocialAccountStats.mockResolvedValue({ total: 0, ingestionEnabled: 0 });
 
     render(<AccountsTab />);
     expect(await screen.findByText('No social accounts yet')).toBeInTheDocument();
@@ -170,7 +179,7 @@ describe('AccountsTab', () => {
   });
 
   it('fails into a retry instead of "No social accounts yet" when the account read fails', async () => {
-    api.getSocialAccounts.mockRejectedValueOnce(new Error('boom'));
+    getSocialAccounts.mockRejectedValueOnce(new Error('boom'));
     const user = userEvent.setup();
     render(<AccountsTab />);
 
@@ -182,13 +191,13 @@ describe('AccountsTab', () => {
   });
 
   it('fails into a retry when the platform list read fails', async () => {
-    api.getSocialAccountPlatforms.mockRejectedValueOnce(new Error('boom'));
+    getSocialAccountPlatforms.mockRejectedValueOnce(new Error('boom'));
     render(<AccountsTab />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load social platforms');
   });
 
   it('withholds "Add to org registry" while the link read is failed, so an already-linked account is not duplicated', async () => {
-    api.getSocialAccountOrgLinks.mockRejectedValueOnce(new Error('privacy down'));
+    getSocialAccountOrgLinks.mockRejectedValueOnce(new Error('privacy down'));
     const user = userEvent.setup();
     render(<AccountsTab />);
 
@@ -196,7 +205,7 @@ describe('AccountsTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load org registry links');
     expect(screen.queryByRole('button', { name: /Add to org registry/ })).not.toBeInTheDocument();
 
-    api.getSocialAccountOrgLinks.mockResolvedValueOnce([{ socialAccountId: 'acc-1', orgId: 'org-1', orgName: 'Example Org' }]);
+    getSocialAccountOrgLinks.mockResolvedValueOnce([{ socialAccountId: 'acc-1', orgId: 'org-1', orgName: 'Example Org' }]);
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('In org registry')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Add to org registry/ })).toHaveLength(1);

@@ -4,11 +4,26 @@ import socket from '../../services/socket';
 import * as storage from '../../lib/safeStorage';
 import { safeRemoveStorage, safeRemoveSession } from '../../lib/safeStorage';
 import PeerAdministrationPanel from './PeerAdministrationPanel';
-import { getPeerAdminSetup, savePeerAdminGrant, previewPeerAdministration, savePeerExecutionGrant, previewPeerExecution, dispatchPeerExecution, getPeerExecutionStatus, getPeerCatalogReviews } from '../../services/api';
+import {
+  getPeerAdminSetup,
+  savePeerAdminGrant,
+  previewPeerAdministration,
+  savePeerExecutionGrant,
+  previewPeerExecution,
+  dispatchPeerExecution,
+  getPeerExecutionStatus,
+  getPeerCatalogReviews,
+} from '../../services/apiSystem.js';
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../../services/api', () => ({
-  getPeerAdminSetup: vi.fn(), savePeerAdminGrant: vi.fn(), previewPeerAdministration: vi.fn(),
-  savePeerExecutionGrant: vi.fn(), previewPeerExecution: vi.fn(), dispatchPeerExecution: vi.fn(), getPeerExecutionStatus: vi.fn(), getPeerCatalogReviews: vi.fn(),
+vi.mock('../../services/apiSystem.js', () => ({
+  getPeerAdminSetup: vi.fn(),
+  savePeerAdminGrant: vi.fn(),
+  previewPeerAdministration: vi.fn(),
+  savePeerExecutionGrant: vi.fn(),
+  previewPeerExecution: vi.fn(),
+  dispatchPeerExecution: vi.fn(),
+  getPeerExecutionStatus: vi.fn(),
+  getPeerCatalogReviews: vi.fn(),
 }));
 const peer = { id: 'peer-example', instanceId: '11111111-1111-4111-8111-111111111111', enabled: true, hasSyncSecret: true };
 const setup = {

@@ -25,8 +25,11 @@ import TabPills from '../components/ui/TabPills';
 import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import {
-  getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
-} from '../services/api';
+  getPipelineSeries,
+  getIssueEditorial,
+  analyzeIssueEditorial,
+  getSeriesJudge,
+} from '../services/apiPipeline.js';
 import { useSeriesEditorial } from '../hooks/useSeriesEditorial';
 
 // Deep-linkable tabs (?tab=roadmap|panel) — the URL is the source of truth for

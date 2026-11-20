@@ -7,7 +7,7 @@ const { mockGetCosWhileAwayActivity, mockSocket } = vi.hoisted(() => ({
   mockSocket: { on: vi.fn(), off: vi.fn() },
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiAgents.js', () => ({
   getCosWhileAwayActivity: (...args) => mockGetCosWhileAwayActivity(...args),
 }));
 

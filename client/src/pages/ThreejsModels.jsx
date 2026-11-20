@@ -9,7 +9,7 @@ import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect';
 import useThreejsModelFamilies, { GENERAL_FAMILY_ID } from '../hooks/useThreejsModelFamilies';
-import { createThreejsModel, listThreejsModels } from '../services/api';
+import { createThreejsModel, listThreejsModels } from '../services/apiThreejsModels.js';
 import toast from '../components/ui/Toast';
 import { timeAgo, nameFromImageFilename } from '../utils/formatters';
 

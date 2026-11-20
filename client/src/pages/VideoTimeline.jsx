@@ -5,12 +5,17 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
 import useListResource from '../hooks/useListResource';
-import * as api from '../services/api';
+import {
+  listTimelineProjects,
+  listVideoHistory,
+  createTimelineProject,
+  deleteTimelineProject,
+} from '../services/apiImageVideo.js';
 import { formatDurationSec } from '../utils/formatters';
 import { projectSummary, historySourceDuration, CLIP_CATALOG_QUERY } from '../lib/videoTimelineModel';
 
-const loadTimelineProjects = () => api.listTimelineProjects({ silent: true });
-const loadVideoHistory = () => api.listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY });
+const loadTimelineProjects = () => listTimelineProjects({ silent: true });
+const loadVideoHistory = () => listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY });
 
 export default function VideoTimeline() {
   const navigate = useNavigate();
@@ -31,7 +36,7 @@ export default function VideoTimeline() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setCreating(true);
-    const created = await api.createTimelineProject(trimmed, { silent: true }).catch((err) => {
+    const created = await createTimelineProject(trimmed, { silent: true }).catch((err) => {
       toast.error(`Failed to create: ${err.message}`);
       return null;
     });
@@ -44,7 +49,7 @@ export default function VideoTimeline() {
 
   const handleDelete = async (project) => {
     setProjects((prev) => prev.filter((p) => p.id !== project.id));
-    await api.deleteTimelineProject(project.id, { silent: true }).catch((err) => {
+    await deleteTimelineProject(project.id, { silent: true }).catch((err) => {
       toast.error(`Failed to delete: ${err.message}`);
       retryProjects();
     });

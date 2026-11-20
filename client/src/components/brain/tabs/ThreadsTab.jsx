@@ -14,7 +14,15 @@ import { Check, Info, Link2, ListTodo, Pin, Plus, Search, Trash2, X } from 'luci
 import useUrlParams from '../../../hooks/useUrlParams';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import useAsyncAction from '../../../hooks/useAsyncAction';
-import * as api from '../../../services/api';
+import {
+  getThread,
+  listThreads,
+  createThread,
+  updateThread,
+  deleteThread,
+  addThreadRef,
+  removeThreadRef,
+} from '../../../services/apiBrainThreads.js';
 import Drawer from '../../Drawer';
 import Pill from '../../ui/Pill';
 import TabPills from '../../ui/TabPills';
@@ -109,7 +117,7 @@ const draftToPatch = (draft, stored = {}) => ({
   notes: draft.notes,
 });
 
-const loadRecord = (id) => api.getThread(id, { silent: true });
+const loadRecord = (id) => getThread(id, { silent: true });
 
 const inputClass = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
@@ -218,7 +226,7 @@ export default function ThreadsTab() {
     let active = true;
     setLoading(true);
     setListError(false);
-    api.listThreads(
+    listThreads(
       { q, tag, status: listStatus },
       { silent: true },
     )
@@ -305,7 +313,7 @@ export default function ThreadsTab() {
   const [create, creating] = useAsyncAction(async () => {
     const title = newTitle.trim();
     if (!title) return null;
-    const thread = await api.createThread({ title }, { silent: true });
+    const thread = await createThread({ title }, { silent: true });
     setNewTitle('');
     replaceRow(thread);
     updateParams({ thread: thread.id });
@@ -313,7 +321,7 @@ export default function ThreadsTab() {
   }, { errorMessage: 'Failed to create thread' });
 
   const [markDone] = useAsyncAction(async (thread) => {
-    const updated = await api.updateThread(thread.id, { status: 'done' }, { silent: true });
+    const updated = await updateThread(thread.id, { status: 'done' }, { silent: true });
     replaceRow(updated);
     toast.success(`Done: ${updated.title}`);
     return updated;
@@ -326,7 +334,7 @@ export default function ThreadsTab() {
       setDrawerTab('details');
       return null;
     }
-    const updated = await api.updateThread(record.id, draftToPatch(draft, record), { silent: true });
+    const updated = await updateThread(record.id, draftToPatch(draft, record), { silent: true });
     // A PUT answers with the bare record; keep the hydrated refs we already hold.
     const full = { ...record, ...updated };
     adoptRecord(full);
@@ -336,7 +344,7 @@ export default function ThreadsTab() {
   }, { errorMessage: 'Failed to save thread' });
 
   const [remove, removing] = useAsyncAction(async () => {
-    await api.deleteThread(record.id, { silent: true });
+    await deleteThread(record.id, { silent: true });
     setThreads((prev) => prev.filter((t) => t.id !== record.id));
     closeDrawer();
     toast.success('Thread deleted');
@@ -349,13 +357,13 @@ export default function ThreadsTab() {
     const id = newRef.id.trim();
     if (!id) return null;
     const ref = { kind: newRef.kind, id, ...(newRef.label.trim() ? { label: newRef.label.trim() } : {}) };
-    adoptRecord(await api.addThreadRef(record.id, ref, { silent: true }));
+    adoptRecord(await addThreadRef(record.id, ref, { silent: true }));
     setNewRef({ kind: newRef.kind, id: '', label: '' });
     return true;
   }, { errorMessage: 'Failed to add link' });
 
   const [removeRef] = useAsyncAction(async (item) => {
-    adoptRecord(await api.removeThreadRef(record.id, item.kind, item.id, { silent: true }));
+    adoptRecord(await removeThreadRef(record.id, item.kind, item.id, { silent: true }));
     return true;
   }, { errorMessage: 'Failed to remove link' });
 

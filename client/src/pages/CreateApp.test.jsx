@@ -15,9 +15,13 @@ const fakeSocket = {
 
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiProviders.js', () => ({
   getActiveProvider: vi.fn(() => Promise.resolve({ id: 'provider-1', name: 'Example Provider' })),
+}));
+vi.mock('../services/apiScaffold.js', () => ({
   getDirectories: vi.fn(() => Promise.resolve({ currentPath: '/srv/example-app', directories: [] })),
+}));
+vi.mock('../services/apiApps.js', () => ({
   createApp: vi.fn(() => Promise.resolve({ id: 'app-1' })),
 }));
 
@@ -109,7 +113,7 @@ describe('CreateApp — PM2 standardization is opt-in', () => {
   });
 
   it('disables the action when no LLM provider is configured', async () => {
-    const api = await import('../services/api');
+    const api = await import('../services/apiProviders.js');
     api.getActiveProvider.mockResolvedValueOnce(null);
 
     await detectApp();

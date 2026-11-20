@@ -21,7 +21,14 @@ import MarkdownOutput from '../cos/MarkdownOutput';
 import Modal from '../ui/Modal';
 import { formatDateTime, formatCount, formatDateShort } from '../../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../../utils/markdownText';
-import * as api from '../../services/api';
+import { normalizeBrainScanReportPath } from '../../services/apiBrain.js';
+import {
+  completeReviewItem,
+  dismissReviewItem,
+  deleteReviewItem,
+  updateReviewItem,
+  bulkUpdateReviewStatus,
+} from '../../services/apiReview.js';
 
 const TYPE_CONFIG = {
   alert: { label: 'Alerts', icon: AlertTriangle, color: 'text-port-warning' },
@@ -180,7 +187,7 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
                 )}
                 {item.metadata?.reportUrl && (
                   <a
-                    href={api.normalizeBrainScanReportPath(item.metadata.reportUrl)}
+                    href={normalizeBrainScanReportPath(item.metadata.reportUrl)}
                     className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${item.metadata.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
                   >
                     <FileText size={13} />
@@ -322,24 +329,24 @@ export default function LegacyReviewSection({
   const [editingId, setEditingId] = useState(null);
 
   const handleComplete = async (id) => {
-    await api.completeReviewItem(id).catch(() => null);
+    await completeReviewItem(id).catch(() => null);
   };
 
   const handleDismiss = async (id) => {
-    await api.dismissReviewItem(id).catch(() => null);
+    await dismissReviewItem(id).catch(() => null);
   };
 
   const handleDelete = async (id) => {
-    await api.deleteReviewItem(id).catch(() => null);
+    await deleteReviewItem(id).catch(() => null);
   };
 
   const handleSaveEdit = async (id, title, description) => {
-    await api.updateReviewItem(id, { title, description }).catch(() => null);
+    await updateReviewItem(id, { title, description }).catch(() => null);
     setEditingId(null);
   };
 
-  const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
-  const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
+  const handleMarkAllRead = () => bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
+  const handleCompleteAll = () => bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
   // Derived review state. Memoized because the parent page subscribes to
   // review:item:created/updated/deleted socket events and re-renders on each —

@@ -22,7 +22,7 @@ import {
   getAccelerandoBook,
   getRapidReaderLibraryEntry,
   listRapidReaderLibrary,
-} from '../services/api';
+} from '../services/apiRapidReader.js';
 
 const SAMPLE = `Speed reading is a collection of techniques used to scan text quickly while still understanding what you've read. Most people read in chunks of three or four words at a time, which slows them down. Rapid serial visual presentation flashes one word at a time at a fixed location, removing the need to move your eyes. With practice, comprehension stays intact at three to five hundred words per minute, and many readers can push past six hundred for familiar material.`;
 

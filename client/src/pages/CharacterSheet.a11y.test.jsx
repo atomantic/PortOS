@@ -10,8 +10,10 @@ import { MemoryRouter } from 'react-router';
 const get = vi.fn();
 const put = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiCore.js', () => ({
   default: { get: (...a) => get(...a), post: vi.fn(), put: (...a) => put(...a) },
+}));
+vi.mock('../services/apiSystem.js', () => ({
   generateAvatar: vi.fn(() => Promise.resolve({})),
 }));
 

@@ -9,9 +9,13 @@
 import { useState, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import {
-  previewUniverseMerge, mergeUniverses, previewSeriesMerge, mergeSeries,
-  aiResolveUniverseMerge, aiResolveSeriesMerge,
-} from '../services/api';
+  previewUniverseMerge,
+  mergeUniverses,
+  previewSeriesMerge,
+  mergeSeries,
+  aiResolveUniverseMerge,
+  aiResolveSeriesMerge,
+} from '../services/apiSyncReview.js';
 
 // `choices[field]` value space. SURVIVOR/LOSER mirror the server's Zod enum;
 // AI is client-only and means "use the value at overrides[field]" (populated

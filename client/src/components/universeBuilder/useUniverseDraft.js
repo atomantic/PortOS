@@ -17,18 +17,17 @@ import {
   adoptUniverseStyleGuide,
   createUniverse,
   deleteUniverse,
-  getProviders,
-  getSettings,
   getUniverse,
-  listImageModels,
-  listLorasFull,
   listUniverses,
   listWorldRuns,
   removeUniverseStyleReference,
   updateUniverse,
   WORLD_LOCKABLE_FIELDS,
   ensureInfluences,
-} from '../../services/api';
+} from '../../services/apiUniverseBuilder.js';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings } from '../../services/apiSystem.js';
+import { listImageModels, listLorasFull } from '../../services/apiImageVideo.js';
 import {
   deriveAvailableBackends, renderPinLadder, renderTargetPin,
   IMAGE_GEN_MODE, RENDER_TARGET,

@@ -4,12 +4,8 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import SettingsLoadError from '../ui/SettingsLoadError';
-import {
-  getSettings,
-  updateSettings,
-  getMortalLoomStatus,
-  importMortalLoom
-} from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
+import { getMortalLoomStatus, importMortalLoom } from '../../services/apiMortalLoom.js';
 import { formatBytes, formatDateTime } from '../../utils/formatters';
 
 export function MortalLoomTab() {

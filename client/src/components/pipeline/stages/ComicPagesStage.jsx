@@ -9,7 +9,7 @@ import {
   generatePipelineComicPanelImagePrompts,
   updatePipelineIssue,
   extractPipelineComicPages,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';

@@ -6,7 +6,16 @@ import {Fingerprint, Dna, Clock, Activity, Palette, Target,
   AlertTriangle, CheckCircle, Info} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
-import * as api from '../../../services/api';
+import {
+  getIdentityStatus,
+  getChronotype,
+  getLongevity,
+  getGoals,
+  getCrossInsights,
+  deriveChronotype,
+  deriveLongevity,
+} from '../../../services/apiGoals.js';
+import { getTasteProfile } from '../../../services/apiDigitalTwin.js';
 
 const SECTION_CONFIG = {
   genome: { label: 'Genome', icon: Dna, color: 'blue' },
@@ -84,12 +93,12 @@ export default function IdentityTab({ onRefresh }) {
 
   const loadData = useCallback(async () => {
     const reads = await Promise.allSettled([
-      api.getIdentityStatus({ silent: true }),
-      api.getChronotype({ silent: true }),
-      api.getLongevity({ silent: true }),
-      api.getTasteProfile({ silent: true }),
-      api.getGoals({ silent: true }),
-      api.getCrossInsights({ silent: true })
+      getIdentityStatus({ silent: true }),
+      getChronotype({ silent: true }),
+      getLongevity({ silent: true }),
+      getTasteProfile({ silent: true }),
+      getGoals({ silent: true }),
+      getCrossInsights({ silent: true })
     ]);
     const [identityData, chronoData, longData, tasteData, goalsData, insightsData] = reads
       .map((read) => (read.status === 'fulfilled' ? read.value : null));
@@ -113,7 +122,7 @@ export default function IdentityTab({ onRefresh }) {
 
   const handleDeriveChronotype = async () => {
     setDerivingChronotype(true);
-    await api.deriveChronotype().catch(() => null);
+    await deriveChronotype().catch(() => null);
     setDerivingChronotype(false);
     await loadData();
     onRefresh?.();
@@ -121,7 +130,7 @@ export default function IdentityTab({ onRefresh }) {
 
   const handleDeriveLongevity = async () => {
     setDerivingLongevity(true);
-    await api.deriveLongevity().catch(() => null);
+    await deriveLongevity().catch(() => null);
     setDerivingLongevity(false);
     await loadData();
     onRefresh?.();

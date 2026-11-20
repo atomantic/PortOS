@@ -3,12 +3,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getDigitalTwinDocuments: vi.fn(),
   getDigitalTwinDocument: vi.fn(),
   updateSoulDocument: vi.fn(),
   createSoulDocument: vi.fn(),
-  deleteSoulDocument: vi.fn()
+  deleteSoulDocument: vi.fn(),
 }));
 
 vi.mock('../../ui/Toast', () => ({
@@ -16,7 +16,12 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import DocumentsTab from './DocumentsTab';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinDocuments,
+  getDigitalTwinDocument,
+  updateSoulDocument,
+  deleteSoulDocument,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 
 const Where = () => <div data-testid="where">{useLocation().search}</div>;
@@ -26,12 +31,12 @@ const DOC = { id: 'doc-1', title: 'Core Values', category: 'core', enabled: true
 describe('DocumentsTab failed save', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinDocuments.mockResolvedValue([DOC]);
-    api.getDigitalTwinDocument.mockResolvedValue(DOC);
+    getDigitalTwinDocuments.mockResolvedValue([DOC]);
+    getDigitalTwinDocument.mockResolvedValue(DOC);
   });
 
   it('re-enables Save after a rejected update so the unsaved edit can be retried', async () => {
-    api.updateSoulDocument.mockRejectedValueOnce(new Error('Document is locked'));
+    updateSoulDocument.mockRejectedValueOnce(new Error('Document is locked'));
     const user = userEvent.setup();
     renderTab();
 
@@ -39,12 +44,12 @@ describe('DocumentsTab failed save', () => {
     await user.type(await screen.findByLabelText('Soul document'), ' edited');
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(api.updateSoulDocument).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateSoulDocument).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled());
     expect(toast.success).not.toHaveBeenCalled();
 
     // The retry goes through: the editor was not stranded behind a stuck `saving` flag.
-    api.updateSoulDocument.mockResolvedValueOnce({ ...DOC, content: 'original edited' });
+    updateSoulDocument.mockResolvedValueOnce({ ...DOC, content: 'original edited' });
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Document saved'));
   });
@@ -54,7 +59,7 @@ describe('DocumentsTab failed load', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows a retryable load error instead of "No documents yet", then the list once Retry succeeds', async () => {
-    api.getDigitalTwinDocuments.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([DOC]);
+    getDigitalTwinDocuments.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce([DOC]);
     const user = userEvent.setup();
     renderTab();
 
@@ -67,7 +72,7 @@ describe('DocumentsTab failed load', () => {
   });
 
   it('keeps "No documents yet" for a genuinely empty library', async () => {
-    api.getDigitalTwinDocuments.mockResolvedValue([]);
+    getDigitalTwinDocuments.mockResolvedValue([]);
     renderTab();
     expect(await screen.findByText('No documents yet')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -77,8 +82,8 @@ describe('DocumentsTab failed load', () => {
 describe('DocumentsTab inline editing and deep link', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getDigitalTwinDocuments.mockResolvedValue([DOC]);
-    api.getDigitalTwinDocument.mockResolvedValue(DOC);
+    getDigitalTwinDocuments.mockResolvedValue([DOC]);
+    getDigitalTwinDocument.mockResolvedValue(DOC);
   });
 
   it('opens ?doc=<id> directly editable, saves with one PUT and no refetch', async () => {
@@ -86,13 +91,13 @@ describe('DocumentsTab inline editing and deep link', () => {
     renderTab(vi.fn(), '/digital-twin/documents?doc=doc-1');
     const box = await screen.findByLabelText('Soul document');
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-    api.updateSoulDocument.mockResolvedValueOnce({ ...DOC, content: 'original!' });
+    updateSoulDocument.mockResolvedValueOnce({ ...DOC, content: 'original!' });
     await user.type(box, '!');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Document saved'));
-    expect(api.updateSoulDocument).toHaveBeenCalledTimes(1);
-    expect(api.getDigitalTwinDocuments).toHaveBeenCalledTimes(1);
-    expect(api.getDigitalTwinDocument).toHaveBeenCalledTimes(1);
+    expect(updateSoulDocument).toHaveBeenCalledTimes(1);
+    expect(getDigitalTwinDocuments).toHaveBeenCalledTimes(1);
+    expect(getDigitalTwinDocument).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
@@ -103,8 +108,8 @@ describe('DocumentsTab inline editing and deep link', () => {
     expect(screen.getByTestId('where')).toHaveTextContent('?doc=doc-1');
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    api.deleteSoulDocument.mockResolvedValueOnce();
+    deleteSoulDocument.mockResolvedValueOnce();
     await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
-    await waitFor(() => expect(api.deleteSoulDocument).toHaveBeenCalledWith('doc-1'));
+    await waitFor(() => expect(deleteSoulDocument).toHaveBeenCalledWith('doc-1'));
   });
 });

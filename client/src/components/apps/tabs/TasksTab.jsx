@@ -5,7 +5,8 @@ import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource.js';
 import TaskAddForm from '../../cos/TaskAddForm';
-import * as api from '../../../services/api';
+import { getProviders } from '../../../services/apiProviders.js';
+import { getApps, getAppAgents } from '../../../services/apiApps.js';
 import { formatDurationMs, formatTime } from '../../../utils/formatters';
 
 const STATUS_CONFIG = {
@@ -18,13 +19,13 @@ const STATUS_CONFIG = {
 };
 
 
-const fetchProviders = () => api.getProviders({ silent: true }).then(d => d?.providers ?? []);
-const fetchApps = () => api.getApps({ silent: true }).then(a => (a ?? []).filter(app => app.id !== 'portos-autofixer'));
+const fetchProviders = () => getProviders({ silent: true }).then(d => d?.providers ?? []);
+const fetchApps = () => getApps({ silent: true }).then(a => (a ?? []).filter(app => app.id !== 'portos-autofixer'));
 
 export default function TasksTab({ appId }) {
   // The tab owns its error UI, so the request is silent (no auto-toast).
   const fetchAppAgents = useCallback(
-    () => api.getAppAgents(appId, undefined, { silent: true }).then((result) => result?.agents ?? []),
+    () => getAppAgents(appId, undefined, { silent: true }).then((result) => result?.agents ?? []),
     [appId],
   );
   const { items: agents, state, error, retry: fetchAgents } = useListResource(fetchAppAgents);

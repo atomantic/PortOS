@@ -2,9 +2,17 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SecurityTab } from './SecurityTab';
-import * as api from '../../services/api';
+import {
+  listAuthSessions,
+  getAgentKeyStatus,
+  getAuthStatus,
+  setAgentKeyEnabled,
+  revokeAuthSession,
+  revokeAllAgentSessions,
+  setAuthPassword,
+} from '../../services/apiAuth.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAuth.js', () => ({
   getAuthStatus: vi.fn(),
   setAuthPassword: vi.fn(),
   clearAuthPassword: vi.fn(),
@@ -38,13 +46,13 @@ describe('SecurityTab', () => {
     vi.clearAllMocks();
     // Most tests don't exercise the sessions panel — default to an empty list
     // so the effect that fetches it doesn't reject unhandled in every test.
-    api.listAuthSessions.mockResolvedValue({ sessions: [] });
-    api.getAgentKeyStatus.mockResolvedValue({ enabled: false, authEnabled: true, path: '~/.portos/agent-key.json', active: false, expiresAt: null });
+    listAuthSessions.mockResolvedValue({ sessions: [] });
+    getAgentKeyStatus.mockResolvedValue({ enabled: false, authEnabled: true, path: '~/.portos/agent-key.json', active: false, expiresAt: null });
   });
 
   it('turns the agent API key on and off from the Security tab', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.setAgentKeyEnabled.mockImplementation(async (on) => ({
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    setAgentKeyEnabled.mockImplementation(async (on) => ({
       enabled: on, authEnabled: true, path: '~/.portos/agent-key.json', active: on, expiresAt: on ? Date.now() + 86_400_000 : null,
     }));
 
@@ -53,21 +61,21 @@ describe('SecurityTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Turn on' }));
     expect(await screen.findByText('Agent API key on')).toBeInTheDocument();
     expect(screen.getByText('~/.portos/agent-key.json')).toBeInTheDocument();
-    expect(api.setAgentKeyEnabled).toHaveBeenCalledWith(true);
+    expect(setAgentKeyEnabled).toHaveBeenCalledWith(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn off and revoke' }));
     expect(await screen.findByText('Agent API key off')).toBeInTheDocument();
-    expect(api.setAgentKeyEnabled).toHaveBeenLastCalledWith(false);
+    expect(setAgentKeyEnabled).toHaveBeenLastCalledWith(false);
   });
 
   it('hides the agent API key card while no password is set', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: false });
+    getAuthStatus.mockResolvedValue({ enabled: false });
 
     render(<SecurityTab />);
 
     expect(await screen.findByText('Login password disabled')).toBeInTheDocument();
     expect(screen.queryByText(/Agent API key/)).not.toBeInTheDocument();
-    expect(api.getAgentKeyStatus).not.toHaveBeenCalled();
+    expect(getAgentKeyStatus).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
@@ -75,7 +83,7 @@ describe('SecurityTab', () => {
   });
 
   it('renders the enabled password controls after a valid status response', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    getAuthStatus.mockResolvedValue({ enabled: true });
 
     render(<SecurityTab />);
 
@@ -84,11 +92,11 @@ describe('SecurityTab', () => {
     expect(screen.getByLabelText('Current password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Disable login' })).toBeInTheDocument();
     expect(screen.queryByText('Set a password')).not.toBeInTheDocument();
-    expect(api.getAuthStatus).toHaveBeenCalledWith({ silent: true });
+    expect(getAuthStatus).toHaveBeenCalledWith({ silent: true });
   });
 
   it('renders the disabled password controls after a valid status response', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: false });
+    getAuthStatus.mockResolvedValue({ enabled: false });
 
     render(<SecurityTab />);
 
@@ -99,7 +107,7 @@ describe('SecurityTab', () => {
   });
 
   it('keeps both password flows hidden when the status request rejects', async () => {
-    api.getAuthStatus.mockRejectedValue(new Error('Server unavailable'));
+    getAuthStatus.mockRejectedValue(new Error('Server unavailable'));
 
     render(<SecurityTab />);
 
@@ -111,7 +119,7 @@ describe('SecurityTab', () => {
   });
 
   it('treats a malformed success payload as an unknown status', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: 'false' });
+    getAuthStatus.mockResolvedValue({ enabled: 'false' });
 
     render(<SecurityTab />);
 
@@ -122,7 +130,7 @@ describe('SecurityTab', () => {
   });
 
   it('retries a failed status load and restores the matching controls', async () => {
-    api.getAuthStatus
+    getAuthStatus
       .mockRejectedValueOnce(new Error('Server unavailable'))
       .mockResolvedValueOnce({ enabled: true });
 
@@ -133,12 +141,12 @@ describe('SecurityTab', () => {
     expect(await screen.findByText('Login password enabled')).toBeInTheDocument();
     expect(screen.getByText('Change password')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    await waitFor(() => expect(api.getAuthStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
   });
 
   it('shows an agent session with a revoke button that does not touch the password form', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.listAuthSessions.mockResolvedValue({
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    listAuthSessions.mockResolvedValue({
       sessions: [
         { id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
         { id: 'browser-1', label: null, expiresAt: Date.parse('2026-10-01T00:00:00Z') },
@@ -154,31 +162,31 @@ describe('SecurityTab', () => {
   });
 
   it('revokes an agent session without signing the user out', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.listAuthSessions.mockResolvedValue({
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    listAuthSessions.mockResolvedValue({
       sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
     });
-    api.revokeAuthSession.mockResolvedValue({ ok: true });
+    revokeAuthSession.mockResolvedValue({ ok: true });
 
     render(<SecurityTab />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
 
-    await waitFor(() => expect(api.revokeAuthSession).toHaveBeenCalledWith('agent-1'));
+    await waitFor(() => expect(revokeAuthSession).toHaveBeenCalledWith('agent-1'));
     await waitFor(() => expect(screen.queryByText('1 agent session')).not.toBeInTheDocument());
     // Revoking is scoped to that one session — the password form stays intact.
     expect(screen.getByText('Login password enabled')).toBeInTheDocument();
   });
 
   it('bounds the session list and revokes all agent sessions only after confirmation', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.listAuthSessions.mockResolvedValue({
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    listAuthSessions.mockResolvedValue({
       sessions: [
         { id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
         { id: 'agent-2', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
       ],
     });
-    api.revokeAllAgentSessions.mockResolvedValue({ ok: true, revoked: 2 });
+    revokeAllAgentSessions.mockResolvedValue({ ok: true, revoked: 2 });
 
     render(<SecurityTab />);
 
@@ -188,24 +196,24 @@ describe('SecurityTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Revoke all agent sessions' }));
     // First click only asks for confirmation.
-    expect(api.revokeAllAgentSessions).not.toHaveBeenCalled();
+    expect(revokeAllAgentSessions).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm revoke all' }));
 
-    await waitFor(() => expect(api.revokeAllAgentSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(revokeAllAgentSessions).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByText('2 agent sessions')).not.toBeInTheDocument());
     expect(screen.getByText('Login password enabled')).toBeInTheDocument();
   });
 
   it('refreshes agent sessions when password is changed', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.listAuthSessions
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    listAuthSessions
       .mockResolvedValueOnce({
         sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
       })
       .mockResolvedValueOnce({
         sessions: [],
       });
-    api.setAuthPassword.mockResolvedValue({ enabled: true });
+    setAuthPassword.mockResolvedValue({ enabled: true });
 
     render(<SecurityTab />);
 
@@ -216,14 +224,14 @@ describe('SecurityTab', () => {
     fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-123' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
 
-    await waitFor(() => expect(api.setAuthPassword).toHaveBeenCalled());
+    await waitFor(() => expect(setAuthPassword).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByText('1 agent session')).not.toBeInTheDocument());
-    expect(api.listAuthSessions).toHaveBeenCalledTimes(2);
+    expect(listAuthSessions).toHaveBeenCalledTimes(2);
   });
 
   it('reports a failed agent-session read with Retry instead of hiding the revoke panel', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: true });
-    api.listAuthSessions
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    listAuthSessions
       .mockRejectedValueOnce(new Error('sessions down'))
       .mockResolvedValueOnce({
         sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
@@ -240,19 +248,19 @@ describe('SecurityTab', () => {
   });
 
   it('hides the sessions panel when auth is disabled', async () => {
-    api.getAuthStatus.mockResolvedValue({ enabled: false });
+    getAuthStatus.mockResolvedValue({ enabled: false });
 
     render(<SecurityTab />);
 
     expect(await screen.findByText('Login password disabled')).toBeInTheDocument();
-    expect(api.listAuthSessions).not.toHaveBeenCalled();
+    expect(listAuthSessions).not.toHaveBeenCalled();
     expect(screen.queryByText(/agent session/)).not.toBeInTheDocument();
   });
 
   it('ignores an obsolete failure when a newer StrictMode request succeeds', async () => {
     const firstRequest = deferred();
     const secondRequest = deferred();
-    api.getAuthStatus
+    getAuthStatus
       .mockReturnValueOnce(firstRequest.promise)
       .mockReturnValueOnce(secondRequest.promise);
 
@@ -262,7 +270,7 @@ describe('SecurityTab', () => {
       </StrictMode>,
     );
 
-    await waitFor(() => expect(api.getAuthStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
     await act(async () => firstRequest.reject(new Error('Server unavailable')));
     await act(async () => secondRequest.resolve({ enabled: true }));
 

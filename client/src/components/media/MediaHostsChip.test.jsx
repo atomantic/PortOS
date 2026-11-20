@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ makeMediaPrimary: vi.fn(), getMediaHolders: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMediaHolders.js', () => ({
+  makeMediaPrimary: api.makeMediaPrimary,
+  getMediaHolders: api.getMediaHolders,
+}));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

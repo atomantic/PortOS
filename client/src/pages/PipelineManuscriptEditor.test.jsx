@@ -21,7 +21,24 @@ const api = vi.hoisted(() => ({
   pipelineManuscriptCompletenessSseUrl: vi.fn((id) => `/api/pipeline/series/${id}/manuscript/completeness/progress`),
   getProviders: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiPipeline.js', () => ({
+  getPipelineSeries: api.getPipelineSeries,
+  updatePipelineSeries: api.updatePipelineSeries,
+  getPipelineManuscript: api.getPipelineManuscript,
+  getPipelineManuscriptReview: api.getPipelineManuscriptReview,
+  savePipelineManuscriptSection: api.savePipelineManuscriptSection,
+  restorePipelineStageVersion: api.restorePipelineStageVersion,
+  patchPipelineManuscriptComment: api.patchPipelineManuscriptComment,
+  generatePipelineManuscriptFix: api.generatePipelineManuscriptFix,
+  acceptPipelineManuscriptFix: api.acceptPipelineManuscriptFix,
+  undoPipelineManuscriptFix: api.undoPipelineManuscriptFix,
+  analyzePipelineManuscriptCompleteness: api.analyzePipelineManuscriptCompleteness,
+  startPipelineManuscriptCompleteness: api.startPipelineManuscriptCompleteness,
+  cancelPipelineManuscriptCompleteness: api.cancelPipelineManuscriptCompleteness,
+  getPipelineManuscriptCompletenessStatus: api.getPipelineManuscriptCompletenessStatus,
+  pipelineManuscriptCompletenessSseUrl: api.pipelineManuscriptCompletenessSseUrl,
+}));
+vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../services/apiLocalLlm', async (importOriginal) => ({
   ...await importOriginal(),
   getLocalLlmStatus: vi.fn().mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } }),

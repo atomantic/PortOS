@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
-import * as api from '../services/api';
+import { getTombstoneSweepStatus, sweepTombstonesNow } from '../services/apiPeerSync.js';
+import {
+  getDataOverview,
+  getDataBackups,
+  getDataCategory,
+  archiveDataCategory,
+  purgeDataCategory,
+  deleteDataBackup,
+} from '../services/apiSystem.js';
 import { formatBytes, formatCount, formatDateNumeric } from '../utils/formatters';
 import { pluralize } from '../lib/textUtils';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -79,7 +87,7 @@ function TombstoneGcSection() {
   // only to that room) and re-reads on reconnect, so a peer change missed
   // while disconnected is caught up. Pausing a peer does not release holds.
   const { data: status, error, refetch, updateData } = useSocketResource(async ({ events }) => {
-    const r = await api.getTombstoneSweepStatus({ silent: true });
+    const r = await getTombstoneSweepStatus({ silent: true });
     if (!Array.isArray(r?.refused)) throw new Error('Invalid tombstone sweep status');
     if (events.length) {
       clearTimeout(followUpTimerRef.current);
@@ -94,7 +102,7 @@ function TombstoneGcSection() {
   const heldByPausedPeers = status?.heldByPausedPeers ?? [];
 
   const [runSweep, sweeping] = useAsyncAction(async () => {
-    const result = await api.sweepTombstonesNow({ graceMs: 0 }, { silent: true });
+    const result = await sweepTombstonesNow({ graceMs: 0 }, { silent: true });
     if (!result) return null;
     const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
     const totalPruned = universes + series + issues + collections;
@@ -462,7 +470,7 @@ export default function DataManager() {
   const fetchStorageOverview = useCallback(() => {
     const token = ++overviewRequestRef.current;
     setOverviewPending(true);
-    const read = api.getDataOverview({ silent: true }).then(data => {
+    const read = getDataOverview({ silent: true }).then(data => {
       if (token !== overviewRequestRef.current) return;
       setOverview(data);
       setOverviewError(false);
@@ -478,7 +486,7 @@ export default function DataManager() {
   const fetchBackups = useCallback(() => {
     const token = ++backupsRequestRef.current;
     setBackupsPending(true);
-    return api.getDataBackups({ silent: true }).then(data => {
+    return getDataBackups({ silent: true }).then(data => {
       if (token !== backupsRequestRef.current) return;
       setBackups(data);
       setBackupsError(false);
@@ -518,7 +526,7 @@ export default function DataManager() {
 
   const loadDetail = async (key) => {
     const token = (detailRequestRef.current += 1);
-    const d = await api.getDataCategory(key).catch(() => null);
+    const d = await getDataCategory(key).catch(() => null);
     if (detailRequestRef.current !== token || expandedCatRef.current !== key) return;
     setDetail(d);
   };
@@ -556,7 +564,7 @@ export default function DataManager() {
     while (overviewReadRef.current) await overviewReadRef.current;
     const token = ++overviewRequestRef.current;
     const detailToken = expandedCatRef.current === 'cos' ? ++detailRequestRef.current : null;
-    const refreshed = await api.getDataCategory('cos', { measure: true, silent: true }).catch(() => null);
+    const refreshed = await getDataCategory('cos', { measure: true, silent: true }).catch(() => null);
     if (!refreshed?.measurement || token !== overviewRequestRef.current) return;
     if (expandedCatRef.current === 'cos' && detailToken === detailRequestRef.current) {
       setDetail(refreshed);
@@ -582,7 +590,7 @@ export default function DataManager() {
     if (maintenanceInFlightRef.current) return;
     maintenanceInFlightRef.current = true;
     setArchiving(key);
-    const result = await api.archiveDataCategory(key).catch(() => null);
+    const result = await archiveDataCategory(key).catch(() => null);
     maintenanceInFlightRef.current = false;
     setArchiving(null);
     if (result) refreshAfterAction(key);
@@ -593,7 +601,7 @@ export default function DataManager() {
     maintenanceInFlightRef.current = true;
     setPurging(key);
     setConfirmPurge(null);
-    await api.purgeDataCategory(key).catch(() => null);
+    await purgeDataCategory(key).catch(() => null);
     maintenanceInFlightRef.current = false;
     setPurging(null);
     refreshAfterAction(key);
@@ -603,7 +611,7 @@ export default function DataManager() {
     if (maintenanceInFlightRef.current) return false;
     maintenanceInFlightRef.current = true;
     setDeletingItem(name);
-    const result = await api.purgeDataCategory(key, { subPath: name }).catch(() => null);
+    const result = await purgeDataCategory(key, { subPath: name }).catch(() => null);
     maintenanceInFlightRef.current = false;
     setDeletingItem(null);
     if (!result) return false;
@@ -624,7 +632,7 @@ export default function DataManager() {
     deletingBackupsRef.current.add(filename);
     // The API layer toasts the failure; keep the row on a rejected delete so
     // the archive still on disk stays visible and the user can retry (#8922).
-    const deleted = await api.deleteDataBackup(filename).then(() => true, () => false);
+    const deleted = await deleteDataBackup(filename).then(() => true, () => false);
     deletingBackupsRef.current.delete(filename);
     if (deleted) setBackups(prev => prev.filter(b => b.name !== filename));
   };

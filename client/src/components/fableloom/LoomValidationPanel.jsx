@@ -12,9 +12,7 @@ import {
   AlertTriangle, CircleAlert, Film, Layers, ListChecks, Loader2, Sparkles, Waypoints,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import {
-  reviewLoomEpisode, reviewLoomEpisodeContinuity, validateLoomEpisode,
-} from '../../services/api';
+import { reviewLoomEpisode, reviewLoomEpisodeContinuity, validateLoomEpisode } from '../../services/apiFableLoom.js';
 import TabPills from '../ui/TabPills';
 import LoomContinuityPanel from './LoomContinuityPanel';
 import LoomProductionPanel from './LoomProductionPanel';

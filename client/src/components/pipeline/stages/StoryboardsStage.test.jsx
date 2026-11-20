@@ -8,12 +8,20 @@ const api = vi.hoisted(() => ({
   updatePipelineShotsFromBoard: vi.fn(),
   updatePipelineIssue: vi.fn(),
 }));
-vi.mock('../../../services/api', () => {
+vi.mock('../../../services/apiPipeline.js', () => {
   const rest = ['generatePipelineVisualImage', 'generatePipelineSceneVideo', 'generatePipelineShotStartFrame',
     'refinePipelineSceneImagePrompt', 'generatePipelineSceneImagePrompts',
-    'extractPipelineStoryboardScenes', 'createBlankSketch'];
-  return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn()])) };
+    'extractPipelineStoryboardScenes'];
+  return { updatePipelineIssue: api.updatePipelineIssue, ...Object.fromEntries(rest.map((name) => [name, vi.fn()])) };
 });
+vi.mock('../../../services/apiStoryboards.js', () => ({
+  openStoryboardForPipelineIssue: api.openStoryboardForPipelineIssue,
+  getPipelineStoryboardChanges: api.getPipelineStoryboardChanges,
+  updatePipelineShotsFromBoard: api.updatePipelineShotsFromBoard,
+}));
+vi.mock('../../../services/apiImageVideo.js', () => ({
+  createBlankSketch: vi.fn(),
+}));
 const socket = vi.hoisted(() => {
   const handlers = new Map();
   return {

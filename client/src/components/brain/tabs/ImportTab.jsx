@@ -10,7 +10,7 @@ import {Upload,
   ExternalLink,
   X,
   Sparkles} from 'lucide-react';
-import * as api from '../../../services/api';
+import { previewChatgptImport, uploadChatgptZip, runChatgptImport } from '../../../services/apiBrain.js';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -174,7 +174,7 @@ function ChatGPTWizard({ onExit, navigate }) {
       return;
     }
 
-    const res = await api.previewChatgptImport(parsed).catch((err) => ({ error: err.message }));
+    const res = await previewChatgptImport(parsed).catch((err) => ({ error: err.message }));
     setUploading(false);
     if (res?.error || !res?.ok) {
       setError(res?.error || 'Server rejected the upload.');
@@ -196,12 +196,10 @@ function ChatGPTWizard({ onExit, navigate }) {
 
     let res;
     if (zipFile) {
-      res = await api
-        .uploadChatgptZip(zipFile, { tags: tags.join(','), skipEmpty, silent: true })
+      res = await uploadChatgptZip(zipFile, { tags: tags.join(','), skipEmpty, silent: true })
         .catch((err) => ({ error: err.message }));
     } else if (parsedRaw) {
-      res = await api
-        .runChatgptImport(parsedRaw, { tags, skipEmpty })
+      res = await runChatgptImport(parsedRaw, { tags, skipEmpty })
         .catch((err) => ({ error: err.message }));
     } else {
       setImporting(false);

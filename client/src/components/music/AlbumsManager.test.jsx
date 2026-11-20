@@ -12,9 +12,12 @@ vi.mock('../../hooks/useMediaJobProgress', () => ({ default: () => ({ status: 'i
 
 const listAlbums = vi.fn();
 const listTracks = vi.fn();
-vi.mock('../../services/api', async (importOriginal) => ({
+vi.mock('../../services/apiAlbums.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listAlbums: (...a) => listAlbums(...a),
+}));
+vi.mock('../../services/apiTracks.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   listTracks: (...a) => listTracks(...a),
 }));
 

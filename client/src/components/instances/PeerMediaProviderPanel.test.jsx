@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   probePeer: vi.fn(),
   updatePeer: vi.fn(),
 }));
 
-import { probePeer, updatePeer } from '../../services/api';
+import { probePeer, updatePeer } from '../../services/apiSystem.js';
 import PeerMediaProviderPanel from './PeerMediaProviderPanel';
 
 const basePeer = {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Dna, Heart, HeartPulse, Zap, Activity, TestTube, Droplet, Droplets, Sun, Leaf, Sparkles, Apple, Coffee, Shield, ShieldCheck, ShieldAlert, Flame, Brain, BrainCog, Moon, Dumbbell, Salad, Eye, Bone, Pill, Ribbon, Wind, Scissors, Ear } from 'lucide-react';
 import { Link } from 'react-router';
-import { getGenomeHealthCorrelations } from '../../services/api';
+import { getGenomeHealthCorrelations } from '../../services/apiHealth.js';
 import InsightCard from './InsightCard';
 import ConfidenceBadge from './ConfidenceBadge';
 import ProvenancePanel from './ProvenancePanel';

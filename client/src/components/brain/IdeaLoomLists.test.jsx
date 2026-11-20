@@ -2,15 +2,31 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../services/api', () => ({
-  getIdeaLoomLists: vi.fn(), getIdeaLoomSettings: vi.fn(),
-  createIdeaLoomList: vi.fn(), updateIdeaLoomList: vi.fn(), deleteIdeaLoomList: vi.fn(),
-  importIdeaLoomFromObsidian: vi.fn(), syncIdeaLoomToObsidian: vi.fn(),
-  updateIdeaLoomSettings: vi.fn(), getNotesVaults: vi.fn(),
+vi.mock('../../services/apiBrain.js', () => ({
+  getIdeaLoomLists: vi.fn(),
+  getIdeaLoomSettings: vi.fn(),
+  createIdeaLoomList: vi.fn(),
+  updateIdeaLoomList: vi.fn(),
+  deleteIdeaLoomList: vi.fn(),
+  importIdeaLoomFromObsidian: vi.fn(),
+  syncIdeaLoomToObsidian: vi.fn(),
+  updateIdeaLoomSettings: vi.fn(),
+}));
+vi.mock('../../services/apiNotes.js', () => ({
+  getNotesVaults: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
-import * as api from '../../services/api';
+import {
+  getIdeaLoomLists,
+  getIdeaLoomSettings,
+  updateIdeaLoomSettings,
+  syncIdeaLoomToObsidian,
+  createIdeaLoomList,
+  updateIdeaLoomList,
+  deleteIdeaLoomList,
+} from '../../services/apiBrain.js';
+import { getNotesVaults } from '../../services/apiNotes.js';
 import toast from '../ui/Toast';
 import IdeaLoomLists from './IdeaLoomLists';
 
@@ -41,14 +57,14 @@ const storedList = (overrides = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getIdeaLoomLists.mockResolvedValue([]);
-  api.getIdeaLoomSettings.mockResolvedValue({ enabled: false, obsidianVaultId: null, autoSync: false });
-  api.getNotesVaults.mockResolvedValue([{ id: 'vault-1', name: 'Example Vault' }]);
+  getIdeaLoomLists.mockResolvedValue([]);
+  getIdeaLoomSettings.mockResolvedValue({ enabled: false, obsidianVaultId: null, autoSync: false });
+  getNotesVaults.mockResolvedValue([{ id: 'vault-1', name: 'Example Vault' }]);
 });
 
 describe('IdeaLoomLists', () => {
   it('opts into vault sync and automatic export one explicit step at a time', async () => {
-    api.updateIdeaLoomSettings
+    updateIdeaLoomSettings
       .mockResolvedValueOnce({ enabled: true, obsidianVaultId: null, autoSync: false })
       .mockResolvedValueOnce({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false })
       .mockResolvedValueOnce({ enabled: true, obsidianVaultId: 'vault-1', autoSync: true });
@@ -64,12 +80,12 @@ describe('IdeaLoomLists', () => {
     const autoSync = await screen.findByLabelText(/Export automatically/);
     fireEvent.click(autoSync);
 
-    await waitFor(() => expect(api.updateIdeaLoomSettings).toHaveBeenLastCalledWith({ autoSync: true }, expect.anything()));
+    await waitFor(() => expect(updateIdeaLoomSettings).toHaveBeenLastCalledWith({ autoSync: true }, expect.anything()));
   });
 
   it('shows a retryable error instead of an empty vault picker when the vault list fails to load', async () => {
-    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
-    api.getNotesVaults.mockRejectedValueOnce(new Error('vault service down'));
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    getNotesVaults.mockRejectedValueOnce(new Error('vault service down'));
     renderPanel();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Obsidian vaults');
@@ -82,8 +98,8 @@ describe('IdeaLoomLists', () => {
   });
 
   it('offers explicit recovery only after an exchange reports a deleted note', async () => {
-    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
-    api.syncIdeaLoomToObsidian
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    syncIdeaLoomToObsidian
       .mockResolvedValueOnce({ counts: { exported: 0, missing: 1 } })
       .mockResolvedValueOnce({ counts: { exported: 1, missing: 0 } });
     renderPanel();
@@ -94,15 +110,15 @@ describe('IdeaLoomLists', () => {
     const recover = await screen.findByText('Recreate 1 deleted note');
     fireEvent.click(recover);
 
-    await waitFor(() => expect(api.syncIdeaLoomToObsidian)
+    await waitFor(() => expect(syncIdeaLoomToObsidian)
       .toHaveBeenLastCalledWith(null, expect.objectContaining({ recreateMissing: true })));
     // The first, automatic-shaped export must NOT have asked for a recreate.
-    expect(api.syncIdeaLoomToObsidian.mock.calls[0][1]).not.toHaveProperty('recreateMissing');
+    expect(syncIdeaLoomToObsidian.mock.calls[0][1]).not.toHaveProperty('recreateMissing');
     await waitFor(() => expect(screen.queryByText(/Recreate/)).toBeNull());
   });
 
   it('keeps local list editing available while vault sync is disabled', async () => {
-    api.createIdeaLoomList.mockResolvedValue({ id: 'list-1', title: 'Launch ideas', prompt: 'Why?', category: 'product', status: 'draft', ideas: ['One'] });
+    createIdeaLoomList.mockResolvedValue({ id: 'list-1', title: 'Launch ideas', prompt: 'Why?', category: 'product', status: 'draft', ideas: ['One'] });
     renderPanel();
 
     expect(await screen.findByText('Vault sync is disabled. Local lists remain available.')).toBeTruthy();
@@ -114,7 +130,7 @@ describe('IdeaLoomLists', () => {
     fireEvent.click(screen.getByLabelText('Add idea'));
     fireEvent.click(screen.getByText('Save list'));
 
-    await waitFor(() => expect(api.createIdeaLoomList).toHaveBeenCalledWith(
+    await waitFor(() => expect(createIdeaLoomList).toHaveBeenCalledWith(
       { title: 'Launch ideas', prompt: 'Why?', category: 'product', status: 'draft', help: '', ideas: ['One'] },
       { silent: true },
     ));
@@ -122,8 +138,8 @@ describe('IdeaLoomLists', () => {
   });
 
   it('tells the user the integration is on but unbound when no vault is selected', async () => {
-    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: null, autoSync: false });
-    api.getIdeaLoomLists.mockResolvedValue([storedList()]);
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: null, autoSync: false });
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
     renderPanel();
 
     expect(await screen.findByText('No Obsidian vault is selected. Local lists remain available.')).toBeTruthy();
@@ -133,19 +149,19 @@ describe('IdeaLoomLists', () => {
   });
 
   it('offers explicit exchange controls only for a configured vault', async () => {
-    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
-    api.getIdeaLoomLists.mockResolvedValue([storedList()]);
-    api.syncIdeaLoomToObsidian.mockResolvedValue({ counts: { exported: 1, skipped: 0 } });
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
+    syncIdeaLoomToObsidian.mockResolvedValue({ counts: { exported: 1, skipped: 0 } });
     renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Export to Obsidian' }));
-    await waitFor(() => expect(api.syncIdeaLoomToObsidian).toHaveBeenCalledWith(null, { silent: true }));
+    await waitFor(() => expect(syncIdeaLoomToObsidian).toHaveBeenCalledWith(null, { silent: true }));
     expect(await screen.findByText(/Last exchange: 0 imported · 1 exported/)).toBeTruthy();
   });
 
   it('reports exchange problems instead of showing a successful completion', async () => {
-    api.getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
-    api.syncIdeaLoomToObsidian.mockResolvedValue({ counts: { failed: 1 } });
+    getIdeaLoomSettings.mockResolvedValue({ enabled: true, obsidianVaultId: 'vault-1', autoSync: false });
+    syncIdeaLoomToObsidian.mockResolvedValue({ counts: { failed: 1 } });
     renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Export to Obsidian' }));
@@ -154,7 +170,7 @@ describe('IdeaLoomLists', () => {
   });
 
   it('does not report an unread settings fetch as a disabled integration', async () => {
-    api.getIdeaLoomSettings.mockRejectedValue(new Error('Server unreachable'));
+    getIdeaLoomSettings.mockRejectedValue(new Error('Server unreachable'));
     renderPanel();
 
     expect(await screen.findByText('Could not load IdeaLoom settings. Local lists remain available.')).toBeTruthy();
@@ -162,8 +178,8 @@ describe('IdeaLoomLists', () => {
   });
 
   it('reorders a selected list locally and saves only the schema fields', async () => {
-    api.getIdeaLoomLists.mockResolvedValue([storedList()]);
-    api.updateIdeaLoomList.mockResolvedValue(storedList({ ideas: ['Second', 'First'] }));
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
+    updateIdeaLoomList.mockResolvedValue(storedList({ ideas: ['Second', 'First'] }));
     renderPanel();
 
     fireEvent.click(await screen.findByText('Launch ideas'));
@@ -171,26 +187,26 @@ describe('IdeaLoomLists', () => {
     fireEvent.click(screen.getByLabelText('Move idea 2 up'));
     fireEvent.click(screen.getByText('Save list'));
 
-    await waitFor(() => expect(api.updateIdeaLoomList).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateIdeaLoomList).toHaveBeenCalledWith(
       'list-1',
       { title: 'Launch ideas', prompt: 'What should we launch?', category: 'product', status: 'draft', help: '', ideas: ['Second', 'First'] },
       { silent: true },
     ));
     // Record metadata must never ride back to the strict API.
-    const [, body] = api.updateIdeaLoomList.mock.calls[0];
+    const [, body] = updateIdeaLoomList.mock.calls[0];
     expect(Object.keys(body).sort()).toEqual(['category', 'help', 'ideas', 'prompt', 'status', 'title']);
     expect(screen.getByTestId('location').textContent).toBe('?list=list-1');
   });
 
   it('completes a list in one click without discarding unsaved edits', async () => {
-    api.getIdeaLoomLists.mockResolvedValue([storedList()]);
-    api.updateIdeaLoomList.mockResolvedValue(storedList({ status: 'completed', ideas: ['Renamed', 'Second'] }));
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
+    updateIdeaLoomList.mockResolvedValue(storedList({ status: 'completed', ideas: ['Renamed', 'Second'] }));
     renderPanel('/brain/ideas?list=list-1');
 
     fireEvent.change(await screen.findByLabelText('Idea 1'), { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByLabelText('Mark list completed'));
 
-    await waitFor(() => expect(api.updateIdeaLoomList).toHaveBeenCalledWith(
+    await waitFor(() => expect(updateIdeaLoomList).toHaveBeenCalledWith(
       'list-1',
       expect.objectContaining({ status: 'completed', ideas: ['Renamed', 'Second'] }),
       { silent: true },
@@ -206,18 +222,18 @@ describe('IdeaLoomLists', () => {
     fireEvent.click(screen.getByText('Save list'));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('A list prompt is required'));
-    expect(api.createIdeaLoomList).not.toHaveBeenCalled();
+    expect(createIdeaLoomList).not.toHaveBeenCalled();
   });
 
   it('deletes a list behind an inline confirmation and drops it from the URL', async () => {
-    api.getIdeaLoomLists.mockResolvedValue([storedList()]);
-    api.deleteIdeaLoomList.mockResolvedValue(null);
+    getIdeaLoomLists.mockResolvedValue([storedList()]);
+    deleteIdeaLoomList.mockResolvedValue(null);
     renderPanel('/brain/ideas?list=list-1');
 
     fireEvent.click(await screen.findByLabelText('Delete list'));
     fireEvent.click(screen.getByTitle('Delete list'));
 
-    await waitFor(() => expect(api.deleteIdeaLoomList).toHaveBeenCalledWith('list-1', { silent: true }));
+    await waitFor(() => expect(deleteIdeaLoomList).toHaveBeenCalledWith('list-1', { silent: true }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(''));
     expect(await screen.findByText('No IdeaLoom lists yet.')).toBeTruthy();
   });

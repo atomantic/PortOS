@@ -13,7 +13,15 @@ const api = vi.hoisted(() => ({
   updateApp: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({
+  getJiraInstances: api.getJiraInstances,
+  getJiraProjects: api.getJiraProjects,
+  getJiraBoards: api.getJiraBoards,
+  getJiraBoardSprints: api.getJiraBoardSprints,
+  getJiraIssue: api.getJiraIssue,
+  searchJiraEpics: api.searchJiraEpics,
+}));
+vi.mock('../../services/apiApps.js', () => ({ updateApp: api.updateApp }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const app = { id: 'app-1', jira: { enabled: true } };

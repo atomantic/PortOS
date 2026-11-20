@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Upload, Download, FileJson, HeartPulse, CheckCircle, AlertCircle } from 'lucide-react';
-import * as api from '../../../services/api';
+import { ingestAppleHealth, uploadAppleHealthXml } from '../../../services/apiHealth.js';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -57,7 +57,7 @@ export default function SettingsTab({ onRefresh }) {
         return;
       }
 
-      const stats = await api.ingestAppleHealth(parsed).catch(err => {
+      const stats = await ingestAppleHealth(parsed).catch(err => {
         setJsonError(err.message);
         return null;
       });
@@ -94,7 +94,7 @@ export default function SettingsTab({ onRefresh }) {
     // AGENTS.md "custom catch ⇒ silent: true" convention.
     // The route answers only after the whole import (and any clinical records
     // in a ZIP) has finished, so the resolved body is the terminal result.
-    api.uploadAppleHealthXml(file, { silent: true })
+    uploadAppleHealthXml(file, { silent: true })
       .then((result) => {
         setXmlResult(result);
         setXmlImporting(false);

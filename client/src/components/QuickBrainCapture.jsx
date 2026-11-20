@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { Link } from 'react-router';
 import { ChevronDown, ClipboardPaste, Film, Send, Sliders, Sparkles, X } from 'lucide-react';
 import toast from './ui/Toast';
-import * as api from '../services/api';
+import { getYoutubeIngestSettings, captureBrainThought } from '../services/apiBrain.js';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool.js';
 import { useRepoIntake } from '../hooks/useRepoIntake.js';
 import useYoutubeIngest from '../hooks/useYoutubeIngest.js';
@@ -56,7 +56,7 @@ export default function QuickBrainCapture() {
   useEffect(() => {
     if (!isYoutube || seededRef.current) return;
     seededRef.current = true;
-    api.getYoutubeIngestSettings({ silent: true })
+    getYoutubeIngestSettings({ silent: true })
       .then((settings) => setIngestOpts(ingestOptionsFromSettings(settings)))
       .catch(() => {}); // defaultIngestOptions() is already sensible
   }, [isYoutube]);
@@ -148,7 +148,7 @@ export default function QuickBrainCapture() {
   const sendCapture = async (payload, failedId) => {
     const captureOptions = { creative: payload.creative, repoIntake: payload.repoIntake };
     if (payload.note) captureOptions.note = payload.note;
-    const result = await api.captureBrainThought(payload.text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
+    const result = await captureBrainThought(payload.text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
       const message = err.message || 'Failed to capture';
       toast.error(message);
       failedCaptures.fail(payload, message, failedId);

@@ -25,7 +25,14 @@ import Banner from '../components/ui/Banner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import FamilyCard from '../components/quotaBurn/FamilyCard';
 import { NumberField } from '../components/quotaBurn/fields';
-import * as api from '../services/api';
+import {
+  getQuotaBurn,
+  getQuotaBurnCatalog,
+  saveQuotaBurn,
+  rearmQuotaBurn,
+  runQuotaBurn,
+} from '../services/apiQuotaBurn.js';
+import { getCosSchedule, getCosJobs } from '../services/apiAgents.js';
 import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
 import { buildQuotaBurnTaskCatalog, flattenTaskCatalog } from '../lib/quotaBurnTasks';
@@ -157,7 +164,7 @@ function QuotaBurnContent() {
     // `silent: true` because the failure is rendered by this page's own banner
     // rather than the request helper's toast — see client/src/AGENTS.md's
     // silent-vs-toasting rule.
-    const data = await api.getQuotaBurn(refresh, { silent: true })
+    const data = await getQuotaBurn(refresh, { silent: true })
       .catch((err) => {
         setLoadError(err?.message || 'The request failed.');
         return READ_FAILED;
@@ -205,9 +212,9 @@ function QuotaBurnContent() {
     // for the same reason as `load` — the failure is rendered by the family
     // card's own banner, not the request helper's toast.
     const [burnCatalog, schedule, jobs] = await Promise.all([
-      read(api.getQuotaBurnCatalog({ silent: true })),
-      read(api.getCosSchedule({ silent: true })),
-      read(api.getCosJobs({ silent: true })),
+      read(getQuotaBurnCatalog({ silent: true })),
+      read(getCosSchedule({ silent: true })),
+      read(getCosJobs({ silent: true })),
     ]);
     const next = normalizeCatalog(burnCatalog === READ_FAILED ? null : burnCatalog);
     setCatalog(next);
@@ -269,7 +276,7 @@ function QuotaBurnContent() {
     if (!patch) return;
     const seq = editSeqRef.current;
     savingRef.current = true;
-    const result = await api.saveQuotaBurn(patch, { silent: true })
+    const result = await saveQuotaBurn(patch, { silent: true })
       .catch((err) => { toast.error(`Could not save: ${err.message}`); return null; });
     // Cleared before the `load()` below so that read can still adopt the
     // server's normalization — the flag exists to fence concurrent POLL reads,
@@ -321,7 +328,7 @@ function QuotaBurnContent() {
     const patch = pendingRef.current;
     if (!patch) return;
     pendingRef.current = null;
-    api.saveQuotaBurn(patch, { silent: true })
+    saveQuotaBurn(patch, { silent: true })
       // The page is gone, so there is no header indicator left to tell the
       // truth about persistence: swallowing this failure is what turned
       // "Saving changes…" into permanently-lost edits. Say so, and keep the
@@ -354,7 +361,7 @@ function QuotaBurnContent() {
   const startSequence = async (familyId, jobs) => {
     setRunning(true);
     const patch = { enabled: true, families: { [familyId]: { enabled: true, sequence: true, jobs } } };
-    const saved = await api.saveQuotaBurn(patch, { silent: true })
+    const saved = await saveQuotaBurn(patch, { silent: true })
       .catch(err => { toast.error(`Could not save sequence: ${err.message}`); return null; });
     if (saved) {
       setConfig(prev => mergeQuotaBurnPatch(prev, patch));
@@ -370,7 +377,7 @@ function QuotaBurnContent() {
   // would fight the debounced save.
   const rearm = async (familyId, jobId = null) => {
     setRunning(true);
-    const next = await api.rearmQuotaBurn(familyId, jobId, { silent: true })
+    const next = await rearmQuotaBurn(familyId, jobId, { silent: true })
       .catch((err) => { toast.error(`Could not re-arm: ${err.message}`); return null; });
     if (next?.status) setStatus(next.status);
     setRunning(false);
@@ -378,7 +385,7 @@ function QuotaBurnContent() {
 
   const run = async (body, label) => {
     setRunning(true);
-    const response = await api.runQuotaBurn(body, { silent: true })
+    const response = await runQuotaBurn(body, { silent: true })
       .catch((err) => { toast.error(`${label} failed: ${err.message}`); return null; });
     if (response) {
       const result = response.result || {};

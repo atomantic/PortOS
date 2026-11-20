@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
+}));
+vi.mock('../../services/apiPipeline.js', () => ({
   updatePipelineSeries: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
 
-import { getProviders, updatePipelineSeries } from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { updatePipelineSeries } from '../../services/apiPipeline.js';
 import SeriesLlmPicker from './SeriesLlmPicker';
 
 const PROVIDERS = [

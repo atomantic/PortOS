@@ -26,5 +26,3 @@ Use the shared boundaries: the clipboard helpers (insecure-origin support), `use
 Search first: `node scripts/lib-catalog.js <term> [--dir <dir>]` prints `path — summary — exported names` for every module in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/` and `client/src/services/` whose path, exports or header matches all the terms. The catalog is derived on demand; nothing is checked in.
 
 A new module in one of those directories opens with a comment whose first paragraph is a one-sentence summary of at most 200 characters, followed by any longer rationale in the same comment. `<dir>/moduleSummaries.test.js` fails on a missing or over-length summary. There are no barrels or catalog tables to update, so a new module needs no edit outside its own file and test; import modules directly.
-
-The one exception is `client/src/services/api.js`, a real import path: re-export a new `apiX.js` from it (`client/src/services/index.test.js` enforces this; give a colliding name a namespace export there).

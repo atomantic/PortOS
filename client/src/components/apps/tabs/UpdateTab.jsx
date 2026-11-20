@@ -7,7 +7,14 @@ import Banner from '../../ui/Banner';
 import AutoUpdatePanel from './AutoUpdatePanel';
 import NodeRuntimePanel from './NodeRuntimePanel';
 import ChromeUpdatePanel from './ChromeUpdatePanel';
-import * as api from '../../../services/api';
+import {
+  getUpdateStatus,
+  checkForUpdate,
+  executePortosUpdate,
+  syncPortosFork,
+  ignoreUpdateVersion,
+  clearIgnoredVersions,
+} from '../../../services/apiSystem.js';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
 import { useSocketResource } from '../../../hooks/useSocketResource';
@@ -47,7 +54,7 @@ function StepIndicator({ status }) {
 
 export default function UpdateTab() {
   const { data: status, loading, refetch: fetchStatus, updateData: setStatus } = useSocketResource(
-    () => api.getUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
+    () => getUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
   );
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -95,7 +102,7 @@ export default function UpdateTab() {
 
   const handleCheck = async () => {
     setChecking(true);
-    const result = await api.checkForUpdate().catch(() => null);
+    const result = await checkForUpdate().catch(() => null);
     if (result) setStatus(prev => ({ ...(prev ?? {}), ...result }));
     setChecking(false);
   };
@@ -105,8 +112,8 @@ export default function UpdateTab() {
   // only schedules a render; the action passes its fresh response directly.
   // `launch` lets the Node runtime panel start its restart through the same
   // baseline, step list and restart watch as a release update.
-  const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = api.executePortosUpdate) => {
-    lastUpdateRequest.current = launch === api.executePortosUpdate ? { opts, fromStatus, launch } : null;
+  const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = executePortosUpdate) => {
+    lastUpdateRequest.current = launch === executePortosUpdate ? { opts, fromStatus, launch } : null;
     const s = fromStatus || status;
     // Record the version and uptime of the still-running server, so even an
     // instant restart (whose first post-restart poll already reports a small
@@ -144,7 +151,7 @@ export default function UpdateTab() {
   const syncForkThenRun = async (extraOpts = {}) => {
     setSyncingFork(true);
     setForkSyncError(null);
-    const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
+    const synced = await syncPortosFork({}, { silent: true }).catch(err => {
       setForkSyncError(err.message);
       return null;
     });
@@ -155,7 +162,7 @@ export default function UpdateTab() {
     } else {
       toast.success(`Synced ${synced.fullName} from ${synced.source}`);
     }
-    const fresh = await api.getUpdateStatus({ silent: true }).catch(() => null);
+    const fresh = await getUpdateStatus({ silent: true }).catch(() => null);
     if (!fresh) return;
     setStatus(fresh);
     await runUpdate(extraOpts, fresh);
@@ -168,7 +175,7 @@ export default function UpdateTab() {
   const handleSyncForkOnly = async () => {
     setSyncingFork(true);
     setForkSyncError(null);
-    const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
+    const synced = await syncPortosFork({}, { silent: true }).catch(err => {
       setForkSyncError(err.message);
       return null;
     });
@@ -183,14 +190,14 @@ export default function UpdateTab() {
   };
 
   const handleIgnore = async (version) => {
-    const result = await api.ignoreUpdateVersion(version).catch(() => null);
+    const result = await ignoreUpdateVersion(version).catch(() => null);
     if (!result) return;
     fetchStatus();
     toast.success(`v${version} ignored`);
   };
 
   const handleClearIgnored = async () => {
-    const result = await api.clearIgnoredVersions().catch(() => null);
+    const result = await clearIgnoredVersions().catch(() => null);
     if (!result) return;
     fetchStatus();
     toast.success('Ignored versions cleared');

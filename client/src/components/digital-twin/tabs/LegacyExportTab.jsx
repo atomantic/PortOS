@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Download, Archive, RefreshCw, Package, AlertTriangle } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
-import * as api from '../../../services/api';
+import { getLegacyExportPreview, downloadLegacyExport } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import { formatBytes } from '../../../utils/formatters';
@@ -34,7 +34,7 @@ export default function LegacyExportTab() {
     setLoading(true);
     // ExportTab-style: tolerate a failed preview with a falsy fallback so the
     // tab still renders an empty state instead of throwing.
-    const data = await api.getLegacyExportPreview({ silent: true }).catch(() => null);
+    const data = await getLegacyExportPreview({ silent: true }).catch(() => null);
     setPreview(data);
     // Default selection: every present section.
     if (data?.sections) {
@@ -72,8 +72,7 @@ export default function LegacyExportTab() {
     // If every present section is selected, send no filter (server treats
     // omitted `sections` as "all") so a future section is included by default.
     const allPresent = selectedPresent.length === presentSections.length;
-    const buffer = await api
-      .downloadLegacyExport({ sections: allPresent ? null : selectedPresent }, { silent: true })
+    const buffer = await downloadLegacyExport({ sections: allPresent ? null : selectedPresent }, { silent: true })
       .catch(() => null);
     setGenerating(false);
     setProgress(null);

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { getRiggedAvatars } from '../services/api';
+import { getRiggedAvatars } from '../services/apiAvatar.js';
 
 // Avatar capabilities for rigged + animated records (#5894). A retargeted character carries only the clips its ONE retarget produced while every CoS state wants its own motion; the server reports per-state coverage
 // (`GET /avatar/rigged`, `server/services/rigging/clipCapabilities.js`) and these resolvers turn it into a playable clip WITHOUT pretending an uncovered state is covered (falling back to a clip the character has).

@@ -1,7 +1,7 @@
 import { taskExecutionOptions } from '../../../../../server/lib/executionOptions.js';
 import { useCallback, useMemo, useState } from 'react';
 import { RefreshCw, Loader2, X } from 'lucide-react';
-import * as api from '../../../services/api';
+import { hydrateCosAgentDescription, relaunchCosAgent } from '../../../services/apiAgents.js';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import AppContextPicker from '../../AppContextPicker';
@@ -53,7 +53,7 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
   const clipped = Boolean(agent?.metadata?.taskDescriptionTruncated);
   const taskDescription = hydrated || agent?.metadata?.taskDescription || agent?.taskId || 'Current task';
   const hydrateDescription = useCallback(async () => {
-    const full = await api.hydrateCosAgentDescription(agent);
+    const full = await hydrateCosAgentDescription(agent);
     setHydrated(full.metadata?.taskDescription ?? null);
   }, [agent]);
 
@@ -87,7 +87,7 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
   const [submit, submitting] = useAsyncAction(async () => {
     // Blank means "keep what the stalled run had" (AGENTS.md's absent-vs-empty
     // rule) — the server treats a falsy override as unchanged.
-    const result = await api.relaunchCosAgent(agent.id, {
+    const result = await relaunchCosAgent(agent.id, {
       provider: formData.provider || undefined,
       model: formData.model || undefined,
       executionOptions: formData.executionOptions,

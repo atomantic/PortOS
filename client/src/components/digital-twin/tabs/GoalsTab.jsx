@@ -5,7 +5,17 @@ import {Target, Plus, Trash2, Check, ChevronDown, ChevronUp,
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
-import * as api from '../../../services/api';
+import {
+  getGoals,
+  getLongevity,
+  setBirthDate,
+  deriveLongevity,
+  createGoal,
+  updateGoal,
+  deleteGoal,
+  addGoalMilestone,
+  completeGoalMilestone,
+} from '../../../services/apiGoals.js';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { formatDateNumeric } from '../../../utils/formatters';
 import LoadFailedState from '../../ui/LoadFailedState';
@@ -58,7 +68,7 @@ export default function GoalsTab({ onRefresh }) {
 
   const loadData = useCallback(async () => {
     const [goalsResult, longevityResult] = await Promise.allSettled([
-      api.getGoals(), api.getLongevity()
+      getGoals(), getLongevity()
     ]);
     setLoadFailed(goalsResult.status === 'rejected');
     if (goalsResult.status === 'fulfilled') {
@@ -73,7 +83,7 @@ export default function GoalsTab({ onRefresh }) {
 
   const handleSetBirthDate = async () => {
     if (!birthDateInput) return;
-    await api.setBirthDate(birthDateInput);
+    await setBirthDate(birthDateInput);
     setShowBirthDate(false);
     await loadData();
     onRefresh?.();
@@ -82,7 +92,7 @@ export default function GoalsTab({ onRefresh }) {
   const handleDeriveLongevity = async () => {
     setDerivingLongevity(true);
     try {
-      await api.deriveLongevity();
+      await deriveLongevity();
       await loadData();
     } catch {
       // The request helper already shows the failure toast.
@@ -93,7 +103,7 @@ export default function GoalsTab({ onRefresh }) {
 
   const handleCreateGoal = async () => {
     if (!newGoal.title.trim()) return;
-    await api.createGoal(newGoal);
+    await createGoal(newGoal);
     setNewGoal({ title: '', description: '', horizon: '5-year', category: 'mastery' });
     setShowNewGoal(false);
     await loadData();
@@ -101,12 +111,12 @@ export default function GoalsTab({ onRefresh }) {
   };
 
   const handleUpdateGoalStatus = async (goalId, status) => {
-    await api.updateGoal(goalId, { status });
+    await updateGoal(goalId, { status });
     await loadData();
   };
 
   const handleDeleteGoal = async (goalId) => {
-    await api.deleteGoal(goalId);
+    await deleteGoal(goalId);
     setExpandedGoal(null);
     await loadData();
     onRefresh?.();
@@ -114,7 +124,7 @@ export default function GoalsTab({ onRefresh }) {
 
   const handleAddMilestone = async (goalId) => {
     if (!newMilestone.title.trim()) return;
-    await api.addGoalMilestone(goalId, {
+    await addGoalMilestone(goalId, {
       title: newMilestone.title,
       ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
     });
@@ -123,7 +133,7 @@ export default function GoalsTab({ onRefresh }) {
   };
 
   const handleCompleteMilestone = async (goalId, milestoneId) => {
-    await api.completeGoalMilestone(goalId, milestoneId);
+    await completeGoalMilestone(goalId, milestoneId);
     await loadData();
   };
 

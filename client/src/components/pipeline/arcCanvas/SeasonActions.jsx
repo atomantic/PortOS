@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Loader2, Wand2, ListChecks, X, ShieldCheck } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { createPipelineIssue, listPipelineIssues } from '../../../services/api';
+import { createPipelineIssue, listPipelineIssues } from '../../../services/apiPipeline.js';
 import VerifyScopeHint from './VerifyScopeHint.jsx';
 import { pluralize } from '../../../lib/textUtils';
 

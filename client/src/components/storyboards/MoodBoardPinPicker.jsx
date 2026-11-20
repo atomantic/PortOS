@@ -3,7 +3,7 @@ import { Loader2, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
-import { getMoodBoard } from '../../services/api';
+import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { moodBoardItemAnalysisSource, moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
 
 /**

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getTailcatForwards: vi.fn(),
   retryTailcatForward: vi.fn(),
   forgetTailcatForward: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { getTailcatForwards, retryTailcatForward, forgetTailcatForward } from '../../services/api';
+import { getTailcatForwards, retryTailcatForward, forgetTailcatForward } from '../../services/apiSystem.js';
 import TailcatForwardsPanel from './TailcatForwardsPanel';
 
 const failedForward = {

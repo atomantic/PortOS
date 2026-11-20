@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiApps.js', () => ({
   getAppRepositorySources: vi.fn(),
 }));
 vi.mock('../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+import { getAppRepositorySources } from '../../services/apiApps.js';
 import { useAppOperation } from '../../hooks/useAppOperation';
 import EidoverseUpdateBanner from './EidoverseUpdateBanner';
 
@@ -66,25 +66,25 @@ beforeEach(() => {
   useAppOperation.mockReturnValue({
     steps: [], isOperating: false, error: null, completed: false, startUpdate,
   });
-  api.getAppRepositorySources.mockResolvedValue(behindStatus());
+  getAppRepositorySources.mockResolvedValue(behindStatus());
 });
 
 afterEach(() => cleanup());
 
 describe('Eidoverse out-of-date advisory', () => {
   it('stays silent when every checkout is current', async () => {
-    api.getAppRepositorySources.mockResolvedValue({ ...behindStatus(), updateAvailable: false });
+    getAppRepositorySources.mockResolvedValue({ ...behindStatus(), updateAvailable: false });
     renderBanner();
 
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalled());
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalled());
     expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('stays silent when the freshness check fails, rather than guessing', async () => {
-    api.getAppRepositorySources.mockRejectedValue(new Error('origin unreachable'));
+    getAppRepositorySources.mockRejectedValue(new Error('origin unreachable'));
     renderBanner();
 
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalled());
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalled());
     expect(screen.queryByRole('status')).toBeNull();
   });
 
@@ -96,7 +96,7 @@ describe('Eidoverse out-of-date advisory', () => {
       origin: { fullName: 'example-owner/eidoverse-worlds', isUpstream: false, isFork: true },
       forkVsUpstream: { available: true, ahead: 0, behind: 2, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     renderBanner();
 
     const banner = await screen.findByRole('status');
@@ -114,7 +114,7 @@ describe('Eidoverse out-of-date advisory', () => {
       origin: { fullName: 'example-owner/eidoverse-worlds', isUpstream: false, isFork: true },
       forkVsUpstream: { available: true, ahead: 1, behind: 2, state: 'diverged', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     renderBanner();
 
     await screen.findByRole('status');
@@ -127,7 +127,7 @@ describe('Eidoverse out-of-date advisory', () => {
   // from its own origin brings nothing new, so an advisory raised for that drift
   // could never be cleared by any button PortOS offers (#6321).
   it('says nothing about a fork PortOS has no push access to', async () => {
-    api.getAppRepositorySources.mockResolvedValue({
+    getAppRepositorySources.mockResolvedValue({
       kind: 'managed-app',
       // The server computes this from the same rule; a fork PortOS may only
       // read is not an available update.
@@ -151,7 +151,7 @@ describe('Eidoverse out-of-date advisory', () => {
     });
     renderBanner();
 
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalled());
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalled());
     expect(screen.queryByRole('status')).toBeNull();
   });
 
@@ -166,7 +166,7 @@ describe('Eidoverse out-of-date advisory', () => {
       origin: { fullName: 'anima-research/eidoverse-video', isUpstream: false, isFork: true, canPush: false },
       forkVsUpstream: { available: true, ahead: 0, behind: 12, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     renderBanner();
 
     const banner = await screen.findByRole('status');
@@ -181,13 +181,13 @@ describe('Eidoverse out-of-date advisory', () => {
 
     cleanup();
     renderBanner();
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('status')).toBeNull();
 
     cleanup();
     const newer = behindStatus();
     newer.sources[0].origin.head = 'primary-origin-head-2';
-    api.getAppRepositorySources.mockResolvedValue(newer);
+    getAppRepositorySources.mockResolvedValue(newer);
     renderBanner();
     expect(await screen.findByRole('status')).toHaveTextContent('Eidoverse update available');
   });
@@ -207,7 +207,7 @@ describe('Eidoverse out-of-date advisory', () => {
     expect(screen.queryByRole('button', { name: /Update Eidoverse/ })).toBeNull();
 
     await act(async () => { useAppOperation.mock.calls.at(-1)[0].onComplete(); });
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalledTimes(2));
     expect(onUpdated).toHaveBeenCalled();
   });
 });

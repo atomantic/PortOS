@@ -17,7 +17,7 @@ const providerHook = vi.hoisted(() => ({
   activeProviderId: 'codex',
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({ createFeatureAgent: api.createFeatureAgent }));
 vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: api.getToolUseModels }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => providerHook }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { updatePipelineSeries } from '../../../services/api';
+import { updatePipelineSeries } from '../../../services/apiPipeline.js';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../StoryShapes';
 import FieldLockToggle from './FieldLockToggle.jsx';
 import TickingClockEditor from './TickingClockEditor.jsx';

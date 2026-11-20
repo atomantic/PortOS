@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
 import { Target, ArrowRight } from 'lucide-react';
-import { getGoalsTree } from '../../services/api';
+import { getGoalsTree } from '../../services/apiGoals.js';
 import BrailleSpinner from '../BrailleSpinner';
 import { GOALS_LIST_PATH, goalDetailPath } from '../goals/goalConstants';
 

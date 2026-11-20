@@ -1,11 +1,12 @@
 import { Link } from 'react-router';
-import * as api from '../services/api';
+import { getProviders } from '../services/apiProviders.js';
+import { getApps } from '../services/apiApps.js';
 import TaskAddForm from './cos/TaskAddForm';
 import ListLoadError from './ui/ListLoadError';
 import useListResource from '../hooks/useListResource';
 
-const fetchProviders = () => api.getProviders({ silent: true }).then(data => data?.providers || []);
-const fetchApps = () => api.getApps({ silent: true }).then(data => (Array.isArray(data) ? data : data?.apps || []));
+const fetchProviders = () => getProviders({ silent: true }).then(data => data?.providers || []);
+const fetchApps = () => getApps({ silent: true }).then(data => (Array.isArray(data) ? data : data?.apps || []));
 
 export default function QuickTaskWidget() {
   const providersList = useListResource(fetchProviders);

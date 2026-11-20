@@ -4,7 +4,7 @@ import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Setti
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import BrailleSpinner from '../components/BrailleSpinner';
-import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
+import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/apiImageTo3d.js';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
 import useMounted from '../hooks/useMounted';

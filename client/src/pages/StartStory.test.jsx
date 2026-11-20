@@ -10,7 +10,7 @@ vi.mock('react-router', async (io) => {
 });
 
 const listUniverseNames = vi.hoisted(() => vi.fn());
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: (...a) => listUniverseNames(...a),
 }));
 

@@ -13,7 +13,8 @@
 // model is the exact class of lie this hook was added to end.
 
 import { useEffect, useState } from 'react';
-import { getSettings, listImageModels } from '../services/api';
+import { getSettings } from '../services/apiSystem.js';
+import { listImageModels } from '../services/apiImageVideo.js';
 import { installLocalModelId } from '../lib/imageGenBackends';
 
 /**

@@ -19,7 +19,7 @@ import RetiredTrainingData from '../components/models/RetiredTrainingData';
 import Banner from '../components/ui/Banner';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { isVideoLoraFamily } from '../lib/runnerFamilies';
-import { listLorasFull, deleteLoraFull, getCivitaiAuth, getCivitaiSuggestions } from '../services/api';
+import { listLorasFull, deleteLoraFull, getCivitaiAuth, getCivitaiSuggestions } from '../services/apiImageVideo.js';
 import { installedHfKey } from '../components/loras/loraDisplay';
 import HfDownloadProgress from '../components/loras/HfDownloadProgress';
 import CivitaiAuthModal from '../components/loras/CivitaiAuthModal';

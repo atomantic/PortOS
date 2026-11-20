@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, GitCommitHorizontal } from 'lucide-react';
 import Pill from '../ui/Pill';
 import Banner from '../ui/Banner';
-import * as api from '../../services/api';
+import { getSystemBuild } from '../../services/apiSystem.js';
 import {
   SERVED_BUILD_ID,
   TRUSTED_BUNDLE_STAMP,
@@ -36,7 +36,7 @@ export default function BuildStampPanel({ uptimeFormatted }) {
   // drops the socket and reloads the page anyway.
   useEffect(() => {
     let live = true;
-    api.getSystemBuild({ silent: true })
+    getSystemBuild({ silent: true })
       .then((data) => { if (live) { setBuild(data); setLoad('ready'); } })
       .catch(() => { if (live) setLoad('error'); });
     return () => { live = false; };

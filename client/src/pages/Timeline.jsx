@@ -7,7 +7,7 @@ import {
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TimelineImportPanels, { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
-import * as api from '../services/api';
+import { getTimelineDay } from '../services/apiTimeline.js';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatCount, formatDurationSec, formatWeekdayDate, localDateKey, shiftISODate } from '../utils/formatters';
 
@@ -146,7 +146,7 @@ export default function Timeline() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api.getTimelineDay(urlDate ? { date: urlDate, silent: true } : { silent: true })
+    getTimelineDay(urlDate ? { date: urlDate, silent: true } : { silent: true })
       .then((result) => { if (active) setDay(result); })
       .catch((err) => { if (active) { setDay(null); toast.error(`Failed to load timeline: ${err.message}`); } })
       .finally(() => { if (active) setLoading(false); });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getLegacyExportPreview: vi.fn(),
   downloadLegacyExport: vi.fn(),
 }));
@@ -17,7 +17,7 @@ vi.mock('../../../lib/downloadBlob', () => ({
 }));
 
 import LegacyExportTab from './LegacyExportTab';
-import { getLegacyExportPreview, downloadLegacyExport } from '../../../services/api';
+import { getLegacyExportPreview, downloadLegacyExport } from '../../../services/apiDigitalTwin.js';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import toast from '../../ui/Toast';
 

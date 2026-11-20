@@ -4,7 +4,7 @@ import Drawer from '../Drawer';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
-import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } from '../../services/api';
+import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } from '../../services/apiCatalog.js';
 import { formatCount } from '../../utils/formatters';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { STORY_DRAFT_LIMITS } from '../../../../server/lib/catalog/catalogStoryDraft.js';

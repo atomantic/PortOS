@@ -9,7 +9,11 @@ import {
   Target,
   Sparkles
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinGaps,
+  getDigitalTwinEnrichProgress,
+  analyzeAssessment,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
@@ -20,7 +24,7 @@ import { ENRICHMENT_CATEGORIES } from '../constants';
 import { formatCount } from '../../../utils/formatters';
 
 // Module-level so the identity is stable for useListResource.
-const fetchGaps = () => api.getDigitalTwinGaps({ silent: true }).then((data) => data?.gaps ?? []);
+const fetchGaps = () => getDigitalTwinGaps({ silent: true }).then((data) => data?.gaps ?? []);
 
 export default function InterviewTab({ onRefresh }) {
   const navigate = useNavigate();
@@ -40,7 +44,7 @@ export default function InterviewTab({ onRefresh }) {
   const [progressError, setProgressError] = useState(null);
 
   const loadProgress = useCallback(async () => {
-    const result = await api.getDigitalTwinEnrichProgress({ silent: true })
+    const result = await getDigitalTwinEnrichProgress({ silent: true })
       .then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
     setEnrichProgress(result.data);
     setProgressError(result.error ? (result.error instanceof Error ? result.error : new Error('Request failed')) : null);
@@ -63,7 +67,7 @@ export default function InterviewTab({ onRefresh }) {
     setAnalyzing(true);
     setAnalysisResult(null);
 
-    const result = await api.analyzeAssessment(content.trim(), selectedProviderId, selectedModel, { silent: true })
+    const result = await analyzeAssessment(content.trim(), selectedProviderId, selectedModel, { silent: true })
       .catch((err) => ({ error: err.message }));
 
     if (result.error) {

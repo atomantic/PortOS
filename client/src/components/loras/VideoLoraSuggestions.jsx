@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import { formatCount } from '../../utils/formatters';
 import { VIDEO_LORA_FAMILIES } from '../../lib/runnerFamilies';
-import { searchVideoLoras } from '../../services/api';
+import { searchVideoLoras } from '../../services/apiImageVideo.js';
 import { RUNNER_BADGE_CLASS, RUNNER_LABEL, hfCardKey, pctOf } from './loraDisplay';
 
 // Family filter for the live HuggingFace search below the curated list.

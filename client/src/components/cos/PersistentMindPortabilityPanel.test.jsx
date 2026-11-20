@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const api = vi.hoisted(() => ({ exportPersistentMindBundle: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({ exportPersistentMindBundle: api.exportPersistentMindBundle }));
 
 const downloadBlob = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/downloadBlob.js', () => ({ downloadBlob }));

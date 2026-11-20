@@ -1,6 +1,6 @@
 import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import * as api from '../services/api';
+import { getBrainSummary, getBrainSettings } from '../services/apiBrain.js';
 import {Brain as BrainIcon} from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
@@ -44,8 +44,8 @@ export default function Brain() {
   // Preserve the last good snapshot when a reconciliation read fails.
   const fetchData = useCallback(async () => {
     const [summary, settings] = await Promise.all([
-      api.getBrainSummary({ silent: true }),
-      api.getBrainSettings({ silent: true })
+      getBrainSummary({ silent: true }),
+      getBrainSettings({ silent: true })
     ]);
     return { summary, settings };
   }, []);

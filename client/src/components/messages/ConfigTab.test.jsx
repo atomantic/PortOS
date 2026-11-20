@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getGoogleAuthStatus: vi.fn(),
   getGoogleAuthUrl: vi.fn(),
   getSettings: vi.fn(),
+  updateSettings: vi.fn(),
   runGoogleAutoConfig: vi.fn(),
   saveGoogleAuthCredentials: vi.fn(),
   startGoogleAutoConfig: vi.fn(),
@@ -25,7 +26,18 @@ const providerModels = vi.hoisted(() => ({
   setSelectedProviderId: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMessages.js', () => ({ deleteMessageAccount: api.deleteMessageAccount }));
+vi.mock('../../services/apiCalendar.js', () => ({
+  getGoogleAuthStatus: api.getGoogleAuthStatus,
+  getGoogleAuthUrl: api.getGoogleAuthUrl,
+  runGoogleAutoConfig: api.runGoogleAutoConfig,
+  saveGoogleAuthCredentials: api.saveGoogleAuthCredentials,
+  startGoogleAutoConfig: api.startGoogleAutoConfig,
+}));
+vi.mock('../../services/apiSystem.js', () => ({
+  getSettings: api.getSettings,
+  updateSettings: api.updateSettings,
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => providerModels }));
 
@@ -156,7 +168,7 @@ describe('Messages prompt template settings', () => {
 
   async function editReplyAndSave() {
     api.getGoogleAuthStatus.mockResolvedValue(noAuth);
-    api.updateSettings = vi.fn().mockResolvedValue({ ok: true });
+    api.updateSettings.mockResolvedValue({ ok: true });
     renderConfig();
     const reply = await screen.findByLabelText('Reply Template');
     fireEvent.change(reply, { target: { value: 'Custom reply' } });
@@ -180,7 +192,7 @@ describe('Messages prompt template settings', () => {
 
   it('keeps Save shut after a failed settings read so defaults never overwrite the stored config', async () => {
     api.getGoogleAuthStatus.mockResolvedValue(noAuth);
-    api.updateSettings = vi.fn().mockResolvedValue({ ok: true });
+    api.updateSettings.mockResolvedValue({ ok: true });
     api.getSettings.mockRejectedValueOnce(new Error('Synthetic settings failure'));
     renderConfig();
 

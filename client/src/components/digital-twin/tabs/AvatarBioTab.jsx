@@ -11,7 +11,7 @@ import {
   RefreshCw,
   AlertCircle
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getAvatarBio, polishAvatarBio } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import { formatCount } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -78,7 +78,7 @@ export default function AvatarBioTab() {
   const loadBio = useCallback(async (len, gen) => {
     setLoading(true);
     // The deterministic build owns its own error UI here; silence the helper toast.
-    const result = await api.getAvatarBio(len, { silent: true }).catch((err) => ({ error: err.message }));
+    const result = await getAvatarBio(len, { silent: true }).catch((err) => ({ error: err.message }));
     if (!mountedRef.current || gen !== genRef.current) return; // superseded by a newer length
     if (result?.error) {
       toast.error(result.error);
@@ -105,7 +105,7 @@ export default function AvatarBioTab() {
     const gen = genRef.current;
     setPolishing(true);
     setPolished(null);
-    const res = await api.polishAvatarBio(selectedProviderId, selectedModel, length, { silent: true })
+    const res = await polishAvatarBio(selectedProviderId, selectedModel, length, { silent: true })
       .catch((err) => ({ error: err.message }));
 
     if (!mountedRef.current || gen !== genRef.current) return; // length changed mid-refine — drop stale result

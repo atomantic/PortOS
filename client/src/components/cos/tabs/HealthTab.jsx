@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, TrendingUp, Brain, Zap, Database, Clock, Trophy, Activity } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getCosTodayActivity, getCosLearning, backfillCosLearning } from '../../../services/apiAgents.js';
 import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
 import ListLoadError from '../../ui/ListLoadError';
@@ -22,7 +22,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
 
   const loadTodayActivity = async () => {
     setLoadingActivity(true);
-    const data = await api.getCosTodayActivity().catch(() => null);
+    const data = await getCosTodayActivity().catch(() => null);
     setTodayActivity(data);
     setLoadingActivity(false);
   };
@@ -31,7 +31,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
     const request = ++learningRequestRef.current;
     setLoadingLearning(true);
     let failure = null;
-    const data = await api.getCosLearning({ silent: true }).catch(err => {
+    const data = await getCosLearning({ silent: true }).catch(err => {
       failure = err;
       return null;
     });
@@ -43,7 +43,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
 
   const handleBackfill = async () => {
     setBackfilling(true);
-    const result = await api.backfillCosLearning().catch(() => null);
+    const result = await backfillCosLearning().catch(() => null);
     if (result?.success) {
       await loadLearning();
     }

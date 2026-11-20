@@ -7,7 +7,7 @@
 
 import { useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { organizeGoals, createGoal } from '../services/apiGoals.js';
 import { applyOrganizationSuggestion } from '../components/goals/applyOrganization';
 
 export function useGoalOrganize(onRefresh) {
@@ -21,7 +21,7 @@ export function useGoalOrganize(onRefresh) {
     if (!providerId) { toast.error('No API provider available'); return; }
     busy.current = true;
     setOrganizing(true);
-    const result = await api.organizeGoals({ providerId, model }, { silent: true }).catch(() => null);
+    const result = await organizeGoals({ providerId, model }, { silent: true }).catch(() => null);
     busy.current = false;
     setOrganizing(false);
     if (result) setOrgSuggestion(result);
@@ -54,7 +54,7 @@ export function useGoalCreate(onRefresh) {
     busy.current = true;
     setIsCreating(true);
     try {
-      await api.createGoal(goal, { silent: true });
+      await createGoal(goal, { silent: true });
       onRefresh();
       return true;
     } catch {

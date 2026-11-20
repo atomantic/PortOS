@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, Cpu, Gauge, Sparkles } from 'lucide-react';
-import { getSystemCapabilities } from '../../services/api';
+import { getSystemCapabilities } from '../../services/apiSystem.js';
 
 /**
  * The launch context on each profile below is arithmetic, not taste, so it is

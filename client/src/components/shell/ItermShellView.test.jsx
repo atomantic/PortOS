@@ -10,7 +10,9 @@ vi.mock('../../hooks/useInstanceFeatures.js', () => ({
   }),
 }));
 vi.mock('./useItermSession', () => ({ useItermSession: () => state.hook }));
-vi.mock('../../services/api', () => ({ getItermStatus: vi.fn(() => new Promise(() => {})) }));
+vi.mock('../../services/apiShell.js', () => ({
+  getItermStatus: vi.fn(() => new Promise(() => {})),
+}));
 
 import ItermShellView from './ItermShellView';
 import ShellSourceSwitch from './ShellSourceSwitch';

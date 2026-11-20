@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import FleetUsageCard, { applyFleetBilling } from './FleetUsageCard';
 
 const api = vi.hoisted(() => ({ updateUsageFleetBilling: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({ updateUsageFleetBilling: api.updateUsageFleetBilling }));
 
 const row = (overrides = {}) => ({
   instanceId: 'inst-a',

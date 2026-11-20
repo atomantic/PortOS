@@ -3,7 +3,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const getVideoHistoryItem = vi.fn();
 const extendVideoHistoryItem = vi.fn();
-vi.mock('../../services/api.js', () => ({ getVideoHistoryItem, extendVideoHistoryItem }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getVideoHistoryItem,
+  extendVideoHistoryItem,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const { default: TakeExtend } = await import('./TakeExtend.jsx');

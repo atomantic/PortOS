@@ -57,7 +57,19 @@ async function parseZipText(arrayBuffer, ext = '.txt') {
   }
   throw new Error(`No ${ext} file found inside the zip`);
 }
-import * as api from '../../../services/api';
+import {
+  getGenomeSummary,
+  getClinvarStatus,
+  updateGenomeMarkerNotes,
+  uploadGenomeFile,
+  scanGenomeMarkers,
+  searchGenomeSNP,
+  saveGenomeMarker,
+  deleteGenomeMarker,
+  deleteGenomeData,
+  syncClinvar,
+  scanClinvar,
+} from '../../../services/apiMeatspace.js';
 import { ATTACHMENT_MAX_FILE_SIZE } from '../../../utils/fileUpload';
 import { formatBytes, formatCount, formatDateNumeric } from '../../../utils/formatters';
 import GenomeCategoryCard from '../GenomeCategoryCard';
@@ -153,8 +165,8 @@ export default function GenomeTab() {
 
   const fetchSummary = useCallback(async () => {
     const [data, cvStatus] = await Promise.all([
-      api.getGenomeSummary({ silent: true }).catch(() => null),
-      api.getClinvarStatus().catch(() => ({ synced: false }))
+      getGenomeSummary({ silent: true }).catch(() => null),
+      getClinvarStatus().catch(() => ({ synced: false }))
     ]);
     setSummaryFailed(data === null);
     setSummary(data);
@@ -195,7 +207,7 @@ export default function GenomeTab() {
     }
     notesTimerRef.current[markerId] = setTimeout(async () => {
       setSavingNotes(markerId);
-      await api.updateGenomeMarkerNotes(markerId, notes, { silent: true }).catch(() => {
+      await updateGenomeMarkerNotes(markerId, notes, { silent: true }).catch(() => {
         toast.error('Failed to save notes');
       });
       setSavingNotes(null);
@@ -224,7 +236,7 @@ export default function GenomeTab() {
           setUploading(false);
           return;
         }
-        const result = await api.uploadGenomeFile(parsed.content, parsed.filename).catch(() => null);
+        const result = await uploadGenomeFile(parsed.content, parsed.filename).catch(() => null);
         if (result) {
           toast.success(`Genome uploaded: ${formatCount(result.snpCount)} SNPs found`);
           await fetchSummary();
@@ -237,7 +249,7 @@ export default function GenomeTab() {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const content = e.target.result;
-        const result = await api.uploadGenomeFile(content, file.name).catch(() => null);
+        const result = await uploadGenomeFile(content, file.name).catch(() => null);
         if (result) {
           toast.success(`Genome uploaded: ${formatCount(result.snpCount)} SNPs found`);
           await fetchSummary();
@@ -270,7 +282,7 @@ export default function GenomeTab() {
 
   const handleScan = useCallback(async () => {
     setScanning(true);
-    const result = await api.scanGenomeMarkers().catch(() => null);
+    const result = await scanGenomeMarkers().catch(() => null);
     if (result) {
       toast.success(`Scanned ${result.markers.length} curated markers`);
       await fetchSummary();
@@ -285,7 +297,7 @@ export default function GenomeTab() {
     }
     setSearching(true);
     setSearchResult(null);
-    const result = await api.searchGenomeSNP(searchRsid).catch(() => null);
+    const result = await searchGenomeSNP(searchRsid).catch(() => null);
     setSearchResult(result);
     setSearching(false);
   }, [searchRsid]);
@@ -304,7 +316,7 @@ export default function GenomeTab() {
       implications: searchResult.implications || '',
       status: searchResult.status || 'typical'
     };
-    const saved = await api.saveGenomeMarker(data).catch(() => null);
+    const saved = await saveGenomeMarker(data).catch(() => null);
     if (saved) {
       toast.success(`Marker ${searchResult.rsid} saved`);
       await fetchSummary();
@@ -312,14 +324,14 @@ export default function GenomeTab() {
   }, [searchResult, fetchSummary]);
 
   const handleDeleteMarker = useCallback(async (markerId) => {
-    await api.deleteGenomeMarker(markerId).catch(() => null);
+    await deleteGenomeMarker(markerId).catch(() => null);
     toast.success('Marker removed');
     await fetchSummary();
   }, [fetchSummary]);
 
   const handleDeleteGenome = useCallback(async () => {
     setDeleting(true);
-    await api.deleteGenomeData().catch(() => null);
+    await deleteGenomeData().catch(() => null);
     toast.success('Genome data deleted');
     setConfirmDelete(false);
     setDeleting(false);
@@ -341,7 +353,7 @@ export default function GenomeTab() {
     socket.on('genome:clinvar-progress', onProgress);
     setClinvarSyncing(true);
     setClinvarProgress('Starting ClinVar sync...');
-    const result = await api.syncClinvar(requestId).catch(() => null);
+    const result = await syncClinvar(requestId).catch(() => null);
     socket.off('genome:clinvar-progress', onProgress);
     if (activeClinvarSyncRef.current?.requestId !== requestId) return;
     activeClinvarSyncRef.current = null;
@@ -355,7 +367,7 @@ export default function GenomeTab() {
 
   const handleClinvarScan = useCallback(async () => {
     setClinvarScanning(true);
-    const result = await api.scanClinvar().catch(() => null);
+    const result = await scanClinvar().catch(() => null);
     if (result) {
       setClinvarResults(result);
       toast.success(`ClinVar scan: ${result.totalMatched} variants found in your genome`);

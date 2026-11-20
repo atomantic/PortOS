@@ -17,14 +17,15 @@ import Modal from './Modal';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from './ListLoadError';
 import useListResource from '../../hooks/useListResource';
-import * as api from '../../services/api';
+import { getProcessesList } from '../../services/apiCommands.js';
+import { getProcessLogs } from '../../services/apiLogs.js';
 import { copyToClipboard } from '../../lib/clipboard';
 
 // Keep the default tailLines (200) present here so the controlled <select>
 // renders a matching option on open rather than a mismatched first entry.
 const TAIL_OPTIONS = [100, 200, 500, 1000, 2000];
 
-const fetchProcesses = () => api.getProcessesList({ silent: true })
+const fetchProcesses = () => getProcessesList({ silent: true })
   .then((list) => (Array.isArray(list) ? list : []));
 
 export default function ProcessLogModal({ open, onClose, processName, title = 'System Logs' }) {
@@ -57,7 +58,7 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
     // Clear the prior logs so the in-flight fetch shows the spinner instead of
     // the previous process/tail's output (which could sit under a new title).
     setLogs('');
-    const res = await api.getProcessLogs(selected, tailLines).catch((err) => {
+    const res = await getProcessLogs(selected, tailLines).catch((err) => {
       if (reqId === reqIdRef.current) setError(err?.message || 'Failed to load logs');
       return null;
     });

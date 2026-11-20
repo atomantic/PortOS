@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   getHfTokenStatus: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
@@ -10,7 +10,7 @@ vi.mock('../ui/Toast', () => ({
   }),
 }));
 
-import { getHfTokenStatus } from '../../services/api';
+import { getHfTokenStatus } from '../../services/apiImageVideo.js';
 import MidiGatedModal from './MidiGatedModal';
 
 const REPO = 'MuScriptor/muscriptor-medium';

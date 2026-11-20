@@ -5,7 +5,10 @@ import { MemoryRouter } from 'react-router';
 const identityApi = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
 const api = vi.hoisted(() => ({ getCosLearningDurations: vi.fn(), recheckCosAgentCleanup: vi.fn() }));
 vi.mock('../../../services/apiSystem', () => identityApi);
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosLearningDurations: api.getCosLearningDurations,
+  recheckCosAgentCleanup: api.recheckCosAgentCleanup,
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('./AgentCard', () => ({ default: () => null }));
 vi.mock('../TaskAddForm', () => ({ default: () => null }));

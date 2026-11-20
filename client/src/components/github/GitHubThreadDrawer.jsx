@@ -4,7 +4,7 @@ import { ExternalLink } from 'lucide-react';
 import Drawer from '../Drawer';
 import Pill from '../ui/Pill';
 import { formatDateTime } from '../../utils/formatters';
-import { getGitHubNotification } from '../../services/api';
+import { getGitHubNotification } from '../../services/apiGithub.js';
 import socket from '../../services/socket';
 import { AI_SKIP_LABELS, DECISION_VIEW, HANDOFF_SKIP_LABELS, LANE_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
 

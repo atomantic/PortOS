@@ -14,7 +14,11 @@ const api = vi.hoisted(() => ({
   fetchBeeperAttachment: vi.fn(),
   setBeeperAttachmentKeep: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBeeper.js', () => ({
+  beeperAttachmentUrl: api.beeperAttachmentUrl,
+  fetchBeeperAttachment: api.fetchBeeperAttachment,
+  setBeeperAttachmentKeep: api.setBeeperAttachmentKeep,
+}));
 
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));

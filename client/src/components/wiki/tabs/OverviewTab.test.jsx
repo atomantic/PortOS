@@ -2,9 +2,11 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OverviewTab from './OverviewTab';
-import * as api from '../../../services/api';
+import { getCosJobs } from '../../../services/apiAgents.js';
+import { getNote } from '../../../services/apiNotes.js';
 
-vi.mock('../../../services/api');
+vi.mock('../../../services/apiAgents.js');
+vi.mock('../../../services/apiNotes.js');
 
 const stats = { rawSources: 0, total: 0 };
 
@@ -27,7 +29,7 @@ describe('OverviewTab empty Health Report', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('says maintenance is off and links to System Tasks when the job is disabled', async () => {
-    api.getCosJobs.mockResolvedValue({ jobs: [{ id: 'job-wiki-maintenance', enabled: false }] });
+    getCosJobs.mockResolvedValue({ jobs: [{ id: 'job-wiki-maintenance', enabled: false }] });
     renderTab();
     expect(await screen.findByText(/Weekly wiki maintenance is off/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'System Tasks' }).getAttribute('href')).toBe('/cos/jobs');
@@ -35,7 +37,7 @@ describe('OverviewTab empty Health Report', () => {
   });
 
   it('shows the next run when the job is enabled', async () => {
-    api.getCosJobs.mockResolvedValue({
+    getCosJobs.mockResolvedValue({
       jobs: [{ id: 'job-wiki-maintenance', enabled: true, nextRunAt: '2030-01-06T03:00:00.000Z' }],
     });
     renderTab();
@@ -44,7 +46,7 @@ describe('OverviewTab empty Health Report', () => {
   });
 
   it('reports unavailable status instead of off when the jobs request fails', async () => {
-    api.getCosJobs.mockRejectedValue(new Error('boom'));
+    getCosJobs.mockRejectedValue(new Error('boom'));
     renderTab();
     await waitFor(() => expect(screen.getByText(/status is unavailable/)).toBeTruthy());
     expect(screen.queryByText(/is off/)).toBeNull();
@@ -54,23 +56,23 @@ describe('OverviewTab empty Health Report', () => {
 describe('OverviewTab Health Report', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCosJobs.mockResolvedValue({ jobs: [] });
+    getCosJobs.mockResolvedValue({ jobs: [] });
   });
 
   it('renders the lint report as Markdown and keeps the whole body past 2,000 characters', async () => {
     const tail = 'FINAL-FINDING-AFTER-2000-CHARS';
     const body = '# Wiki Lint Report\n\n**Zero structural issues**\n\n' + 'filler line.\n'.repeat(300) + tail;
-    api.getNote.mockResolvedValue({ body, modifiedAt: '2026-05-10T00:00:00.000Z' });
+    getNote.mockResolvedValue({ body, modifiedAt: '2026-05-10T00:00:00.000Z' });
     const { container } = renderTab(LINT_NOTE);
     expect(await screen.findByRole('heading', { name: 'Wiki Lint Report' })).toBeTruthy();
     expect(container.querySelector('strong').textContent).toBe('Zero structural issues');
     expect(screen.queryByText(/\*\*/)).toBeNull();
     expect(container.textContent).toContain(tail);
-    expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/lint-report.md', { silent: true });
+    expect(getNote).toHaveBeenCalledWith('v1', 'wiki/lint-report.md', { silent: true });
   });
 
   it('opens the full report in the Browse tab', async () => {
-    api.getNote.mockResolvedValue({ body: '# Report', modifiedAt: '2026-05-10T00:00:00.000Z' });
+    getNote.mockResolvedValue({ body: '# Report', modifiedAt: '2026-05-10T00:00:00.000Z' });
     render(
       <MemoryRouter initialEntries={['/wiki/overview']}>
         <OverviewTab vaultId="v1" stats={stats} notes={[]} allNotes={LINT_NOTE} onRefresh={() => {}} />
@@ -82,8 +84,8 @@ describe('OverviewTab Health Report', () => {
   });
 
   it('shows a retry state when the read fails, and retry reloads the report', async () => {
-    api.getNote.mockRejectedValueOnce(new Error('boom'));
-    api.getNote.mockResolvedValueOnce({ body: '# Recovered', modifiedAt: '2026-05-10T00:00:00.000Z' });
+    getNote.mockRejectedValueOnce(new Error('boom'));
+    getNote.mockResolvedValueOnce({ body: '# Recovered', modifiedAt: '2026-05-10T00:00:00.000Z' });
     renderTab(LINT_NOTE);
     expect(await screen.findByText("Couldn't load the health report")).toBeTruthy();
     expect(screen.queryByText('No lint report yet')).toBeNull();
@@ -93,7 +95,7 @@ describe('OverviewTab Health Report', () => {
 
   it('drops a superseded response that resolves after the vault has switched', async () => {
     let resolveFirst;
-    api.getNote
+    getNote
       .mockImplementationOnce(() => new Promise(r => { resolveFirst = r; }))
       .mockResolvedValueOnce({ body: '# Vault B report', modifiedAt: '2026-05-10T00:00:00.000Z' });
     const tree = (vaultId) => (
@@ -102,7 +104,7 @@ describe('OverviewTab Health Report', () => {
       </MemoryRouter>
     );
     const { rerender } = render(tree('v1'));
-    await waitFor(() => expect(api.getNote).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getNote).toHaveBeenCalledTimes(1));
     rerender(tree('v2'));
     expect(await screen.findByRole('heading', { name: 'Vault B report' })).toBeTruthy();
     resolveFirst({ body: '# Vault A report', modifiedAt: '2026-05-10T00:00:00.000Z' });
@@ -115,6 +117,6 @@ describe('OverviewTab Health Report', () => {
     renderTab([]);
     expect(await screen.findByText('No lint report yet')).toBeTruthy();
     expect(screen.queryByText("Couldn't load the health report")).toBeNull();
-    expect(api.getNote).not.toHaveBeenCalled();
+    expect(getNote).not.toHaveBeenCalled();
   });
 });

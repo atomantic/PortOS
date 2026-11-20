@@ -3,7 +3,13 @@ import { ArrowLeft, Radio, Headphones, CheckCircle, XCircle, Play, RefreshCw, Vo
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import useAudioSessionClaim from '../../../hooks/useAudioSessionClaim.js';
 import useKeyCapture from '../../../hooks/useKeyCapture';
-import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
+import {
+  submitTrainingEntry,
+  getTrainingStats,
+  submitMorseRound,
+  getMorseProgress,
+  updateMorseLevel,
+} from '../../../services/apiMeatspace.js';
 import { DRILL_DESCRIPTIONS } from './constants';
 import { MORSE_MODES as MODES, MORSE_REFERENCE_VIEWS as REFERENCE_VIEWS } from './trainerModes';
 import MorseProgressPanel from './MorseProgressPanel';

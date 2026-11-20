@@ -5,7 +5,10 @@ const api = vi.hoisted(() => ({
   getProviderServiceDefinitions: vi.fn(),
   createProviderService: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviderServiceDefinitions: api.getProviderServiceDefinitions,
+  createProviderService: api.createProviderService,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import ProviderServiceForm from './ProviderServiceForm';

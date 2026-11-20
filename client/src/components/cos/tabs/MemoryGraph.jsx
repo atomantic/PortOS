@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Info } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getMemoryGraph, getMemory } from '../../../services/apiMemory.js';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
 import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
@@ -50,7 +50,7 @@ const MEMORY_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:d
 export default function MemoryGraph() {
   const { data: graphData, loading, error, refetch } = useSocketResource(
     async ({ signal }) => {
-      const result = await api.getMemoryGraph({ signal, silent: true });
+      const result = await getMemoryGraph({ signal, silent: true });
       if (!Array.isArray(result?.nodes) || !Array.isArray(result?.edges)) throw new Error('Invalid memory graph response');
       return result;
     },
@@ -59,7 +59,7 @@ export default function MemoryGraph() {
   const [selection, setSelectedNode] = useState(null);
   const selectedNode = graphData?.nodes?.find(node => node.id === selection?.id) || null;
   const detail = useSocketResource(
-    ({ signal }) => api.getMemory(selectedNode.id, { signal, silent: true }),
+    ({ signal }) => getMemory(selectedNode.id, { signal, silent: true }),
     {
       namespace: 'cos', events: MEMORY_EVENTS, resourceKey: selectedNode?.id,
       enabled: !!selectedNode, matchesEvent: payload => payload?.id === selectedNode?.id

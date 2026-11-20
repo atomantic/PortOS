@@ -34,7 +34,11 @@ describe('ActionableInsightsBanner insightProvenance', () => {
 // tests pin the prop-driven render, the null/empty gating, and the unblock path
 // calling `onRefresh` up instead of owning its own poll.
 const api = vi.hoisted(() => ({ updateCosTask: vi.fn(), approveCosTask: vi.fn(), triggerCosOnDemandTask: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({
+  updateCosTask: api.updateCosTask,
+  approveCosTask: api.approveCosTask,
+  triggerCosOnDemandTask: api.triggerCosOnDemandTask,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const ActionableInsightsBanner = (await import('./ActionableInsightsBanner')).default;

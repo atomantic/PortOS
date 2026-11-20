@@ -4,7 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
-import { listMediaCollections, createMediaCollection } from '../../services/api';
+import { listMediaCollections, createMediaCollection } from '../../services/apiImageVideo.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
 import useFocusTrap from '../../hooks/useFocusTrap.js';

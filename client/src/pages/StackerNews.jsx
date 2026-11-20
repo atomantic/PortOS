@@ -1,7 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Newspaper, Plus, RefreshCw, ShieldCheck, ShieldAlert } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  getStackerNewsAccounts,
+  getStackerNewsTerritories,
+  getStackerNewsItems,
+  getStackerNewsActions,
+  createStackerNewsAccount,
+  updateStackerNewsAccount,
+  createStackerNewsTerritory,
+  updateStackerNewsTerritory,
+  deleteStackerNewsTerritory,
+  verifyStackerNewsAccount,
+  getStackerNewsBrowserIdentity,
+  syncStackerNewsAccount,
+  analyzeStackerNewsItem,
+  addStackerNewsAnalysisFeedback,
+  createStackerNewsAction,
+  reviewStackerNewsAction,
+  executeStackerNewsAction,
+} from '../services/apiStackerNews.js';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -178,7 +196,7 @@ export default function StackerNews() {
   const loadAccounts = useCallback(async () => {
     const requestId = ++accountsLoadRef.current;
     setAccountRead({ status: 'loading' });
-    const result = await api.getStackerNewsAccounts({ silent: true }).catch((err) => ({ error: err.message }));
+    const result = await getStackerNewsAccounts({ silent: true }).catch((err) => ({ error: err.message }));
     if (accountsLoadRef.current !== requestId) return;
     if (result?.error) setAccountRead({ status: 'error', error: result.error });
     else {
@@ -192,7 +210,7 @@ export default function StackerNews() {
     const requestId = (selectedLoadRef.current[key] || 0) + 1;
     selectedLoadRef.current[key] = requestId;
     setResourceReads((previous) => ({ ...previous, [key]: { status: 'loading' } }));
-    const readers = { territories: api.getStackerNewsTerritories, items: api.getStackerNewsItems, actions: api.getStackerNewsActions };
+    const readers = { territories: getStackerNewsTerritories, items: getStackerNewsItems, actions: getStackerNewsActions };
     const setters = { territories: setTerritories, items: setItems, actions: setActions };
     const result = await readers[key](requestedAccountId, { silent: true }).catch((err) => ({ error: err.message }));
     if (selectedLoadRef.current[key] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
@@ -258,7 +276,7 @@ export default function StackerNews() {
   const createAccount = (event) => {
     event.preventDefault();
     if (rejectInvalidAccount(newAccount)) return;
-    finish('create-account', api.createStackerNewsAccount({
+    finish('create-account', createStackerNewsAccount({
       label: newAccount.label, username: newAccount.username, enabled: newAccount.enabled, ...(newAccount.apiKey ? { apiKey: newAccount.apiKey } : {}),
       readTransport: newAccount.readTransport,
       monitoringEnabled: newAccount.monitoringEnabled, monitoringIntervalMinutes: Number(newAccount.monitoringIntervalMinutes),
@@ -275,7 +293,7 @@ export default function StackerNews() {
     if (!selected) return;
     if (rejectInvalidAccount(editAccount)) return;
     const savedAccountId = selected.id;
-    finish('save-account', api.updateStackerNewsAccount(savedAccountId, {
+    finish('save-account', updateStackerNewsAccount(savedAccountId, {
       label: editAccount.label, username: editAccount.username, enabled: editAccount.enabled,
       ...(editAccount.clearApiKey ? { apiKey: '' } : editAccount.apiKey ? { apiKey: editAccount.apiKey } : {}),
       readTransport: editAccount.readTransport,
@@ -298,7 +316,7 @@ export default function StackerNews() {
   const createTerritory = (event) => {
     event.preventDefault();
     if (!selected) return;
-    finish('create-territory', api.createStackerNewsTerritory({
+    finish('create-territory', createStackerNewsTerritory({
       accountId: selected.id, ...territoryPayload(newTerritory),
     }, { silent: true }), (result) => {
       setTerritories((previous) => [...previous, result]); setNewTerritory(emptyTerritory);
@@ -308,29 +326,29 @@ export default function StackerNews() {
   const saveTerritory = (event) => {
     event.preventDefault();
     if (!editingTerritoryId) return;
-    finish(`save-territory-${editingTerritoryId}`, api.updateStackerNewsTerritory(editingTerritoryId, territoryPayload(editTerritory), { silent: true }), (result) => {
+    finish(`save-territory-${editingTerritoryId}`, updateStackerNewsTerritory(editingTerritoryId, territoryPayload(editTerritory), { silent: true }), (result) => {
       setTerritories((previous) => previous.map((territory) => territory.id === result.id ? result : territory));
       setEditingTerritoryId(null); setEditTerritory(emptyTerritory); setNotice('Community settings saved.');
     });
   };
 
-  const removeTerritory = (territory) => finish(`delete-territory-${territory.id}`, api.deleteStackerNewsTerritory(territory.id, { silent: true }), () => {
+  const removeTerritory = (territory) => finish(`delete-territory-${territory.id}`, deleteStackerNewsTerritory(territory.id, { silent: true }), () => {
     setTerritories((previous) => previous.filter((candidate) => candidate.id !== territory.id));
     setDeleteTerritoryId(null);
     if (editingTerritoryId === territory.id) { setEditingTerritoryId(null); setEditTerritory(emptyTerritory); }
     setNotice('Community removed.');
   });
 
-  const checkConnection = () => selected && finish('verify', api.verifyStackerNewsAccount(selected.id, 'api', { silent: true }), (result) => {
+  const checkConnection = () => selected && finish('verify', verifyStackerNewsAccount(selected.id, 'api', { silent: true }), (result) => {
     setNotice(!result.connected ? 'Add an API key before testing.' : `API identity: @${result.username}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: writes are blocked.'}`);
   });
-  const checkBrowser = () => selected && finish('browser', api.getStackerNewsBrowserIdentity(selected.id, { silent: true }), (result) => {
+  const checkBrowser = () => selected && finish('browser', getStackerNewsBrowserIdentity(selected.id, { silent: true }), (result) => {
     setNotice(`Pinned browser identity: @${result.username || 'unknown'}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: handoffs are blocked.'}`);
   });
-  const syncNow = () => selected && finish('sync', api.syncStackerNewsAccount(selected.id, { silent: true }), async (result) => {
+  const syncNow = () => selected && finish('sync', syncStackerNewsAccount(selected.id, { silent: true }), async (result) => {
     setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} newest item(s) checked, ${result.analyzed} analyzed (cap ${result.newestItemLimit || selected.syncItemLimit || 30} per community).`); await Promise.all([loadAccounts(), loadSelected()]);
   });
-  const analyze = (item) => finish(`analyze-${item.id}`, api.analyzeStackerNewsItem(item.id, { silent: true }), (result) => {
+  const analyze = (item) => finish(`analyze-${item.id}`, analyzeStackerNewsItem(item.id, { silent: true }), (result) => {
     setAnalysisResults((previous) => ({ ...previous, [item.id]: result }));
     setNotice(result.stale ? 'Content changed during analysis; the stale result cannot drive an action.' : `Policy decision: ${result.policy?.decision || 'review'}.`);
   });
@@ -338,7 +356,7 @@ export default function StackerNews() {
     const analysisId = analysisResults[item.id]?.analysisId;
     const feedback = feedbackDrafts[item.id]?.trim();
     if (!analysisId || !feedback) return;
-    finish(`feedback-${item.id}`, api.addStackerNewsAnalysisFeedback(analysisId, feedback, { silent: true }), () => {
+    finish(`feedback-${item.id}`, addStackerNewsAnalysisFeedback(analysisId, feedback, { silent: true }), () => {
       setFeedbackDrafts((previous) => ({ ...previous, [item.id]: '' })); setNotice('Moderator feedback recorded with the policy version.');
     });
   };
@@ -357,15 +375,15 @@ export default function StackerNews() {
       ...(isPost ? { payload: { title: draft.title, body: draft.body } } : {}),
       ...(isComment ? { payload: { body: draft.body } } : {}),
     };
-    finish('create-action', api.createStackerNewsAction(data, { silent: true }), (result) => {
+    finish('create-action', createStackerNewsAction(data, { silent: true }), (result) => {
       setActions((previous) => [result, ...previous]); setDraft(emptyDraft); navigate(accountPath(selected.id, 'review'));
     });
   };
 
-  const reviewAction = (action, state) => finish(`review-${action.id}`, api.reviewStackerNewsAction(action.id, { state }, { silent: true }), (result) => {
+  const reviewAction = (action, state) => finish(`review-${action.id}`, reviewStackerNewsAction(action.id, { state }, { silent: true }), (result) => {
     setActions((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
   });
-  const executeAction = (action) => finish(`execute-${action.id}`, api.executeStackerNewsAction(action.id, { silent: true }), (result) => {
+  const executeAction = (action) => finish(`execute-${action.id}`, executeStackerNewsAction(action.id, { silent: true }), (result) => {
     setActions((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
     setNotice(result.state === 'completed'
       ? result.result?.intent === 'zap' ? 'Zap handoff opened. Complete the zap manually in the verified browser.'
@@ -376,7 +394,7 @@ export default function StackerNews() {
 
   const queueItemHandoff = (item, intent) => {
     if (!selected) return;
-    finish(`handoff-${item.id}-${intent}`, api.createStackerNewsAction({
+    finish(`handoff-${item.id}-${intent}`, createStackerNewsAction({
       accountId: selected.id,
       itemId: item.id,
       territoryId: item.territoryId,

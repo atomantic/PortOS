@@ -4,7 +4,8 @@ import toast from '../../ui/Toast';
 import FormField from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
-import * as api from '../../../services/api';
+import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } from '../../../services/apiAgents.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
 import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
@@ -185,7 +186,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
 
   const fetchTasks = useCallback(async () => {
     let failure = null;
-    const data = await api.getCosJobs({ silent: true }).catch((error) => { failure = error; return null; });
+    const data = await getCosJobs({ silent: true }).catch((error) => { failure = error; return null; });
     setLoading(false);
     if (!data) {
       setLoadError(failure instanceof Error ? failure : new Error('Request failed'));
@@ -205,7 +206,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
       return undefined;
     }
     let active = true;
-    api.getProviders({ silent: true }).then(data => {
+    getProviders({ silent: true }).then(data => {
       if (!active) return;
       setRawProviders(data?.providers || []);
       setActiveProviderId(data?.activeProvider || '');
@@ -236,7 +237,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   // outcomes are NOT toasted by the helper, so those branches toast explicitly.
   const handleCreate = async () => {
     if (!validate(createForm)) return;
-    const created = await api.createCosJob(toPayload(createForm, appId)).catch(() => null);
+    const created = await createCosJob(toPayload(createForm, appId)).catch(() => null);
     if (!created) return;
     toast.success('Custom task created');
     setCreateForm(emptyForm());
@@ -245,7 +246,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   };
 
   const handleToggle = async (jobId) => {
-    const result = await api.toggleCosJob(jobId).catch(() => null);
+    const result = await toggleCosJob(jobId).catch(() => null);
     if (!result) return;
     setTasks(prev => prev.map(t => t.id === jobId ? { ...t, enabled: result.job.enabled } : t));
   };
@@ -256,7 +257,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     const job = tasks.find(task => task.id === jobId);
     if (!job) return;
     setTriggering(jobId);
-    const result = await api.triggerCosJob(jobId, runOptions).catch(() => null);
+    const result = await triggerCosJob(jobId, runOptions).catch(() => null);
     setTriggering(null);
     if (!result) return; // HTTP/network error already toasted by the api helper
     if (result.status === 'skipped') {
@@ -268,7 +269,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   };
 
   const handleDelete = async (jobId) => {
-    const result = await api.deleteCosJob(jobId).catch(() => null);
+    const result = await deleteCosJob(jobId).catch(() => null);
     if (!result) return;
     toast.success('Custom task deleted');
     setTasks(prev => prev.filter(t => t.id !== jobId));

@@ -2,12 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiCore.js', () => ({
   PORTOS_APP_ID: 'portos-default',
+}));
+vi.mock('../../../services/apiApps.js', () => ({
   getAppRepositorySources: vi.fn(),
   syncAppRepositoryFork: vi.fn(),
   handleSelfRestart: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
   addCosTask: vi.fn(),
 }));
 vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
@@ -21,7 +27,9 @@ vi.mock('../../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
 }));
 
-import * as api from '../../../services/api';
+import { getAppRepositorySources, syncAppRepositoryFork } from '../../../services/apiApps.js';
+import { addCosTask } from '../../../services/apiAgents.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import useForgeScopeRefresh from '../../../hooks/useForgeScopeRefresh';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import RepositorySourcePanel from './RepositorySourcePanel';
@@ -105,8 +113,8 @@ beforeEach(() => {
     steps: [], isOperating: false, operationType: null, error: null, completed: false,
     startUpdate: vi.fn(),
   });
-  api.getAppRepositorySources.mockResolvedValue(canonicalStatus());
-  api.syncAppRepositoryFork.mockResolvedValue({ synced: true, alreadyUpToDate: false });
+  getAppRepositorySources.mockResolvedValue(canonicalStatus());
+  syncAppRepositoryFork.mockResolvedValue({ synced: true, alreadyUpToDate: false });
 });
 
 afterEach(() => cleanup());
@@ -115,14 +123,14 @@ describe('managed app repository sources', () => {
   it('updates stale submodules through the managed flow without a recovery agent', async () => {
     const status = canonicalStatus();
     status.sources = [{ ...status.sources[0], clean: false, submodulesOnly: true, localVsOrigin: { ahead: 0, behind: 0, state: 'current' } }];
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="portos-default" appName="PortOS" hasLocalChanges />);
     expect(await screen.findByText('submodules need updating')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resolve with agent' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Update app' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Update app' }));
     expect(useAppOperation().startUpdate).toHaveBeenCalledWith('portos-default', 'PortOS', { syncFork: false });
-    expect(api.addCosTask).not.toHaveBeenCalled();
+    expect(addCosTask).not.toHaveBeenCalled();
   });
 
   it('explains and versions both independent checkouts', async () => {
@@ -178,7 +186,7 @@ describe('managed app repository sources', () => {
       },
       forkVsUpstream: { available: true, ahead: 0, behind: 2, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 
     const primary = await screen.findByTestId('repository-source-primary');
@@ -187,7 +195,7 @@ describe('managed app repository sources', () => {
     expect(screen.getByRole('button', { name: 'Sync fork & update app' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
-    await waitFor(() => expect(api.syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
+    await waitFor(() => expect(syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
     expect(useAppOperation.mock.results[0].value.startUpdate).not.toHaveBeenCalled();
   });
 
@@ -201,8 +209,8 @@ describe('managed app repository sources', () => {
       origin: { fullName: 'example-owner/example-app', isUpstream: false, isFork: true },
       forkVsUpstream: { available: true, ahead: 0, behind: 2, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
-    api.syncAppRepositoryFork.mockRejectedValue(Object.assign(new Error('refused without `workflow` scope'), {
+    getAppRepositorySources.mockResolvedValue(status);
+    syncAppRepositoryFork.mockRejectedValue(Object.assign(new Error('refused without `workflow` scope'), {
       code: 'FORGE_TOKEN_SCOPE_MISSING',
       context: { host: 'ghe.example.com', scopes: ['workflow'], command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
     }));
@@ -224,7 +232,7 @@ describe('managed app repository sources', () => {
     status.sources[0].origin = { ...status.sources[0].origin, isFork: true, isUpstream: false };
     status.sources[0].forkVsUpstream = { available: true, ahead: 0, behind: 2, state: 'behind' };
     status.sources[0].forkSyncable = true;
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     const startUpdate = vi.fn();
     const operation = { steps: [], isOperating: false, operationType: 'update', startUpdate };
     useAppOperation.mockImplementation(() => operation);
@@ -282,7 +290,7 @@ describe('managed app repository sources', () => {
       },
       forkVsUpstream: { available: true, ahead: 0, behind: 12, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 
     const companion = await screen.findByTestId('repository-source-companion-1');
@@ -308,7 +316,7 @@ describe('managed app repository sources', () => {
       },
       forkVsUpstream: { available: true, ahead: 0, behind: 2, state: 'behind', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     const onUpdated = vi.fn();
     render(<RepositorySourcePanel appId="app-example" appName="Example App" onUpdated={onUpdated} />);
 
@@ -322,7 +330,7 @@ describe('managed app repository sources', () => {
     await waitFor(() => expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
       'app-example', 'Example App', { syncFork: true },
     ));
-    expect(api.syncAppRepositoryFork).not.toHaveBeenCalled();
+    expect(syncAppRepositoryFork).not.toHaveBeenCalled();
     expect(onUpdated).not.toHaveBeenCalled();
   });
 
@@ -340,7 +348,7 @@ describe('managed app repository sources', () => {
         isFork: false,
       },
     });
-    api.getAppRepositorySources
+    getAppRepositorySources
       .mockResolvedValueOnce(canonicalStatus())
       .mockResolvedValueOnce(currentStatus);
 
@@ -351,7 +359,7 @@ describe('managed app repository sources', () => {
 
     rerender(<RepositorySourcePanel appId="app-example" appName="Example App" refreshKey={1} />);
 
-    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getAppRepositorySources).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId('repository-source-primary')).toHaveTextContent('Current'));
   });
 
@@ -379,9 +387,9 @@ describe('managed app repository sources', () => {
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Update app' }));
     expect(await screen.findByRole('button', { name: 'Reload to update again' })).toBeDisabled();
 
-    const calls = api.getAppRepositorySources.mock.calls.length;
+    const calls = getAppRepositorySources.mock.calls.length;
     act(() => complete());
-    await waitFor(() => expect(api.getAppRepositorySources.mock.calls.length).toBe(calls + 1));
+    await waitFor(() => expect(getAppRepositorySources.mock.calls.length).toBe(calls + 1));
     expect(await screen.findByRole('button', { name: 'Update app' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Reload to update again' })).toBeNull();
   });
@@ -400,7 +408,7 @@ describe('managed app repository sources', () => {
       },
       forkVsUpstream: { available: true, ahead: 1, behind: 2, state: 'diverged', error: null },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 
     expect(await screen.findByRole('button', { name: 'Fork needs reconciliation' })).toBeDisabled();
@@ -408,7 +416,7 @@ describe('managed app repository sources', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Update app' }));
 
     await waitFor(() => expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledOnce());
-    expect(api.syncAppRepositoryFork).not.toHaveBeenCalled();
+    expect(syncAppRepositoryFork).not.toHaveBeenCalled();
   });
 
   it('never reports current when the fork-to-upstream comparison failed', async () => {
@@ -432,7 +440,7 @@ describe('managed app repository sources', () => {
         error: 'Could not compare the fork with canonical upstream',
       },
     });
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 
     const primary = await screen.findByTestId('repository-source-primary');
@@ -503,7 +511,7 @@ describe('managed app repository sources', () => {
         isFork: false,
       },
     })];
-    api.getAppRepositorySources.mockResolvedValue(status);
+    getAppRepositorySources.mockResolvedValue(status);
     render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
 
     const primary = await screen.findByTestId('repository-source-primary');
@@ -537,18 +545,18 @@ describe('PortOS self-update restart handoff', () => {
  it('replaces unsafe dirty-checkout updates with an explicitly configured recovery task', async () => {
   const status = canonicalStatus();
   status.sources[0].clean = false;
-  api.getAppRepositorySources.mockResolvedValue(status);
-  api.getProviders.mockResolvedValue({ activeProvider: 'example-cli', providers: [{ id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
-  api.addCosTask.mockResolvedValue({ id: 'task-example' });
+  getAppRepositorySources.mockResolvedValue(status);
+  getProviders.mockResolvedValue({ activeProvider: 'example-cli', providers: [{ id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+  addCosTask.mockResolvedValue({ id: 'task-example' });
   render(<MemoryRouter><RepositorySourcePanel appId="app-example" appName="Example App" /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: 'Resolve with agent' }));
   expect(screen.queryByRole('button', { name: 'Update app' })).not.toBeInTheDocument();
-  expect(api.addCosTask).not.toHaveBeenCalled();
+  expect(addCosTask).not.toHaveBeenCalled();
   const start = screen.getByRole('button', { name: 'Start recovery agent' });
   await awaitEnabled(start);
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'example-model' } });
   fireEvent.click(start);
   await screen.findByRole('link', { name: 'Recovery queued · View agents' });
-  expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-example', provider: 'example-cli', model: 'example-model', useWorktree: false, openPR: false, workflow: 'app-checkout-recovery', prompt: expect.stringMatching(/including untracked files and the index[\s\S]*never an acceptable resting place[\s\S]*empty stash list/) }), { silent: true });
+  expect(addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-example', provider: 'example-cli', model: 'example-model', useWorktree: false, openPR: false, workflow: 'app-checkout-recovery', prompt: expect.stringMatching(/including untracked files and the index[\s\S]*never an acceptable resting place[\s\S]*empty stash list/) }), { silent: true });
   expect(useAppOperation().startUpdate).not.toHaveBeenCalled();
  });

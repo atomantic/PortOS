@@ -22,7 +22,18 @@ const toast = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosLearning: api.getCosLearning,
+  getCosLearningPerformance: api.getCosLearningPerformance,
+  getCosLearningSkipped: api.getCosLearningSkipped,
+  getCosLearningDurations: api.getCosLearningDurations,
+  getCosLearningRouting: api.getCosLearningRouting,
+  getCosLearningConfidence: api.getCosLearningConfidence,
+  getCosFeedbackStats: api.getCosFeedbackStats,
+  getDismissedCosRecommendations: api.getDismissedCosRecommendations,
+  resetCosTaskTypeLearning: api.resetCosTaskTypeLearning,
+}));
+vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const renderTab = () => render(

@@ -43,8 +43,10 @@ vi.mock('../hooks/useSocketResource', () => ({
   }),
 }));
 
-vi.mock('../services/api', () => ({ updateSettings: vi.fn() }));
-import * as api from '../services/api';
+vi.mock('../services/apiSystem.js', () => ({
+  updateSettings: vi.fn(),
+}));
+import { updateSettings } from '../services/apiSystem.js';
 
 import CapabilityMap from './CapabilityMap';
 
@@ -72,7 +74,7 @@ describe('CapabilityMap setup walkthrough', () => {
 });
 
 it('saves Tailcat and not-desired choices and retains the saved choice on failure', async () => {
-  api.updateSettings.mockResolvedValue({});
+  updateSettings.mockResolvedValue({});
   render(<MemoryRouter><CapabilityMap /></MemoryRouter>);
   const select = screen.getByLabelText('Networking preference');
   fireEvent.change(select, { target: { value: 'tailcat' } });
@@ -80,8 +82,8 @@ it('saves Tailcat and not-desired choices and retains the saved choice on failur
   expect(screen.queryByText('Enable MagicDNS')).not.toBeInTheDocument();
   fireEvent.change(select, { target: { value: 'none' } });
   await waitFor(() => expect(select).toHaveValue('none'));
-  expect(api.updateSettings).toHaveBeenLastCalledWith({ networkSetupPreference: 'none' }, { silent: true });
-  api.updateSettings.mockRejectedValueOnce(new Error('Save failed'));
+  expect(updateSettings).toHaveBeenLastCalledWith({ networkSetupPreference: 'none' }, { silent: true });
+  updateSettings.mockRejectedValueOnce(new Error('Save failed'));
   fireEvent.change(select, { target: { value: 'tailscale' } });
   await awaitEnabled(select);
   expect(select).toHaveValue('none');

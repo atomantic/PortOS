@@ -6,7 +6,12 @@ const copyToClipboard = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard }));
 const generateImage = vi.fn();
 const previewImagePrompt = vi.fn();
-vi.mock('../../services/api', () => ({ generateImage: (...a) => generateImage(...a), previewImagePrompt: (...a) => previewImagePrompt(...a) }));
+vi.mock('../../services/apiSystem.js', () => ({
+  generateImage: (...a) => generateImage(...a),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  previewImagePrompt: (...a) => previewImagePrompt(...a),
+}));
 const listCatalogIngredients = vi.fn();
 const getCatalogIngredientDetails = vi.fn();
 vi.mock('../../services/apiCatalog', () => ({ listCatalogIngredients: (...a) => listCatalogIngredients(...a), getCatalogIngredientDetails: (...a) => getCatalogIngredientDetails(...a) }));

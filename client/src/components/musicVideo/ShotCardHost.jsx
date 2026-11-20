@@ -8,7 +8,7 @@ import { coldOpenScenes } from '../../../../server/lib/musicVideo/musicVideoCold
 import { isLayeredComposition } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { FOOTAGE_OPTIONAL_MODES, sceneShotName } from '../../lib/musicVideoStages.js';
-import { getStoryboard } from '../../services/api';
+import { getStoryboard } from '../../services/apiStoryboards.js';
 import { storyboardShotPanel } from '../../../../server/lib/storyboardFit.js';
 
 /** The video's linked storyboard, read when its shots open (null when none is linked or it is gone). */

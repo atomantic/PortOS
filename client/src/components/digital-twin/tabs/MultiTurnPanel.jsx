@@ -1,5 +1,5 @@
 import { MessagesSquare } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getMultiTurnTests, getMultiTurnTestHistory, runMultiTurnTests } from '../../../services/apiDigitalTwin.js';
 import { MULTI_TURN_STATUS } from '../constants';
 import TwinEvaluationSuitePanel, { SuiteModelResponses } from './TwinEvaluationSuitePanel';
 
@@ -31,9 +31,9 @@ const SUITE = {
   statusMap: MULTI_TURN_STATUS,
   passResult: 'consistent',
   failResult: 'inconsistent',
-  getTests: api.getMultiTurnTests,
-  getHistory: api.getMultiTurnTestHistory,
-  runTests: api.runMultiTurnTests,
+  getTests: getMultiTurnTests,
+  getHistory: getMultiTurnTestHistory,
+  runTests: runMultiTurnTests,
   successToast: 'Multi-turn conversation tests completed'
 };
 

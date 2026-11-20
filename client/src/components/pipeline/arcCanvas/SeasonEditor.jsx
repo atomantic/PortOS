@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { updatePipelineSeason } from '../../../services/api';
+import { updatePipelineSeason } from '../../../services/apiPipeline.js';
 
 export default function SeasonEditor({ series, season, seasons, onSeriesUpdate, seasonLocked = false }) {
   const [draft, setDraft] = useState(season);

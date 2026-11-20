@@ -39,7 +39,11 @@ import { subtypeLabel } from '../manuscript/constants';
 import InlineDiff from '../../ui/InlineDiff';
 import toast from '../../ui/Toast';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment, undoPipelineManuscriptFix } from '../../../services/api';
+import {
+  acceptPipelineManuscriptFix,
+  patchPipelineManuscriptComment,
+  undoPipelineManuscriptFix,
+} from '../../../services/apiPipeline.js';
 
 const SEVERITY_DOT = {
   high: 'bg-rose-400',

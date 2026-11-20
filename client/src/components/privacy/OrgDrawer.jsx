@@ -2,9 +2,8 @@ import { useState, useEffect } from 'react';
 import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import {
-  createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings, getSocialAccounts,
-} from '../../services/api';
+import { createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings } from '../../services/apiPrivacy.js';
+import { getSocialAccounts } from '../../services/apiDigitalTwin.js';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import toast from '../ui/Toast';

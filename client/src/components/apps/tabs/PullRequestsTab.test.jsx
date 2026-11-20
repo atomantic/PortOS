@@ -26,6 +26,7 @@ vi.mock('../../../services/socket', () => ({ default: socketMock }));
 vi.mock('../../../services/apiLocalLlm', () => ({
   getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
   getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
+  getLocalLlmStatus: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: toastMock }));
 // The refresh slot is SSE-backed; its own behavior is the server state machine's
@@ -40,18 +41,18 @@ vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
 const { getInstanceFeatures } = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: {} }),
 }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiApps.js', () => ({
   getAppPullRequests: vi.fn(),
-  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
   doReviewAppPullRequest: vi.fn(),
   mergeAppPullRequest: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
-  // The run-settings panel's reviewer override reads the install's Code Review
-  // Defaults for its seed and the reviewer Model column's options.
+}));
+vi.mock('../../../services/apiCodeReview.js', () => ({
   getCodeReviewDefaults: vi.fn(),
-  getLocalLlmStatus: vi.fn(),
 }));
 
 // useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
@@ -60,7 +61,16 @@ vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
   getInstanceFeatures: (...args) => getInstanceFeatures(...args),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getAppPullRequests,
+  resolveAppPullRequest,
+  reviewAppPullRequest,
+  doReviewAppPullRequest,
+  mergeAppPullRequest,
+} from '../../../services/apiApps.js';
+import { getProviders } from '../../../services/apiProviders.js';
+import { getCodeReviewDefaults } from '../../../services/apiCodeReview.js';
+import { getLocalLlmStatus } from '../../../services/apiLocalLlm.js';
 import PullRequestsTab from './PullRequestsTab';
 
 const PULL_REQUEST = {
@@ -112,32 +122,32 @@ beforeEach(() => {
   socketMock.on.mockClear();
   socketMock.off.mockClear();
   socketMock.emit.mockClear();
-  api.getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST]));
-  api.resolveAppPullRequest.mockResolvedValue({
+  getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST]));
+  resolveAppPullRequest.mockResolvedValue({
     task: { id: 'task-1', status: 'pending' },
     duplicate: false,
     started: true,
     queueReason: null,
   });
-  api.reviewAppPullRequest.mockResolvedValue({
+  reviewAppPullRequest.mockResolvedValue({
     requestId: 'demand-abc',
     reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
   });
-  api.doReviewAppPullRequest.mockResolvedValue({
+  doReviewAppPullRequest.mockResolvedValue({
     number: 17,
     doReviewAction: { taskId: 'task-doreview-1', status: 'pending' },
     duplicate: false,
     started: true,
     queueReason: null,
   });
-  api.mergeAppPullRequest.mockResolvedValue({ number: 17, merged: true, method: 'merge', deletedBranch: true });
-  api.getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
-  api.getCodeReviewDefaults.mockResolvedValue({
+  mergeAppPullRequest.mockResolvedValue({ number: 17, merged: true, method: 'merge', deletedBranch: true });
+  getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
+  getCodeReviewDefaults.mockResolvedValue({
     reviewers: ['codex'], usernames: [], optionalReviewers: [], reviewerMaxRounds: {},
     stopMode: 'all', reviewerApplies: false, installed: {},
   });
-  api.getLocalLlmStatus.mockResolvedValue({ backends: {} });
+  getLocalLlmStatus.mockResolvedValue({ backends: {} });
 });
 
 afterEach(() => {
@@ -150,7 +160,7 @@ describe('PullRequestsTab', () => {
     await renderTab();
 
     expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
-    expect(api.getAppPullRequests).toHaveBeenCalledWith('app-1');
+    expect(getAppPullRequests).toHaveBeenCalledWith('app-1');
     expect(screen.getByText('#17')).toBeInTheDocument();
     expect(screen.getByText('Changes requested')).toBeInTheDocument();
     expect(screen.getByText('Checks passing')).toBeInTheDocument();
@@ -161,7 +171,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('sends the page-level provider/model/effort pin along with a resolve action', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
@@ -175,13 +185,13 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Resolve & merge/ }));
 
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined, reviewMode: 'delegated' },
     ));
   });
 
   it('preserves scheduled review stages unless the user explicitly enables the override', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
@@ -195,7 +205,7 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Untrusted:Review/ }));
 
-    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, {},
     ));
   });
@@ -204,7 +214,7 @@ describe('PullRequestsTab', () => {
   // provider pin only when the user opts in — and never the Code review setting,
   // which governs the two actions PortOS composes here.
   it('passes the Run with pin to Untrusted:Review once the opt-in is ticked, and nothing else', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
@@ -220,7 +230,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByLabelText('Also run Untrusted:Review on the Run with provider'));
     fireEvent.click(screen.getByRole('button', { name: /Untrusted:Review/ }));
 
-    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
     ));
   });
@@ -229,7 +239,7 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
 
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
@@ -248,7 +258,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('surfaces why a resolve task is queued but not yet running', async () => {
-    api.resolveAppPullRequest.mockResolvedValue({
+    resolveAppPullRequest.mockResolvedValue({
       task: { id: 'task-1', status: 'pending' },
       duplicate: false,
       started: false,
@@ -303,8 +313,8 @@ describe('PullRequestsTab', () => {
       title: 'Repair the sync path',
       url: 'https://github.com/acme/widget/pull/18',
     };
-    api.getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST, SECOND_PULL_REQUEST]));
-    api.resolveAppPullRequest
+    getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST, SECOND_PULL_REQUEST]));
+    resolveAppPullRequest
       .mockResolvedValueOnce({ task: { id: 'task-1', status: 'pending' }, duplicate: false })
       .mockResolvedValueOnce({ task: { id: 'task-2', status: 'pending' }, duplicate: false });
     await renderTab();
@@ -312,7 +322,7 @@ describe('PullRequestsTab', () => {
     const resolveButtons = await screen.findAllByRole('button', { name: /Resolve & merge/ });
     fireEvent.click(resolveButtons[0]);
     fireEvent.click(resolveButtons[1]);
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalledTimes(2));
 
     act(() => {
       socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-1', status: 'completed' } });
@@ -332,7 +342,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('hydrates an active server-side resolve action without offering another button', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{
+    getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,
       agentAction: { taskId: 'task-active', status: 'in_progress' },
     }]));
@@ -348,7 +358,7 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Untrusted:Review/ }));
 
-    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(reviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, {},
     ));
     expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
@@ -374,7 +384,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('restores the preflight explanation after reloading the PR list', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST,
+    getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST,
       reviewAction: { taskId: 'preflight-17', status: 'failed', error: 'Prompt Guard stopped before an agent started.' },
     }]));
     await renderTab();
@@ -394,7 +404,7 @@ describe('PullRequestsTab', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('before an agent started');
     expect(screen.getByRole('link', { name: 'View failure record' })).toHaveAttribute('href', '/cos/tasks?task=preflight-17&source=internal');
     fireEvent.click(screen.getByRole('button', { name: 'Retry Untrusted:Review' }));
-    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reviewAppPullRequest).toHaveBeenCalledTimes(2));
     expect(await screen.findByRole('link', { name: /Untrusted:Review: Queued/ })).toBeInTheDocument();
   });
 
@@ -432,7 +442,7 @@ describe('PullRequestsTab', () => {
   it('offers Do:Review on a row pr-reviewer will not touch, and queues it', async () => {
     // The screenshot case: a code contributor's PR, ineligible for the
     // pr-reviewer sweep, previously left with Resolve & merge as its only action.
-    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
+    getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
     await renderTab();
 
     expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
@@ -440,7 +450,7 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
 
-    await waitFor(() => expect(api.doReviewAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(doReviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
     expect(await screen.findByRole('link', { name: /Do:Review: Queued/ })).toBeInTheDocument();
@@ -448,7 +458,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('hides Do:Review on a GitLab forge, where slashdo PR mode cannot run', async () => {
-    api.getAppPullRequests.mockResolvedValue({
+    getAppPullRequests.mockResolvedValue({
       ...okPayload([{ ...PULL_REQUEST, reviewEligible: false, doReviewEligible: false }]),
       forge: 'gitlab',
     });
@@ -477,7 +487,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('names a failed resolve retry as a merge action and retries that same action', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{
+    getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,
       agentAction: { taskId: 'resolve-failed', status: 'failed' },
     }]));
@@ -487,15 +497,15 @@ describe('PullRequestsTab', () => {
     expect(screen.queryByRole('link', { name: 'Abuse Guard setup' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry Untrusted:Review' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Resolve & merge' }));
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
-    expect(api.reviewAppPullRequest).not.toHaveBeenCalled();
+    expect(reviewAppPullRequest).not.toHaveBeenCalled();
     expect(await screen.findByRole('link', { name: /Resolve & merge: Queued/ })).toBeInTheDocument();
   });
 
   it('hydrates an in-flight pr-reviewer run without offering the button again', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{
+    getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,
       reviewAction: { taskId: 'app-improve-17', status: 'in_progress' },
     }]));
@@ -507,7 +517,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('omits the pr-reviewer action on a row the server marked ineligible', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
+    getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
 
     await renderTab();
 
@@ -519,16 +529,16 @@ describe('PullRequestsTab', () => {
     await renderTab();
     // The row must clear on the merge itself, not on the reload behind it — a
     // merged request still offering a Merge button is the misleading state.
-    api.getAppPullRequests.mockImplementation(() => new Promise(() => {}));
+    getAppPullRequests.mockImplementation(() => new Promise(() => {}));
 
     fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
     // Arming alone must not merge — the confirm row is the approval.
-    expect(api.mergeAppPullRequest).not.toHaveBeenCalled();
+    expect(mergeAppPullRequest).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText('Merge method for #17'), { target: { value: 'squash' } });
     fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
 
-    await waitFor(() => expect(api.mergeAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { method: 'squash', deleteBranch: true },
     ));
     expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('Merged GitHub #17'));
@@ -542,7 +552,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByLabelText('Delete branch'));
     fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
 
-    await waitFor(() => expect(api.mergeAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { method: 'merge', deleteBranch: false },
     ));
   });
@@ -553,7 +563,7 @@ describe('PullRequestsTab', () => {
       context: { host: 'ghe.example.com', scopes: ['workflow'], command: 'gh auth refresh -h ghe.example.com -s workflow', refreshable: true },
     });
     const mergeOnce = async () => {
-      api.mergeAppPullRequest.mockRejectedValue(scopeError());
+      mergeAppPullRequest.mockRejectedValue(scopeError());
       await renderTab();
       fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
       fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
@@ -603,7 +613,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('keeps the confirm row open so a refused merge method can be changed', async () => {
-    api.mergeAppPullRequest.mockRejectedValue(new Error('Squash merges are not allowed on this repository'));
+    mergeAppPullRequest.mockRejectedValue(new Error('Squash merges are not allowed on this repository'));
 
     await renderTab();
 
@@ -616,7 +626,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('omits the merge action on a row the server marked unmergeable', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, mergeEligible: false }]));
+    getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, mergeEligible: false }]));
 
     await renderTab();
 
@@ -625,7 +635,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('keeps forge failures distinct from a healthy empty list', async () => {
-    api.getAppPullRequests.mockResolvedValue({
+    getAppPullRequests.mockResolvedValue({
       forge: 'github',
       fullName: 'acme/widget',
       pullRequests: [],
@@ -642,7 +652,7 @@ describe('PullRequestsTab', () => {
   });
 
   it('shows a healthy empty state when the forge answers with no open requests', async () => {
-    api.getAppPullRequests.mockResolvedValue(okPayload([]));
+    getAppPullRequests.mockResolvedValue(okPayload([]));
 
     await renderTab();
 
@@ -670,12 +680,12 @@ describe('PullRequestsTab', () => {
 
     fireEvent.change(screen.getByLabelText('Code review'), { target: { value: 'self' } });
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, expect.objectContaining({ reviewMode: 'self' }),
     ));
 
     fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
-    await waitFor(() => expect(api.doReviewAppPullRequest).toHaveBeenCalledWith(
+    await waitFor(() => expect(doReviewAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, expect.objectContaining({ reviewMode: 'self' }),
     ));
   });
@@ -690,8 +700,8 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Reviewer override/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
 
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
-    expect(api.resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalled());
+    expect(resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
   });
 
   // Dropping the seeded `codex` row is an edit, so the (now empty) roster has to
@@ -705,8 +715,8 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Remove codex$/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
 
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
-    expect(api.resolveAppPullRequest.mock.calls[0][2]).toMatchObject({ reviewers: [] });
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalled());
+    expect(resolveAppPullRequest.mock.calls[0][2]).toMatchObject({ reviewers: [] });
   });
 
   // The picker emits a partial against its baseline, so editing a field back to
@@ -724,8 +734,8 @@ describe('PullRequestsTab', () => {
     expect(screen.getByRole('button', { name: /^Reviewer override$/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
-    expect(api.resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    await waitFor(() => expect(resolveAppPullRequest).toHaveBeenCalled());
+    expect(resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
   });
 
   // A picker whose every edit would be discarded reads as a setting being

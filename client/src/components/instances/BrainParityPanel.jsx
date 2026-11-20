@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, ScanSearch, RefreshCw } from 'lucide-react';
 import Pill from '../ui/Pill';
-import { runBrainParityCheck } from '../../services/api';
+import { runBrainParityCheck } from '../../services/apiBrain.js';
 import { formatCount, timeAgo } from '../../utils/formatters';
 
 // Statuses in the order they're worth reading: what we hold and they don't,

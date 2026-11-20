@@ -3,7 +3,10 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import useProviderCatalog, { __resetProviderCatalogCache, invalidateProviderCatalog } from './useProviderCatalog.js';
 
 const api = vi.hoisted(() => ({ getProviderCatalog: vi.fn(), createProviderPreset: vi.fn() }));
-vi.mock('../services/api.js', () => api);
+vi.mock('../services/apiProviders.js', () => ({
+  getProviderCatalog: api.getProviderCatalog,
+  createProviderPreset: api.createProviderPreset,
+}));
 const socket = vi.hoisted(() => {
   const listeners = new Map();
   return {

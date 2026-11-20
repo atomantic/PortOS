@@ -5,7 +5,15 @@ import {
   RefreshCw, Play, Square, Trash2, Plus, Clock, Zap, ChevronDown, ChevronRight,
   Bot, AlertCircle, CheckCircle, Loader2
 } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  createLoop,
+  stopLoop,
+  resumeLoop,
+  triggerLoop,
+  deleteLoop,
+  getLoops,
+  getLoopProviders,
+} from '../services/apiLoops.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
@@ -69,7 +77,7 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
       cwd: cwd.trim() || undefined,
       providerId: providerId || undefined,
     };
-    api.createLoop(data)
+    createLoop(data)
       .then(() => {
         setPrompt('');
         setName('');
@@ -334,10 +342,10 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
 }
 
 const ACTION_MAP = {
-  stop: { fn: api.stopLoop, msg: 'Loop stopped' },
-  resume: { fn: api.resumeLoop, msg: 'Loop resumed' },
-  trigger: { fn: api.triggerLoop, msg: 'Iteration triggered' },
-  delete: { fn: api.deleteLoop, msg: 'Loop deleted' },
+  stop: { fn: stopLoop, msg: 'Loop stopped' },
+  resume: { fn: resumeLoop, msg: 'Loop resumed' },
+  trigger: { fn: triggerLoop, msg: 'Iteration triggered' },
+  delete: { fn: deleteLoop, msg: 'Loop deleted' },
 };
 
 const LOOP_EVENTS = [
@@ -351,7 +359,7 @@ function LoopsContent() {
   const promptRef = useRef(null);
   const [providers, setProviders] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
-  const loadLoops = useCallback(() => api.getLoops({ silent: true }), []);
+  const loadLoops = useCallback(() => getLoops({ silent: true }), []);
   const { data, loading, error, refetch: fetchLoops } = useSocketResource(loadLoops, {
     namespace: 'loops', events: LOOP_EVENTS,
   });
@@ -359,7 +367,7 @@ function LoopsContent() {
 
   useEffect(() => {
     let active = true;
-    api.getLoopProviders().then(data => {
+    getLoopProviders().then(data => {
       if (active) setProviders(data.providers || []);
     }).catch(() => {});
     return () => { active = false; };

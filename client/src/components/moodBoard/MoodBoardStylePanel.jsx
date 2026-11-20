@@ -20,7 +20,13 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
 import useSingleImageRender from '../../hooks/useSingleImageRender';
-import { getMoodBoard, getMoodBoardAnalyze, startMoodBoardAnalyze, updateMoodBoard, composeMoodBoardPrompt } from '../../services/api';
+import {
+  getMoodBoard,
+  getMoodBoardAnalyze,
+  startMoodBoardAnalyze,
+  updateMoodBoard,
+  composeMoodBoardPrompt,
+} from '../../services/apiMoodBoard.js';
 import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import { moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';

@@ -20,10 +20,6 @@ vi.mock('../services/apiCatalog', () => ({
   attachCatalogIngredientGeneratedImage: vi.fn(),
   listCatalogStories: vi.fn(),
   joinCatalogStory: vi.fn(),
-}));
-vi.mock('../services/api', () => ({
-  createCatalogIngredient: (...args) => createCatalogIngredient(...args),
-  joinCatalogStory: (...args) => joinCatalogStory(...args),
   draftCatalogStoryMember: vi.fn(),
 }));
 vi.mock('../components/musicVideo/MusicVideoLlmPicker', () => ({ default: () => <p>Model picker</p> }));
@@ -41,8 +37,18 @@ vi.mock('../components/MediaImage', async () => {
 });
 
 import CreativeLibrary from './CreativeLibrary';
-import { listCatalogIngredients, createCatalogIngredient, getCatalogFacets, setCatalogIngredientLock, getCatalogIngredientCards, getCatalogIngredientDetails, attachCatalogIngredientGeneratedImage, listCatalogStories, joinCatalogStory } from '../services/apiCatalog';
-import { draftCatalogStoryMember } from '../services/api';
+import {
+  listCatalogIngredients,
+  createCatalogIngredient,
+  getCatalogFacets,
+  setCatalogIngredientLock,
+  getCatalogIngredientCards,
+  getCatalogIngredientDetails,
+  attachCatalogIngredientGeneratedImage,
+  listCatalogStories,
+  joinCatalogStory,
+  draftCatalogStoryMember,
+} from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 const renderLibrary = (libraryId, entry) => render(

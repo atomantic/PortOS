@@ -3,7 +3,7 @@ import PageLayout from '../components/PageLayout';
 import { useEffect, useState, useRef } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
-import * as api from '../services/api';
+import { getSystemHealth, updateHealthThresholds } from '../services/apiSystem.js';
 import toast from '../components/ui/Toast';
 import { formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -109,7 +109,7 @@ function SystemHealthOverview() {
   const draftSeededRef = useRef(false);
 
   const { data: health, loading, error, refetch } = useSocketResource(
-    () => api.getSystemHealth({ silent: true }),
+    () => getSystemHealth({ silent: true }),
     { namespace: 'readiness', events: READINESS_EVENTS },
   );
   const { dismissingType, handleDismissWarning } = useHealthWarningDismiss(refetch);
@@ -137,7 +137,7 @@ function SystemHealthOverview() {
   const handleSaveThresholds = async () => {
     if (!draft) return;
     setSaving(true);
-    const result = await api.updateHealthThresholds(draft, { silent: true }).catch(err => {
+    const result = await updateHealthThresholds(draft, { silent: true }).catch(err => {
       toast.error(err?.message || 'Failed to save thresholds');
       return null;
     });

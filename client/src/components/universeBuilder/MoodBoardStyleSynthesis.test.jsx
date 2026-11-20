@@ -5,7 +5,7 @@ import MoodBoardStyleSynthesis from './MoodBoardStyleSynthesis';
 const apiMocks = vi.hoisted(() => ({
   synthesizeMoodBoardStyle: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({ ...apiMocks }));
+vi.mock('../../services/apiMoodBoard.js', () => ({ ...apiMocks }));
 vi.mock('../../hooks/useProviderModels', () => ({
   default: vi.fn(() => ({
     providers: [{ id: 'ollama', name: 'Ollama', type: 'api', enabled: true }],

@@ -12,7 +12,7 @@ import useMounted from '../../hooks/useMounted';
 import { RESOLUTIONS, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { uuidv4 } from '../../lib/uuid';
 import { formatCount } from '../../utils/formatters';
-import { generateMoodBoardImages, getMoodBoardGeneration } from '../../services/api';
+import { generateMoodBoardImages, getMoodBoardGeneration } from '../../services/apiMoodBoard.js';
 import socket from '../../services/socket';
 
 const presets = RESOLUTIONS.filter((r) => !r.compatible);

@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import * as api from '../../../services/api';
+import {
+  getNotesVaults,
+  detectNotesVaults,
+  scanNotesVault,
+  getNotesVaultFolders,
+  getNotesVaultTags,
+  searchNotes,
+  addNotesVault,
+  createNote,
+  deleteNote,
+} from '../../../services/apiNotes.js';
 import {
   BookOpen,
   FolderOpen,
@@ -189,7 +199,7 @@ export default function NotesTab() {
   const loadVaults = async (preferredVaultId) => {
     const scope = vaultScopeRef.current;
     setVaultError(false);
-    const data = await api.getNotesVaults({ silent: true }).catch(() => null);
+    const data = await getNotesVaults({ silent: true }).catch(() => null);
     if (!isCurrentScope(scope)) return;
     if (!data) {
       setVaultError(true);
@@ -217,7 +227,7 @@ export default function NotesTab() {
   const detectAvailableVaults = async () => {
     const scope = vaultScopeRef.current;
     setDetectError(false);
-    const detected = await api.detectNotesVaults({ silent: true }).catch(() => null);
+    const detected = await detectNotesVaults({ silent: true }).catch(() => null);
     if (!isCurrentScope(scope)) return;
     if (detected) setDetectedVaults(detected);
     else setDetectError(true);
@@ -230,7 +240,7 @@ export default function NotesTab() {
     const requestKey = `${selectedVaultId}\u0000${folderFilter}`;
     setScanning(true);
     setScanError(false);
-    const data = await api.scanNotesVault(selectedVaultId, { folder: folderFilter, limit: 500, silent: true }).catch(() => null);
+    const data = await scanNotesVault(selectedVaultId, { folder: folderFilter, limit: 500, silent: true }).catch(() => null);
     if (!isCurrentScope(scope) || sequence !== scanSeqRef.current) return;
     if (data) {
       setNotes(data.notes);
@@ -244,14 +254,14 @@ export default function NotesTab() {
   const loadFolders = async () => {
     if (!selectedVaultId) return;
     const scope = vaultScopeRef.current;
-    const data = await api.getNotesVaultFolders(selectedVaultId, { silent: true }).catch(() => null);
+    const data = await getNotesVaultFolders(selectedVaultId, { silent: true }).catch(() => null);
     if (isCurrentScope(scope) && data?.folders) setFolders(data.folders);
   };
 
   const loadTags = async () => {
     if (!selectedVaultId) return;
     const scope = vaultScopeRef.current;
-    const data = await api.getNotesVaultTags(selectedVaultId).catch(() => null);
+    const data = await getNotesVaultTags(selectedVaultId).catch(() => null);
     if (isCurrentScope(scope) && data?.tags) setTags(data.tags);
   };
 
@@ -261,7 +271,7 @@ export default function NotesTab() {
     const sequence = ++searchSeqRef.current;
     setSearching(true);
     setSearchError(false);
-    const data = await api.searchNotes(selectedVaultId, query.trim(), undefined, { silent: true }).catch(() => null);
+    const data = await searchNotes(selectedVaultId, query.trim(), undefined, { silent: true }).catch(() => null);
     if (!mountedRef.current || scope !== vaultScopeRef.current || sequence !== searchSeqRef.current) return;
     if (data) setSearchResults(data);
     else setSearchError(true);
@@ -284,7 +294,7 @@ export default function NotesTab() {
   const handleAddVault = async (name, path) => {
     const scope = vaultScopeRef.current;
     setAddingVault(true);
-    const result = await api.addNotesVault({ name, path }, { silent: true }).catch((error) => {
+    const result = await addNotesVault({ name, path }, { silent: true }).catch((error) => {
       toast.error(error?.message || 'Failed to add vault');
       return null;
     });
@@ -330,7 +340,7 @@ export default function NotesTab() {
     const scope = vaultScopeRef.current;
     const sequence = selectSeqRef.current;
     setCreating(true);
-    const data = await api.createNote(selectedVaultId, newNotePath.trim(), '', { silent: true }).catch((error) => {
+    const data = await createNote(selectedVaultId, newNotePath.trim(), '', { silent: true }).catch((error) => {
       toast.error(error?.message || 'Failed to create note');
       return null;
     });
@@ -348,7 +358,7 @@ export default function NotesTab() {
   const handleDeleteNote = async (notePath) => {
     const scope = vaultScopeRef.current;
     const sequence = selectSeqRef.current;
-    const deleted = await api.deleteNote(selectedVaultId, notePath, { silent: true })
+    const deleted = await deleteNote(selectedVaultId, notePath, { silent: true })
       .then(() => true)
       .catch((error) => {
         toast.error(error?.message || 'Failed to delete note');

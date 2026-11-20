@@ -5,13 +5,22 @@ vi.mock('../../../services/socket', async () => {
   const { EventEmitter } = await import('node:events');
   return { default: new EventEmitter() };
 });
-vi.mock('../../../services/api', () => ({
-  getMeatspaceOverview: vi.fn(), getAlcoholSummary: vi.fn(), getBodyHistory: vi.fn(),
-  getBloodTests: vi.fn(), getEpigeneticTests: vi.fn(), getEyeExams: vi.fn(),
-  getLatestHealthMetrics: vi.fn(), getLifeCalendar: vi.fn(),
+vi.mock('../../../services/apiMeatspace.js', () => ({
+  getMeatspaceOverview: vi.fn(),
+  getAlcoholSummary: vi.fn(),
+  getBodyHistory: vi.fn(),
+  getBloodTests: vi.fn(),
+  getEpigeneticTests: vi.fn(),
+  getEyeExams: vi.fn(),
+  getLifeCalendar: vi.fn(),
+}));
+vi.mock('../../../services/apiHealth.js', () => ({
+  getLatestHealthMetrics: vi.fn(),
 }));
 vi.mock('../../DeathClockCountdown', () => ({ default: () => null }));
-import * as api from '../../../services/api';
+import * as meatspaceApi from '../../../services/apiMeatspace.js';
+import * as healthApi from '../../../services/apiHealth.js';
+const api = { ...meatspaceApi, ...healthApi };
 import socket from '../../../services/socket';
 import OverviewTab from './OverviewTab';
 

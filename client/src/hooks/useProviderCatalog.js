@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { createProviderPreset, getProviderCatalog } from '../services/api';
+import { createProviderPreset, getProviderCatalog } from '../services/apiProviders.js';
 import socket from '../services/socket.js';
 import { harnessLabel } from '../utils/providerHarnesses.js';
 import { parseProviderRef } from '../utils/providerRef.js';

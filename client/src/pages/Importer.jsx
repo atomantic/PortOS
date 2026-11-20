@@ -12,7 +12,8 @@ import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import { previewCanonFragments } from '../lib/canonPrompt';
 import { resolveImporterDeepLink } from '../lib/importerDeepLink';
-import { listUniverseSummaries, listPipelineSeriesSummaries } from '../services/api';
+import { listUniverseSummaries } from '../services/apiUniverseBuilder.js';
+import { listPipelineSeriesSummaries } from '../services/apiPipeline.js';
 import {
   analyzeImport,
   classifyImport,

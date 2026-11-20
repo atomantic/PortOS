@@ -4,7 +4,7 @@ import { FormField } from '../ui/FormField';
 import PageSkeleton from '../ui/PageSkeleton';
 import PageHeader from '../PageHeader';
 import Modal from '../ui/Modal';
-import api from '../../services/api';
+import api from '../../services/apiCore.js';
 import { invalidateInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 const inputClass = 'w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white';

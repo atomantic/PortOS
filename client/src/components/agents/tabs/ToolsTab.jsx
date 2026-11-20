@@ -1,6 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getPlatformAccounts,
+  getAgentRateLimits,
+  getAgentSubmolts,
+  getAgentDrafts,
+  getAgentFeed,
+  getAgentRelevantPosts,
+  getAgentPost,
+  generateAgentPost,
+  createAgentDraft,
+  publishAgentPost,
+  updateAgentDraft,
+  generateAgentComment,
+  publishAgentComment,
+  engageAgent,
+  checkAgentPosts,
+  deleteAgentDraft,
+} from '../../../services/apiAccounts.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
@@ -55,7 +72,7 @@ export default function ToolsTab({ agentId, agent }) {
   // Auto-resolve the moltbook account for this agent
   useEffect(() => {
     let live = true;
-    api.getPlatformAccounts(agentId, 'moltbook').then(data => {
+    getPlatformAccounts(agentId, 'moltbook').then(data => {
       if (!live) return;
       const active = data.filter(a => a.status === 'active');
       if (active.length > 0) {
@@ -78,7 +95,7 @@ export default function ToolsTab({ agentId, agent }) {
       return undefined;
     }
     let live = true;
-    api.getAgentRateLimits(selectedAccountId).then(data => { if (live) setRateLimits(data); }).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    getAgentRateLimits(selectedAccountId).then(data => { if (live) setRateLimits(data); }).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
     return () => { live = false; };
   }, [selectedAccountId]);
 
@@ -87,7 +104,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!selectedAccountId) return undefined;
     let live = true;
     // The error clears only on success, so a slow retry never reads as "only general".
-    api.getAgentSubmolts(selectedAccountId, { silent: true }).then(data => {
+    getAgentSubmolts(selectedAccountId, { silent: true }).then(data => {
       if (!live) return;
       setSubmoltsError(null);
       const list = data.submolts || data || [];
@@ -113,7 +130,7 @@ export default function ToolsTab({ agentId, agent }) {
     cooldownEnds,
     onAllExpired: () => {
       if (selectedAccountId) {
-        api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+        getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       }
     },
   });
@@ -121,7 +138,7 @@ export default function ToolsTab({ agentId, agent }) {
   const loadDrafts = useCallback(async () => {
     if (!agentId) return;
     setDraftsError(false);
-    await api.getAgentDrafts(agentId, { silent: true })
+    await getAgentDrafts(agentId, { silent: true })
       .then((data) => setDrafts(data))
       .catch(() => setDraftsError(true));
   }, [agentId]);
@@ -135,7 +152,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!selectedAccountId) return;
     setFeedLoading(true);
     try {
-      const feed = await api.getAgentFeed({ accountId: selectedAccountId, sort: feedSort, limit: 25 });
+      const feed = await getAgentFeed({ accountId: selectedAccountId, sort: feedSort, limit: 25 });
       setFeedPosts(feed.posts || feed || []);
     } catch {
       // The request helper already shows the failure toast.
@@ -148,7 +165,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setFeedLoading(true);
     try {
-      const posts = await api.getAgentRelevantPosts({ agentId, accountId: selectedAccountId, maxResults: 10 });
+      const posts = await getAgentRelevantPosts({ agentId, accountId: selectedAccountId, maxResults: 10 });
       setFeedPosts(posts);
     } catch {
       // The request helper already shows the failure toast.
@@ -158,7 +175,7 @@ export default function ToolsTab({ agentId, agent }) {
   };
 
   const handleViewPost = async (post) => {
-    const details = await api.getAgentPost(selectedAccountId, post.id);
+    const details = await getAgentPost(selectedAccountId, post.id);
     setSelectedPost(details);
     setPostComments(details.comments || []);
     setCommentContent('');
@@ -171,13 +188,13 @@ export default function ToolsTab({ agentId, agent }) {
     setGenerating(true);
     const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
     // request() toasts a failure; release Generate rather than leave it spinning.
-    const generated = await api.generateAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, providerId: contentConfig?.providerId, model: contentConfig?.model }).catch(() => null);
+    const generated = await generateAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, providerId: contentConfig?.providerId, model: contentConfig?.model }).catch(() => null);
     setGenerating(false);
     if (!generated) return;
     setPostTitle(generated.title);
     setPostContent(generated.content);
 
-    const draft = await api.createAgentDraft({
+    const draft = await createAgentDraft({
       agentId,
       type: 'post',
       title: generated.title,
@@ -193,11 +210,11 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishPost = async () => {
     if (!postTitle || !postContent) return;
     setPublishing(true);
-    const result = await api.publishAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, title: postTitle, content: postContent }).catch(() => null);
+    const result = await publishAgentPost({ agentId, accountId: selectedAccountId, submolt: selectedSubmolt, title: postTitle, content: postContent }).catch(() => null);
 
     if (!result) {
       setPublishing(false);
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+      getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       return;
     }
 
@@ -205,7 +222,7 @@ export default function ToolsTab({ agentId, agent }) {
       if (result?.verificationFailed) {
         toast.error('Post verification failed — draft preserved for retry');
       } else {
-        await api.updateAgentDraft({ agentId, draftId: activeDraftId, data: {
+        await updateAgentDraft({ agentId, draftId: activeDraftId, data: {
           status: 'published',
           publishedPostId: result?.id || result?._id || result?.post_id || null,
           publishedAt: new Date().toISOString()
@@ -223,7 +240,7 @@ export default function ToolsTab({ agentId, agent }) {
       setPostContent('');
     }
     setPublishing(false);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   // Comment generation (auto-saves as draft)
@@ -231,7 +248,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!selectedPost) return;
     setGeneratingComment(true);
     const contentConfig = agent?.aiConfig?.content || agent?.aiConfig;
-    const generated = await api.generateAgentComment({
+    const generated = await generateAgentComment({
       agentId, accountId: selectedAccountId, postId: selectedPost.id, parentId: replyToId || undefined,
       providerId: contentConfig?.providerId, model: contentConfig?.model
     }).catch(() => null);
@@ -239,7 +256,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!generated) return;
     setCommentContent(generated.content);
 
-    const draft = await api.createAgentDraft({
+    const draft = await createAgentDraft({
       agentId,
       type: 'comment',
       content: generated.content,
@@ -256,13 +273,13 @@ export default function ToolsTab({ agentId, agent }) {
   const handlePublishComment = async () => {
     if (!selectedPost || !commentContent) return;
     setPublishingComment(true);
-    const result = await api.publishAgentComment({
+    const result = await publishAgentComment({
       agentId, accountId: selectedAccountId, postId: selectedPost.id, content: commentContent, parentId: replyToId || undefined
     }).catch(() => null);
 
     if (!result) {
       setPublishingComment(false);
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+      getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       return;
     }
 
@@ -270,7 +287,7 @@ export default function ToolsTab({ agentId, agent }) {
       if (result?.verificationFailed) {
         toast.error('Comment verification failed — draft preserved for retry');
       } else {
-        await api.updateAgentDraft({ agentId, draftId: activeDraftId, data: {
+        await updateAgentDraft({ agentId, draftId: activeDraftId, data: {
           status: 'published',
           publishedAt: new Date().toISOString()
         } }).catch(err => console.warn('⚠️ Failed to mark comment draft published: ' + err.message));
@@ -288,7 +305,7 @@ export default function ToolsTab({ agentId, agent }) {
     }
     setPublishingComment(false);
     handleViewPost(selectedPost);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   // Engage
@@ -297,10 +314,10 @@ export default function ToolsTab({ agentId, agent }) {
     setEngaging(true);
     setEngageResult(null);
     try {
-      const result = await api.engageAgent({ agentId, accountId: selectedAccountId, maxComments: 1, maxVotes: 3 });
+      const result = await engageAgent({ agentId, accountId: selectedAccountId, maxComments: 1, maxVotes: 3 });
       setEngageResult(result);
       toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+      getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
     } catch {
       // The request helper already shows the failure toast.
     } finally {
@@ -313,12 +330,12 @@ export default function ToolsTab({ agentId, agent }) {
     if (!agentId || !selectedAccountId) return;
     setChecking(true);
     setCheckResult(null);
-    const result = await api.checkAgentPosts({ agentId, accountId: selectedAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
+    const result = await checkAgentPosts({ agentId, accountId: selectedAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
     setChecking(false);
     if (!result) return;
     setCheckResult(result);
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   const handleLoadDraft = (draft) => {
@@ -334,7 +351,7 @@ export default function ToolsTab({ agentId, agent }) {
       setReplyToId(draft.parentId || null);
       if (draft.postId) {
         const acctId = draft.accountId || selectedAccountId;
-        api.getAgentPost(acctId, draft.postId).then(details => {
+        getAgentPost(acctId, draft.postId).then(details => {
           setSelectedPost(details);
           setPostComments(details.comments || []);
         }).catch(err => console.warn('⚠️ Failed to load draft post details: ' + err.message));
@@ -344,7 +361,7 @@ export default function ToolsTab({ agentId, agent }) {
   };
 
   const handleDeleteDraft = async (draftId) => {
-    await api.deleteAgentDraft(agentId, draftId);
+    await deleteAgentDraft(agentId, draftId);
     if (activeDraftId === draftId) setActiveDraftId(null);
     loadDrafts();
     toast.success('Draft deleted');

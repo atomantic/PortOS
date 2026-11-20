@@ -9,7 +9,7 @@ import {
   getModelAbuseGuardStatus,
   installModelAbuseGuard,
   scanModelAbuseContent,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import UntrustedContentPolicyPanel from './UntrustedContentPolicyPanel.jsx';
 import { formatCount } from '../../utils/formatters';

@@ -11,7 +11,12 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), info: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosTasks: api.getCosTasks,
+  getCosLearningDurations: api.getCosLearningDurations,
+  recheckCosAgentCleanup: api.recheckCosAgentCleanup,
+  updateCosTask: api.updateCosTask,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 // TaskAddForm pulls in provider/model plumbing not under test — stub it out.
 vi.mock('./AgentCard', () => ({ default: ({ agent, liveOutput }) => <div>Active agent {agent.id}{liveOutput?.map((entry, i) => <p key={i}>{entry.line}</p>)}</div> }));

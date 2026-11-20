@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { pairPeerSyncSecret } from '../../services/api';
+import { pairPeerSyncSecret } from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 
 // A stored peer password is used once to provision the generated peer-only

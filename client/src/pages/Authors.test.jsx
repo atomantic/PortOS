@@ -17,18 +17,20 @@ const renderAuthors = () => render(
 const listAuthors = vi.fn();
 const generateImage = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiAuthors.js', () => ({
   listAuthors: (...a) => listAuthors(...a),
   createAuthor: vi.fn(),
   updateAuthor: vi.fn(),
   deleteAuthor: vi.fn(),
-  generateImage: (...a) => generateImage(...a),
   AUTHOR_NAME_MAX: 120,
   AUTHOR_WRITING_STYLE_MAX: 4000,
   AUTHOR_BIO_MAX: 4000,
   AUTHOR_PHYSICAL_DESCRIPTION_MAX: 2000,
   AUTHOR_HEADSHOT_STYLE_MAX: 2000,
   AUTHOR_HEADSHOT_IMAGE_URL_MAX: 1000,
+}));
+vi.mock('../services/apiSystem.js', () => ({
+  generateImage: (...a) => generateImage(...a),
 }));
 
 const toastSuccess = vi.fn();

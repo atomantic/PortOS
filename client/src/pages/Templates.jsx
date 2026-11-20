@@ -3,7 +3,7 @@ import PageLayout from '../components/PageLayout';
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
-import * as api from '../services/api';
+import { getTemplates, createFromTemplate } from '../services/apiScaffold.js';
 import FolderPicker from '../components/FolderPicker';
 import { FormField } from '../components/ui/FormField';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -29,7 +29,7 @@ function TemplatesContent() {
   const [error, setError] = useState(null);
 
   const fetchTemplates = useCallback(async () => {
-    const serverTemplates = await api.getTemplates({ silent: true });
+    const serverTemplates = await getTemplates({ silent: true });
     return Array.isArray(serverTemplates) ? serverTemplates : [];
   }, []);
   const templatesResource = useListResource(fetchTemplates);
@@ -50,7 +50,7 @@ function TemplatesContent() {
     setCreating(true);
     setError(null);
 
-    const result = await api.createFromTemplate({
+    const result = await createFromTemplate({
       templateId: selectedTemplate.id,
       name: appName,
       targetPath

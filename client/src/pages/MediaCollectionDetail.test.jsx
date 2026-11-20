@@ -18,19 +18,8 @@ const mockLocalizeMediaCollection = vi.fn();
 const mockGetMediaCollectionPrimary = vi.fn();
 const mockSetMediaCollectionPrimary = vi.fn();
 
-vi.mock('../services/api', () => ({
-  listVideoHistory: (...args) => mockListVideoHistory(...args),
-  listMediaCollections: (...args) => mockListMediaCollections(...args),
-  getMediaCollection: (...args) => mockGetMediaCollection(...args),
-  updateMediaCollection: vi.fn(),
-  getMediaCollectionPrimary: (...args) => mockGetMediaCollectionPrimary(...args),
-  setMediaCollectionPrimary: (...args) => mockSetMediaCollectionPrimary(...args),
-  addMediaCollectionItem: (...args) => mockAddMediaCollectionItem(...args),
-  removeMediaCollectionItem: (...args) => mockRemoveMediaCollectionItem(...args),
-  deleteImage: vi.fn(),
-  deleteVideoHistoryItem: vi.fn(),
+vi.mock('../services/apiPeerSync.js', () => ({
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
-  localizeMediaCollection: (...args) => mockLocalizeMediaCollection(...args),
 }));
 
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
@@ -47,6 +36,17 @@ vi.mock('../services/apiImageVideo', () => ({
     });
     return { items: items.slice(offset, offset + limit), total: items.length, offset, limit };
   },
+  listVideoHistory: (...args) => mockListVideoHistory(...args),
+  listMediaCollections: (...args) => mockListMediaCollections(...args),
+  getMediaCollection: (...args) => mockGetMediaCollection(...args),
+  updateMediaCollection: vi.fn(),
+  getMediaCollectionPrimary: (...args) => mockGetMediaCollectionPrimary(...args),
+  setMediaCollectionPrimary: (...args) => mockSetMediaCollectionPrimary(...args),
+  addMediaCollectionItem: (...args) => mockAddMediaCollectionItem(...args),
+  removeMediaCollectionItem: (...args) => mockRemoveMediaCollectionItem(...args),
+  deleteImage: vi.fn(),
+  deleteVideoHistoryItem: vi.fn(),
+  localizeMediaCollection: (...args) => mockLocalizeMediaCollection(...args),
 }));
 
 vi.mock('../components/ui/Toast', () => ({

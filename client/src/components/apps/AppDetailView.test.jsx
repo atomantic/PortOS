@@ -12,15 +12,19 @@ const instanceFeatureMock = vi.hoisted(() => ({
   error: null,
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCore.js', () => ({
   PORTOS_APP_ID: 'portos-default',
+}));
+vi.mock('../../services/apiApps.js', () => ({
   getApp: vi.fn(),
-  getProcessesList: vi.fn(),
   launchNativeApp: vi.fn(),
   buildApp: vi.fn(),
   stopApp: vi.fn(),
   restartApp: vi.fn(),
   startApp: vi.fn(),
+}));
+vi.mock('../../services/apiCommands.js', () => ({
+  getProcessesList: vi.fn(),
 }));
 
 vi.mock('../../services/socket', () => ({
@@ -66,7 +70,8 @@ vi.mock('./tabs/QualityTab', () => ({ default: () => <div data-testid="tab-quali
 vi.mock('./LaunchVideoPanel', () => ({ default: () => <div data-testid="tab-launch-video" /> }));
 vi.mock('./tabs/UpdateTab', () => ({ default: () => <div data-testid="tab-update" /> }));
 
-import * as api from '../../services/api';
+import { getApp, launchNativeApp, buildApp } from '../../services/apiApps.js';
+import { getProcessesList } from '../../services/apiCommands.js';
 import AppDetailView, { APP_DETAIL_TAB_ICONS } from './AppDetailView';
 import { APP_DETAIL_TABS } from './constants';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
@@ -111,7 +116,7 @@ describe('AppDetailView app-removal socket handling', () => {
       { id: 'gsd', enabled: true },
     ];
     instanceFeatureMock.error = null;
-    api.getApp.mockResolvedValue(APP);
+    getApp.mockResolvedValue(APP);
   });
 
   it('navigates away without refetching a detail record known to be deleted', async () => {
@@ -126,7 +131,7 @@ describe('AppDetailView app-removal socket handling', () => {
     });
 
     expect(screen.getByTestId('location')).toHaveTextContent('/apps');
-    expect(api.getApp).toHaveBeenCalledTimes(1);
+    expect(getApp).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -141,7 +146,7 @@ describe('AppDetailView header title', () => {
   // access path to the rest of a long name on a phone (#5694).
   it('exposes the full app name through the heading title attribute', async () => {
     const longName = 'Example Application With A Deliberately Very Long Managed App Name For Wrapping';
-    api.getApp.mockResolvedValue({ ...APP, name: longName });
+    getApp.mockResolvedValue({ ...APP, name: longName });
 
     renderDetail();
 
@@ -150,7 +155,7 @@ describe('AppDetailView header title', () => {
   });
 
   it('keeps the edit control next to the app identity on desktop', async () => {
-    api.getApp.mockResolvedValue(APP);
+    getApp.mockResolvedValue(APP);
     renderDetail();
 
     const heading = await screen.findByRole('heading', { name: APP.name });
@@ -158,7 +163,7 @@ describe('AppDetailView header title', () => {
   });
 
   it('re-opens the edit drawer on a reload carrying ?appTab and forgets the tab on close', async () => {
-    api.getApp.mockResolvedValue(APP);
+    getApp.mockResolvedValue(APP);
     renderDetail('/apps/app-1/overview?appTab=intelligence');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Close edit drawer' }));
@@ -168,7 +173,7 @@ describe('AppDetailView header title', () => {
   });
 
   it('does not display PM2 process names in the header', async () => {
-    api.getApp.mockResolvedValue({
+    getApp.mockResolvedValue({
       ...APP,
       pm2ProcessNames: ['example-backend', 'example-worker'],
     });
@@ -184,7 +189,7 @@ describe('AppDetailView managed-app feature tabs', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     socketHandlers.clear();
-    api.getApp.mockResolvedValue(APP);
+    getApp.mockResolvedValue(APP);
   });
 
   it('hides globally disabled feature tabs', async () => {
@@ -208,7 +213,7 @@ describe('AppDetailView managed-app feature tabs', () => {
       { id: 'jira', enabled: false },
       { id: 'gsd', enabled: true },
     ];
-    api.getApp.mockResolvedValue({
+    getApp.mockResolvedValue({
       ...APP,
       featureOverrides: { datadog: true, jira: true, gsd: false },
     });
@@ -250,14 +255,14 @@ describe('AppDetailView managed-app feature tabs', () => {
     });
 
     it('renders from a deep link', async () => {
-      api.getApp.mockResolvedValue(FULL_APP);
+      getApp.mockResolvedValue(FULL_APP);
       renderDetail(`/apps/${FULL_APP.id}/${id}`);
       expect(await screen.findByTestId(testId)).toBeInTheDocument();
       expect(screen.queryByTestId('overview-app')).toBeNull();
     });
 
     it('renders after a tab click from Overview', async () => {
-      api.getApp.mockResolvedValue(FULL_APP);
+      getApp.mockResolvedValue(FULL_APP);
       renderDetail(`/apps/${FULL_APP.id}/overview`);
       expect(await screen.findByTestId('overview-app')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('tab', { name: label }));
@@ -277,11 +282,11 @@ describe('AppDetailView fetch lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     socketHandlers.clear();
-    api.getApp.mockReset();
+    getApp.mockReset();
   });
 
   it('shows a retryable unavailable state for a failed detail request and recovers', async () => {
-    api.getApp
+    getApp
       .mockRejectedValueOnce(Object.assign(new Error('Server unreachable'), { status: 503 }))
       .mockResolvedValueOnce(APP);
     renderDetail();
@@ -296,7 +301,7 @@ describe('AppDetailView fetch lifecycle', () => {
   });
 
   it('keeps a confirmed 404 distinct from an unavailable detail request', async () => {
-    api.getApp.mockRejectedValue(Object.assign(new Error('App not found'), { status: 404 }));
+    getApp.mockRejectedValue(Object.assign(new Error('App not found'), { status: 404 }));
     renderDetail();
 
     const missing = await screen.findByText('App not found');
@@ -308,7 +313,7 @@ describe('AppDetailView fetch lifecycle', () => {
   it('clears old child props immediately on navigation and ignores a late old-app refresh', async () => {
     let resolveOld;
     let resolveNew;
-    api.getApp.mockResolvedValueOnce(APP)
+    getApp.mockResolvedValueOnce(APP)
       .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
     renderDetail();
@@ -326,7 +331,7 @@ describe('AppDetailView fetch lifecycle', () => {
 
   it('ignores a failed previous-route request and recovers from a current-app failed refresh', async () => {
     let rejectOld;
-    api.getApp.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
+    getApp.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
       .mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Second App' });
     renderDetail();
     // The read starts on a microtask; let the first route's request go out before navigating away.
@@ -336,17 +341,17 @@ describe('AppDetailView fetch lifecycle', () => {
     await act(async () => rejectOld(new Error('Old request failed')));
     expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
 
-    api.getApp.mockRejectedValueOnce(new Error('Refresh failed'));
+    getApp.mockRejectedValueOnce(new Error('Refresh failed'));
     await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
     expect(screen.queryByTestId('overview-app')).toBeNull();
-    api.getApp.mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Recovered App' });
+    getApp.mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Recovered App' });
     await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
     expect(screen.getByRole('heading', { name: 'Recovered App' })).toBeInTheDocument();
   });
 
   it('filters other-app events, preserves fleet invalidation, and coalesces to the newest refresh', async () => {
     let resolveOlder;
-    api.getApp.mockResolvedValueOnce(APP)
+    getApp.mockResolvedValueOnce(APP)
       .mockImplementationOnce(() => new Promise(resolve => { resolveOlder = resolve; }))
       .mockResolvedValueOnce({ ...APP, name: 'Updated App' });
     renderDetail();
@@ -356,19 +361,19 @@ describe('AppDetailView fetch lifecycle', () => {
       changed({ action: 'update', appId: 'app-2' });
       changed({ action: 'delete', appId: 'app-2' });
     });
-    expect(api.getApp).toHaveBeenCalledTimes(1);
+    expect(getApp).toHaveBeenCalledTimes(1);
     await act(async () => changed({ action: 'update', appId: APP.id }));
-    expect(api.getApp).toHaveBeenCalledTimes(2);
+    expect(getApp).toHaveBeenCalledTimes(2);
     // Events during an in-flight read coalesce into one trailing read; the
     // superseded older result never lands.
     await act(async () => changed({ action: 'update-task-types' }));
-    expect(api.getApp).toHaveBeenCalledTimes(2);
+    expect(getApp).toHaveBeenCalledTimes(2);
     await act(async () => resolveOlder(APP));
-    expect(api.getApp).toHaveBeenCalledTimes(3);
+    expect(getApp).toHaveBeenCalledTimes(3);
     expect(screen.getByRole('heading', { name: 'Updated App' })).toBeInTheDocument();
-    api.getApp.mockResolvedValueOnce(APP);
+    getApp.mockResolvedValueOnce(APP);
     await act(async () => changed());
-    expect(api.getApp).toHaveBeenCalledTimes(4);
+    expect(getApp).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -379,24 +384,24 @@ describe('native launch realtime status', () => {
     vi.clearAllMocks();
     socketHandlers.clear();
     vi.useFakeTimers();
-    api.getApp.mockResolvedValue({ ...APP, nativeLaunch: { label: 'Native', processName: 'example-native' } });
-    api.launchNativeApp.mockResolvedValue({ processName: 'example-native' });
-    api.getProcessesList.mockResolvedValue([{ name: 'example-native', status: 'online' }]);
+    getApp.mockResolvedValue({ ...APP, nativeLaunch: { label: 'Native', processName: 'example-native' } });
+    launchNativeApp.mockResolvedValue({ processName: 'example-native' });
+    getProcessesList.mockResolvedValue([{ name: 'example-native', status: 'online' }]);
     const view = renderDetail();
     await act(async () => {});
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Launch Native for Example App' })));
     expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
-    expect(api.getProcessesList).toHaveBeenCalledTimes(1);
+    expect(getProcessesList).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTimeAsync(15000));
-    expect(api.getProcessesList).toHaveBeenCalledTimes(1);
+    expect(getProcessesList).toHaveBeenCalledTimes(1);
     await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: null }));
     expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
     await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: [{ name: 'example-native', status: 'stopped' }] }));
     expect(screen.getByTestId('native-state')).toHaveTextContent('Exited');
     await act(async () => socketHandlers.get('connect')());
-    expect(api.getProcessesList).toHaveBeenCalledTimes(2);
+    expect(getProcessesList).toHaveBeenCalledTimes(2);
     await act(async () => document.dispatchEvent(new Event('visibilitychange')));
-    expect(api.getProcessesList).toHaveBeenCalledTimes(3);
+    expect(getProcessesList).toHaveBeenCalledTimes(3);
     view.unmount();
     expect(socketHandlers.has('processes:changed')).toBe(false);
     expect(socketHandlers.has('connect')).toBe(false);
@@ -407,8 +412,8 @@ describe('action button active states and aria-busy', () => {
   it('sets aria-busy and shows spinning state during build', async () => {
     let resolveBuild;
     const buildPromise = new Promise((resolve) => { resolveBuild = resolve; });
-    api.buildApp.mockReturnValue(buildPromise);
-    api.getApp.mockResolvedValue({ ...APP, buildCommand: 'npm run build' });
+    buildApp.mockReturnValue(buildPromise);
+    getApp.mockResolvedValue({ ...APP, buildCommand: 'npm run build' });
 
     renderDetail();
     const buildBtn = await screen.findByRole('button', { name: /Build production UI/ });

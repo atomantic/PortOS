@@ -21,7 +21,15 @@ const socket = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiRuns.js', () => ({
+  getRuns: api.getRuns,
+  getRunPrompt: api.getRunPrompt,
+  getRunOutput: api.getRunOutput,
+  deleteRun: api.deleteRun,
+  deleteFailedRuns: api.deleteFailedRuns,
+  stopRun: api.stopRun,
+}));
+vi.mock('../../../services/apiLogs.js', () => ({ getProcessLogs: api.getProcessLogs }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/ProcessLogModal', () => ({
   default: () => null,

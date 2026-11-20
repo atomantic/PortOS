@@ -1,7 +1,8 @@
 import ExecutionOptionsAttribution from '../components/providers/ExecutionOptionsAttribution.jsx';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Bot, Maximize2, Minimize2 } from 'lucide-react';
-import * as api from '../services/api';
+import { getApps } from '../services/apiApps.js';
+import { getProviders } from '../services/apiProviders.js';
 import { readClipboard } from '../lib/clipboard';
 import useClickOutside from '../hooks/useClickOutside';
 import useEscapeKey from '../hooks/useEscapeKey';
@@ -73,7 +74,7 @@ function PortosShellView() {
 
   // Fetch app folders from the managed apps list
   useEffect(() => {
-    api.getApps()
+    getApps()
       .then(apps => setAppFolders(
         (apps || [])
           .filter(a => a.repoPath)
@@ -95,7 +96,7 @@ function PortosShellView() {
     if (providersRequestedRef.current) return;
     providersRequestedRef.current = true;
     setProviders(prev => ({ ...prev, loading: true }));
-    api.getProviders({ silent: true })
+    getProviders({ silent: true })
       .then(res => setProviders({ list: res?.providers || [], loading: false }))
       .catch(err => {
         console.warn('fetch providers:', err?.message ?? String(err));

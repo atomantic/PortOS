@@ -6,7 +6,7 @@ import { Link } from 'react-router';
 import {
   CheckCircle, AlertTriangle, XCircle, Circle, ChevronRight, ListChecks,
 } from 'lucide-react';
-import * as api from '../services/api';
+import { getCapabilities, updateSettings } from '../services/apiSystem.js';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import NetworkSetupGuide from '../components/NetworkSetupGuide.jsx';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -62,7 +62,7 @@ function CapabilityMapContent() {
   const [savedPreference, setSavedPreference] = useState(null);
   const [saving, setSaving] = useState(false);
   const { data, loading, error } = useSocketResource(
-    () => api.getCapabilities({ silent: true }),
+    () => getCapabilities({ silent: true }),
     { namespace: 'readiness', events: READINESS_EVENTS, matchesEvent: matchesReadinessEvent },
   );
 
@@ -85,7 +85,7 @@ function CapabilityMapContent() {
   const preference = savedPreference ?? data.networkSetupPreference ?? '';
   const savePreference = (value) => {
     setSaving(true);
-    api.updateSettings({ networkSetupPreference: value }, { silent: true })
+    updateSettings({ networkSetupPreference: value }, { silent: true })
       .then(() => setSavedPreference(value))
       .catch((error) => toast.error(error.message || 'Could not save networking preference'))
       .finally(() => setSaving(false));

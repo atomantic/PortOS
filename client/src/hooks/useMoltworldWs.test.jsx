@@ -13,7 +13,7 @@ vi.mock('../services/socket', () => ({
 }));
 
 // Mock the initial status fetch so mount doesn't hit the network.
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiAccounts.js', () => ({
   moltworldWsStatus: vi.fn(async () => ({ status: 'disconnected' })),
   moltworldWsConnect: vi.fn(async () => ({ status: 'connected' })),
   moltworldWsDisconnect: vi.fn(async () => ({ status: 'disconnected' })),

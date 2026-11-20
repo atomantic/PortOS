@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import HarnessUpdateControl from './HarnessUpdateControl';
-import { getHarnessUpdateReference } from '../../services/api';
+import { getHarnessUpdateReference } from '../../services/apiHarnesses.js';
 
-vi.mock('../../services/api', () => ({ getHarnessUpdateReference: vi.fn() }));
+vi.mock('../../services/apiHarnesses.js', () => ({
+  getHarnessUpdateReference: vi.fn(),
+}));
 
 const harness = { id: 'example', label: 'Example CLI', installedVersion: '1.2.3', candidateVersion: '1.2.4' };
 const ticket = '00000000-0000-4000-8000-000000000001';

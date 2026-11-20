@@ -37,7 +37,7 @@ import FilePickerButton from '../components/ui/FilePickerButton';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import PageHeader from '../components/PageHeader';
 import * as api from '../services/apiOpenClaw';
-import * as coreApi from '../services/api';
+import { getApps } from '../services/apiApps.js';
 import { formatCount, formatDateTime } from '../utils/formatters';
 import { useOpenClawAttachments, OPENCLAW_ATTACHMENT_ACCEPT } from '../hooks/useOpenClawAttachments';
 import { useOpenClawStream } from '../hooks/useOpenClawStream';
@@ -47,7 +47,7 @@ import useListResource from '../hooks/useListResource';
 import ListLoadError from '../components/ui/ListLoadError';
 
 const NO_APPS = Object.freeze([]);
-const fetchActiveApps = () => coreApi.getApps({ silent: true }).then(data => (data || []).filter(app => !app.archived));
+const fetchActiveApps = () => getApps({ silent: true }).then(data => (data || []).filter(app => !app.archived));
 
 function getRuntimeState(status, featureEnabled) {
   if (!featureEnabled || status?.featureEnabled === false) {

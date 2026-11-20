@@ -39,10 +39,12 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
           if (/\/components\/shell\/useShellSession(?:\.js)?$/.test(id)) return '\0shell-session';
           if (/\/components\/shell\/useItermSession(?:\.js)?$/.test(id)) return '\0iterm-session';
           if (/\/hooks\/useInstanceFeatures(?:\.js)?$/.test(id)) return '\0shell-features';
-          if (/\/services\/api(?:\.js)?$/.test(id)) return '\0shell-api';
+          if (id === '../services/apiApps.js') return '\0shell-apps';
+          if (id === '../services/apiProviders.js') return '\0shell-providers';
         },
         load(id) {
-          if (id === '\0shell-api') return 'export const getApps = async () => [];';
+          if (id === '\0shell-apps') return 'export const getApps = async () => [];';
+          if (id === '\0shell-providers') return 'export const getProviders = async () => ({ providers: [] });';
           if (id === '\0iterm-session') return 'export const useItermSession = () => { throw new Error("Unexpected iTerm connection"); };';
           if (id === '\0shell-features') return `
             export const useInstanceFeatures = () => ({

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Bone, Loader2 } from 'lucide-react';
-import { getRiggingReadiness, rigImageTo3dModel, listRiggingClips, retargetImageTo3dModel } from '../../services/api';
+import {
+  getRiggingReadiness,
+  rigImageTo3dModel,
+  listRiggingClips,
+  retargetImageTo3dModel,
+} from '../../services/apiRigging.js';
 import { riggingReasonLabel } from '../../lib/riggingReasons.js';
 import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';

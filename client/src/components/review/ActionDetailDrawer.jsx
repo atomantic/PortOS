@@ -4,7 +4,8 @@ import Drawer from '../Drawer';
 import GitHubNotificationCard from '../github/GitHubNotificationCard';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import { localDateKey } from '../../utils/formatters';
-import * as api from '../../services/api';
+import { getThread, updateThread } from '../../services/apiBrainThreads.js';
+import { updateReviewItem } from '../../services/apiReview.js';
 import {
   AgentFeedbackReview,
   QueueInvestigation,
@@ -49,7 +50,7 @@ export default function ActionDetailDrawer({
       description: item.summary || '',
     });
     if (isThread && item.sourceRef) {
-      api.getThread(item.sourceRef, { silent: true })
+      getThread(item.sourceRef, { silent: true })
         .then((full) => {
           if (cancelled) return;
           setRecord(full);
@@ -63,7 +64,7 @@ export default function ActionDetailDrawer({
   const [save, saving] = useAsyncAction(async () => {
     if (!item || !draft || (!isThread && !isTodo)) return null;
     const updated = isThread
-      ? await api.updateThread(item.sourceRef, {
+      ? await updateThread(item.sourceRef, {
         title: draft.title.trim(),
         status: draft.status,
         priority: draft.priority,
@@ -71,7 +72,7 @@ export default function ActionDetailDrawer({
         dueAt: draft.dueAt ? new Date(`${draft.dueAt}T00:00:00`).toISOString() : null,
         notes: draft.notes,
       }, { silent: true })
-      : await api.updateReviewItem(item.sourceRef, {
+      : await updateReviewItem(item.sourceRef, {
         title: draft.title.trim(),
         description: draft.description.trim(),
       }, { silent: true });

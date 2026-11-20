@@ -12,7 +12,7 @@ import {
   reviewLoomEpisodeOutline,
   updateLoomEpisode,
   validateLoomEpisodeOutline,
-} from '../../services/api';
+} from '../../services/apiFableLoom.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';

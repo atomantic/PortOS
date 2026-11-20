@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPipeline.js', () => ({
   startPipelineAutopilot: vi.fn(),
   cancelPipelineAutopilot: vi.fn(),
   pausePipelineAutopilot: vi.fn(),
@@ -12,14 +12,15 @@ vi.mock('../../services/api', () => ({
   getPipelineSeriesCanonReadiness: vi.fn(),
   getPipelineSeries: vi.fn(),
   listPipelineIssues: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
-  getSettings: vi.fn(),
-  patchSettingsSlice: vi.fn(),
 }));
 // The nested schedule control reads these modules directly, outside the API barrel.
 vi.mock('../../services/apiSystem', async (importOriginal) => ({
   ...await importOriginal(),
   getSettings: vi.fn().mockResolvedValue({ seriesAutopilot: { schedules: [] } }),
+  patchSettingsSlice: vi.fn(),
 }));
 vi.mock('../../services/apiAgents', async (importOriginal) => ({
   ...await importOriginal(),
@@ -45,10 +46,9 @@ import {
   getPipelineSeriesCanonReadiness,
   getPipelineSeries,
   listPipelineIssues,
-  getProviders,
-  getSettings,
-  patchSettingsSlice,
-} from '../../services/api';
+} from '../../services/apiPipeline.js';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 import AutopilotPanel from './AutopilotPanel';
 

@@ -10,7 +10,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 
 const ideaProps = vi.hoisted(() => []);
 vi.mock('../hooks/usePipelineProgress', () => ({ usePipelineProgress: () => ({ latest: null, frames: [] }) }));
-vi.mock('../services/api', async (importOriginal) => ({
+vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getPipelineConfig: vi.fn(async () => ({ arcRoles: [] })),
   getPipelineIssue: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock('../components/pipeline/ArcRolePicker', () => ({ default: () => null }))
 vi.mock('../components/CatalogCastPanel', () => ({ default: () => null }));
 vi.mock('../components/pipeline/stages/VisualGenSettings', () => ({ VisualGenSettingsPanel: () => null }));
 
-import * as api from '../services/api';
+import { getPipelineIssue, updatePipelineIssue, getPipelineSeries } from '../services/apiPipeline.js';
 import PipelineIssue from './PipelineIssue';
 
 const issue = (id, title, ideaStatus = 'ready') => ({
@@ -70,13 +70,13 @@ describe('PipelineIssue across an issue switch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ideaProps.length = 0;
-    api.getPipelineIssue.mockImplementation(async (id) => ISSUES[id]);
+    getPipelineIssue.mockImplementation(async (id) => ISSUES[id]);
   });
 
   it('ignores a lock PATCH for the previous issue that answers late', async () => {
     const user = userEvent.setup();
     let resolvePatch;
-    api.updatePipelineIssue.mockImplementation(() => new Promise((resolve) => { resolvePatch = resolve; }));
+    updatePipelineIssue.mockImplementation(() => new Promise((resolve) => { resolvePatch = resolve; }));
     await renderAndSwitch(() => user.click(screen.getByRole('button', { name: 'Lock Idea' })));
 
     await act(async () => { resolvePatch({ ...ISSUES['issue-a'], stages: { idea: { status: 'ready', locked: true } } }); });
@@ -93,7 +93,7 @@ describe('PipelineIssue across an issue switch', () => {
   });
 
   it('keeps an issue available when its series lookup fails', async () => {
-    api.getPipelineSeries.mockRejectedValueOnce(new Error('series offline'));
+    getPipelineSeries.mockRejectedValueOnce(new Error('series offline'));
 
     await renderAndSwitch();
 
@@ -102,7 +102,7 @@ describe('PipelineIssue across an issue switch', () => {
   });
 
   it('leaves the loading state when the requested issue no longer exists', async () => {
-    api.getPipelineIssue.mockResolvedValueOnce(null);
+    getPipelineIssue.mockResolvedValueOnce(null);
     const router = createMemoryRouter(
       [
         { path: '/pipeline/issues/:issueId/:stage', element: <PipelineIssue /> },
@@ -119,12 +119,12 @@ describe('PipelineIssue across an issue switch', () => {
 
   it('hides the previous issue and waits for the new series before mounting its stage', async () => {
     let resolveSeries;
-    api.getPipelineSeries.mockImplementation((id) => id === 'series-b'
+    getPipelineSeries.mockImplementation((id) => id === 'series-b'
       ? new Promise((resolve) => { resolveSeries = resolve; })
       : Promise.resolve({ id: 'series-a', name: 'Series A', targetFormat: 'video' }));
 
     await renderAndSwitch(null, async () => {
-      await vi.waitFor(() => expect(api.getPipelineSeries).toHaveBeenCalledWith('series-b', { silent: true }));
+      await vi.waitFor(() => expect(getPipelineSeries).toHaveBeenCalledWith('series-b', { silent: true }));
       expect(screen.queryByRole('heading', { name: /Issue A/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('heading', { name: /Issue B/ })).not.toBeInTheDocument();
       expect(screen.queryByTestId('idea-stage')).not.toBeInTheDocument();

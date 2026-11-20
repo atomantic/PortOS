@@ -4,7 +4,7 @@ import { Group } from 'three';
 import ArExportPanel from './ArExportPanel';
 
 const uploadImageTo3dUsdz = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageTo3d.js', () => ({
   imageTo3dUsdzUrl: (id) => `/api/image-to-3d/models/${id}/usdz`,
   uploadImageTo3dUsdz: (...a) => uploadImageTo3dUsdz(...a),
 }));

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { getAuthStatus, loginWithPassword } from '../services/api';
+import { getAuthStatus, loginWithPassword } from '../services/apiAuth.js';
 
 // Constrain the `?next=` redirect target to a same-origin in-app path.
 // Reject absolute URLs (`https://attacker.example`), protocol-relative

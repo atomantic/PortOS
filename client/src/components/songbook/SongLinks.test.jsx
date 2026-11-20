@@ -4,7 +4,8 @@ import { MemoryRouter } from 'react-router';
 
 // Mock the api barrel — the editor loads both picker lists on mount.
 const api = vi.hoisted(() => ({ listRounds: vi.fn(), listTracks: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiRounds.js', () => ({ listRounds: api.listRounds }));
+vi.mock('../../services/apiTracks.js', () => ({ listTracks: api.listTracks }));
 
 import { SongLinkChips, SongLinksEditor } from './SongLinks.jsx';
 

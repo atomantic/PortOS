@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { getImageGenStatus } from '../services/api';
+import { getImageGenStatus } from '../services/apiSystem.js';
 
 /**
  * The local image runtime's verdict for one model (`readiness`, `reason`, one-button `remedy`) from the SAME server diagnosis the renderer refuses against (`server/services/imageGen/localRuntime.js`). A hook rather than state fused into the status card because a host needs the VALUE too: a deck must disable "Render all" when the runtime is dead, one step earlier than the error message.

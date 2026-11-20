@@ -17,7 +17,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { listRounds, createRound, deleteRound, generateRound } from '../services/api';
+import { listRounds, createRound, deleteRound, generateRound } from '../services/apiRounds.js';
 import { RHYTHM_SHAPES } from '../lib/songCraft';
 
 const shapeLabel = (id) => RHYTHM_SHAPES.find((s) => s.id === id)?.label || null;

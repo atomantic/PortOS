@@ -3,7 +3,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import { ISSUE_AUTHOR_FILTER_OPTIONS } from '../cos/constants';
 import { WORK_TRACKER_LABELS, workItemNoun } from './constants';
 import { formatSkipCauses } from '../../lib/perpetualSkipCauses';
-import * as api from '../../services/api';
+import { getAppWorkItems } from '../../services/apiApps.js';
 
 // Trackers with an author gate — PLAN.md items and JIRA sprint tickets have none.
 const TRACKERS_WITH_AUTHOR_FILTER = new Set(['github', 'gitlab']);
@@ -73,7 +73,7 @@ export default function WorkItemPicker({ appId, target, onChange }) {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError('');
-    const data = await api.getAppWorkItems(appId, { issueAuthorFilter: filter || undefined })
+    const data = await getAppWorkItems(appId, { issueAuthorFilter: filter || undefined })
       .catch((err) => {
         if (requestId === requestIdRef.current) setError(err.message || 'Failed to load work items');
         return null;

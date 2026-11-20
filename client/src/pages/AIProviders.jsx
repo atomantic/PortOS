@@ -2,7 +2,31 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { getOrchestrationProfiles } from '../services/apiAgents.js';
+import { getApps } from '../services/apiApps.js';
+import {
+  getSampleProviders,
+  getCodexModels,
+  getCodexAccount,
+  getProviderRuntimes,
+  getProviders,
+  getProviderStatuses,
+  getProviderReadiness,
+  recoverProvider,
+  setActiveProvider,
+  testProvider,
+  deleteProvider,
+  addProviderTuiMode,
+  updateProvider,
+  startCodexLogin,
+  cancelCodexLogin,
+  codexLogout,
+  serveProviderModel,
+  refreshProviderModels,
+  createProvider,
+} from '../services/apiProviders.js';
+import { getInstances } from '../services/apiSystem.js';
+import { createRun, stopRun } from '../services/apiRuns.js';
 import socket from '../services/socket';
 import { isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, isTuiProvider, isApiProvider, isCodexSubscriptionProvider, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { OTHER_HARNESS_GROUP, groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
@@ -107,7 +131,7 @@ export default function AIProviders() {
   const [runPrompt, setRunPrompt] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const loadOrchestrationProfiles = useCallback(async () => {
-    const result = await api.getOrchestrationProfiles?.({ silent: true });
+    const result = await getOrchestrationProfiles?.({ silent: true });
     return Array.isArray(result) ? result : result?.profiles || [];
   }, []);
   const {
@@ -118,7 +142,7 @@ export default function AIProviders() {
   } = useListResource(loadOrchestrationProfiles);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const loadApps = useCallback(async () => {
-    const list = await api.getApps({ silent: true });
+    const list = await getApps({ silent: true });
     return Array.isArray(list) ? list : [];
   }, []);
   const appsResource = useListResource(loadApps);
@@ -128,7 +152,7 @@ export default function AIProviders() {
   const [showSamples, setShowSamples] = useState(false);
   // Samples are fetched only once the user asks for them (`showSamples`).
   const loadSamples = useCallback(async () => {
-    const result = await api.getSampleProviders({ silent: true });
+    const result = await getSampleProviders({ silent: true });
     return result?.providers || [];
   }, []);
   const {
@@ -165,7 +189,7 @@ export default function AIProviders() {
   }, []);
 
   const loadCodexModels = useCallback(async (fresh = false) => {
-    const result = await api.getCodexModels({ fresh, silent: true }).catch(() => null);
+    const result = await getCodexModels({ fresh, silent: true }).catch(() => null);
     if (!result || !Object.hasOwn(result, 'models')) return null;
     setCodexModels(result);
     // `null` is never fetched; an empty list is a real catalog. Only merge a
@@ -180,10 +204,10 @@ export default function AIProviders() {
     // Compatibility with a server that predates the account endpoint. The
     // normal client library always has this function; the guard makes a mixed
     // client/server upgrade leave the established provider controls intact.
-    if (typeof api.getCodexAccount !== 'function') return undefined;
+    if (typeof getCodexAccount !== 'function') return undefined;
     const revision = ++observationRevision.current.account;
     setCodexAccountLoading(true);
-    const result = await api.getCodexAccount({ fresh, silent: true }).catch(() => null);
+    const result = await getCodexAccount({ fresh, silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.account) return;
     const readiness = result?.readiness && typeof result.readiness === 'object' ? result.readiness : null;
     setCodexAccount(readiness);
@@ -263,15 +287,15 @@ export default function AIProviders() {
   // the critical path: the page paints from the provider list and the install
   // badges appear when the probes land.
   const loadRuntimes = useCallback(async () => {
-    const data = await api.getProviderRuntimes({ silent: true }).catch(() => null);
+    const data = await getProviderRuntimes({ silent: true }).catch(() => null);
     setRuntimes(data?.runtimes && typeof data.runtimes === 'object' ? data.runtimes : {});
   }, []);
 
   useEffect(() => { loadRuntimes(); }, [loadRuntimes]);
 
   const loadFleetPeers = useCallback(async () => {
-    if (typeof api.getInstances !== 'function') return [];
-    const data = await api.getInstances({ silent: true });
+    if (typeof getInstances !== 'function') return [];
+    const data = await getInstances({ silent: true });
     return Array.isArray(data?.peers) ? data.peers : [];
   }, []);
   const fleetPeersResource = useListResource(loadFleetPeers, { enabled: fleetSetupOpen });
@@ -314,11 +338,11 @@ export default function AIProviders() {
     let providersFailed = false;
     const statusRevision = ++observationRevision.current.status;
     const [providersData, statusData] = await Promise.all([
-      api.getProviders({ fresh: true }).catch(() => {
+      getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),
-      api.getProviderStatuses().catch(() => ({ providers: {} })),
+      getProviderStatuses().catch(() => ({ providers: {} })),
     ]);
     if (!observationMounted.current) return;
     if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
@@ -350,7 +374,7 @@ export default function AIProviders() {
   // passes (the server expires `estimatedRecovery` on read), without a full reload.
   const refreshStatuses = useCallback(async () => {
     const revision = ++observationRevision.current.status;
-    const statusData = await api.getProviderStatuses({ silent: true }).catch(() => null);
+    const statusData = await getProviderStatuses({ silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.status) return;
     setObservationUnavailable(previous => ({ ...previous, status: !statusData?.providers }));
     if (statusData?.providers) setStatuses(statusData.providers);
@@ -362,7 +386,7 @@ export default function AIProviders() {
   // from the Models → Runtimes page clears the card's checklist on its own.
   const loadReadiness = useCallback(async () => {
     const revision = ++observationRevision.current.readiness;
-    const data = await api.getProviderReadiness({ silent: true }).catch(() => null);
+    const data = await getProviderReadiness({ silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.readiness) return;
     const valid = data?.readiness && typeof data.readiness === 'object';
     setObservationUnavailable(previous => ({ ...previous, readiness: !valid }));
@@ -385,7 +409,7 @@ export default function AIProviders() {
   // next failure re-benches it — recovery is "try again now", not "fix the cause".
   const handleRecover = async (id) => {
     setRecovering(prev => ({ ...prev, [id]: true }));
-    const result = await api.recoverProvider(id, { silent: true }).catch(() => null);
+    const result = await recoverProvider(id, { silent: true }).catch(() => null);
     if (result) {
       observationRevision.current.status += 1;
       setStatuses(prev => ({ ...prev, [id]: { ...prev[id], available: true, reason: 'ok', message: 'Provider available', timeUntilRecovery: null } }));
@@ -398,7 +422,7 @@ export default function AIProviders() {
 
   const handleSetActive = async (id) => {
     if (!id) return;
-    const result = await api.setActiveProvider(id).catch(() => null);
+    const result = await setActiveProvider(id).catch(() => null);
     if (result) {
       providerListRevision.current.mutation += 1;
       setActiveProviderId(id);
@@ -407,14 +431,14 @@ export default function AIProviders() {
 
   const handleTest = async (id) => {
     setTestResults(prev => ({ ...prev, [id]: { testing: true } }));
-    const result = await api.testProvider(id).catch(err => ({ success: false, error: err.message }));
+    const result = await testProvider(id).catch(err => ({ success: false, error: err.message }));
     setTestResults(prev => ({ ...prev, [id]: result }));
   };
 
   // Removed in place. A mode of a grouped card is the exception: the server owns
   // the grouping (`executionModes`), so removing one re-reads to regroup.
   const handleDelete = async (id) => {
-    await api.deleteProvider(id);
+    await deleteProvider(id);
     const groupedMode = providers.some(p => p.id !== id && (p.executionModes || []).some(mode => mode.id === id));
     if (groupedMode || providers.find(p => p.id === id)?.executionModes?.length > 1) {
       loadData();
@@ -430,7 +454,7 @@ export default function AIProviders() {
   // way to splice a new mode into the list from here.
   const handleAddTuiMode = async (provider) => {
     setAddingTuiMode(prev => ({ ...prev, [provider.id]: true }));
-    const created = await api.addProviderTuiMode(provider.id, { silent: true }).catch(() => null);
+    const created = await addProviderTuiMode(provider.id, { silent: true }).catch(() => null);
     setAddingTuiMode(prev => ({ ...prev, [provider.id]: false }));
     if (!created) {
       toast.error(`Could not add an interactive mode for ${provider.name}`);
@@ -441,7 +465,7 @@ export default function AIProviders() {
   };
 
   const handleToggleEnabled = async (provider) => {
-    const updated = await api.updateProvider(provider.id, {
+    const updated = await updateProvider(provider.id, {
       enabled: !provider.enabled,
     });
     // Only `enabled` is patched: the response is a bare record without the
@@ -451,7 +475,7 @@ export default function AIProviders() {
   };
 
   const handleEnableCodexSubscription = async (provider) => {
-    const updated = await api.updateProvider(provider.id, { textTransportEnabled: true }, { silent: true }).catch(() => null);
+    const updated = await updateProvider(provider.id, { textTransportEnabled: true }, { silent: true }).catch(() => null);
     if (!updated) {
       toast.error('Could not save the ChatGPT subscription transport');
       return;
@@ -465,7 +489,7 @@ export default function AIProviders() {
 
   const handleCodexSignIn = async (deviceCode) => {
     setCodexLoginLoading(true);
-    const result = await api.startCodexLogin(deviceCode, { silent: true }).catch(() => null);
+    const result = await startCodexLogin(deviceCode, { silent: true }).catch(() => null);
     setCodexLoginLoading(false);
     if (!result?.login) {
       toast.error('Could not start ChatGPT sign-in');
@@ -487,7 +511,7 @@ export default function AIProviders() {
 
   const handleCancelCodexLogin = async (loginId) => {
     setCodexLoginLoading(true);
-    const result = await api.cancelCodexLogin(loginId, { silent: true }).catch(() => null);
+    const result = await cancelCodexLogin(loginId, { silent: true }).catch(() => null);
     setCodexLoginLoading(false);
     if (!result?.readiness) {
       toast.error('Could not cancel ChatGPT sign-in');
@@ -499,7 +523,7 @@ export default function AIProviders() {
 
   const handleCodexLogout = async () => {
     setCodexAccountLoading(true);
-    const result = await api.codexLogout({ silent: true }).catch(() => null);
+    const result = await codexLogout({ silent: true }).catch(() => null);
     setCodexAccountLoading(false);
     if (!result?.readiness) {
       toast.error('Could not log out of ChatGPT');
@@ -523,7 +547,7 @@ export default function AIProviders() {
     const models = Array.isArray(provider.models) ? [...provider.models] : [];
     const updates = { defaultModel };
     if (!models.includes(defaultModel)) updates.models = [defaultModel, ...models];
-    const updated = await api.updateProvider(provider.id, updates).catch(() => null);
+    const updated = await updateProvider(provider.id, updates).catch(() => null);
     if (!updated) return;
     providerListRevision.current.mutation += 1;
     setProviders((prev) => prev.map((entry) => (
@@ -542,7 +566,7 @@ export default function AIProviders() {
     setServingModel((prev) => ({ ...prev, [provider.id]: true }));
     // `silent` so the 409 refusal (an externally-started daemon) reads as one
     // toast naming the fix rather than the helper's generic error on top of it.
-    const result = await api.serveProviderModel(provider.id, { silent: true })
+    const result = await serveProviderModel(provider.id, { silent: true })
       .catch((err) => ({ error: err?.message || 'The relaunch failed.' }));
     setServingModel((prev) => ({ ...prev, [provider.id]: false }));
     if (!result?.success) {
@@ -575,7 +599,7 @@ export default function AIProviders() {
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
-      const result = await api.refreshProviderModels(id, { silent: true });
+      const result = await refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
         const modelCatalog = Array.isArray(result.modelCatalog) ? result.modelCatalog : result.models;
@@ -607,7 +631,7 @@ export default function AIProviders() {
     setRunOutput('');
     const workspace = apps.find(a => a.id === selectedWorkspace);
 
-    const result = await api.createRun({
+    const result = await createRun({
       providerId: activeProviderId,
       prompt: runPrompt,
       workspacePath: workspace?.repoPath,
@@ -625,7 +649,7 @@ export default function AIProviders() {
 
   const handleStopRun = async () => {
     if (activeRun) {
-      await api.stopRun(activeRun);
+      await stopRun(activeRun);
       setActiveRun(null);
     }
   };
@@ -640,7 +664,7 @@ export default function AIProviders() {
   const handleAddSample = async (provider) => {
     setAddingSample(prev => ({ ...prev, [provider.id]: true }));
     try {
-      await api.createProvider(provider);
+      await createProvider(provider);
       setSampleProviders(prev => prev.filter(p => p.id !== provider.id));
       await loadData();
       toast.success(`Added ${provider.name}`);
@@ -655,7 +679,7 @@ export default function AIProviders() {
   };
 
   const handleCreateFleetProvider = async (provider) => {
-    const created = await api.createProvider(provider);
+    const created = await createProvider(provider);
     providerListRevision.current.mutation += 1;
     setProviders((current) => [...current, created]);
     toast.success(`${created.name} is connected to the fleet GPU host`);
@@ -665,7 +689,7 @@ export default function AIProviders() {
   // Repoints an existing provider at a fleet host in place, rather than
   // leaving the user to create a duplicate and manually delete the old one.
   const handleUpdateFleetProvider = async (id, patch) => {
-    const updated = await api.updateProvider(id, patch);
+    const updated = await updateProvider(id, patch);
     providerListRevision.current.mutation += 1;
     setProviders((current) => current.map((entry) => (entry.id === id ? updated : entry)));
     toast.success(`${updated.name} is connected to the fleet GPU host`);
@@ -680,7 +704,7 @@ export default function AIProviders() {
 
     for (const provider of addableSamples) {
       try {
-        await api.createProvider(provider);
+        await createProvider(provider);
         succeededIds.push(provider.id);
       } catch (err) {
         console.error(`Failed to add sample provider ${provider.name || provider.id}:`, err);

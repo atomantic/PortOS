@@ -3,12 +3,15 @@ import { Loader2, Sparkles, ShieldCheck, Lock, Unlock, BookText, FileSearch } fr
 import toast from '../../ui/Toast';
 import { useLockToggle } from '../../../hooks/useLockToggle';
 import {
-  generatePipelineArcOverview, verifyPipelineArc,
+  generatePipelineArcOverview,
+  verifyPipelineArc,
   resolvePipelineArcIssues,
-  derivePipelineArcFromManuscript, commitPipelineArcFromManuscript,
+  derivePipelineArcFromManuscript,
+  commitPipelineArcFromManuscript,
   analyzePipelineManuscriptCompleteness,
-  listPipelineIssues, updatePipelineSeries,
-} from '../../../services/api';
+  listPipelineIssues,
+  updatePipelineSeries,
+} from '../../../services/apiPipeline.js';
 import SeriesLlmPicker from '../SeriesLlmPicker';
 import VerifyScopeTooltip from './VerifyScopeTooltip.jsx';
 import ArcContent from './ArcContent.jsx';

@@ -12,7 +12,14 @@ const api = vi.hoisted(() => ({
   stopCommand: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../services/apiCommands.js', () => ({
+  getAllowedCommands: api.getAllowedCommands,
+  executeCommand: api.executeCommand,
+  stopCommand: api.stopCommand,
+}));
+vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));

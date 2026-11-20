@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import * as api from '../services/api';
+import { getAppClaimReviewers } from '../services/apiApps.js';
 
 /**
  * The reviewers a `/do:next` claim will ACTUALLY run for `appId`, or `null` while the lookup is in flight or has failed.
@@ -23,7 +23,7 @@ export default function useClaimReviewers(appId) {
     setValue(null);
     if (!appId) return undefined;
     let cancelled = false;
-    api.getAppClaimReviewers(appId)
+    getAppClaimReviewers(appId)
       .then((data) => {
         // The one guard that matters: without a list there is nothing to show; the route shapes every other field from the same resolver.
         if (!cancelled && Array.isArray(data?.reviewers)) setValue(data);

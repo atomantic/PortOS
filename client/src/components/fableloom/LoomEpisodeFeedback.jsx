@@ -6,7 +6,7 @@ import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
 import useProviderModels from '../../hooks/useProviderModels';
-import { feedbackLoomEpisode } from '../../services/api';
+import { feedbackLoomEpisode } from '../../services/apiFableLoom.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';

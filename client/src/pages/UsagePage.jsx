@@ -3,7 +3,7 @@ import PageLayout from '../components/PageLayout';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { DatabaseZap, BarChart3 } from 'lucide-react';
-import * as api from '../services/api';
+import { getUsageBackfillStatus, getUsage, startUsageBackfill } from '../services/apiSystem.js';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
@@ -79,7 +79,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
   const [readError, setReadError] = useState(false);
   const [loadedRange, setLoadedRange] = useState(null);
   const { data: backfill, updateData: setBackfill, refetch: refreshBackfill } = useSocketResource(
-    () => api.getUsageBackfillStatus({ silent: true }),
+    () => getUsageBackfillStatus({ silent: true }),
     { events: BACKFILL_EVENTS },
   );
 
@@ -96,7 +96,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
       : (USAGE_PERIOD_OPTIONS.find((option) => option.id === period)?.label || period);
     setLoading(true);
     setReadError(false);
-    const data = await api.getUsage(params, { silent: true }).catch(() => null);
+    const data = await getUsage(params, { silent: true }).catch(() => null);
     if (token === requestRef.current) {
       if (data) {
         setUsage(data);
@@ -120,7 +120,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
     { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
-    const status = await api.startUsageBackfill({ silent: true });
+    const status = await startUsageBackfill({ silent: true });
     setBackfill(status);
     // A fast worker can finish before the POST response arrives. Reconcile
     // once so that response cannot overwrite an already-observed completion.

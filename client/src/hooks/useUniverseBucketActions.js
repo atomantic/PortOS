@@ -18,7 +18,7 @@ import {
   generateCategoryVariations,
   promoteVariationToCanon,
   updateUniverse,
-} from '../services/api';
+} from '../services/apiUniverseBuilder.js';
 import useUniverseAction from './useUniverseAction';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { mergeVariations } from '../lib/universeBuilderExpand';

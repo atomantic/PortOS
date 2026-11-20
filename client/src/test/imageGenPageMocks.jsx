@@ -184,10 +184,19 @@ export function resetImageGenMockState() {
   state.mediaPreviewFactory = null;
 }
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: state.peers })),
   getImageGenStatus: (...args) => state.getImageGenStatus(...args),
   generateImage: (...args) => state.generateImage(...args),
+  getSettings: (...args) => state.getSettings(...args),
+}));
+vi.mock('../services/apiMediaJobs.js', () => ({
+  listMediaJobs: (...args) => state.listMediaJobs(...args),
+}));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
+
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
   generateImageMultipart: vi.fn(async () => ({})),
   previewImagePrompt: (...args) => state.previewImagePrompt(...args),
   listImageModels: (...args) => state.listImageModels(...args),
@@ -200,17 +209,11 @@ vi.mock('../services/api', () => ({
   setImageHidden: vi.fn(async () => ({})),
   cleanGalleryImage: vi.fn(async () => ({})),
   getActiveImageJob: vi.fn(async () => ({ activeJob: state.activeJob })),
-  getSettings: (...args) => state.getSettings(...args),
   buildFormData: vi.fn(() => new FormData()),
-  listMediaJobs: (...args) => state.listMediaJobs(...args),
   regenerateGalleryImage: vi.fn(async () => ({})),
   getRegenAvailability: vi.fn(async () => ({ available: false })),
   removeImageWatermark: vi.fn(async () => ({})),
   getFlux2Status: vi.fn(async () => state.flux2Status),
-}));
-
-vi.mock('../services/apiImageVideo', () => ({
-  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
 }));
 
 vi.mock('../hooks/useImageGenProgress', () => ({

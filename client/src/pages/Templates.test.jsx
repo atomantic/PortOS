@@ -7,7 +7,10 @@ const api = vi.hoisted(() => ({
   createFromTemplate: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiScaffold.js', () => ({
+  getTemplates: api.getTemplates,
+  createFromTemplate: api.createFromTemplate,
+}));
 vi.mock('../components/FolderPicker', () => ({
   default: () => <div data-testid="folder-picker" />,
 }));

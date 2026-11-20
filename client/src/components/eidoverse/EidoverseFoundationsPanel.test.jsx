@@ -9,7 +9,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   listEidoverseFoundations: vi.fn(),
   listEidoverseControllers: vi.fn(),
   recordEidoverseFoundation: vi.fn(),
@@ -24,7 +24,7 @@ import {
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
   withdrawEidoverseFoundation,
-} from '../../services/api';
+} from '../../services/apiSystem.js';
 import EidoverseFoundationsPanel from './EidoverseFoundationsPanel';
 
 const foundation = (overrides = {}) => ({

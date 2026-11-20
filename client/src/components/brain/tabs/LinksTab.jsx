@@ -4,7 +4,21 @@ import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor,
   useDraggable, useSensor, useSensors,
 } from '@dnd-kit/core';
-import * as api from '../../../services/api';
+import {
+  getBrainLinks,
+  getBrainBuckets,
+  getBrainLink,
+  createBrainLink,
+  updateBrainLink,
+  reorderBrainLinks,
+  deleteBrainLink,
+  cloneBrainLink,
+  pullBrainLink,
+  openBrainLinkFolder,
+  scanBrainLink,
+  reorderBrainBuckets,
+  brainScanReportPath,
+} from '../../../services/apiBrain.js';
 import {
   Link2,
   Send,
@@ -142,7 +156,7 @@ export default function LinksTab({ onRefresh }) {
   const fetchLinks = useCallback(async () => {
     // On failure keep the last good snapshot and flag the collection as
     // unavailable rather than substituting an empty (and authoritative-looking) list.
-    const data = await api.getBrainLinks({ limit: 5000, silent: true }).catch(() => null);
+    const data = await getBrainLinks({ limit: 5000, silent: true }).catch(() => null);
     if (data) {
       setLinks(data.links || []);
       setActionReadFailed(false);
@@ -155,13 +169,13 @@ export default function LinksTab({ onRefresh }) {
   const readChanges = useCallback(async ({ reconcile, events }) => {
     if (reconcile) {
       const [data, bucketData] = await Promise.all([
-        api.getBrainLinks({ limit: 5000, silent: true }),
-        api.getBrainBuckets({ silent: true })
+        getBrainLinks({ limit: 5000, silent: true }),
+        getBrainBuckets({ silent: true })
       ]);
       return { links: data.links || [], buckets: bucketData.buckets || [] };
     }
     const ids = [...new Set(events.map(({ payload }) => payload.id))];
-    const updates = await Promise.all(ids.map(id => api.getBrainLink(id, { silent: true })
+    const updates = await Promise.all(ids.map(id => getBrainLink(id, { silent: true })
       .then(fresh => ({ id, fresh }))
       .catch(error => {
         if (error?.status === 404) return { id, gone: true };
@@ -253,7 +267,7 @@ export default function LinksTab({ onRefresh }) {
     if (tags.length) payload.tags = tags;
 
     setSending(true);
-    const result = await api.createBrainLink(payload, { silent: true }).catch(err => {
+    const result = await createBrainLink(payload, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -287,7 +301,7 @@ export default function LinksTab({ onRefresh }) {
       : { bucketId: null };
     // Optimistic update so chips move instantly.
     setLinks(prev => prev.map(l => (l.id === link.id ? { ...l, ...patch } : l)));
-    const updated = await api.updateBrainLink(link.id, patch, { silent: true }).catch(err => {
+    const updated = await updateBrainLink(link.id, patch, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update link');
       return null;
     });
@@ -312,7 +326,7 @@ export default function LinksTab({ onRefresh }) {
       const r = byId.get(l.id);
       return r ? { ...l, bucketId: r.bucketId, bucketOrder: r.bucketOrder } : l;
     }));
-    const ok = await api.reorderBrainLinks(changed, { silent: true }).catch(() => null);
+    const ok = await reorderBrainLinks(changed, { silent: true }).catch(() => null);
     if (!ok) {
       toast.error('Failed to reorder links');
       fetchLinks(); // revert optimistic change on failure
@@ -326,7 +340,7 @@ export default function LinksTab({ onRefresh }) {
       toast.error('Please enter a valid URL');
       return false;
     }
-    const result = await api.createBrainLink({ url, bucketId, bucketOrder: nextBucketOrder(bucketId) }, { silent: true }).catch(err => {
+    const result = await createBrainLink({ url, bucketId, bucketOrder: nextBucketOrder(bucketId) }, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -370,7 +384,7 @@ export default function LinksTab({ onRefresh }) {
       tags: editForm.tags ? editForm.tags.split(',').map(t => t.trim()).filter(Boolean) : []
     };
 
-    const result = await api.updateBrainLink(linkId, updates, { silent: true }).catch(err => {
+    const result = await updateBrainLink(linkId, updates, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('Another link already uses this URL');
       } else {
@@ -393,7 +407,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleDelete = async (linkId) => {
-    const result = await api.deleteBrainLink(linkId, { silent: true }).catch(err => {
+    const result = await deleteBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete');
       return null;
     });
@@ -406,7 +420,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleClone = async (linkId) => {
-    const result = await api.cloneBrainLink(linkId, { silent: true }).catch(err => {
+    const result = await cloneBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to start clone');
       return null;
     });
@@ -418,7 +432,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handlePull = async (linkId) => {
-    const result = await api.pullBrainLink(linkId, { silent: true }).catch(err => {
+    const result = await pullBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to pull');
       return null;
     });
@@ -429,14 +443,14 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleOpenFolder = async (linkId) => {
-    await api.openBrainLinkFolder(linkId, { silent: true }).catch(err => {
+    await openBrainLinkFolder(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to open folder');
     });
   };
 
   const handleScan = async (linkId) => {
     setScanningId(linkId);
-    const result = await api.scanBrainLink(linkId, { silent: true }).catch(err => {
+    const result = await scanBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to start scan');
       return null;
     });
@@ -467,7 +481,7 @@ export default function LinksTab({ onRefresh }) {
       const next = [...prev];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      api.reorderBrainBuckets(next.map(b => b.id), { silent: true }).catch(err => {
+      reorderBrainBuckets(next.map(b => b.id), { silent: true }).catch(err => {
         toast.error(err.message || 'Failed to reorder buckets');
       });
       return next;
@@ -990,7 +1004,7 @@ export default function LinksTab({ onRefresh }) {
                       </span>
                     ) : hasScanReport(link) && (
                       <Link
-                        to={api.brainScanReportPath(link.id)}
+                        to={brainScanReportPath(link.id)}
                         className={`flex items-center gap-1 text-xs ${link.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'} hover:underline`}
                         title="View malware scan report"
                       >

@@ -14,11 +14,18 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { clickStartDownload } from '../test/downloadPreflightConfirm.js';
 import Loras from './Loras';
 import {
-  listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect,
-  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai, searchCivitaiLoras, searchVideoLoras,
-} from '../services/api';
+  listLorasFull,
+  deleteLoraFull,
+  installLoraFromHuggingfaceStream,
+  probeLoraEffect,
+  previewLoraInstall,
+  getCivitaiSuggestions,
+  installLoraFromCivitai,
+  searchCivitaiLoras,
+  searchVideoLoras,
+} from '../services/apiImageVideo.js';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   listLorasFull: vi.fn(),
   installLoraFromCivitai: vi.fn(),
   previewLoraInstall: vi.fn(async () => ({
@@ -33,6 +40,8 @@ vi.mock('../services/api', () => ({
   searchCivitaiLoras: vi.fn(),
   searchVideoLoras: vi.fn(),
   probeLoraEffect: vi.fn(),
+}));
+vi.mock('../services/apiLoraTraining.js', () => ({
   getRetiredDataInventory: vi.fn(async () => []),
   deleteRetiredData: vi.fn(),
 }));

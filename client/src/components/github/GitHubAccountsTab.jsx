@@ -15,8 +15,8 @@ import {
   updateGitHubAccount,
   deleteGitHubAccount,
   getGitHubAccountStatus,
-  getProviders,
-} from '../../services/api';
+} from '../../services/apiGithub.js';
+import { getProviders } from '../../services/apiProviders.js';
 
 const GITHUB_DOT_COM = 'github.com';
 // Public/Private is where thread text may go; who counts as trusted is the

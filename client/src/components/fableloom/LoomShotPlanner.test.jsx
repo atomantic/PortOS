@@ -2,7 +2,13 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { it, expect, vi } from 'vitest';
 import LoomShotPlanner from './LoomShotPlanner';
 const api = vi.hoisted(() => ({ getLoom: vi.fn(async () => ({ id: 'loom-1' })), getLoomEpisodeShotRun: vi.fn(async () => null), cancelLoomEpisodeShotRun: vi.fn(), startLoomEpisodeShotRun: vi.fn(), applyLoomEpisodeShots: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiFableLoom.js', () => ({
+  getLoom: api.getLoom,
+  getLoomEpisodeShotRun: api.getLoomEpisodeShotRun,
+  cancelLoomEpisodeShotRun: api.cancelLoomEpisodeShotRun,
+  startLoomEpisodeShotRun: api.startLoomEpisodeShotRun,
+  applyLoomEpisodeShots: api.applyLoomEpisodeShots,
+}));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 it('previews with the selected route, then explicitly applies the reviewed fingerprint', async () => {

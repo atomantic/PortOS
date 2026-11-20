@@ -16,7 +16,19 @@ const api = {
   reviewXDraft: vi.fn(),
   openXDraft: vi.fn(),
 };
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiX.js', () => ({
+  getXAccounts: api.getXAccounts,
+  getXPosts: api.getXPosts,
+  getXDrafts: api.getXDrafts,
+  createXAccount: api.createXAccount,
+  updateXAccount: api.updateXAccount,
+  deleteXAccount: api.deleteXAccount,
+  syncXAccount: api.syncXAccount,
+  openXAccountDestination: api.openXAccountDestination,
+  createXDraft: api.createXDraft,
+  reviewXDraft: api.reviewXDraft,
+  openXDraft: api.openXDraft,
+}));
 
 const { default: XPage } = await import('./X.jsx');
 

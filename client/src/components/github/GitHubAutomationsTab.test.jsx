@@ -15,7 +15,16 @@ const api = vi.hoisted(() => ({
 const socket = vi.hoisted(() => ({ handlers: {}, on: vi.fn(), off: vi.fn() }));
 socket.on.mockImplementation((event, handler) => { socket.handlers[event] = handler; });
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiGithub.js', () => ({
+  deleteGitHubLearnedRule: api.deleteGitHubLearnedRule,
+  getGitHubAutomationActivity: api.getGitHubAutomationActivity,
+  getGitHubAutomations: api.getGitHubAutomations,
+  getGitHubLearnedRules: api.getGitHubLearnedRules,
+  setGitHubNotificationCadence: api.setGitHubNotificationCadence,
+  syncGitHubNotifications: api.syncGitHubNotifications,
+  undoGitHubAutomationAction: api.undoGitHubAutomationAction,
+  updateGitHubAccount: api.updateGitHubAccount,
+}));
 vi.mock('../../services/socket', () => ({ default: socket }));
 
 const GitHubAutomationsTab = (await import('./GitHubAutomationsTab')).default;

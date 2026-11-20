@@ -16,7 +16,7 @@ import {
   getThreejsModel,
   getThreejsModelSource,
   threejsModelSourceUrl,
-} from '../services/api';
+} from '../services/apiThreejsModels.js';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { listThreejsClips } from '../lib/threejsAnimation';

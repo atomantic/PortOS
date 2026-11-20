@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { getMediaCollectionPrimary, setMediaCollectionPrimary } from '../../services/api';
+import { getMediaCollectionPrimary, setMediaCollectionPrimary } from '../../services/apiImageVideo.js';
 import socket from '../../services/socket';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { formatCount } from '../../utils/formatters';

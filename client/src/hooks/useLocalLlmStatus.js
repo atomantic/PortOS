@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getLocalLlmStatus, installLocalLlmBackend } from '../services/api';
+import { getLocalLlmStatus, installLocalLlmBackend } from '../services/apiLocalLlm.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { localLlmBackendLabel } from '../lib/localLlmBackends.js';

@@ -11,7 +11,7 @@ import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../hooks/u
 import useClaimReviewers from '../../hooks/useClaimReviewers';
 import ClaimReviewerSource from './ClaimReviewerSource';
 import WorkItemPicker from './WorkItemPicker';
-import * as api from '../../services/api';
+import { createSlashdoTask } from '../../services/apiAgents.js';
 
 /**
  * Pre-flight settings for an Agent Operations `/do:*` run: for `/do:next`, which
@@ -92,7 +92,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
     setSubmitting(true);
     setSubmitError('');
     // silent: this drawer owns its own inline error + the caller's toast.
-    const result = await api.createSlashdoTask(command, appId, {
+    const result = await createSlashdoTask(command, appId, {
       target: work.target || undefined,
       // Only send the filter/reviewers the user actually chose — otherwise the
       // app's configured claim-work defaults apply server-side, unchanged.

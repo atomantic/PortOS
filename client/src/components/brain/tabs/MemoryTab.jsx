@@ -1,6 +1,33 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router';
-import * as api from '../../../services/api';
+import {
+  getBrainPeople,
+  getBrainProjects,
+  getBrainIdeas,
+  getBrainAdmin,
+  getBrainMemories,
+  getBrainPerson,
+  getBrainProject,
+  getBrainIdea,
+  getBrainAdminItem,
+  getBrainMemory,
+  updateBrainPerson,
+  updateBrainProject,
+  updateBrainIdea,
+  updateBrainAdminItem,
+  updateBrainMemory,
+  createBrainPerson,
+  createBrainProject,
+  createBrainIdea,
+  createBrainAdminItem,
+  createBrainMemory,
+  deleteBrainPerson,
+  deleteBrainProject,
+  deleteBrainIdea,
+  deleteBrainAdminItem,
+  deleteBrainMemory,
+} from '../../../services/apiBrain.js';
+import { getMemoryBackendStatus } from '../../../services/apiMemory.js';
 import {Plus,
   Edit2,
   Trash2,
@@ -126,12 +153,12 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     };
     let res;
     switch (activeType) {
-      case 'people': res = await api.getBrainPeople(options); break;
-      case 'projects': res = await api.getBrainProjects(options); break;
-      case 'ideas': res = await api.getBrainIdeas(options); break;
-      case 'admin': res = await api.getBrainAdmin(options); break;
+      case 'people': res = await getBrainPeople(options); break;
+      case 'projects': res = await getBrainProjects(options); break;
+      case 'ideas': res = await getBrainIdeas(options); break;
+      case 'admin': res = await getBrainAdmin(options); break;
       case 'memories':
-      default: res = await api.getBrainMemories(options); break;
+      default: res = await getBrainMemories(options); break;
     }
 
     const items = Array.isArray(res) ? res : (res.items || res[activeType] || []);
@@ -174,20 +201,20 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         const options = { silent: true };
         switch (selectedType) {
           case 'people':
-            full = await api.getBrainPerson(recordId, options);
+            full = await getBrainPerson(recordId, options);
             break;
           case 'projects':
-            full = await api.getBrainProject(recordId, options);
+            full = await getBrainProject(recordId, options);
             break;
           case 'ideas':
-            full = await api.getBrainIdea(recordId, options);
+            full = await getBrainIdea(recordId, options);
             break;
           case 'admin':
-            full = await api.getBrainAdminItem(recordId, options);
+            full = await getBrainAdminItem(recordId, options);
             break;
           case 'memories':
           default:
-            full = await api.getBrainMemory(recordId, options);
+            full = await getBrainMemory(recordId, options);
             break;
         }
       } catch (err) {
@@ -214,7 +241,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const viewerLoading = !!recordId && !listedRecord && !detailResolved;
 
   const fetchBackendStatus = useCallback(() => {
-    api.getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
+    getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
   }, []);
 
   useEffect(() => {
@@ -245,25 +272,25 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let result;
     switch (session.type) {
       case 'people':
-        result = await api.updateBrainPerson(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainPerson(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'projects':
-        result = await api.updateBrainProject(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainProject(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.updateBrainIdea(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainIdea(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.updateBrainAdminItem(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainAdminItem(session.id, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -271,7 +298,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       case 'memories': {
         const { tagInput, ...memData } = editForm;
         if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await api.updateBrainMemory(session.id, memData, { silent: true }).catch(err => {
+        result = await updateBrainMemory(session.id, memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -296,25 +323,25 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let result;
     switch (activeType) {
       case 'people':
-        result = await api.createBrainPerson(addForm, { silent: true }).catch(err => {
+        result = await createBrainPerson(addForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'projects':
-        result = await api.createBrainProject({ ...addForm, status: addForm.status || 'active' }, { silent: true }).catch(err => {
+        result = await createBrainProject({ ...addForm, status: addForm.status || 'active' }, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.createBrainIdea(addForm, { silent: true }).catch(err => {
+        result = await createBrainIdea(addForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.createBrainAdminItem({ ...addForm, status: addForm.status || 'open' }, { silent: true }).catch(err => {
+        result = await createBrainAdminItem({ ...addForm, status: addForm.status || 'open' }, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -322,7 +349,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       case 'memories': {
         const { tagInput, ...memData } = addForm;
         if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await api.createBrainMemory(memData, { silent: true }).catch(err => {
+        result = await createBrainMemory(memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -346,31 +373,31 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let failed = false;
     switch (activeType) {
       case 'people':
-        await api.deleteBrainPerson(id, { silent: true }).catch(err => {
+        await deleteBrainPerson(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'projects':
-        await api.deleteBrainProject(id, { silent: true }).catch(err => {
+        await deleteBrainProject(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'ideas':
-        await api.deleteBrainIdea(id, { silent: true }).catch(err => {
+        await deleteBrainIdea(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'admin':
-        await api.deleteBrainAdminItem(id, { silent: true }).catch(err => {
+        await deleteBrainAdminItem(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'memories':
-        await api.deleteBrainMemory(id, { silent: true }).catch(err => {
+        await deleteBrainMemory(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
@@ -391,19 +418,19 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     const update = { status: 'done' };
     switch (activeType) {
       case 'projects':
-        result = await api.updateBrainProject(record.id, update, { silent: true }).catch(err => {
+        result = await updateBrainProject(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.updateBrainIdea(record.id, update, { silent: true }).catch(err => {
+        result = await updateBrainIdea(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.updateBrainAdminItem(record.id, update, { silent: true }).catch(err => {
+        result = await updateBrainAdminItem(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -437,7 +464,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     if (activeType === 'memories' && record.contentTruncated) {
       setEditForm({});
       setEditStatus('loading');
-      const full = await api.getBrainMemory(record.id, { silent: true }).catch(() => null);
+      const full = await getBrainMemory(record.id, { silent: true }).catch(() => null);
       if (editSession.current !== session) return;
       if (full?.id === record.id && !full.contentTruncated) {
         setEditForm({ ...full, tagInput: (full.tags || []).join(', ') });

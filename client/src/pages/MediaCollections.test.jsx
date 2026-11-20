@@ -25,7 +25,7 @@ vi.mock('../hooks/useCancelableDebounce', async (importOriginal) => {
 });
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn().mockResolvedValue([
     { id: 'col-1', name: 'Alpha', items: [{ kind: 'image', ref: 'img1.png', addedAt: '2024-01-01' }] },
     { id: 'col-2', name: 'Beta', items: [] },
@@ -232,7 +232,7 @@ describe('MediaCollections', () => {
   });
 
   it('opens the new collection after creating it, even under an active search', async () => {
-    const { createMediaCollection } = await import('../services/api');
+    const { createMediaCollection } = await import('../services/apiImageVideo.js');
     createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
     const user = userEvent.setup();
     // `?q=alpha` is the hostile case: a brand-new collection is always empty
@@ -258,7 +258,7 @@ describe('MediaCollections', () => {
     // detail route back to the list route. Creating a collection must
     // cancel the pending mirror synchronously, before navigating, rather
     // than relying on that unmount race to resolve in its favor.
-    const { createMediaCollection } = await import('../services/api');
+    const { createMediaCollection } = await import('../services/apiImageVideo.js');
     createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
     const user = userEvent.setup();
     // An active search keeps the mirror's debounce genuinely armed (a
@@ -292,7 +292,7 @@ describe('MediaCollections', () => {
   });
 
   it('shows the onboarding copy on a fresh install, not a hidden-empties notice', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     mockUnsortedItems = [];
     renderPage();
@@ -305,7 +305,7 @@ describe('MediaCollections', () => {
   });
 
   it('gives the fresh-install empty state a call to action that focuses the create field', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     mockUnsortedItems = [];
     renderPage();
@@ -317,7 +317,7 @@ describe('MediaCollections', () => {
   });
 
   it('reports a failed search as a failed search, not as a fresh install', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     // Loose media but no collections yet — the exact population the onboarding
     // copy is for. With a query active, that copy would answer the search with
@@ -328,7 +328,7 @@ describe('MediaCollections', () => {
   });
 
   it('reports a failed collections fetch instead of claiming there are none', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     renderPage();
     expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
@@ -342,7 +342,7 @@ describe('MediaCollections', () => {
   });
 
   it('owns the failure UI, so the shared request() toast stays silent', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     renderPage();
     await screen.findByRole('button', { name: 'Retry' });
@@ -350,7 +350,7 @@ describe('MediaCollections', () => {
   });
 
   it('recovers the grid when Retry succeeds', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     const user = userEvent.setup();
     renderPage('/media/collections?empty=1');
@@ -360,7 +360,7 @@ describe('MediaCollections', () => {
   });
 
   it('keeps the last good grid when a later refresh fails', async () => {
-    const { listMediaCollections, deleteMediaCollection } = await import('../services/api');
+    const { listMediaCollections, deleteMediaCollection } = await import('../services/apiImageVideo.js');
     const user = userEvent.setup();
     renderPage('/media/collections?empty=1');
     await screen.findByText('Alpha');
@@ -386,7 +386,7 @@ describe('MediaCollections', () => {
   });
 
   it('reveals newly unfiled images after deleting their only collection', async () => {
-    const { listMediaCollections, listGalleryCollectionSummaries, deleteMediaCollection } = await import('../services/api');
+    const { listMediaCollections, listGalleryCollectionSummaries, deleteMediaCollection } = await import('../services/apiImageVideo.js');
     mockUnsortedItems = [];
     listMediaCollections.mockResolvedValueOnce([
       { id: 'col-1', name: 'Alpha', items: [{ kind: 'image', ref: 'img1.png' }] },

@@ -9,7 +9,7 @@ import {ArrowLeft,
   ChevronDown,
   ChevronRight,
   Check} from 'lucide-react';
-import * as api from '../../services/api';
+import { getEnrichmentListItems, analyzeEnrichmentList, saveEnrichmentList } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import BrailleSpinner from '../BrailleSpinner';
@@ -64,7 +64,7 @@ export default function ListEnrichment({
     setItemsError(null);
     // A failed read must not seed a blank editor: saving from it replaces the
     // stored list and its document with whatever was retyped.
-    const existingItems = await api.getEnrichmentListItems(categoryId, { silent: true })
+    const existingItems = await getEnrichmentListItems(categoryId, { silent: true })
       .catch((err) => { setItemsError(err); return null; });
     if (existingItems?.length > 0) {
       setItems(existingItems.map(({ title, note }) => mkItem(title, note)));
@@ -113,7 +113,7 @@ export default function ListEnrichment({
     setAnalyzing(true);
     setAnalysis(null);
 
-    const result = await api.analyzeEnrichmentList(
+    const result = await analyzeEnrichmentList(
       categoryId,
       validItems,
       selectedProvider.providerId,
@@ -138,7 +138,7 @@ export default function ListEnrichment({
     }
 
     setSaving(true);
-    const result = await api.saveEnrichmentList(
+    const result = await saveEnrichmentList(
       categoryId,
       documentContent,
       getValidItems(),

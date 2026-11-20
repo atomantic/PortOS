@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { getSettings, updateSettings } from '../services/api';
+import { getSettings, updateSettings } from '../services/apiSystem.js';
 
 const clampInterval = (value, defaultInterval) => Math.max(1, Math.min(1440, Math.floor(Number(value) || defaultInterval)));
 

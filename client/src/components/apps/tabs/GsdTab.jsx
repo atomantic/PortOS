@@ -8,7 +8,9 @@ import GsdProjectHeader from '../../gsd/GsdProjectHeader';
 import PhaseCardList from '../../gsd/PhaseCardList';
 import GsdConcernsPanel from '../../cos/tabs/GsdConcernsPanel';
 import GsdDocumentsPanel from '../../gsd/GsdDocumentsPanel';
-import * as api from '../../../services/api';
+import { addCosTask } from '../../../services/apiAgents.js';
+import { triggerGsdPhaseAction, getGsdProject, getGsdPhases } from '../../../services/apiGSD.js';
+import { getAppDocuments } from '../../../services/apiApps.js';
 import { useInstanceFeatures } from '../../../hooks/useInstanceFeatures.js';
 
 const STEP_DESCRIPTIONS = {
@@ -56,7 +58,7 @@ function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
   const handleRunStep = async (step) => {
     setRunningStep(step.id);
     // The request helper toasts a failure itself; only a created task is a success.
-    const created = await api.addCosTask({
+    const created = await addCosTask({
       description: STEP_DESCRIPTIONS[step.id],
       app: appId,
       priority: 'MEDIUM',
@@ -198,7 +200,7 @@ function NextActionBanner({ pendingActions, appId }) {
 
   const handleTrigger = async () => {
     setTriggering(true);
-    const result = await api.triggerGsdPhaseAction(appId, action.phaseId, action.nextAction).catch(() => null);
+    const result = await triggerGsdPhaseAction(appId, action.phaseId, action.nextAction).catch(() => null);
     setTriggering(false);
     if (result) {
       toast.success(`${action.nextAction} task created for ${action.phaseId}`);
@@ -269,7 +271,7 @@ export default function GsdTab({ appId, repoPath }) {
     const recordFailure = (error) => { failure ??= error; return null; };
 
     // Fetch GSD status from documents endpoint (silent, no toast)
-    const docsData = await api.getAppDocuments(appId, { silent: true }).catch(recordFailure);
+    const docsData = await getAppDocuments(appId, { silent: true }).catch(recordFailure);
     // The server omits `gsd` when the app's repo path is unset or missing on disk.
     // That is not an uninitialized project (Run would queue mapping agents
     // against a missing checkout), so it is reported like a failed read.
@@ -281,8 +283,8 @@ export default function GsdTab({ appId, repoPath }) {
     // Only fetch project data if we have a roadmap + state (full project)
     if (gsd?.hasRoadmap && gsd?.hasState) {
       const [projectData, phasesData] = await Promise.all([
-        api.getGsdProject(appId, { silent: true }).catch(recordFailure),
-        api.getGsdPhases(appId, { silent: true }).catch(recordFailure),
+        getGsdProject(appId, { silent: true }).catch(recordFailure),
+        getGsdPhases(appId, { silent: true }).catch(recordFailure),
       ]);
       if (projectData) setProject(projectData);
       if (phasesData) setPendingActions(phasesData.pendingActions || []);

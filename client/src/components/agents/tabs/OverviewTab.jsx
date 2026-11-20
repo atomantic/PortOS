@@ -2,7 +2,22 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getPlatformAccounts,
+  moltworldRateLimits,
+  getAgentRateLimits,
+  engageAgent,
+  checkAgentPosts,
+  moltworldExplore,
+  moltworldBuild,
+  registerPlatformAccount,
+  deletePlatformAccount,
+  testPlatformAccount,
+  claimPlatformAccount,
+} from '../../../services/apiAccounts.js';
+import { getProviders } from '../../../services/apiProviders.js';
+import { getAgentActivityStats } from '../../../services/apiAgents.js';
+import { updateAgentPersonality } from '../../../services/apiPersonalities.js';
 import { filterSelectableModels } from '../../../utils/providers';
 import { providerModeSelectionPolicy } from '../../../utils/providerSelection';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -79,7 +94,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const fetchAccounts = useCallback(async () => {
     setAccountsLoading(true);
     setAccountsError(false);
-    await api.getPlatformAccounts(agentId, null, { silent: true })
+    await getPlatformAccounts(agentId, null, { silent: true })
       .then((data) => setAccounts(data))
       .catch(() => setAccountsError(true))
       .finally(() => setAccountsLoading(false));
@@ -87,13 +102,13 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const fetchProviders = useCallback(async () => {
     setProvidersError(false);
-    await api.getProviders({ silent: true })
+    await getProviders({ silent: true })
       .then((data) => setProviders((data.providers || []).filter(p => p.enabled)))
       .catch(() => setProvidersError(true));
   }, []);
 
   const fetchStats = useCallback(async () => {
-    const stats = await api.getAgentActivityStats(agentId).catch(() => null);
+    const stats = await getAgentActivityStats(agentId).catch(() => null);
     setActivityStats(stats);
   }, [agentId]);
 
@@ -124,8 +139,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     if (!quickAccountId) return Promise.resolve(null);
     const account = accounts.find(a => a.id === quickAccountId);
     return account?.platform === 'moltworld'
-      ? api.moltworldRateLimits(quickAccountId)
-      : api.getAgentRateLimits(quickAccountId);
+      ? moltworldRateLimits(quickAccountId)
+      : getAgentRateLimits(quickAccountId);
   }, [quickAccountId, accounts]);
 
   const refetchRateLimits = useCallback(() => {
@@ -188,7 +203,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
       },
       aiConfig
     };
-    await api.updateAgentPersonality(agentId, submitData);
+    await updateAgentPersonality(agentId, submitData);
     toast.success('Agent updated');
     onAgentUpdate?.();
   };
@@ -205,7 +220,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     if (!agentId || !quickAccountId) return;
     setEngaging(true);
     try {
-      const result = await api.engageAgent({ agentId, accountId: quickAccountId, maxComments: 1, maxVotes: 3 });
+      const result = await engageAgent({ agentId, accountId: quickAccountId, maxComments: 1, maxVotes: 3 });
       toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
       refetchRateLimits();
     } catch {
@@ -218,7 +233,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleCheckPosts = async () => {
     if (!agentId || !quickAccountId) return;
     setChecking(true);
-    const result = await api.checkAgentPosts({ agentId, accountId: quickAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
+    const result = await checkAgentPosts({ agentId, accountId: quickAccountId, days: 7, maxReplies: 2, maxUpvotes: 10 }).catch(() => null);
     setChecking(false);
     if (!result) return;
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
@@ -229,7 +244,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const handleExplore = async () => {
     if (!agentId || !quickAccountId) return;
     setExploring(true);
-    const result = await api.moltworldExplore({ accountId: quickAccountId, agentId }).catch(() => null);
+    const result = await moltworldExplore({ accountId: quickAccountId, agentId }).catch(() => null);
     setExploring(false);
     if (!result) return;
     toast.success(`Explored (${result.x}, ${result.y}) — ${pluralize(result.nearby || 0, 'agent')} nearby`);
@@ -238,7 +253,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleBuild = async () => {
     if (!agentId || !quickAccountId) return;
-    const result = await api.moltworldBuild({ accountId: quickAccountId, agentId, x: 0, y: 0, z: 0, type: 'stone', action: 'place' }).catch(() => null);
+    const result = await moltworldBuild({ accountId: quickAccountId, agentId, x: 0, y: 0, z: 0, type: 'stone', action: 'place' }).catch(() => null);
     if (result) toast.success('Block placed');
     refetchRateLimits();
   };
@@ -251,7 +266,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleAccountSubmit = async (e) => {
     e.preventDefault();
-    const result = await api.registerPlatformAccount({
+    const result = await registerPlatformAccount({
       agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
     });
     resetAccountForm();
@@ -268,7 +283,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   };
 
   const handleAccountDelete = async (id) => {
-    await api.deletePlatformAccount(id);
+    await deletePlatformAccount(id);
     fetchAccounts();
   };
 
@@ -276,7 +291,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     setTestingId(id);
     setTestResult(null);
     try {
-      const result = await api.testPlatformAccount(id, { silent: true });
+      const result = await testPlatformAccount(id, { silent: true });
       setTestResult({ accountId: id, ...result });
     } catch (err) {
       setTestResult({ accountId: id, success: false, message: err.message || 'Account test failed' });
@@ -286,7 +301,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   };
 
   const handleAccountClaim = async (id) => {
-    await api.claimPlatformAccount(id);
+    await claimPlatformAccount(id);
     fetchAccounts();
     setTestResult(null);
   };
@@ -598,7 +613,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               type="button"
               onClick={async () => {
                 const aiConfig = buildAiConfig(formData.aiConfig);
-                await api.updateAgentPersonality(agentId, { aiConfig });
+                await updateAgentPersonality(agentId, { aiConfig });
                 toast.success(aiConfig ? 'AI providers saved' : 'Reset to system defaults');
                 onAgentUpdate?.();
               }}

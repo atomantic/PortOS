@@ -11,7 +11,19 @@ import StatusBadge from '../components/StatusBadge';
 import AppOperationBanner from '../components/apps/AppOperationBanner';
 import { useAppOperation } from '../hooks/useAppOperation';
 import useUrlParams from '../hooks/useUrlParams';
-import * as api from '../services/api';
+import {
+  getApps,
+  getAppQualitySummaries,
+  deleteApp,
+  startApp,
+  stopApp,
+  restartApp,
+  handleSelfRestart,
+  launchNativeApp,
+  archiveApp,
+  unarchiveApp,
+} from '../services/apiApps.js';
+import { PORTOS_APP_ID } from '../services/apiCore.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { getLaunchUrls } from '../services/appUrls';
 import { formatCount } from '../utils/formatters';
@@ -20,13 +32,13 @@ import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
 const APP_EVENTS = ['apps:changed'];
 
 const fetchAppList = async ({ signal }) => {
-  const data = await api.getApps({ signal, silent: true });
+  const data = await getApps({ signal, silent: true });
   if (!Array.isArray(data)) throw new Error('Invalid apps response');
   return data;
 };
 
 const fetchQualitySummaries = async ({ signal }) => {
-  const data = await api.getAppQualitySummaries({ signal, silent: true });
+  const data = await getAppQualitySummaries({ signal, silent: true });
   if (!Array.isArray(data)) throw new Error('Invalid app quality summaries response');
   return new Map(data.map(({ id, quality }) => [id, quality]));
 };
@@ -61,7 +73,7 @@ export default function Apps() {
   const { operations, restarting, dismiss } = useAppOperation({ onComplete: fetchApps });
 
   const handleDelete = async (app) => {
-    const removed = await api.deleteApp(app.id).then(() => true, () => false);
+    const removed = await deleteApp(app.id).then(() => true, () => false);
     if (!removed) return;
     setConfirmingDelete(null);
     setApps(prev => prev.filter(candidate => candidate.id !== app.id));
@@ -70,21 +82,21 @@ export default function Apps() {
 
   const handleStart = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'start' }));
-    await api.startApp(app.id).catch(() => null);
+    await startApp(app.id).catch(() => null);
     setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
   const handleStop = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'stop' }));
-    await api.stopApp(app.id).catch(() => null);
+    await stopApp(app.id).catch(() => null);
     setActionLoading(prev => ({ ...prev, [app.id]: null }));
   };
 
   const handleRestart = async (app) => {
     setActionLoading(prev => ({ ...prev, [app.id]: 'restart' }));
-    const result = await api.restartApp(app.id).catch(() => null);
+    const result = await restartApp(app.id).catch(() => null);
     if (result?.selfRestart) {
-      api.handleSelfRestart();
+      handleSelfRestart();
       return;
     }
     setActionLoading(prev => ({ ...prev, [app.id]: null }));
@@ -92,7 +104,7 @@ export default function Apps() {
 
   const handleNativeLaunch = async (app) => {
     setNativeLaunchLoading(prev => ({ ...prev, [app.id]: true }));
-    const result = await api.launchNativeApp(app.id).catch(() => null);
+    const result = await launchNativeApp(app.id).catch(() => null);
     setNativeLaunchLoading(prev => ({ ...prev, [app.id]: false }));
     if (result?.success) toast.success(`${app.nativeLaunch.label} is running`);
   };
@@ -107,7 +119,7 @@ export default function Apps() {
   // scheduling when it was not (#3436).
   const setArchived = async (app, archived) => {
     setArchiving(prev => ({ ...prev, [app.id]: true }));
-    const result = await (archived ? api.archiveApp(app.id) : api.unarchiveApp(app.id)).catch(() => null);
+    const result = await (archived ? archiveApp(app.id) : unarchiveApp(app.id)).catch(() => null);
     setArchiving(prev => ({ ...prev, [app.id]: false }));
     if (!result) return;
     setApps(prev => prev.map(a => (a.id === app.id ? { ...a, archived } : a)));
@@ -138,7 +150,7 @@ export default function Apps() {
           steps={op.steps}
           error={op.error}
           completed={op.completed}
-          restarting={restarting && op.appId === api.PORTOS_APP_ID}
+          restarting={restarting && op.appId === PORTOS_APP_ID}
           onDismiss={op.error || op.completed ? () => dismiss(op.appId) : null}
         />
       ))}
@@ -439,7 +451,7 @@ export default function Apps() {
                           Manage
                         </Link>
                         {/* Archive + Remove are withheld for the PortOS baseline app */}
-                        {app.id !== api.PORTOS_APP_ID && (
+                        {app.id !== PORTOS_APP_ID && (
                           <OverflowMenu
                             label={`More actions for ${app.name}`}
                             triggerRef={menuTriggerRef(app.id)}

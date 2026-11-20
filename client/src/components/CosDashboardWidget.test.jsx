@@ -11,7 +11,7 @@ vi.mock('../hooks/useSocketResource', () => ({
   useSocketResource: (...args) => mockUseSocketResource(...args),
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiAgents.js', () => ({
   getCosQuickSummary: vi.fn(),
   getCosLearningSummary: vi.fn(),
   getCosRecentTasks: vi.fn(),

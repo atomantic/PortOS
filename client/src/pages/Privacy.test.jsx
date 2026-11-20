@@ -14,15 +14,13 @@ const SUBJECTS = vi.hoisted(() => [
 ]);
 
 // ── Mock the API surface ─────────────────────────────────────────────────────
-vi.mock('../services/api', () => ({
-  // Household subjects (#3658) — `self` plus one consenting partner.
+vi.mock('../services/apiPrivacy.js', () => ({
   getPrivacySubjects: vi.fn().mockResolvedValue(SUBJECTS),
   createPrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn().mockResolvedValue([]),
   grantPrivacySubjectConsent: vi.fn().mockResolvedValue({ id: 'c-9', scope: 'broker_scan' }),
   revokePrivacySubjectConsent: vi.fn(),
-  // Brokers tab (#8332 consent banner).
   getPrivacyBrokerCases: vi.fn().mockResolvedValue([]),
   getPrivacyBrokers: vi.fn().mockResolvedValue([]),
   getPrivacyOptOutDigest: vi.fn().mockResolvedValue({ total: 0, humanTasks: 0, blocked: 0, items: [] }),
@@ -48,18 +46,12 @@ vi.mock('../services/api', () => ({
   getPrivacyOrgs: vi.fn().mockResolvedValue([
     { id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active', website: '', contact: {} },
   ]),
-  // Broker case summary chips on the Overview tab (#2146).
   getPrivacyScanStatus: vi.fn().mockResolvedValue({ enabledBrokers: 2, caseCounts: { found: 1 }, dueForRecheck: 0 }),
   createPrivacyOrg: vi.fn(),
   updatePrivacyOrg: vi.fn(),
   deletePrivacyOrg: vi.fn().mockResolvedValue({ ok: true }),
   getOrgHoldings: vi.fn().mockResolvedValue([]),
   setOrgHoldings: vi.fn(),
-  getSocialAccounts: vi.fn().mockResolvedValue({
-    accounts: [
-      { id: 'sa-1', platform: 'github', username: 'octocat', displayName: 'The Octocat', url: 'https://github.com/octocat' },
-    ],
-  }),
   getPrivacyChanges: vi.fn().mockResolvedValue([
     {
       id: 'ev-1', vaultRecordId: 'rec-1', replacementRecordId: 'rec-9', kind: 'address_change',
@@ -80,6 +72,13 @@ vi.mock('../services/api', () => ({
   markChangeOrgRemoved: vi.fn(),
   draftChangeUpdateEmail: vi.fn(),
 }));
+vi.mock('../services/apiDigitalTwin.js', () => ({
+  getSocialAccounts: vi.fn().mockResolvedValue({
+    accounts: [
+      { id: 'sa-1', platform: 'github', username: 'octocat', displayName: 'The Octocat', url: 'https://github.com/octocat' },
+    ],
+  }),
+}));
 
 import Privacy, { TABS } from './Privacy';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
@@ -92,8 +91,12 @@ describe('Privacy TABS ↔ nav manifest', () => {
   });
 });
 import {
-  revealVaultRecord, getVaultRecords, getPrivacyStatus, getPrivacySubjects, createPrivacySubject,
-} from '../services/api';
+  revealVaultRecord,
+  getVaultRecords,
+  getPrivacyStatus,
+  getPrivacySubjects,
+  createPrivacySubject,
+} from '../services/apiPrivacy.js';
 
 const SELF_ID = '00000000-0000-4000-8000-000000000001';
 

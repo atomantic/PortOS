@@ -11,7 +11,15 @@ import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
-import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase, recoverDatabaseRestore, deleteBackupSnapshot } from '../../services/api';
+import {
+  getSettings,
+  updateSettings,
+  getBackupStatus,
+  getBackupSnapshots,
+  restoreDatabase,
+  recoverDatabaseRestore,
+  deleteBackupSnapshot,
+} from '../../services/apiSystem.js';
 import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';

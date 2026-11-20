@@ -4,7 +4,15 @@ import useMounted from '../hooks/useMounted';
 import { useParams, useNavigate, Link } from 'react-router';
 import { Wand2, ArrowLeft } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import {
+  getFeatureAgent,
+  startFeatureAgent,
+  pauseFeatureAgent,
+  resumeFeatureAgent,
+  stopFeatureAgent,
+  triggerFeatureAgent,
+} from '../services/apiAgents.js';
+import { getApps } from '../services/apiApps.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { TABS } from '../components/feature-agents/constants';
 import { useValidTab } from '../hooks/useValidTab';
@@ -18,7 +26,7 @@ import LoadFailedState from '../components/ui/LoadFailedState';
 
 const AGENT_EVENTS = ['cos:feature-agent:status', 'cos:feature-agent:run-complete'];
 
-const fetchAgentRecord = id => api.getFeatureAgent(id, { silent: true }).catch(err => {
+const fetchAgentRecord = id => getFeatureAgent(id, { silent: true }).catch(err => {
   if (err?.status === 404) return null;
   throw err;
 });
@@ -46,23 +54,23 @@ export default function FeatureAgentDetail() {
   const mountedRef = useMounted();
 
   useEffect(() => {
-    api.getApps().then(data => { if (mountedRef.current) setApps((data || []).filter(a => !a.archived)); }).catch(() => {});
+    getApps().then(data => { if (mountedRef.current) setApps((data || []).filter(a => !a.archived)); }).catch(() => {});
   }, []);
 
   const handleStart = useCallback((agentId) => {
-    api.startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));
+    startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handlePause = useCallback((agentId) => {
-    api.pauseFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(err => toast.error(err.message || 'Action failed'));
+    pauseFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleResume = useCallback((agentId) => {
-    api.resumeFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(err => toast.error(err.message || 'Action failed'));
+    resumeFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleStop = useCallback((agentId) => {
-    api.stopFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Action failed'));
+    stopFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
   const handleTrigger = useCallback((agentId) => {
-    api.triggerFeatureAgent(agentId, { silent: true }).then(result => {
+    triggerFeatureAgent(agentId, { silent: true }).then(result => {
       if (result?.triggered === false) {
         toast.error(result.reason || 'Run could not be started');
         return;

@@ -3,7 +3,7 @@ import { FileText, Pencil, Save, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import MarkdownOutput from '../cos/MarkdownOutput';
-import * as api from '../../services/api';
+import { getGsdDocument, saveGsdDocument } from '../../services/apiGSD.js';
 
 const DOCUMENTS = [
   { key: 'PROJECT.md', label: 'Project' },
@@ -33,7 +33,7 @@ export default function GsdDocumentsPanel({ appId, selectedDoc, onSelectDoc }) {
     }
 
     setLoading(true);
-    api.getGsdDocument(appId, selectedDoc)
+    getGsdDocument(appId, selectedDoc)
       .then(data => {
         if (!cancelled) setContent(data?.content ?? null);
       })
@@ -59,7 +59,7 @@ export default function GsdDocumentsPanel({ appId, selectedDoc, onSelectDoc }) {
 
   const handleSave = async () => {
     setSaving(true);
-    const result = await api.saveGsdDocument(appId, selectedDoc, editContent).catch(() => null);
+    const result = await saveGsdDocument(appId, selectedDoc, editContent).catch(() => null);
     setSaving(false);
 
     if (!result) {

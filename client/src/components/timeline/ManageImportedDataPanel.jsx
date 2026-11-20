@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Loader2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { getTimelineSources, eraseTimelineSource } from '../../services/apiTimeline.js';
 import toast from '../ui/Toast';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
 import useMounted from '../../hooks/useMounted';
@@ -25,7 +25,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     if (pending.current) return;
     let active = true;
     const current = ++generation.current;
-    api.getTimelineSources({ silent: true }).then((r) => {
+    getTimelineSources({ silent: true }).then((r) => {
       if (active && generation.current === current) {
         setSources(r?.sources || []);
         if (r?.sources?.length) setVisible(true);
@@ -45,14 +45,14 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     setBusy(true);
     setError(null);
     let confirmedGone = false;
-    const result = await api.eraseTimelineSource(source, { silent: true })
+    const result = await eraseTimelineSource(source, { silent: true })
       .catch(async (err) => {
         if (!mounted.current) return null;
         setError(err.message || 'Could not delete imported data.');
         // A lost acknowledgement can follow a committed delete. Re-read once;
         // never repeat the mutation or turn an unavailable read into absence.
         const current = ++generation.current;
-        const fresh = await api.getTimelineSources({ silent: true }).catch(() => null);
+        const fresh = await getTimelineSources({ silent: true }).catch(() => null);
         if (!mounted.current || generation.current !== current || !Array.isArray(fresh?.sources)) return null;
         if (fresh.sources.some(row => row.source === source)) setSources(fresh.sources);
         else {
@@ -85,7 +85,7 @@ export default function ManageImportedDataPanel({ reloadKey, onChanged }) {
     setRemoving(null);
     // Reconcile counts after the mutation and animation; keep any lost-ack
     // warning visible even when this authoritative read succeeds.
-    api.getTimelineSources({ silent: true }).then((fresh) => {
+    getTimelineSources({ silent: true }).then((fresh) => {
       if (mounted.current && generation.current === current && !pending.current && Array.isArray(fresh?.sources)) {
         setSources(fresh.sources);
       }

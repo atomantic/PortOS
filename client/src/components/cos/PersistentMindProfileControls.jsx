@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import useProviderModels from '../../hooks/useProviderModels';
-import * as api from '../../services/api';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import useLocalModels from '../../hooks/useLocalModels';
 import { modelCapabilityInfo } from '../../utils/providers.js';
 import ModelCapabilitySummary from '../models/ModelCapabilitySummary.jsx';
@@ -125,7 +125,7 @@ export default function PersistentMindProfileControls({
       onSavingChange?.(true);
     }
     try {
-      await api.updateCosConfig({ persistentMindProfile: next }, { silent: true });
+      await updateCosConfig({ persistentMindProfile: next }, { silent: true });
       toast.success('Persistent mind profile updated');
       // A model change can synchronously clear an incompatible effort, creating
       // two saves from one selection. Only publish the newest saved snapshot so

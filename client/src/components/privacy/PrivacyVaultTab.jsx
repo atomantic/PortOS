@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Eye, EyeOff, Pencil, Trash2, ShieldCheck, ShieldAlert } from 'lucide-react';
 import {
-  getVaultRecords, deleteVaultRecord, revealVaultRecord, updateVaultRecord, getPrivacyStatus,
-} from '../../services/api';
+  getVaultRecords,
+  deleteVaultRecord,
+  revealVaultRecord,
+  updateVaultRecord,
+  getPrivacyStatus,
+} from '../../services/apiPrivacy.js';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import VaultRecordDrawer from './VaultRecordDrawer';

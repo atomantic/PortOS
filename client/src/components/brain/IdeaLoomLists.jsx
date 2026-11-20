@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, CheckCircle2, Download, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { getNotesVaults } from '../../services/apiNotes.js';
+import {
+  getIdeaLoomLists,
+  getIdeaLoomSettings,
+  updateIdeaLoomList,
+  createIdeaLoomList,
+  deleteIdeaLoomList,
+  updateIdeaLoomSettings,
+  importIdeaLoomFromObsidian,
+  syncIdeaLoomToObsidian,
+} from '../../services/apiBrain.js';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -9,7 +19,7 @@ import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 
 // Module-level so useListResource sees a stable fetcher. The row owns the error UI; the route returns a bare array.
-const fetchVaults = () => api.getNotesVaults({ silent: true });
+const fetchVaults = () => getNotesVaults({ silent: true });
 
 const emptyList = () => ({ title: '', prompt: '', category: '', help: '', status: 'draft', ideas: [] });
 
@@ -70,8 +80,8 @@ export default function IdeaLoomLists() {
   const load = useCallback(async () => {
     setLoading(true);
     const [nextLists, nextSettings] = await Promise.all([
-      api.getIdeaLoomLists({ silent: true }),
-      api.getIdeaLoomSettings({ silent: true }),
+      getIdeaLoomLists({ silent: true }),
+      getIdeaLoomSettings({ silent: true }),
     ]).catch((error) => {
       toast.error(error.message || 'Failed to load IdeaLoom lists');
       return [[], null];
@@ -101,8 +111,8 @@ export default function IdeaLoomLists() {
     }
     const body = toPayload(next);
     const result = await (next.id
-      ? api.updateIdeaLoomList(next.id, body, { silent: true })
-      : api.createIdeaLoomList(body, { silent: true })
+      ? updateIdeaLoomList(next.id, body, { silent: true })
+      : createIdeaLoomList(body, { silent: true })
     ).catch((error) => { toast.error(error.message || 'Failed to save IdeaLoom list'); return null; });
     if (!result) return;
     const saved = result.list || result;
@@ -115,7 +125,7 @@ export default function IdeaLoomLists() {
   };
 
   const remove = async (id) => {
-    const result = await api.deleteIdeaLoomList(id, { silent: true }).catch((error) => {
+    const result = await deleteIdeaLoomList(id, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to delete IdeaLoom list');
       return false;
     });
@@ -141,7 +151,7 @@ export default function IdeaLoomLists() {
   };
 
   const patchSettings = async (updates) => {
-    const result = await api.updateIdeaLoomSettings(updates, { silent: true }).catch((error) => {
+    const result = await updateIdeaLoomSettings(updates, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to update IdeaLoom settings');
       return null;
     });
@@ -193,9 +203,9 @@ export default function IdeaLoomLists() {
         </div>}
         {notice && <p role="status" className="mb-3 rounded bg-port-warning/10 p-2 text-xs text-port-warning">{notice}</p>}
         {!notice && <div className="mb-3 flex flex-wrap gap-2">
-          <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.importIdeaLoomFromObsidian({ silent: true }), 'IdeaLoom import complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Download size={14} />Import from Obsidian</button>
-          <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.syncIdeaLoomToObsidian(null, { silent: true }), 'IdeaLoom export complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Upload size={14} />Export to Obsidian</button>
-          {Boolean(exchangeResult?.missing) && <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => api.syncIdeaLoomToObsidian(null, { silent: true, recreateMissing: true }), 'Deleted notes recreated')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-warning px-3 text-xs text-port-warning hover:bg-port-warning/10 disabled:opacity-50"><RotateCcw size={14} />Recreate {exchangeResult.missing} deleted note{exchangeResult.missing === 1 ? '' : 's'}</button>}
+          <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => importIdeaLoomFromObsidian({ silent: true }), 'IdeaLoom import complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Download size={14} />Import from Obsidian</button>
+          <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => syncIdeaLoomToObsidian(null, { silent: true }), 'IdeaLoom export complete')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-xs text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Upload size={14} />Export to Obsidian</button>
+          {Boolean(exchangeResult?.missing) && <button type="button" disabled={exchangeBusy} onClick={() => runExchange(() => syncIdeaLoomToObsidian(null, { silent: true, recreateMissing: true }), 'Deleted notes recreated')} className="flex min-h-[44px] items-center gap-2 rounded border border-port-warning px-3 text-xs text-port-warning hover:bg-port-warning/10 disabled:opacity-50"><RotateCcw size={14} />Recreate {exchangeResult.missing} deleted note{exchangeResult.missing === 1 ? '' : 's'}</button>}
         </div>}
         {exchangeResult && <p role="status" className="mb-3 text-xs text-gray-400">Last exchange: {RESULT_KEYS.map((key) => `${exchangeResult[key] || 0} ${key}`).join(' · ')}</p>}
         <div className="space-y-1">

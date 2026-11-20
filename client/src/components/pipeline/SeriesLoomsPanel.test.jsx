@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   listLooms: vi.fn(),
   createLoom: vi.fn(),
 }));
@@ -14,7 +14,7 @@ vi.mock('react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigate };
 });
 
-import * as api from '../../services/api';
+import { listLooms, createLoom } from '../../services/apiFableLoom.js';
 import SeriesLoomsPanel, { deriveLoomName } from './SeriesLoomsPanel';
 
 const series = { id: 'ser-1', name: 'Example Series', universeId: 'uni-1', logline: 'A quiet town keeps a loud secret.' };
@@ -38,14 +38,14 @@ const renderPanel = async (props = {}) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listLooms.mockResolvedValue([summary]);
+  listLooms.mockResolvedValue([summary]);
 });
 
 describe('SeriesLoomsPanel', () => {
   it('lists the series-scoped looms with their counts and a link to the editor', async () => {
     await renderPanel();
     await waitFor(() => expect(screen.getByText('Example Series — branching narrative')).toBeInTheDocument());
-    expect(api.listLooms).toHaveBeenCalledWith({ seriesId: 'ser-1', silent: true });
+    expect(listLooms).toHaveBeenCalledWith({ seriesId: 'ser-1', silent: true });
     expect(screen.getByText('1 episode')).toBeInTheDocument();
     expect(screen.getByText('4 scenes')).toBeInTheDocument();
     expect(screen.getByText('2 endings')).toBeInTheDocument();
@@ -54,7 +54,7 @@ describe('SeriesLoomsPanel', () => {
   });
 
   it('shows a load error with Retry, not "None yet", when the loom read fails', async () => {
-    api.listLooms.mockRejectedValueOnce(new Error('Looms unavailable'));
+    listLooms.mockRejectedValueOnce(new Error('Looms unavailable'));
     await renderPanel();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load branching narratives — Looms unavailable');
     expect(screen.queryByText(/None yet/)).toBeNull();
@@ -65,13 +65,13 @@ describe('SeriesLoomsPanel', () => {
   });
 
   it('shows an empty state when nothing links to the series', async () => {
-    api.listLooms.mockResolvedValue([]);
+    listLooms.mockResolvedValue([]);
     await renderPanel();
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
   });
 
   it('creates a loom pre-linked to the series and its universe, then opens the editor', async () => {
-    api.createLoom.mockResolvedValue({ id: 'loom-9' });
+    createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
     await renderPanel();
     await waitFor(() => expect(screen.getByText('Example Series — branching narrative')).toBeInTheDocument());
@@ -79,7 +79,7 @@ describe('SeriesLoomsPanel', () => {
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));
     await user.type(screen.getByLabelText('Communication medium'), 'A crystal radio.');
     await user.click(screen.getByRole('button', { name: 'Create narrative' }));
-    await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith({
+    await waitFor(() => expect(createLoom).toHaveBeenCalledWith({
       name: 'Example Series — branching narrative',
       logline: 'A quiet town keeps a loud secret.',
       participationMode: 'helper',
@@ -91,8 +91,8 @@ describe('SeriesLoomsPanel', () => {
   });
 
   it('passes null (not an empty string) for a series with no universe', async () => {
-    api.listLooms.mockResolvedValue([]);
-    api.createLoom.mockResolvedValue({ id: 'loom-9' });
+    listLooms.mockResolvedValue([]);
+    createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
     await renderPanel({ series: { id: 'ser-2', name: 'Bare Series' } });
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
@@ -100,7 +100,7 @@ describe('SeriesLoomsPanel', () => {
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));
     await user.selectOptions(screen.getByLabelText('Audience role'), 'protagonist');
     await user.click(screen.getByRole('button', { name: 'Create narrative' }));
-    await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith(
+    await waitFor(() => expect(createLoom).toHaveBeenCalledWith(
       expect.objectContaining({
         participationMode: 'protagonist', audienceCommunicationMedium: '',
         universeId: null, seriesId: 'ser-2',
@@ -112,7 +112,7 @@ describe('SeriesLoomsPanel', () => {
   it('renders nothing without a series id', () => {
     const { container } = render(<MemoryRouter><SeriesLoomsPanel series={null} /></MemoryRouter>);
     expect(container).toBeEmptyDOMElement();
-    expect(api.listLooms).not.toHaveBeenCalled();
+    expect(listLooms).not.toHaveBeenCalled();
   });
 });
 

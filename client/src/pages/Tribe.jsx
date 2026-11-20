@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Heart, Network, Orbit, Plus, Users, Clock } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  getTribePeople,
+  createTribePerson,
+  getTribeDuplicateIdentifiers,
+  updateTribePerson,
+  deleteTribePerson,
+  createTribeTouchpoint,
+} from '../services/apiTribe.js';
 import socket from '../services/socket';
 import BrailleSpinner from '../components/BrailleSpinner';
 import EmptyState from '../components/EmptyState';
@@ -114,7 +121,7 @@ export default function Tribe() {
   };
 
   const loadContacts = async (isCancelled = () => false) => {
-    const result = await api.getTribePeople({ silent: true }).catch((err) => {
+    const result = await getTribePeople({ silent: true }).catch((err) => {
       if (!isCancelled()) toast.error(err.message || 'Failed to load Tribe');
       return null;
     });
@@ -124,7 +131,7 @@ export default function Tribe() {
     if (result !== null && people.length === 0 && legacy.length > 0) {
       const imported = [];
       for (const contact of legacy) {
-        const created = await api.createTribePerson({
+        const created = await createTribePerson({
           name: contact.name || 'Unnamed person', relationship: contact.relationship || '',
           ring: contact.ring || 'tribe', cadenceDays: Math.max(1, Number(contact.cadenceDays) || ringFor(contact.ring).cadenceDays),
           lastContact: contact.lastContact || null, channel: contact.channel || '', energy: contact.energy || 'steady',
@@ -147,7 +154,7 @@ export default function Tribe() {
     let cancelled = false;
     const isCancelled = () => cancelled;
     loadContacts(isCancelled);
-    const loadDuplicates = () => api.getTribeDuplicateIdentifiers({ silent: true })
+    const loadDuplicates = () => getTribeDuplicateIdentifiers({ silent: true })
       .then((report) => { if (!isCancelled()) setDuplicates(report); })
       .catch(() => { if (!isCancelled()) setDuplicates({ emails: [], phones: [] }); });
     loadDuplicates();
@@ -222,7 +229,7 @@ export default function Tribe() {
     const isCreate = !draft.id;
     if (isCreate || (draft.lastContact || '') !== (draft.loadedLastContact || '')) payload.lastContact = draft.lastContact || null;
     setSaving(true);
-    const resolved = await (draft.id ? api.updateTribePerson(draft.id, payload, { silent: true }) : api.createTribePerson(payload, { silent: true }))
+    const resolved = await (draft.id ? updateTribePerson(draft.id, payload, { silent: true }) : createTribePerson(payload, { silent: true }))
       .catch((err) => { toast.error(err.message || 'Failed to save relationship'); return null; });
     setSaving(false);
     if (!resolved) return;
@@ -235,7 +242,7 @@ export default function Tribe() {
     const id = draft.id;
     if (!id) return;
     setDeleting(true);
-    const result = await api.deleteTribePerson(id, { silent: true }).catch((err) => {
+    const result = await deleteTribePerson(id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to delete relationship');
       return null;
     });
@@ -254,7 +261,7 @@ export default function Tribe() {
   const logTouch = async (id) => {
     const now = new Date();
     const date = localDateStr(now);
-    const result = await api.createTribeTouchpoint(id, {
+    const result = await createTribeTouchpoint(id, {
       happenedAt: now.toISOString(), localDate: date,
       channel: contacts.find((contact) => contact.id === id)?.channel || '',
       summary: 'Manual touchpoint', source: 'user',

@@ -6,7 +6,7 @@ import {
   Check,
   AlertCircle
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import { compareSpokenWrittenStyle, updateDigitalTwinTraits } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -95,7 +95,7 @@ export default function VoiceStyleTab({ onRefresh }) {
       payload.writtenSamples = [written.trim()];
     }
 
-    const res = await api.compareSpokenWrittenStyle(payload, { silent: true })
+    const res = await compareSpokenWrittenStyle(payload, { silent: true })
       .catch((err) => ({ error: err.message }));
 
     if (res.error && res.rawResponse) {
@@ -122,7 +122,7 @@ export default function VoiceStyleTab({ onRefresh }) {
       if (suggested[k] != null) communicationProfile[k] = suggested[k];
     });
 
-    const res = await api.updateDigitalTwinTraits({ communicationProfile }, { silent: true })
+    const res = await updateDigitalTwinTraits({ communicationProfile }, { silent: true })
       .catch((err) => ({ error: err.message }));
 
     if (res?.error) {

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({ getFeatureAgents: vi.fn() }));
+vi.mock('../services/apiAgents.js', () => ({
+  getFeatureAgents: vi.fn(),
+}));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../components/feature-agents/FeatureAgentCard', () => ({
@@ -10,7 +12,7 @@ vi.mock('../components/feature-agents/FeatureAgentCard', () => ({
 }));
 
 import FeatureAgents from './FeatureAgents';
-import { getFeatureAgents } from '../services/api';
+import { getFeatureAgents } from '../services/apiAgents.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), restore: vi.fn(), events: new Map() }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiMoodBoard.js', () => ({
   generateMoodBoardImages: (...args) => mocks.generate(...args),
   getMoodBoardGeneration: (...args) => mocks.restore(...args),
 }));

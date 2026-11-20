@@ -7,7 +7,7 @@ const { socketMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/socket', () => ({ default: socketMock }));
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCalendar.js', () => ({
   getCalendarEvents: vi.fn(),
   syncCalendarAccount: vi.fn(),
   apiSyncGoogleCalendar: vi.fn(),
@@ -15,7 +15,12 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
-import * as api from '../../services/api';
+import {
+  getCalendarEvents,
+  syncCalendarAccount,
+  apiSyncGoogleCalendar,
+  mcpSyncGoogleCalendar,
+} from '../../services/apiCalendar.js';
 import AgendaTab from './AgendaTab';
 import toast from '../ui/Toast';
 
@@ -46,7 +51,7 @@ async function renderAgenda(accounts, entry = '/calendar/agenda') {
 describe('AgendaTab empty states', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCalendarEvents.mockResolvedValue({ events: [] });
+    getCalendarEvents.mockResolvedValue({ events: [] });
   });
 
   it('directs users without an enabled account to calendar sync', async () => {
@@ -92,7 +97,7 @@ const event = (id, startTime, endTime = startTime, extra = {}) => ({
 });
 
 function serveEvents(records) {
-  api.getCalendarEvents.mockImplementation(async ({ startDate, search, accountId, offset, limit }) => {
+  getCalendarEvents.mockImplementation(async ({ startDate, search, accountId, offset, limit }) => {
     const matching = records.filter(record => new Date(record.endTime) >= new Date(startDate)
       && (!search || record.title.includes(search))
       && (!accountId || record.accountId === accountId))
@@ -121,7 +126,7 @@ describe('AgendaTab date scope and paging', () => {
       event('future', tomorrow.toISOString()),
     ]);
     await renderAgenda(accounts);
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith({ startDate: today.toISOString(), limit: 50, offset: 0 });
+    expect(getCalendarEvents).toHaveBeenLastCalledWith({ startDate: today.toISOString(), limit: 50, offset: 0 });
     expect(screen.queryByText(history.title)).toBeNull();
     expect(screen.getByText('Event overnight')).toBeTruthy();
     expect(screen.getByText('All day')).toBeTruthy();
@@ -130,7 +135,7 @@ describe('AgendaTab date scope and paging', () => {
     fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2000-01-02' } });
     expect(await screen.findByText(history.title)).toBeTruthy();
     expect(screen.getByTestId('query')).toHaveTextContent('from=2000-01-02');
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith({
+    expect(getCalendarEvents).toHaveBeenLastCalledWith({
       startDate: new Date(2000, 0, 2).toISOString(), limit: 50, offset: 0,
     });
     fireEvent.click(screen.getByRole('button', { name: 'Today' }));
@@ -150,10 +155,10 @@ describe('AgendaTab date scope and paging', () => {
   });
 
   it('reads the selected date from the URL without UTC day shifting and clears back to today', async () => {
-    api.getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
+    getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
     await renderAgenda(accounts, '/calendar/agenda?from=2026-03-08');
     expect(screen.getByLabelText('From date')).toHaveValue('2026-03-08');
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith({
+    expect(getCalendarEvents).toHaveBeenLastCalledWith({
       startDate: new Date(2026, 2, 8).toISOString(), limit: 50, offset: 0,
     });
     fireEvent.change(screen.getByLabelText('From date'), { target: { value: '' } });
@@ -176,11 +181,11 @@ describe('AgendaTab date scope and paging', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
     expect(screen.getAllByRole('button', { name: /^Event / }).map(button => button.textContent.slice(0, 9)))
       .toEqual(records.map(record => record.title));
-    expect(api.getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 50, 100]);
+    expect(getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 50, 100]);
 
     fireEvent.change(screen.getByLabelText('Filter by account'), { target: { value: 'work' } });
     expect(await screen.findByText('No matching events')).toBeTruthy();
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 'work', offset: 0 }));
+    expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ accountId: 'work', offset: 0 }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
@@ -188,7 +193,7 @@ describe('AgendaTab date scope and paging', () => {
     fireEvent.change(screen.getByLabelText('Search events'), { target: { value: '104' } });
     expect(await screen.findByText('Event 104')).toBeTruthy();
     expect(screen.getByRole('status')).toHaveTextContent('1 of 1');
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ search: '104', offset: 0 }));
+    expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ search: '104', offset: 0 }));
 
     fireEvent.change(screen.getByLabelText('Search events'), { target: { value: '' } });
     await act(async () => {});
@@ -202,17 +207,17 @@ describe('AgendaTab date scope and paging', () => {
     const syncHandler = socketMock.on.mock.calls.filter(([name]) => name === 'calendar:sync:completed').at(-1)[1];
     await act(async () => syncHandler({ accountId: 'personal', status: 'success' }));
     expect(screen.getByRole('status')).toHaveTextContent('50 of 105');
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }));
+    expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }));
   });
 
   it('ignores a late previous-filter page and retries failed pages without losing loaded events', async () => {
     const first = event('first', '2099-01-01T12:00:00');
-    api.getCalendarEvents.mockResolvedValue({ events: [first], total: 2 });
+    getCalendarEvents.mockResolvedValue({ events: [first], total: 2 });
     await renderAgenda(accounts);
     let finishOldPage;
-    api.getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { finishOldPage = resolve; }));
+    getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { finishOldPage = resolve; }));
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    api.getCalendarEvents.mockResolvedValue({ events: [event('new', '2099-01-02T12:00:00')], total: 2 });
+    getCalendarEvents.mockResolvedValue({ events: [event('new', '2099-01-02T12:00:00')], total: 2 });
     fireEvent.change(screen.getByLabelText('Search events'), { target: { value: 'new' } });
     await act(async () => {});
     await act(async () => finishOldPage({ events: [event('stale', '2099-01-01T13:00:00')], total: 2 }));
@@ -220,14 +225,14 @@ describe('AgendaTab date scope and paging', () => {
     expect(screen.queryByText('Event first')).toBeNull();
     expect(screen.getByText('Event new')).toBeTruthy();
 
-    api.getCalendarEvents.mockRejectedValueOnce(new Error('offline'));
+    getCalendarEvents.mockRejectedValueOnce(new Error('offline'));
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load events');
     expect(screen.getByText('Event new')).toBeTruthy();
-    api.getCalendarEvents.mockResolvedValueOnce({ events: [event('last', '2099-01-03T12:00:00')], total: 2 });
+    getCalendarEvents.mockResolvedValueOnce({ events: [event('last', '2099-01-03T12:00:00')], total: 2 });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Event last')).toBeTruthy();
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 }));
+    expect(getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 }));
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 });
@@ -242,38 +247,38 @@ describe('Agenda provider sync', () => {
   ];
   beforeEach(() => {
     vi.resetAllMocks();
-    api.getCalendarEvents.mockResolvedValue({ events: [] });
-    api.syncCalendarAccount.mockResolvedValue({ status: 'success', newEvents: 2 });
-    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
-    api.mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 3 });
+    getCalendarEvents.mockResolvedValue({ events: [] });
+    syncCalendarAccount.mockResolvedValue({ status: 'success', newEvents: 2 });
+    apiSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
+    mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 3 });
   });
 
   it.each(['Sync', 'Sync now'])('routes %s to each enabled provider and refreshes HTTP-only completions', async action => {
     await renderAgenda(syncAccounts);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: action })));
-    expect(api.syncCalendarAccount).toHaveBeenCalledExactlyOnceWith('outlook', { silent: true });
-    expect(api.apiSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('google', { silent: true });
-    expect(api.mcpSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('mcp', { silent: true });
+    expect(syncCalendarAccount).toHaveBeenCalledExactlyOnceWith('outlook', { silent: true });
+    expect(apiSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('google', { silent: true });
+    expect(mcpSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('mcp', { silent: true });
     // The three completion refreshes arrive in one burst and coalesce into one read.
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(2);
     expect(toast.success).toHaveBeenCalledTimes(3);
     expect(screen.getByRole('button', { name: 'Sync' })).not.toBeDisabled();
     const completed = socketMock.on.mock.calls.find(([name]) => name === 'calendar:sync:completed')[1];
     await act(async () => completed({ accountId: 'google', status: 'success', newEvents: 1 }));
     expect(toast.success).toHaveBeenCalledTimes(3);
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a mixed batch busy until HTTP settles and identifies failed and partial accounts', async () => {
     let rejectOutlook;
-    api.syncCalendarAccount.mockImplementation(() => new Promise((_resolve, reject) => { rejectOutlook = reject; }));
-    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'partial', reason: 'One calendar unavailable' });
-    api.mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
+    syncCalendarAccount.mockImplementation(() => new Promise((_resolve, reject) => { rejectOutlook = reject; }));
+    apiSyncGoogleCalendar.mockResolvedValue({ status: 'partial', reason: 'One calendar unavailable' });
+    mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
     await renderAgenda(syncAccounts);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Sync' })));
     expect(screen.getByRole('button', { name: 'Sync' })).toBeDisabled();
     expect(toast.warning).toHaveBeenCalledWith('Example Google: Calendar sync incomplete: One calendar unavailable');
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(2);
     await act(async () => rejectOutlook(new Error('Provider unavailable')));
     expect(toast.error).toHaveBeenCalledWith('Example Outlook: Calendar sync failed: Provider unavailable');
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('Example MCP: Calendar sync complete: 1 events');
@@ -282,15 +287,15 @@ describe('Agenda provider sync', () => {
   });
 
   it('warns about skipped and push-only outcomes without refreshing or claiming success', async () => {
-    api.syncCalendarAccount.mockResolvedValue({ status: 'skipped' });
-    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'push-only' });
+    syncCalendarAccount.mockResolvedValue({ status: 'skipped' });
+    apiSyncGoogleCalendar.mockResolvedValue({ status: 'push-only' });
     await renderAgenda(syncAccounts.slice(0, 2));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Sync now' })));
     expect(toast.warning).toHaveBeenCalledTimes(2);
     expect(toast.warning.mock.calls[0][0]).toContain('Example Outlook: Sync skipped');
     expect(toast.warning.mock.calls[1][0]).toContain('Example Google: This account receives pushed updates');
     expect(toast.success).not.toHaveBeenCalled();
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(1);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -298,11 +303,11 @@ describe('Agenda provider sync', () => {
 it('reconciles configuration and reconnect without resurrecting a superseded event page', async () => {
   vi.clearAllMocks();
   const oldEvent = event('old', new Date().toISOString(), undefined, { title: 'Old meeting' });
-  api.getCalendarEvents.mockResolvedValueOnce({ events: [oldEvent], total: 1 });
+  getCalendarEvents.mockResolvedValueOnce({ events: [oldEvent], total: 1 });
   await renderAgenda(accounts);
   expect(screen.getByText('Old meeting')).toBeTruthy();
   let resolveOld;
-  api.getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+  getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
     .mockResolvedValueOnce({ events: [], total: 0 });
   const changed = socketMock.on.mock.calls.find(([name]) => name === 'calendar:changed')[1];
   const reconnect = socketMock.on.mock.calls.find(([name]) => name === 'connect')[1];

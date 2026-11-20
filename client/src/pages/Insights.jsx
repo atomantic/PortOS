@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { useValidTab } from '../hooks/useValidTab';
 import { Dna, Palette, Link2, Lightbulb, ArrowRight, Target } from 'lucide-react';
+import { getGenomeHealthCorrelations } from '../services/apiHealth.js';
 import {
-  getGenomeHealthCorrelations,
   getInsightThemes,
   getInsightNarrative,
   refreshInsightThemes,
-  refreshInsightNarrative
-} from '../services/api';
+  refreshInsightNarrative,
+} from '../services/apiSystem.js';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import GenomeHealthTab from '../components/insights/GenomeHealthTab';
 import TasteIdentityTab from '../components/insights/TasteIdentityTab';

@@ -18,7 +18,7 @@ import {
   scrollTerminalPage,
 } from '../../lib/terminalScroll';
 import { readFileAsBase64 } from '../../utils/fileUpload';
-import * as api from '../../services/api';
+import { sendShellImage } from '../../services/apiShell.js';
 import toast from '../ui/Toast';
 import { MAX_TOTAL_SESSIONS } from '../../../../server/lib/shellLimits.js';
 
@@ -204,7 +204,7 @@ export function useShellSession({ isFullscreen } = {}) {
       toast.error(`Failed to read ${file.name}`);
       return false;
     }
-    const sent = await api.sendShellImage(sessionId, { data, filename: file.name, message }, { silent: true })
+    const sent = await sendShellImage(sessionId, { data, filename: file.name, message }, { silent: true })
       .catch((err) => {
         toast.error(`Failed to send image: ${err.message}`);
         return null;

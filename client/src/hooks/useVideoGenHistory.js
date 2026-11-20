@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { normalizeVideo } from '../components/media/normalize';
 import toast from '../components/ui/Toast';
-import { cancelVideoPendingDelete, deleteVideoHistoryItem, listVideoHistory } from '../services/api';
+import { cancelVideoPendingDelete, deleteVideoHistoryItem, listVideoHistory } from '../services/apiImageVideo.js';
 import { useMediaCompletionRefresh } from './useMediaCompletionRefresh';
 import { useMediaAnnotations } from './useMediaAnnotations';
 import { refreshMediaUsages } from './useMediaUsages';

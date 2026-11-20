@@ -9,7 +9,12 @@ const api = vi.hoisted(() => ({
   deleteSong: vi.fn(),
   updateSong: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSongbook.js', () => ({
+  listSongs: api.listSongs,
+  createSong: api.createSong,
+  deleteSong: api.deleteSong,
+  updateSong: api.updateSong,
+}));
 const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 

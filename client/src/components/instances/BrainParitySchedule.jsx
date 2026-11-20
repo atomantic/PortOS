@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CalendarClock, ToggleLeft, ToggleRight } from 'lucide-react';
 import toast from '../ui/Toast';
-import { getCosJob, toggleCosJob, updateCosJob } from '../../services/api';
+import { getCosJob, toggleCosJob, updateCosJob } from '../../services/apiAgents.js';
 import { JOB_INTERVAL_OPTIONS } from '../../utils/cronHelpers';
 import { timeAgo } from '../../utils/formatters';
 

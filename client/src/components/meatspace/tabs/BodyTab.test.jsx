@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
-  getBodyHistory: vi.fn(), getBloodPressure: vi.fn(), addBloodPressure: vi.fn(),
-  getEyeExams: vi.fn(), addEyeExam: vi.fn(), updateEyeExam: vi.fn(),
+vi.mock('../../../services/apiMeatspace.js', () => ({
+  getBodyHistory: vi.fn(),
+  getBloodPressure: vi.fn(),
+  addBloodPressure: vi.fn(),
+  getEyeExams: vi.fn(),
+  addEyeExam: vi.fn(),
+  updateEyeExam: vi.fn(),
 }));
 vi.mock('../../../hooks/useChartColors.js', () => ({ default: () => ({}) }));
 // Charts do not participate in date entry and require browser layout.
@@ -13,7 +17,14 @@ vi.mock('recharts', () => ({
   Tooltip: () => null, Legend: () => null, ReferenceLine: () => null,
 }));
 
-import * as api from '../../../services/api';
+import {
+  getBodyHistory,
+  getBloodPressure,
+  getEyeExams,
+  addBloodPressure,
+  addEyeExam,
+  updateEyeExam,
+} from '../../../services/apiMeatspace.js';
 import BodyTab from './BodyTab';
 
 const EXISTING_EXAM = { id: 'exam-1', date: '2026-02-10', leftSphere: -1 };
@@ -28,12 +39,12 @@ beforeEach(() => {
       return new Date(this.getTime() - 7 * 60 * 60 * 1000)[`getUTC${part}`]();
     });
   }
-  api.getBodyHistory.mockResolvedValue([]);
-  api.getBloodPressure.mockResolvedValue({ readings: [] });
-  api.getEyeExams.mockResolvedValue({ exams: [EXISTING_EXAM] });
-  api.addBloodPressure.mockImplementation(async input => input);
-  api.addEyeExam.mockImplementation(async input => ({ id: 'exam-2', ...input }));
-  api.updateEyeExam.mockImplementation(async (id, input) => ({ id, ...input }));
+  getBodyHistory.mockResolvedValue([]);
+  getBloodPressure.mockResolvedValue({ readings: [] });
+  getEyeExams.mockResolvedValue({ exams: [EXISTING_EXAM] });
+  addBloodPressure.mockImplementation(async input => input);
+  addEyeExam.mockImplementation(async input => ({ id: 'exam-2', ...input }));
+  updateEyeExam.mockImplementation(async (id, input) => ({ id, ...input }));
 });
 
 afterEach(() => {
@@ -55,13 +66,13 @@ describe('BodyTab measurement dates', () => {
     changeField('Systolic', '120');
     changeField('Diastolic', '80');
     await click('Save Reading');
-    expect(api.addBloodPressure).toHaveBeenCalledWith({ date: '2026-03-14', systolic: 120, diastolic: 80 });
+    expect(addBloodPressure).toHaveBeenCalledWith({ date: '2026-03-14', systolic: 120, diastolic: 80 });
 
     await click('Add Exam');
     expect(screen.getByLabelText('Date')).toHaveValue('2026-03-14');
     changeField('L SPH', '-1.25');
     await click('Add');
-    expect(api.addEyeExam).toHaveBeenCalledWith({ date: '2026-03-14', leftSphere: -1.25 });
+    expect(addEyeExam).toHaveBeenCalledWith({ date: '2026-03-14', leftSphere: -1.25 });
   });
 
   it('preserves backdated entries and the stored date when editing an existing exam', async () => {
@@ -70,19 +81,19 @@ describe('BodyTab measurement dates', () => {
     expect(screen.getByLabelText('Date')).toHaveValue(EXISTING_EXAM.date);
     changeField('L SPH', '-1.5');
     await click('Save');
-    expect(api.updateEyeExam).toHaveBeenCalledWith('exam-1', { date: '2026-02-10', leftSphere: -1.5 });
+    expect(updateEyeExam).toHaveBeenCalledWith('exam-1', { date: '2026-02-10', leftSphere: -1.5 });
 
     await click('Add Reading');
     changeField('Date', '2026-03-01');
     changeField('Systolic', '118');
     changeField('Diastolic', '78');
     await click('Save Reading');
-    expect(api.addBloodPressure).toHaveBeenCalledWith({ date: '2026-03-01', systolic: 118, diastolic: 78 });
+    expect(addBloodPressure).toHaveBeenCalledWith({ date: '2026-03-01', systolic: 118, diastolic: 78 });
 
     await click('Add Exam');
     changeField('Date', '2026-03-02');
     changeField('R SPH', '-0.75');
     await click('Add');
-    expect(api.addEyeExam).toHaveBeenCalledWith({ date: '2026-03-02', rightSphere: -0.75 });
+    expect(addEyeExam).toHaveBeenCalledWith({ date: '2026-03-02', rightSphere: -0.75 });
   });
 });

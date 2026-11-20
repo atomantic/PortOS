@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import * as api from '../../services/api';
+import { getAppleHealthMetrics, getLatestHealthMetrics } from '../../services/apiHealth.js';
 import MetricCard from './MetricCard';
 import SleepCard from './SleepCard';
 import ListLoadError from '../ui/ListLoadError';
@@ -36,7 +36,7 @@ export default function HealthCategorySection({ category, from, to, expanded, on
 
     Promise.all(
       keys.map(key =>
-        api.getAppleHealthMetrics(key, from, to, { silent: true })
+        getAppleHealthMetrics(key, from, to, { silent: true })
           .then(data => ({ key, data: Array.isArray(data) ? data : [] }))
           .catch(error => ({ key, data: [], error }))
       )
@@ -58,7 +58,7 @@ export default function HealthCategorySection({ category, from, to, expanded, on
 
       // Fetch latest values for metrics with no data in this range
       if (emptyMetrics.length > 0) {
-        api.getLatestHealthMetrics(emptyMetrics)
+        getLatestHealthMetrics(emptyMetrics)
           .then(latest => { if (!cancelled) setLatestValues(prev => ({ ...prev, ...latest })); })
           .catch(err => console.warn('fetch latest health metrics:', err?.message ?? String(err)));
       }

@@ -13,8 +13,10 @@ function makeDeferred(id) {
   return promise;
 }
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiApps.js', () => ({
   getApps: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../services/apiAgents.js', () => ({
   getFeatureAgent: vi.fn((id) => makeDeferred(id)),
   startFeatureAgent: vi.fn(),
   pauseFeatureAgent: vi.fn(),
@@ -35,7 +37,7 @@ vi.mock('../components/feature-agents/RunsTab', () => ({ default: () => null }))
 vi.mock('../components/feature-agents/OutputTab', () => ({ default: () => null }));
 vi.mock('../components/feature-agents/GitTab', () => ({ default: () => null }));
 
-import * as api from '../services/api';
+import { getFeatureAgent } from '../services/apiAgents.js';
 import FeatureAgentDetail from './FeatureAgentDetail';
 
 function Harness() {
@@ -65,14 +67,14 @@ describe('FeatureAgentDetail load race', () => {
     await act(async () => {}); // the resource hook starts its read one microtask after mount
 
     // A's fetch is in flight; the loading skeleton is up.
-    expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-a', { silent: true });
+    expect(getFeatureAgent).toHaveBeenCalledWith('agent-a', { silent: true });
     expect(screen.getByRole('status', { name: 'Loading agent' })).toBeInTheDocument();
 
     // Navigate A→B before A resolves.
     await act(async () => {
       screen.getByText('go-b').click();
     });
-    await waitFor(() => expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-b', { silent: true }));
+    await waitFor(() => expect(getFeatureAgent).toHaveBeenCalledWith('agent-b', { silent: true }));
 
     // Resolve A LATE — must be ignored (wrong agent must never show).
     await act(async () => {
@@ -109,7 +111,7 @@ describe('FeatureAgentDetail load race', () => {
   });
 
   it('offers Retry for a failed read instead of claiming the agent is gone', async () => {
-    api.getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Server unavailable'), { status: 503 })));
+    getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Server unavailable'), { status: 503 })));
     render(
       <MemoryRouter initialEntries={['/feature-agents/agent-a/overview']}>
         <Harness />
@@ -139,7 +141,7 @@ describe('FeatureAgentDetail load race', () => {
     });
     await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
 
-    api.getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Feature agent not found'), { status: 404 })));
+    getFeatureAgent.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Feature agent not found'), { status: 404 })));
     const statusHandler = socket.on.mock.calls.find(([event]) => event === 'cos:feature-agent:status')[1];
     await act(async () => { statusHandler({ id: 'agent-a' }); });
     await waitFor(() => expect(screen.getByText('Feature agent not found')).toBeInTheDocument());

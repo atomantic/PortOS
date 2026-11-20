@@ -9,7 +9,16 @@ import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
-import { getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel, deleteLocalLlmModel, upgradeLocalLlmBackend, controlOllamaService, installAudioModel, previewLocalLlmDownload } from '../../services/api';
+import {
+  getLocalLlmCatalog,
+  getLocalLlmHuggingFaceSearch,
+  installLocalLlmModel,
+  deleteLocalLlmModel,
+  upgradeLocalLlmBackend,
+  controlOllamaService,
+  previewLocalLlmDownload,
+} from '../../services/apiLocalLlm.js';
+import { installAudioModel } from '../../services/apiMusic.js';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import LocalLlmInstalledModels from './LocalLlmInstalledModels.jsx';
 import DownloadPreflightConfirm from '../models/DownloadPreflightConfirm.jsx';

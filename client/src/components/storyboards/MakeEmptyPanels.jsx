@@ -4,7 +4,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import ProgressBar from '../ui/ProgressBar';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
-import { getStoryboardMakeEmpty, startStoryboardMakeEmpty } from '../../services/api';
+import { getStoryboardMakeEmpty, startStoryboardMakeEmpty } from '../../services/apiStoryboards.js';
 import { formatCount } from '../../utils/formatters';
 
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;

@@ -3,7 +3,7 @@ import { Network } from 'lucide-react';
 import Pill from '../ui/Pill';
 import ToggleSwitch from '../ToggleSwitch';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import { updateUsageFleetBilling } from '../../services/apiSystem.js';
 import { formatCompactCountOrDash as formatNumber, formatUsd, timeAgo } from '../../utils/formatters';
 
 /**
@@ -106,7 +106,7 @@ export default function FleetUsageCard({ fleet, onSaved }) {
     confirmedAt.current.delete(row.instanceId);
     setOverrides((prev) => ({ ...prev, [row.instanceId]: next }));
     setPending((prev) => ({ ...prev, [row.instanceId]: true }));
-    const ok = await api.updateUsageFleetBilling(
+    const ok = await updateUsageFleetBilling(
       { instanceId: row.instanceId, usesSubscriptions: next },
       { silent: true },
     ).then(() => true).catch((err) => {

@@ -3,7 +3,7 @@ import { Server, Crown } from 'lucide-react';
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { refreshMediaHolders } from '../../hooks/useMediaHolders';
-import { makeMediaPrimary } from '../../services/api';
+import { makeMediaPrimary } from '../../services/apiMediaHolders.js';
 
 const CHIP = 'px-1.5 py-0.5 rounded inline-flex items-center gap-0.5';
 const names = (list) => list.map((h) => h.name).join(', ');

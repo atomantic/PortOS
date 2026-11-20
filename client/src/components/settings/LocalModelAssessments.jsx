@@ -41,9 +41,12 @@ import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from 
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import {
-  getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
+  getLocalLlmAssessments,
+  runLocalLlmAssessment,
+  runOpenCodeAgentBenchmark,
+  deleteLocalLlmAssessment,
   getModelCapabilityTests,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
 
 // Heavy, tab-gated panels: PortosModelBenchmarkPanel pulls vendor-charts, the
 // capability matrix is ~1,000 lines, and the sweep panel is only used on its tab.

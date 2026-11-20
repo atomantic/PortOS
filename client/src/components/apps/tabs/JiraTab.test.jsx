@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiSystem.js', () => ({
   getJiraInstances: vi.fn(),
   getJiraProjects: vi.fn(),
   getJiraBoards: vi.fn(),
@@ -10,6 +10,8 @@ vi.mock('../../../services/api', () => ({
   getJiraIssue: vi.fn(),
   searchJiraEpics: vi.fn(),
   getMySprintTickets: vi.fn(),
+}));
+vi.mock('../../../services/apiApps.js', () => ({
   updateApp: vi.fn(),
 }));
 
@@ -19,7 +21,14 @@ vi.mock('../../KanbanBoard', () => ({
   default: ({ tickets }) => <div data-testid="kanban">{tickets.length} tickets</div>,
 }));
 
-import * as api from '../../../services/api';
+import {
+  getJiraInstances,
+  getJiraProjects,
+  getJiraBoards,
+  getJiraBoardSprints,
+  getMySprintTickets,
+} from '../../../services/apiSystem.js';
+import { updateApp } from '../../../services/apiApps.js';
 import JiraTab from './JiraTab';
 
 const APP = {
@@ -35,12 +44,12 @@ const renderTab = (app = APP, onRefresh = () => {}) => render(
 );
 
 beforeEach(() => {
-  api.getJiraInstances.mockResolvedValue({ instances: { 'inst-1': { id: 'inst-1', name: 'Acme', baseUrl: 'https://acme.example.com' } } });
-  api.getJiraProjects.mockResolvedValue([{ key: 'PROJ', name: 'Project' }]);
-  api.getJiraBoards.mockResolvedValue([{ id: 12, name: 'Board', type: 'scrum' }]);
-  api.getJiraBoardSprints.mockResolvedValue([{ name: 'Sprint 3' }]);
-  api.getMySprintTickets.mockResolvedValue([{ key: 'PROJ-1', summary: 'Do a thing', status: 'To Do', statusCategory: 'To Do' }]);
-  api.updateApp.mockResolvedValue({ ...APP });
+  getJiraInstances.mockResolvedValue({ instances: { 'inst-1': { id: 'inst-1', name: 'Acme', baseUrl: 'https://acme.example.com' } } });
+  getJiraProjects.mockResolvedValue([{ key: 'PROJ', name: 'Project' }]);
+  getJiraBoards.mockResolvedValue([{ id: 12, name: 'Board', type: 'scrum' }]);
+  getJiraBoardSprints.mockResolvedValue([{ name: 'Sprint 3' }]);
+  getMySprintTickets.mockResolvedValue([{ key: 'PROJ-1', summary: 'Do a thing', status: 'To Do', statusCategory: 'To Do' }]);
+  updateApp.mockResolvedValue({ ...APP });
 });
 
 afterEach(() => {
@@ -54,7 +63,7 @@ describe('JiraTab', () => {
 
     expect(await screen.findByLabelText('JIRA Instance')).toBeInTheDocument();
     expect(await screen.findByTestId('kanban')).toHaveTextContent('1 tickets');
-    expect(api.getMySprintTickets).toHaveBeenCalledWith('inst-1', 'PROJ', { silent: true });
+    expect(getMySprintTickets).toHaveBeenCalledWith('inst-1', 'PROJ', { silent: true });
   });
 
   it('saves ONLY the jira slice, so the PUT cannot touch other app fields', async () => {
@@ -63,8 +72,8 @@ describe('JiraTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Save JIRA Settings/ }));
 
-    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
-    const [id, payload, options] = api.updateApp.mock.calls[0];
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    const [id, payload, options] = updateApp.mock.calls[0];
     expect(id).toBe('app-1');
     expect(Object.keys(payload)).toEqual(['jira']);
     expect(payload.jira).toMatchObject({ enabled: true, instanceId: 'inst-1', projectKey: 'PROJ', boardId: '12', labels: ['cos-auto'] });
@@ -78,11 +87,11 @@ describe('JiraTab', () => {
 
     expect(await screen.findByText('Enable JIRA Integration')).toBeInTheDocument();
     expect(screen.queryByTestId('kanban')).not.toBeInTheDocument();
-    expect(api.getMySprintTickets).not.toHaveBeenCalled();
+    expect(getMySprintTickets).not.toHaveBeenCalled();
   });
 
   it('says "couldn\'t load" with a retry when the sprint fetch fails', async () => {
-    api.getMySprintTickets.mockRejectedValue(new Error('JIRA unreachable'));
+    getMySprintTickets.mockRejectedValue(new Error('JIRA unreachable'));
     renderTab();
 
     expect(await screen.findByText(/Couldn't load sprint tickets — JIRA unreachable/)).toBeInTheDocument();

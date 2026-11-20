@@ -10,13 +10,18 @@ vi.mock('../../services/apiCodeAnimationFilm.js', async load => ({ ...await load
   assembleMusicVideoBlenderCut: vi.fn(), patchFilm: vi.fn(),
   promoteFilm: vi.fn(),
 }));
-vi.mock('../../services/api', () => ({ listTracks: vi.fn(), uploadFile: vi.fn() }));
+vi.mock('../../services/apiTracks.js', () => ({
+  listTracks: vi.fn(),
+}));
+vi.mock('../../services/apiMedia.js', () => ({
+  uploadFile: vi.fn(),
+}));
 vi.mock('../musicVideo/blender/BlenderReadiness.jsx', () => ({ default: () => <div>Blender setup</div> }));
 import ProductionFilm from './ProductionFilm.jsx';
 import { getCodeAnimationProject } from '../../services/apiCodeAnimation';
 import * as filmApi from '../../services/apiCodeAnimationFilm.js';
 import socket from '../../services/socket';
-import { listTracks } from '../../services/api';
+import { listTracks } from '../../services/apiTracks.js';
 
 const id = '00000000-0000-4000-8000-000000000001';
 const project = { id, kind: 'film', title: 'Silent example', film: {

@@ -15,7 +15,17 @@ const api = vi.hoisted(() => ({
   updateBrainMemory: vi.fn(),
   updateBrainIdea: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainSummary: api.getBrainSummary,
+  getBrainSettings: api.getBrainSettings,
+  getBrainMemories: api.getBrainMemories,
+  getBrainMemory: api.getBrainMemory,
+  getBrainIdeas: api.getBrainIdeas,
+  getBrainIdea: api.getBrainIdea,
+  updateBrainMemory: api.updateBrainMemory,
+  updateBrainIdea: api.updateBrainIdea,
+}));
+vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: api.getMemoryBackendStatus }));
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
 const first = { id: 'example-first', title: 'Example first', content: '**First full text**', notes: '**First full text**' };

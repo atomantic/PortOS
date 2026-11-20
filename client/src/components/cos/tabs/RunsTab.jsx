@@ -2,7 +2,14 @@ import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribu
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getRuns,
+  deleteRun,
+  stopRun,
+  getRunPrompt,
+  getRunOutput,
+  deleteFailedRuns,
+} from '../../../services/apiRuns.js';
 import { TABS } from '../constants';
 import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
@@ -36,7 +43,7 @@ export default function RunsTab() {
   const [logModalRun, setLogModalRun] = useState(null);
 
   const fetchRuns = useCallback(
-    () => api.getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
+    () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
     [sourceFilter]
   );
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
@@ -112,7 +119,7 @@ export default function RunsTab() {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    const deleted = await api.deleteRun(id).catch(() => null);
+    const deleted = await deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
     supersedeRefresh();
     setRuns(prev => prev.filter(run => run.id !== id));
@@ -122,7 +129,7 @@ export default function RunsTab() {
   const handleStop = async (id, e) => {
     e.stopPropagation();
     setStoppingIds((prev) => new Set(prev).add(id));
-    const stopped = await api.stopRun(id).then(() => true).catch(() => false);
+    const stopped = await stopRun(id).then(() => true).catch(() => false);
     if (!stopped) {
       setStoppingIds((prev) => {
         const next = new Set(prev);
@@ -147,8 +154,8 @@ export default function RunsTab() {
     // Load full prompt and output if not already loaded
     if (!expandedDetails[id]) {
       const [prompt, output] = await Promise.all([
-        api.getRunPrompt(id).catch(() => ''),
-        api.getRunOutput(id).catch(() => '')
+        getRunPrompt(id).catch(() => ''),
+        getRunOutput(id).catch(() => '')
       ]);
       setExpandedDetails(prev => ({
         ...prev,
@@ -182,8 +189,8 @@ export default function RunsTab() {
     let details = expandedDetails[run.id];
     if (!details) {
       const [prompt, output] = await Promise.all([
-        api.getRunPrompt(run.id).catch(() => ''),
-        api.getRunOutput(run.id).catch(() => '')
+        getRunPrompt(run.id).catch(() => ''),
+        getRunOutput(run.id).catch(() => '')
       ]);
       details = { prompt, output };
     }
@@ -233,7 +240,7 @@ export default function RunsTab() {
   const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
-    const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
+    const ok = await deleteFailedRuns().then(() => true).catch(() => false);
     if (ok) {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));

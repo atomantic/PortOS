@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
-import * as api from '../../services/api';
+import { getProviderUsage } from '../../services/apiSystem.js';
 import PageSkeleton from '../ui/PageSkeleton';
 import Pill from '../ui/Pill';
 import { timeAgo } from '../../utils/formatters';
@@ -188,7 +188,7 @@ export function ProviderQuotaSection({ billingRevision }) {
     setLoading(true);
     setError(false);
     if (refresh) setRefreshAllError(false);
-    const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
+    const result = await getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
     applyImageStatus(result, imageToken);
     const familyOrderAtCompletion = new Map(familyRequestOrder.current);
     // Even if a socket-driven cached read overtook Refresh all, its forced
@@ -366,7 +366,7 @@ export function ProviderQuotaSection({ billingRevision }) {
     familyRevisions.current.set(family, revision);
     activeFamilies.current.add(family);
     setRefreshingFamilies((prev) => new Set(prev).add(family));
-    const result = await api.getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
+    const result = await getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
     if (familyRevisions.current.get(family) !== revision) return;
     applyImageStatus(result, imageToken);
     activeFamilies.current.delete(family);
@@ -452,7 +452,7 @@ export function ProviderQuotaSection({ billingRevision }) {
     const startingFullRevision = fullRevision.current;
     const startingFamilies = new Map(peerFamilyRevisions.current);
     const coverageToken = coverageRequest.current;
-    const result = await api.getProviderUsage({ scope: 'peers', silent: true }).catch(() => null);
+    const result = await getProviderUsage({ scope: 'peers', silent: true }).catch(() => null);
     if (!mounted.current || epoch !== billingEpoch.current) return;
     setPeerBillingLoading(false);
     if (startingFullRevision !== fullRevision.current) return;

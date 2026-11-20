@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useCallback } from 'react';
-import { generateImage } from '../services/api';
+import { generateImage } from '../services/apiSystem.js';
 import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
 
 // Stable key for single-target callers (the base-style probe) so `jobId` and

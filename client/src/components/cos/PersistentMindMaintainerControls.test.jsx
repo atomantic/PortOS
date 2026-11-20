@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import PersistentMindMaintainerControls from './PersistentMindMaintainerControls';
 const api = vi.hoisted(() => ({ getPersistentMindMaintainer: vi.fn(), updateCosConfig: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({
+  getPersistentMindMaintainer: api.getPersistentMindMaintainer,
+  updateCosConfig: api.updateCosConfig,
+}));
 const initial = {
   role: { schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 },
   availableApps: [{ id: 'example', name: 'Example app', repository: 'example/project', granted: false, available: true }],

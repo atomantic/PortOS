@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
-import * as api from '../../services/api';
+import { getDailyAlcohol } from '../../services/apiMeatspace.js';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
@@ -36,7 +36,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
     const fromStr = localDateKey(from);
     const toStr = localDateKey();
 
-    const entries = await api.getDailyAlcohol(fromStr, toStr, { silent: true }).catch(() => null);
+    const entries = await getDailyAlcohol(fromStr, toStr, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
     setFailed(entries === null);
     if (entries === null) {

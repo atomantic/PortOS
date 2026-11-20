@@ -11,7 +11,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import socket from '../services/socket';
-import { getMediaHolders } from '../services/api';
+import { getMediaHolders } from '../services/apiMediaHolders.js';
 
 // One shared holders map for every mounted card: the first consumer fetches it
 // and listens for `media:holders:changed` (and reconnects), the last one stops.

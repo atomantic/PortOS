@@ -5,7 +5,8 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import Drawer from '../Drawer';
 import TabPills from '../ui/TabPills';
-import * as api from '../../services/api';
+import { getCodeReviewDefaults, getReviewerIdentities } from '../../services/apiCodeReview.js';
+import { updateSettings } from '../../services/apiSystem.js';
 import ReviewerGroupsEditor from '../cos/ReviewerGroupsEditor';
 import GoalFidelityControls from './GoalFidelityControls';
 import CodeReviewHelp from './CodeReviewHelp';
@@ -85,7 +86,7 @@ export default function CodeReviewersTab({ view } = {}) {
     setLoading(true);
     setLoadError(false);
     const version = ++loadVersion.current;
-    api.getCodeReviewDefaults({ silent: true })
+    getCodeReviewDefaults({ silent: true })
       .then((defaults) => {
         if (version !== loadVersion.current) return;
         const groups = defaults?.reviewerFallbackGroups;
@@ -146,7 +147,7 @@ export default function CodeReviewersTab({ view } = {}) {
   const loadIdentities = useCallback(() => {
     // Same-reference bail-out when nothing changed (the common empty case).
     const apply = (next) => setReviewerIdentities((prev) => (prev.length === 0 && next.length === 0 ? prev : next));
-    api.getReviewerIdentities({ silent: true })
+    getReviewerIdentities({ silent: true })
       .then((result) => apply(Array.isArray(result?.identities) ? result.identities : []))
       .catch(() => apply([]));
   }, []);
@@ -206,7 +207,7 @@ export default function CodeReviewersTab({ view } = {}) {
         ...(goalFidelity.fileIssue || goalFidelity.queueTask ? { followUpOn: goalFidelity.followUpOn } : {}),
       },
     };
-    const ok = await api.updateSettings({ codeReview: payload }, { silent: true })
+    const ok = await updateSettings({ codeReview: payload }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(`Failed to save Code Review Defaults: ${err?.message || 'Save failed'}`); return false; });
     saveInFlight.current = false;

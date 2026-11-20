@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as api from '../../../services/api';
+import { getProviders, getProviderStatuses } from '../../../services/apiProviders.js';
 import socket from '../../../services/socket';
 import ProviderStatusCard from './ProviderStatusCard';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviderStatuses: vi.fn(),
   getProviders: vi.fn(),
   recoverProvider: vi.fn(),
@@ -17,11 +17,11 @@ vi.mock('../../../services/socket', () => ({
 describe('ProviderStatusCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example Provider' }] });
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example Provider' }] });
   });
 
   it('shows normalized API-window counts without raw header data', async () => {
-    api.getProviderStatuses.mockResolvedValue({
+    getProviderStatuses.mockResolvedValue({
       providers: {
         example: {
           available: false,
@@ -45,7 +45,7 @@ describe('ProviderStatusCard', () => {
   });
 
   it('labels a limit-only window without a dangling separator', async () => {
-    api.getProviderStatuses.mockResolvedValue({
+    getProviderStatuses.mockResolvedValue({
       providers: {
         example: {
           available: false,
@@ -62,28 +62,28 @@ describe('ProviderStatusCard', () => {
   });
 
   it('fails into Retry instead of "All Available" when the provider list read fails', async () => {
-    api.getProviderStatuses.mockResolvedValue({
+    getProviderStatuses.mockResolvedValue({
       providers: { example: { available: false, reason: 'rate-limit', message: 'Rate limit exceeded' } },
     });
-    api.getProviders.mockRejectedValueOnce(new Error('providers 500'));
+    getProviders.mockRejectedValueOnce(new Error('providers 500'));
 
     render(<ProviderStatusCard />);
 
     expect(await screen.findByText('Unable to load status')).toBeInTheDocument();
     expect(screen.queryByText('All Available')).not.toBeInTheDocument();
 
-    api.getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example Provider' }] });
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', name: 'Example Provider' }] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading status' }));
     await waitFor(() => expect(screen.queryByText('Unable to load status')).not.toBeInTheDocument());
     expect(screen.getByText('Example Provider')).toBeInTheDocument();
   });
 
   it('re-reads provider status when a status-change event arrives', async () => {
-    api.getProviderStatuses.mockResolvedValueOnce({ providers: { example: { available: true } } });
+    getProviderStatuses.mockResolvedValueOnce({ providers: { example: { available: true } } });
     render(<ProviderStatusCard />);
     expect(await screen.findByText('All Available')).toBeInTheDocument();
 
-    api.getProviderStatuses.mockResolvedValueOnce({
+    getProviderStatuses.mockResolvedValueOnce({
       providers: { example: { available: false, reason: 'rate-limit', message: 'Rate limit exceeded' } },
     });
     const [, onChanged] = socket.on.mock.calls.find(([event]) => event === 'provider:status:changed');

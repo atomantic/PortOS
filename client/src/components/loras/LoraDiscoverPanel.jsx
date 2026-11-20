@@ -4,7 +4,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { formatCount } from '../../utils/formatters';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
-import { searchCivitaiLoras } from '../../services/api';
+import { searchCivitaiLoras } from '../../services/apiImageVideo.js';
 import VideoSuggestionsSection from './VideoLoraSuggestions';
 import { RUNNER_BADGE_CLASS, RUNNER_LABEL, cardKey, suggestionKey } from './loraDisplay';
 

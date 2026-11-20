@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
 import toast from '../ui/Toast';
-import { getAgentKeyStatus, setAgentKeyEnabled, rotateAgentKey } from '../../services/api';
+import { getAgentKeyStatus, setAgentKeyEnabled, rotateAgentKey } from '../../services/apiAuth.js';
 import { formatDateShort } from '../../utils/formatters';
 
 // The agent API key lets a Claude Code / Codex session on this computer call

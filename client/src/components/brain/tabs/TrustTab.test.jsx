@@ -10,7 +10,10 @@ const api = vi.hoisted(() => ({
   getBrainInbox: vi.fn(),
   getBrainSettings: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getBrainInbox: api.getBrainInbox,
+  getBrainSettings: api.getBrainSettings,
+}));
 
 const TrustTab = (await import('./TrustTab')).default;
 

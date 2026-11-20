@@ -3,8 +3,8 @@ import PageHeader from '../components/PageHeader';
 import { Activity, Save } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
-import { executeCommand } from '../services/api';
+import { getApps } from '../services/apiApps.js';
+import { executeCommand } from '../services/apiCommands.js';
 import useListResource from '../hooks/useListResource.js';
 import ListLoadError from '../components/ui/ListLoadError';
 
@@ -12,7 +12,7 @@ export function ProcessesPage() {
   const [saving, setSaving] = useState(false);
 
   const fetchApps = useCallback(async () => {
-    const list = await api.getApps({ silent: true });
+    const list = await getApps({ silent: true });
     return Array.isArray(list) ? list : [];
   }, []);
   const appsResource = useListResource(fetchApps);

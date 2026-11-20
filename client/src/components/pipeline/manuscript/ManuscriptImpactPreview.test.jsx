@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   generatePipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 import ManuscriptImpactPreview from './ManuscriptImpactPreview';
-import { acceptPipelineManuscriptFix } from '../../../services/api';
+import { acceptPipelineManuscriptFix } from '../../../services/apiPipeline.js';
 import toast from '../../ui/Toast';
 
 const SECTIONS = [

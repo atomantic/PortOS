@@ -36,7 +36,7 @@ import {
   listShareSubscriptions,
   subscribeToShareBucket,
   unsubscribeFromShareBucket,
-} from '../../services/api';
+} from '../../services/apiSharing.js';
 
 const SUBSCRIBABLE_KINDS = new Set(['series', 'universe']);
 const MENU_WIDTH = 288; // w-72

@@ -12,7 +12,7 @@ import { Sparkles, CheckCircle2, Download, Trash2, X, Film } from 'lucide-react'
 import Modal from '../ui/Modal';
 import SentPromptPanel from '../media/SentPromptPanel';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
-import { trackAudioUrl } from '../../services/api';
+import { trackAudioUrl } from '../../services/apiTracks.js';
 import { renderSourceLabel, sunoRenderHref } from '../../lib/trackProvenance';
 
 function MetaRow({ label, children }) {

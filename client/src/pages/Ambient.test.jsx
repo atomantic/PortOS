@@ -3,13 +3,25 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ambient from './Ambient';
 import { allDayCalendarDate } from '../components/calendar/calendarUtils';
-import * as api from '../services/api';
+import { getDeathClock } from '../services/apiMeatspace.js';
+import { getCosQuickSummary, getCosGoalProgressSummary } from '../services/apiAgents.js';
+import { getCalendarEvents } from '../services/apiCalendar.js';
+import { checkHealth } from '../services/apiSystem.js';
 import socket from '../services/socket';
 import { formatClockTime, formatDateFull } from '../utils/formatters';
 
-vi.mock('../services/api', () => ({
-  getDeathClock: vi.fn(), getCosQuickSummary: vi.fn(),
-  getCosGoalProgressSummary: vi.fn(), getCalendarEvents: vi.fn(), checkHealth: vi.fn()
+vi.mock('../services/apiMeatspace.js', () => ({
+  getDeathClock: vi.fn(),
+}));
+vi.mock('../services/apiAgents.js', () => ({
+  getCosQuickSummary: vi.fn(),
+  getCosGoalProgressSummary: vi.fn(),
+}));
+vi.mock('../services/apiCalendar.js', () => ({
+  getCalendarEvents: vi.fn(),
+}));
+vi.mock('../services/apiSystem.js', () => ({
+  checkHealth: vi.fn(),
 }));
 vi.mock('../services/socket', () => {
   const handlers = new Map();
@@ -21,7 +33,7 @@ vi.mock('../services/socket', () => {
   } };
 });
 vi.mock('../components/DeathClockCountdown', () => ({ default: ({ deathDate }) => <div>{deathDate}</div> }));
-const reads = () => [api.getDeathClock, api.getCosQuickSummary, api.getCosGoalProgressSummary, api.getCalendarEvents].map(fn => fn.mock.calls.length);
+const reads = () => [getDeathClock, getCosQuickSummary, getCosGoalProgressSummary, getCalendarEvents].map(fn => fn.mock.calls.length);
 const flush = async (fn = () => {}) => act(async () => { fn(); });
 const mount = () => flush(() => render(<MemoryRouter><Ambient /></MemoryRouter>));
 const event = (name) => flush(() => socket.dispatch(name));
@@ -36,10 +48,10 @@ beforeEach(() => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
   vi.clearAllMocks();
   socket.connected = true;
-  api.getDeathClock.mockResolvedValue({ deathDate: '2080-01-01', percentComplete: 25 });
-  api.getCosQuickSummary.mockResolvedValue({ today: { running: 1 }, status: { running: true } });
-  api.getCosGoalProgressSummary.mockResolvedValue({ goals: [{ name: 'Example goal', successRate: 50 }] });
-  api.getCalendarEvents.mockResolvedValue({ events: [{ id: 'example', title: 'Example meeting',
+  getDeathClock.mockResolvedValue({ deathDate: '2080-01-01', percentComplete: 25 });
+  getCosQuickSummary.mockResolvedValue({ today: { running: 1 }, status: { running: true } });
+  getCosGoalProgressSummary.mockResolvedValue({ goals: [{ name: 'Example goal', successRate: 50 }] });
+  getCalendarEvents.mockResolvedValue({ events: [{ id: 'example', title: 'Example meeting',
     startTime: new Date(2026, 0, 15, 12).toISOString(), endTime: new Date(2026, 0, 15, 12, 1).toISOString() }], total: 1 });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -49,20 +61,20 @@ describe('Ambient resource updates', () => {
     await mount();
     expect(reads()).toEqual([1, 1, 1, 1]);
     expect(screen.getByText('Example meeting')).toBeTruthy();
-    api.getCalendarEvents.mockResolvedValue({ events: [{ id: 'new', title: 'Changed meeting', isAllDay: true, startTime: new Date(2026, 0, 15, 13).toISOString() }], total: 1 });
+    getCalendarEvents.mockResolvedValue({ events: [{ id: 'new', title: 'Changed meeting', isAllDay: true, startTime: new Date(2026, 0, 15, 13).toISOString() }], total: 1 });
     await event('calendar:sync:completed');
     expect(screen.getByText('Changed meeting')).toBeTruthy();
     expect(screen.getByText('All day')).toBeTruthy();
     expect(reads()).toEqual([1, 1, 1, 2]);
-    api.getDeathClock.mockResolvedValue({ deathDate: '2085-01-01', percentComplete: 20 });
+    getDeathClock.mockResolvedValue({ deathDate: '2085-01-01', percentComplete: 20 });
     await event('meatspace:death-clock:changed');
     expect(screen.getByText('2085-01-01')).toBeTruthy();
     expect(reads()).toEqual([2, 1, 1, 2]);
-    api.getCosQuickSummary.mockResolvedValue({ today: { running: 7 } });
+    getCosQuickSummary.mockResolvedValue({ today: { running: 7 } });
     await event('cos:agent:spawned');
     expect(screen.getByText('7')).toBeTruthy();
     expect(reads()).toEqual([2, 2, 1, 2]);
-    api.getCosGoalProgressSummary.mockResolvedValue({ goals: [{ name: 'Updated goal', successRate: 80 }] });
+    getCosGoalProgressSummary.mockResolvedValue({ goals: [{ name: 'Updated goal', successRate: 80 }] });
     await event('cos:goals:changed');
     expect(screen.getByText('Updated goal')).toBeTruthy();
     expect(reads()).toEqual([2, 2, 2, 2]);
@@ -73,7 +85,7 @@ describe('Ambient resource updates', () => {
     await mount();
     await flush(() => vi.advanceTimersByTime(61000));
     expect(reads()).toEqual([1, 1, 1, 1]);
-    expect(api.checkHealth).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
     expect(screen.queryByText('Example meeting')).toBeNull();
     expect(screen.getByText(formatClockTime(new Date()))).toBeTruthy();
   });
@@ -102,7 +114,7 @@ describe('Ambient resource updates', () => {
     await mount();
     await flush(() => vi.advanceTimersByTime(2000));
     expect(reads()).toEqual([2, 2, 1, 2]);
-    expect(api.getCalendarEvents).toHaveBeenLastCalledWith({
+    expect(getCalendarEvents).toHaveBeenLastCalledWith({
       startDate: new Date(2026, 0, 16).toISOString(),
       endDate: new Date(new Date(2026, 0, 17).getTime() - 1).toISOString(), limit: 200, offset: 0
     }, { silent: true });
@@ -127,7 +139,7 @@ describe('Ambient resource updates', () => {
     // East of UTC it is still ahead after local midnight. Either gap is the bug.
     const showAt = localEnd > absoluteEnd ? absoluteEnd + 1000 : localEnd - 60_000;
     vi.setSystemTime(new Date(showAt));
-    api.getCalendarEvents.mockResolvedValue({
+    getCalendarEvents.mockResolvedValue({
       events: [{
         id: 'jul4', title: 'July 4', isAllDay: true,
         startTime: '2026-07-04T00:00:00.000Z', endTime: '2026-07-05T00:00:00.000Z',
@@ -142,12 +154,12 @@ describe('Ambient resource updates', () => {
   });
 
   it('reads all calendar pages and preserves the last snapshot when an event read fails', async () => {
-    api.getCalendarEvents.mockResolvedValueOnce({ events: [{ id: 'past', title: 'Past', endTime: new Date(2026, 0, 15, 11).toISOString() }], total: 2 })
+    getCalendarEvents.mockResolvedValueOnce({ events: [{ id: 'past', title: 'Past', endTime: new Date(2026, 0, 15, 11).toISOString() }], total: 2 })
       .mockResolvedValueOnce({ events: [{ id: 'future', title: 'Later meeting', startTime: new Date(2026, 0, 15, 13).toISOString() }], total: 2 });
     await mount();
     expect(screen.getByText('Later meeting')).toBeTruthy();
-    expect(api.getCalendarEvents.mock.calls[1][0].offset).toBe(1);
-    api.getCalendarEvents.mockRejectedValueOnce(new Error('offline'));
+    expect(getCalendarEvents.mock.calls[1][0].offset).toBe(1);
+    getCalendarEvents.mockRejectedValueOnce(new Error('offline'));
     await event('calendar:sync:completed');
     expect(screen.getByText('Later meeting')).toBeTruthy();
   });
@@ -176,7 +188,7 @@ it('invalidates pending calendar reads, preserves stale content on failure, and 
   await mount();
   let resolveOld;
   let rejectCurrent;
-  api.getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+  getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
     .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCurrent = reject; }));
   await event('calendar:changed');
   await event('calendar:changed');
@@ -185,7 +197,7 @@ it('invalidates pending calendar reads, preserves stale content on failure, and 
   expect(screen.getByText('Example meeting')).toBeTruthy();
   await flush(() => rejectCurrent(new Error('Read unavailable')));
   expect(screen.getByRole('alert')).toHaveTextContent('stale');
-  api.getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
+  getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
   await flush(() => fireEvent.click(screen.getByRole('button', { name: 'Retry calendar' })));
   expect(screen.queryByText('Example meeting')).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();

@@ -32,7 +32,22 @@ import {
   Undo2
 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getCosLearning,
+  getCosLearningPerformance,
+  getCosLearningSkipped,
+  getCosLearningDurations,
+  getCosLearningRouting,
+  getCosLearningConfidence,
+  getCosFeedbackStats,
+  getDismissedCosRecommendations,
+  dismissCosRecommendation,
+  restoreCosRecommendation,
+  clearDismissedCosRecommendations,
+  backfillCosLearning,
+  resetCosTaskTypeLearning,
+} from '../../../services/apiAgents.js';
+import { getReviewerVerdictStats } from '../../../services/apiCodeReview.js';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import useLatestRequest from '../../../hooks/useLatestRequest';
@@ -164,15 +179,15 @@ export default function LearningTab() {
       return null;
     });
     const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, feedbackData, dismissedData, reviewerVerdictData] = await Promise.all([
-      read(LEARNING_LABEL, api.getCosLearning),
-      read('performance', api.getCosLearningPerformance),
-      read('low-success history', api.getCosLearningSkipped),
-      read('durations', api.getCosLearningDurations),
-      read('model routing', api.getCosLearningRouting),
-      read('confidence', api.getCosLearningConfidence),
-      read('feedback', api.getCosFeedbackStats),
-      read('dismissed recommendations', api.getDismissedCosRecommendations),
-      read(VERDICTS_LABEL, api.getReviewerVerdictStats)
+      read(LEARNING_LABEL, getCosLearning),
+      read('performance', getCosLearningPerformance),
+      read('low-success history', getCosLearningSkipped),
+      read('durations', getCosLearningDurations),
+      read('model routing', getCosLearningRouting),
+      read('confidence', getCosLearningConfidence),
+      read('feedback', getCosFeedbackStats),
+      read('dismissed recommendations', getDismissedCosRecommendations),
+      read(VERDICTS_LABEL, getReviewerVerdictStats)
     ]);
     if (!isCurrent()) return;
     // A verdict re-read that started after this load owns that section's status.
@@ -196,7 +211,7 @@ export default function LearningTab() {
   // aggregate and shows the section as not loaded, with the page's Retry.
   const refreshVerdicts = useCallback(() => {
     const isCurrent = beginVerdictLoad();
-    return api.getReviewerVerdictStats({ silent: true }).then(
+    return getReviewerVerdictStats({ silent: true }).then(
       (stats) => {
         if (!isCurrent()) return;
         setReviewerVerdicts(stats);
@@ -231,7 +246,7 @@ export default function LearningTab() {
       recommendations: (prev.recommendations || []).filter(r => r.id !== rec.id)
     } : prev);
     setDismissed(prev => [{ id: rec.id, dismissedAt: new Date().toISOString(), snapshot: rec.snapshot ?? null }, ...prev]);
-    const result = await api.dismissCosRecommendation(rec.id, rec.snapshot ?? null).catch(() => null);
+    const result = await dismissCosRecommendation(rec.id, rec.snapshot ?? null).catch(() => null);
     if (!result?.dismissed) {
       toast.error('Failed to dismiss recommendation');
       await loadData();
@@ -242,7 +257,7 @@ export default function LearningTab() {
 
   const handleRestoreRec = useCallback(async (id) => {
     setDismissed(prev => prev.filter(d => d.id !== id));
-    const result = await api.restoreCosRecommendation(id).catch(() => null);
+    const result = await restoreCosRecommendation(id).catch(() => null);
     if (!result?.restored) {
       toast.error('Failed to restore recommendation');
     }
@@ -251,7 +266,7 @@ export default function LearningTab() {
 
   const handleClearDismissed = useCallback(async () => {
     setDismissed([]);
-    const result = await api.clearDismissedCosRecommendations().catch(() => null);
+    const result = await clearDismissedCosRecommendations().catch(() => null);
     if (!result?.cleared) {
       toast.error('Failed to clear dismissed list');
     }
@@ -264,7 +279,7 @@ export default function LearningTab() {
 
   const handleBackfill = useCallback(async () => {
     setBackfilling(true);
-    const result = await api.backfillCosLearning().catch(() => null);
+    const result = await backfillCosLearning().catch(() => null);
     if (result?.success) {
       await loadData();
     }
@@ -275,7 +290,7 @@ export default function LearningTab() {
 
   const handleResetTaskType = useCallback(async (taskType) => {
     setResettingType(taskType);
-    const result = await api.resetCosTaskTypeLearning(taskType).catch(() => null);
+    const result = await resetCosTaskTypeLearning(taskType).catch(() => null);
     if (result?.reset) {
       toast.success(`Reset learning data for ${taskType} — auto-approval re-enabled`);
       await loadData();
@@ -291,7 +306,7 @@ export default function LearningTab() {
     setResettingAll(true);
     let successCount = 0;
     for (const item of lowItems) {
-      const result = await api.resetCosTaskTypeLearning(item.taskType).catch(() => null);
+      const result = await resetCosTaskTypeLearning(item.taskType).catch(() => null);
       if (result?.reset) successCount++;
     }
     if (successCount > 0) {

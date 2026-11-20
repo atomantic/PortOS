@@ -30,7 +30,7 @@ import {
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useDrawerTab from '../hooks/useDrawerTab';
-import { createSong, importSongFromUrl } from '../services/api';
+import { createSong, importSongFromUrl } from '../services/apiSongbook.js';
 import { normalizePastedTab, detectFormat, parseTabSheet } from '../lib/tabNotation.js';
 import { isDrumNotation } from '../lib/drumNotation.js';
 import { readClipboard } from '../lib/clipboard.js';

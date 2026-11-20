@@ -13,7 +13,7 @@ import {
   runGitHubAudit,
   undoGitHubAuditChange,
   updateGitHubAccount,
-} from '../../services/api';
+} from '../../services/apiGithub.js';
 
 const fetchAccounts = () => getGitHubAccounts({ silent: true });
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import useContainerWidth from '../../hooks/useContainerWidth';
-import * as api from '../../services/api';
+import { getUsageRollingCost } from '../../services/apiSystem.js';
 import { formatUsd } from '../../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import UsageCoverageNotice from './UsageCoverageNotice';
@@ -60,7 +60,7 @@ export default function RollingCostCard({ fleetRevision, onReconcile, reconcilin
 
   useEffect(() => {
     let cancelled = false;
-    api.getUsageRollingCost({ range }, { silent: true })
+    getUsageRollingCost({ range }, { silent: true })
       .catch(() => null)
       .then((result) => { if (!cancelled) setData(result); });
     return () => { cancelled = true; };

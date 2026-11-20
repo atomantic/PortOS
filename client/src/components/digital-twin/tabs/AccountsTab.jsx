@@ -26,7 +26,15 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
-import * as api from '../../../services/api';
+import {
+  getSocialAccounts,
+  getSocialAccountPlatforms,
+  getSocialAccountStats,
+  updateSocialAccount,
+  createSocialAccount,
+  deleteSocialAccount,
+} from '../../../services/apiDigitalTwin.js';
+import { getSocialAccountOrgLinks, createPrivacyOrg } from '../../../services/apiPrivacy.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -99,9 +107,9 @@ const EMPTY_FORM = {
   notes: ''
 };
 
-const fetchAccounts = () => api.getSocialAccounts({}, { silent: true }).then((data) => data?.accounts ?? []);
-const fetchPlatforms = () => api.getSocialAccountPlatforms({ silent: true }).then((data) => data?.platforms ?? []);
-const fetchOrgLinks = () => api.getSocialAccountOrgLinks({ silent: true });
+const fetchAccounts = () => getSocialAccounts({}, { silent: true }).then((data) => data?.accounts ?? []);
+const fetchPlatforms = () => getSocialAccountPlatforms({ silent: true }).then((data) => data?.platforms ?? []);
+const fetchOrgLinks = () => getSocialAccountOrgLinks({ silent: true });
 
 export default function AccountsTab() {
   const accountsResource = useListResource(fetchAccounts);
@@ -125,7 +133,7 @@ export default function AccountsTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadStats = useCallback(async () => {
-    setStats(await api.getSocialAccountStats().catch(() => null));
+    setStats(await getSocialAccountStats().catch(() => null));
   }, []);
 
   useEffect(() => {
@@ -142,7 +150,7 @@ export default function AccountsTab() {
   // "Add to org registry": create a platform-category org linked to this account.
   const handleAddToOrgRegistry = async (account) => {
     setLinkingId(account.id);
-    const created = await api.createPrivacyOrg({
+    const created = await createPrivacyOrg({
       name: account.displayName || account.username,
       category: 'platform',
       website: account.url || '',
@@ -166,14 +174,14 @@ export default function AccountsTab() {
     setSaving(true);
 
     if (editingId) {
-      const updated = await api.updateSocialAccount(editingId, form).catch(() => null);
+      const updated = await updateSocialAccount(editingId, form).catch(() => null);
       if (updated) {
         toast.success(`Updated ${form.platform} account`);
         setEditingId(null);
         setAccounts(prev => prev.map(a => (a.id === updated.id ? updated : a)));
       }
     } else {
-      const created = await api.createSocialAccount(form).catch(() => null);
+      const created = await createSocialAccount(form).catch(() => null);
       if (created) {
         toast.success(`Added ${form.platform} account`);
         setAccounts(prev => [...prev, created]);
@@ -201,7 +209,7 @@ export default function AccountsTab() {
 
   const handleDelete = async (id) => {
     setDeleting(id);
-    const success = await api.deleteSocialAccount(id).catch(() => false);
+    const success = await deleteSocialAccount(id).catch(() => false);
     if (success !== false) {
       toast.success('Account removed');
       setAccounts(prev => prev.filter(a => a.id !== id));

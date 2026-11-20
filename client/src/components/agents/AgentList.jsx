@@ -7,7 +7,14 @@ import { FormField } from '../ui/FormField';
 import ProviderModelSelector from '../ProviderModelSelector';
 import EmptyState from '../EmptyState';
 import ListLoadError from '../ui/ListLoadError';
-import * as api from '../../services/api';
+import {
+  getAgentPersonalities,
+  generateAgentPersonality,
+  createAgentPersonality,
+} from '../../services/apiPersonalities.js';
+import { getPlatformAccounts } from '../../services/apiAccounts.js';
+import { getScheduleStats, getAutomationSchedules } from '../../services/apiSchedules.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 import { filterSelectableModels } from '../../utils/providers';
@@ -46,11 +53,11 @@ export default function AgentList() {
     setLoadError(false);
     // silent: the inline error below owns the failure UI, so no toast per call.
     await Promise.all([
-      api.getAgentPersonalities(null, { silent: true }),
-      api.getPlatformAccounts(null, null, { silent: true }),
-      api.getScheduleStats({ silent: true }),
-      api.getProviders({ silent: true }),
-      api.getAutomationSchedules(null, null, { silent: true })
+      getAgentPersonalities(null, { silent: true }),
+      getPlatformAccounts(null, null, { silent: true }),
+      getScheduleStats({ silent: true }),
+      getProviders({ silent: true }),
+      getAutomationSchedules(null, null, { silent: true })
     ]).then(([agentsData, accountsData, scheduleStats, providersData, schedData]) => {
       setAgents(agentsData);
       setProviders((providersData.providers || []).filter(p => p.enabled));
@@ -114,7 +121,7 @@ export default function AgentList() {
       },
       avatar: { emoji: formData.avatar.emoji, color: formData.avatar.color }
     };
-    const generated = await api.generateAgentPersonality(
+    const generated = await generateAgentPersonality(
       seedData, selectedProviderId || null, selectedModel || null
     ).catch(() => null);
     setGenerating(false);
@@ -162,7 +169,7 @@ export default function AgentList() {
         quirks: quirksText.split(',').map(t => t.trim()).filter(Boolean)
       }
     };
-    await api.createAgentPersonality(submitData);
+    await createAgentPersonality(submitData);
     resetForm();
     fetchData();
   };

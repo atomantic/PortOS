@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalLlmAssessmentSweep: vi.fn(),
   startLocalLlmAssessmentSweep: vi.fn(),
   cancelLocalLlmAssessmentSweep: vi.fn(),
@@ -13,8 +13,10 @@ vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), war
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
 import {
-  getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
-} from '../../services/api';
+  getLocalLlmAssessmentSweep,
+  startLocalLlmAssessmentSweep,
+  cancelLocalLlmAssessmentSweep,
+} from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import AssessmentSweepPanel from './AssessmentSweepPanel.jsx';
 

@@ -7,7 +7,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { formatBytes } from '../../utils/formatters';
 import { isVideoLoraFamily } from '../../lib/runnerFamilies';
 import { LORA_EFFECT_STATUSES, loraEffectDetail, loraEffectBadge } from '../../lib/loraEffect';
-import { probeLoraEffect } from '../../services/api';
+import { probeLoraEffect } from '../../services/apiImageVideo.js';
 import { RUNNER_BADGE_CLASS, RUNNER_LABEL } from './loraDisplay';
 
 // Responsive grid of installed LoRA cards. Extracted so the Installed section

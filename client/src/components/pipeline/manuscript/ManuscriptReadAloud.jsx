@@ -25,7 +25,11 @@ import toast from '../../ui/Toast';
 import ProgressBar from '../../ui/ProgressBar';
 import { formatDurationMs } from '../../../utils/formatters';
 import SpokenCheckChip, { countLinesNeedingListen } from '../SpokenCheckChip';
-import { acceptNarrationSegmentSpeech, narratePipelineProse, rerenderNarrationSegment } from '../../../services/api';
+import {
+  acceptNarrationSegmentSpeech,
+  narratePipelineProse,
+  rerenderNarrationSegment,
+} from '../../../services/apiPipeline.js';
 import { STAGE_LABEL } from './constants';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';

@@ -9,7 +9,13 @@ const api = vi.hoisted(() => ({
   deleteReferenceRepo: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiReferenceRepos.js', () => ({
+  listReferenceRepos: api.listReferenceRepos,
+  checkReferenceRepo: api.checkReferenceRepo,
+  updateReferenceRepo: api.updateReferenceRepo,
+  deleteReferenceRepo: api.deleteReferenceRepo,
+}));
+vi.mock('../../services/apiApps.js', () => ({ getAppWorkTracker: api.getAppWorkTracker }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import ReferenceReposPanel from './ReferenceReposPanel';

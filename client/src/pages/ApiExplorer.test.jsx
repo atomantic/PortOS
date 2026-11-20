@@ -12,7 +12,17 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSystem.js', () => ({
+  getApiCatalog: api.getApiCatalog,
+  getInternalOpenApiSpec: api.getInternalOpenApiSpec,
+  getOpenApiSpec: api.getOpenApiSpec,
+  getSocketEventCatalog: api.getSocketEventCatalog,
+  getSettings: api.getSettings,
+}));
+vi.mock('../services/apiAgents.js', () => ({
+  getPersistentMindTools: api.getPersistentMindTools,
+  getCosToolCatalog: api.getCosToolCatalog,
+}));
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
 import ApiExplorer from './ApiExplorer';

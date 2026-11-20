@@ -16,7 +16,7 @@
  * @returns {{ targets: object[], loading: boolean, error: string|null, reload: () => void }}
  */
 import { useCallback, useEffect, useState } from 'react';
-import { getImageTo3dTargets } from '../services/api';
+import { getImageTo3dTargets } from '../services/apiImageTo3d.js';
 
 export function useImageTo3dTargets() {
   const [targets, setTargets] = useState([]);

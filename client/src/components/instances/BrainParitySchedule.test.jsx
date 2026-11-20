@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { INTERVAL_OPTIONS } from '../../../../server/lib/autonomousJobIntervals.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiAgents.js', () => ({
   getCosJob: vi.fn(),
   toggleCosJob: vi.fn(),
   updateCosJob: vi.fn(),
@@ -13,7 +13,7 @@ vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { getCosJob, toggleCosJob, updateCosJob } from '../../services/api';
+import { getCosJob, toggleCosJob, updateCosJob } from '../../services/apiAgents.js';
 import BrainParitySchedule, { PARITY_SWEEP_JOB_ID } from './BrainParitySchedule';
 
 const job = (overrides = {}) => ({

@@ -6,7 +6,7 @@ import {
 import toast from '../ui/Toast';
 import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
 import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
-import * as api from '../../services/api';
+import { updateGoal } from '../../services/apiGoals.js';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
 import { GOALS_LIST_PATH, goalDetailPath } from './goalConstants';
 import OrganizePanel from './OrganizePanel';
@@ -318,7 +318,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
       if (!dragGoal.parentId) return; // already a root goal
     }
 
-    const result = await api.updateGoal(dragGoal.id, { parentId: newParentId }, { silent: true }).catch(err => {
+    const result = await updateGoal(dragGoal.id, { parentId: newParentId }, { silent: true }).catch(err => {
       toast.error(err?.message || 'Failed to move goal');
       return null;
     });

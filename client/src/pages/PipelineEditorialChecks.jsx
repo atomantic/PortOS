@@ -42,8 +42,8 @@ import {
   getEditorialChecksRunStatus,
   editorialChecksRunSseUrl,
   getPipelineManuscriptReview,
-  getUniverse,
-} from '../services/api';
+} from '../services/apiPipeline.js';
+import { getUniverse } from '../services/apiUniverseBuilder.js';
 
 export default function PipelineEditorialChecks() {
   const [searchParams, setSearchParams] = useSearchParams();

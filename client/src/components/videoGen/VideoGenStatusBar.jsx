@@ -3,7 +3,7 @@ import { AlertTriangle, Film, RefreshCw, Settings as SettingsIcon } from 'lucide
 import LocalSetupPanel from '../settings/LocalSetupPanel';
 import RuntimeFingerprint from './RuntimeFingerprint';
 import toast from '../ui/Toast';
-import { patchSettingsSlice } from '../../services/api';
+import { patchSettingsSlice } from '../../services/apiSystem.js';
 
 /**
  * VideoGen's top strip: the local Python health pill with refresh, the Episode

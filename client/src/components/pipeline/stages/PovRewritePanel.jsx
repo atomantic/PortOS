@@ -17,7 +17,7 @@ import {
   getPipelinePerspectiveRewrites,
   createPipelinePerspectiveRewrite,
   deletePipelinePerspectiveRewrite,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { timeAgo } from '../../../utils/formatters';
 

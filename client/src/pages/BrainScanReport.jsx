@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { Link, useParams } from 'react-router';
 import { ArrowLeft, FileText, RefreshCw, ShieldAlert, ShieldCheck, Skull } from 'lucide-react';
-import * as api from '../services/api';
+import { getBrainLink, getBrainScanReport } from '../services/apiBrain.js';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -33,8 +33,8 @@ export default function BrainScanReport() {
 function ScanReportForLink({ id }) {
   const fetchReport = useCallback(async () => {
     const [link, report] = await Promise.all([
-      api.getBrainLink(id, { silent: true }),
-      api.getBrainScanReport(id, { silent: true })
+      getBrainLink(id, { silent: true }),
+      getBrainScanReport(id, { silent: true })
     ]);
     return { id, link, report };
   }, [id]);
