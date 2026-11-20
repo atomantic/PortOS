@@ -104,7 +104,6 @@ import {
   isWithinProjectLimit,
   unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
-import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 
 // Autonomous-job + improvement-check timer machinery (extracted to
 // cosJobScheduler.js). Imported for internal use by start()/stop()/init() and
@@ -517,6 +516,7 @@ async function bootDaemon(state) {
       // cos-improvement-check timer) — see canQueueImprovementTasks.
       if (!canQueueImprovementTasks(state)) return;
       const cosTaskData = await getCosTasks();
+      const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
       await queueEligibleImprovementTasks(state, cosTaskData);
       scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
@@ -1456,6 +1456,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   // regenerates an identical first-line per app) is rejected as a duplicate of
   // the completing task and the drain stalls until the next scheduler tick.
   const cosTaskData = await getCosTasks();
+  const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
   await queueEligibleImprovementTasks(state, cosTaskData, {
     ignoreTaskId: agent?.taskId,
     wakeAfterRecord: false,

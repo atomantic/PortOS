@@ -35,7 +35,6 @@ import { remainingActionBudget } from '../../lib/domainBudgets.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getCosTasks } from './cosTaskStore.js';
-import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob, getJob, getEnabledJobs, getAllJobs } from '../autonomousJobs.js';
 import { checkJobGate, hasGate } from '../jobGates.js';
 import { clockCronExpression, nextIntervalJobFireTime } from '../autonomousJobs/scheduler.js';
@@ -519,6 +518,7 @@ async function runImprovementCheckOnce() {
     // dry-run are planning postures that withhold the COS-TASKS.md mutation.
     if (canQueueImprovementTasks(state)) {
       const cosTaskData = await getCosTasks();
+      const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
       await queueEligibleImprovementTasks(state, cosTaskData);
       cosEvents.emit('cos:dequeue-requested');
     }

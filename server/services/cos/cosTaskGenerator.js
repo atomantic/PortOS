@@ -45,7 +45,6 @@ import { MAX_SPAWNS_BLOCKED_CATEGORY, TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '
 
 import { isTruthyMeta, } from '../../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, } from '../preflightTaskCard.js';
-import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 /**
  * Persist a `blocked` status on a task that has hit the max-total-spawns
  * ceiling. Unconditional: the caller has already established `exceedsMaxSpawns`.
@@ -611,6 +610,7 @@ async function spawnPriority2AutoApproved(ctx, { taskSchedule, autonomousSlotCei
 async function maybeQueueImprovementTasks(ctx) {
   const { state, cosTaskData, hasPendingUserTasks, initialStartup, cosAutonomyMode } = ctx;
   if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup && cosAutonomyMode === 'execute') {
+    const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
     await queueEligibleImprovementTasks(state, cosTaskData);
   }
 }

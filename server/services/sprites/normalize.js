@@ -27,7 +27,6 @@
  * by the correct amount of the new key. A no-op when the keys match.
  */
 
-import sharp from 'sharp';
 import { tryReadFile, copyFileGuarded } from '../../lib/fileUtils.js';
 import { hexToRgb, keyChannelSplit, keyShareFn } from './chromaKey.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
@@ -95,6 +94,7 @@ export async function analyzeForeground(src, maskKeyHex) {
   const source = Buffer.isBuffer(src) ? src : (await tryReadFile(src, null)) ?? src;
   await assertFrameHasContent(source);
   const key = hexToRgb(maskKeyHex);
+  const { default: sharp } = await import('sharp');
   const { data, info } = await sharp(source)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
     .raw()
@@ -228,6 +228,7 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
       writeForegroundPixel(canvas, dstI, data, srcI, decon);
     }
   }
+  const { default: sharp } = await import('sharp');
   await sharp(canvas, { raw: { width: side, height: side, channels: 3 } }).png().toFile(dest);
   return { side, charW, charH };
 }
@@ -263,6 +264,7 @@ export async function recompositeOnKey(analysis, src, dest, canvasKeyHex) {
     // Geometry is preserved, so source and destination indices coincide.
     writeForegroundPixel(canvas, p * 3, data, p * 3, decon);
   }
+  const { default: sharp } = await import('sharp');
   await sharp(canvas, { raw: { width, height, channels: 3 } }).png().toFile(dest);
   return { width, height };
 }

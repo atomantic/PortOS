@@ -29,7 +29,7 @@ vi.mock('../../lib/ffmpeg.js', async (load) => ({
   }),
 }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'test-instance') }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()), loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
 vi.mock('./codeRender.js', async (load) => ({ ...await load(), writeCodeProofSheet: vi.fn(async () => null) }));
 vi.mock('../codeAnimation/execution.js', () => ({
   getCodeAnimationExecution: (...args) => blender.fake.getCodeAnimationExecution(...args),
@@ -52,7 +52,7 @@ const { renderMusicVideo, recoverStuckMusicVideoRenders } = await import('./rend
 const { startExcerptRender } = await import('./excerptRender.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 const { removeCompositionScratch, renderTypographyOverlays } = await import('./compositionRender.js');
-const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { mutateVideoHistory } = await import('../videoGen/history.js');
 const { musicVideoEvents } = await import('./events.js');
 const filmSync = await import('../film/sync.js');
 const filmSources = await import('../film/sources.js');

@@ -1,7 +1,6 @@
 /** Import and render admission, before any imported code executes. */
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { parse } from '@babel/parser';
 import { assertMusicVideoMedia, musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 const IMAGES = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.bmp', '.svg', '.ico']);
 const VIDEO = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi']);
@@ -32,6 +31,7 @@ export async function assertDocumentMediaPolicy(project, files) {
         // Inspect executable text and string literals, not inert JSDoc such as Array<Image>.
         // One pass over the (source-ordered) comments: re-slicing the whole text per
         // comment is quadratic and took ~9s on the vendored three.core.js (#10467).
+        const { parse } = await import('@babel/parser');
         const { comments } = parse(source, { sourceType: 'unambiguous' });
         const kept = [];
         let at = 0;

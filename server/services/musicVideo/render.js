@@ -40,7 +40,7 @@ import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
-import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
+import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';

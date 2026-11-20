@@ -28,7 +28,6 @@
 import { schedule, cancel, isValidCron } from './eventScheduler.js';
 import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { getSeries } from './pipeline/series.js';
-import { startSeriesAutopilot } from './pipeline/seriesAutopilot.js';
 import { getUserTimezone } from './userTimezone.js';
 
 // eventScheduler id namespace for a per-series cron. One event per seriesId.
@@ -122,6 +121,7 @@ async function runScheduledAutopilot(seriesId) {
       return;
     }
     console.log(`🎬 Series Autopilot scheduler: starting scheduled run for ${seriesId}`);
+    const { startSeriesAutopilot } = await import('./pipeline/seriesAutopilot.js');
     const result = await startSeriesAutopilot(seriesId, runOptionsFor(entry));
     if (result?.rejected) {
       // cos autonomy is off — the sanctioned gate refused the run. Expected, not an error.

@@ -41,7 +41,7 @@ vi.mock('../universeBuilder.js', async () => ({
 vi.mock('../pipeline/series.js', async () => ({
   listSeries: vi.fn(),
 }));
-vi.mock('../fableLoom/index.js', () => ({ listLooms: vi.fn() }));
+vi.mock('../fableLoom/records.js', () => ({ listLooms: vi.fn() }));
 vi.mock('../authors/index.js', () => ({ listAuthors: vi.fn() }));
 vi.mock('../artists/index.js', () => ({ listArtists: vi.fn() }));
 vi.mock('../albums/index.js', () => ({ listAlbums: vi.fn() }));
@@ -65,7 +65,7 @@ import { assetIntegrityForRecord } from './peerSync.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
-import { listLooms } from '../fableLoom/index.js';
+import { listLooms } from '../fableLoom/records.js';
 import { listAuthors } from '../authors/index.js';
 import { listArtists } from '../artists/index.js';
 import { listAlbums } from '../albums/index.js';

@@ -52,7 +52,7 @@ import { getTrack, mergeTracksFromSync } from '../tracks/index.js';
 import { getProject, mergeProjectsFromSync } from '../creativeDirector/local.js';
 import { getProject as getMusicVideoProject, mergeProjectsFromSync as mergeMusicVideoProjectsFromSync } from '../musicVideo/projects.js';
 import { getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
-import { getLoom, mergeLoomsFromSync } from '../fableLoom/index.js';
+import { getLoom, mergeLoomsFromSync } from '../fableLoom/records.js';
 import {
   getWorkForSync, mergeWorksFromSync,
   getFolderForSync, mergeFoldersFromSync,

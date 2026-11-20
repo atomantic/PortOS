@@ -342,12 +342,18 @@ describe('shared provider type leaf', () => {
 // that is imported statically, so a resolver gap cannot make this look clean.
 describe('heavy single-feature packages stay out of the boot closure', () => {
   const closure = staticImportClosure(abs('index.js'));
-  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three'])(
+  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three', 'sharp', '@babel/parser'])(
     'does not reach %s through static imports from index.js',
     (pkg) => {
       expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);
     },
   );
+  it('arms local model subscriptions before either HTTP router loads', () => {
+    expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
+  });
+  it('loads at most half of the original 3,023 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1511);
+  });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);
   });

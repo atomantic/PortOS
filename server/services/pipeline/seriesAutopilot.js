@@ -42,6 +42,7 @@ export * from './seriesAutopilot/arcSteps.js';
 export * from './seriesAutopilot/dispatch.js';
 export * from './seriesAutopilot/dryRun.js';
 export * from './seriesAutopilot/orchestrator.js';
+export { recoverStuckAutopilots } from './recovery.js';
 
 // Test internals, pulled from their home modules. Lazy getters because a real
 // import cycle (session -> autoRunner -> episodeVideo -> completionHook ->

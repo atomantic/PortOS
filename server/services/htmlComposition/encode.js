@@ -4,7 +4,6 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { availableParallelism, totalmem } from 'node:os';
 import { rm, writeFile } from 'node:fs/promises';
-import sharp from 'sharp';
 import { blurFrame } from './shutterBlur.js';
 import { sumExpr } from '../../lib/ffmpegExpr.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
@@ -58,6 +57,7 @@ const MAX_FRAME_RETRIES = 2;
 // keeps running, so frames already piped are kept. `onRetry({ frame, attempt,
 // error })` reports each restart, `frame` counted on song time.
 export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, onLifecycle, offsetSec = 0, continuous = false, followed = false, videoFilter = null, videoArgs = H264_ENCODE_ARGS, master = false, reopenPage = null, onRetry = null, runFfmpeg = runFfmpegProcess, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+  const { default: sharp } = await import('sharp');
   onLifecycle?.({ phase: 'encoder-preflight' });
   const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');

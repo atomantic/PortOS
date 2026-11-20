@@ -1,7 +1,6 @@
 /**
  * Series Autopilot — run orchestration (#2842 split of seriesAutopilot.js):
- * `startSeriesAutopilot` (the resolve → dispatch → broadcast loop) and the
- * boot-time recovery of runs interrupted by a restart.
+ * `startSeriesAutopilot` (the resolve → dispatch → broadcast loop).
  */
 
 import { randomUUID } from 'crypto';
@@ -12,7 +11,7 @@ import { mergeSeverityWeights, resolveBlockingSet } from '../../../lib/editorial
 import { loadState } from '../../cos/cosState.js';
 import { getDomainBudgetStatus } from '../../domainUsage.js';
 import { getSettings } from '../../settings.js';
-import { getSeries, updateSeries, listSeries } from '../series.js';
+import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { runs, emptyProgress } from './state.js';
@@ -576,23 +575,4 @@ export async function startSeriesAutopilot(sId, options = {}) {
   });
 
   return { runId, alreadyRunning: false, mode };
-}
-
-/**
- * Boot-time recovery: the in-memory run map is lost on restart, so any series
- * whose persisted marker still says `running` is demoted to `paused` (the user
- * can click Run to resume from the next missing step). Mirrors
- * recoverStuckAutoRuns in autoRunner.js. Best-effort; never blocks boot.
- */
-export async function recoverStuckAutopilots() {
-  const all = await listSeries().catch(() => []);
-  const stuck = all.filter((s) => s.autopilot?.status === 'running');
-  if (stuck.length === 0) return 0;
-  for (const s of stuck) {
-    await updateSeries(s.id, {
-      autopilot: { ...s.autopilot, status: 'paused', lastError: 'interrupted by server restart', updatedAt: new Date().toISOString() },
-    }).catch(() => null);
-  }
-  console.log(`📝 autopilot: recovered ${stuck.length} stuck run${stuck.length === 1 ? '' : 's'} on boot`);
-  return stuck.length;
 }

@@ -14,7 +14,10 @@
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { normalizeSlug, deriveOutcome, readImplementingPrState, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
+import { PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence/constants.js';
+import { normalizeSlug } from './layeredIntelligence/dedup.js';
+import { deriveOutcome } from './layeredIntelligence/outcomes.js';
+import { readImplementingPrState } from './layeredIntelligence/forgeFiler.js';
 import { classifyRejection, classifyPrFailure, isPrRefinableReason, isPrFailureReason, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
 import { classifyExecutionFailure, EXECUTION_FAILURE_VALUES } from './layeredIntelligenceExecutionFailures.js';
 

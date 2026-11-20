@@ -50,7 +50,6 @@ import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../../lib/gitCommitProbe.js';
-import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { fileInvestigationTask } from '../investigationTaskProducer.js';
 import { buildInvestigationFingerprint } from '../../lib/investigationTasks.js';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
@@ -1337,6 +1336,7 @@ async function runCleanupOrphanedAgents() {
       // completion, in that order. A hard kill (`pm2 restart`, reboot) lands here,
       // so this is the path that leaves dirt in a managed app repo if any of it
       // is skipped.
+      const { retireDeadAgent } = await import('./agentFinalization.js');
       const retirement = await retireDeadAgent({
         agent,
         task,
@@ -1540,6 +1540,11 @@ function skipHandledOrphan({ taskId, agentId, task }) {
   emitLog('info', `⏭️ Skipping orphaned task ${taskId} — already handled (${blockedCategory})`, { taskId, agentId, blockedCategory });
 }
 
+async function stampOrphanVerdict(taskUpdate, task, outcome) {
+  const { stampLiExecutionVerdict } = await import('./agentFinalization.js');
+  return stampLiExecutionVerdict(taskUpdate, task, outcome);
+}
+
 function skipCompletedOrphan({ taskId, agentId }) {
   emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
 }
@@ -1547,7 +1552,7 @@ function skipCompletedOrphan({ taskId, agentId }) {
 async function recoverPrivateSecurityOrphan({ taskId, agentId, task }) {
   if (task.status === 'completed') return;
   await removePrivateSecurityScratch(agentId);
-  const taskUpdate = await stampLiExecutionVerdict({ status: 'blocked', metadata: { ...task.metadata,
+  const taskUpdate = await stampOrphanVerdict({ status: 'blocked', metadata: { ...task.metadata,
     blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',
     blockedReason: 'Private assessment was interrupted. Inspect its local output and explicitly rerun it; no automatic investigation or provider fallback will run.',
   } }, task, { success: false });
@@ -1559,7 +1564,7 @@ async function recoverRefusedOrphan({ taskId, task, agentMetadata, agentStartedA
   // Do not let an older refused run block a newer invocation.
   const startedAt = toEpochMs(agentStartedAt);
   if (startedAt && toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]) > startedAt) return;
-  await updateTask(taskId, await stampLiExecutionVerdict({ status: 'blocked', metadata: {
+  await updateTask(taskId, await stampOrphanVerdict({ status: 'blocked', metadata: {
     ...task.metadata, ...clearedRetryHoldMetadata(), executionInterruption: interruption,
     blockedAt: new Date().toISOString(), blockedCategory: interruption.category,
     blockedReason: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
@@ -1648,7 +1653,7 @@ async function completeIfCommitted({ taskId, agentId, task, agentMetadata, agent
     && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, runStartedAt);
   if (!commitFound) return false;
   emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
-  const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: true });
+  const taskUpdate = await stampOrphanVerdict({ status: 'completed' }, task, { success: true });
   await updateTask(taskId, taskUpdate, task.taskType || 'user', {
     expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
     recoveryOwner: { id: agentId, startedAt: agentStartedAt },
@@ -1689,7 +1694,7 @@ async function applyOrphanDecision({ taskId, agentId, task, agentMetadata, agent
     : {};
   const outcome = buildOrphanOutcome({ decision, task, agentId, now: Date.now(), resumePatch });
   logOrphanDecision(taskId, decision);
-  const taskUpdate = requeue ? outcome : await stampLiExecutionVerdict(outcome, task, { success: false });
+  const taskUpdate = requeue ? outcome : await stampOrphanVerdict(outcome, task, { success: false });
   const saved = await updateTask(taskId, taskUpdate, task.taskType || 'user', {
     expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
     recoveryOwner: { id: agentId, startedAt: agentStartedAt },

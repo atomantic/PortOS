@@ -63,11 +63,8 @@ import {
   listProjectIds as listMusicVideoProjectIds,
 } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards, listBoardIds } from '../moodBoard/index.js';
-import {
-  pruneTombstonedLooms,
-  listLiveIds as listLiveLoomIds,
-  listIds as listLoomIds,
-} from '../fableLoom/index.js';
+import { pruneTombstonedLooms } from '../fableLoom/records.js';
+import { listLiveIds as listLiveLoomIds, listIds as listLoomIds } from '../fableLoom/store.js';
 import {
   pruneTombstonedWorks, listWorkIdsForSync,
   pruneTombstonedFolders, listFolderIdsForSync,

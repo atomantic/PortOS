@@ -18,7 +18,6 @@
  *    `null` is logged, never a generation failure; callers gate on `ok === false`, never `!ok`.
  */
 
-import sharp from 'sharp';
 import { createHash } from 'crypto';
 import { createBoundedStateMap } from './boundedStateMap.js';
 
@@ -98,8 +97,8 @@ async function measureFrameStats(input) {
   // One sharp instance per read: `metadata()` and `stats()` both consume the pipeline. A decode
   // failure is NOT a verdict, so it is logged and reported as the `null` sentinel; `sharp()` throws
   // synchronously for an empty buffer, hence the promise chain.
-  const probe = await Promise.resolve()
-    .then(async () => ({ metadata: await sharp(input).metadata(), stats: await sharp(input).stats() }))
+  const probe = await import('sharp')
+    .then(async ({ default: sharp }) => ({ metadata: await sharp(input).metadata(), stats: await sharp(input).stats() }))
     .catch((err) => ({ err }));
   if (probe.err) {
     console.warn(`⚠️ Frame stats unavailable, skipping degenerate-frame check: ${probe.err?.message || probe.err}`);

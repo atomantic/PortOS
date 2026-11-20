@@ -10,7 +10,6 @@
 
 import { join, resolve } from 'path';
 import { readdir, stat } from 'fs/promises';
-import sharp from 'sharp';
 import { PATHS, isPathInsideDir, pathExists } from '../../lib/fileUtils.js';
 import { createBoundedStateMap } from '../../lib/boundedStateMap.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -219,6 +218,7 @@ async function readImageMetadata(absPath, stats) {
   if (cached) return cached;
   let result;
   try {
+    const { default: sharp } = await import('sharp');
     const meta = await sharp(absPath, { limitInputPixels: MAX_PIXELS }).metadata();
     result = {
       width: meta.width ?? null,
