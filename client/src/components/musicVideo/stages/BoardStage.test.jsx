@@ -35,12 +35,13 @@ it('fixes a shot reference from the board and refreshes the check-in', async () 
   ] } }).mockResolvedValue({ catalogCheckin: checkin });
   const saved = { sceneId: 's1', patch: { frameReferenceIds: ['ada'] }, updatedAt: '2026-01-01T00:00:00Z' };
   repairMusicVideoShotReference.mockResolvedValueOnce(saved);
-  const b = board(shots, { applyShotReferenceRepair: vi.fn() });
+  const b = board(shots, { applyCatalogCheckin: vi.fn(), applyShotReferenceRepair: vi.fn() });
   b.project.castAndSets = { source: 'catalog' };
   renderBoard(b);
   fireEvent.click(await screen.findByRole('button', { name: 'Add Ada' }));
   await waitFor(() => expect(b.applyShotReferenceRepair).toHaveBeenCalledWith(saved));
   expect(repairMusicVideoShotReference).toHaveBeenCalledWith('p', 'problem-1', { silent: true });
+  await waitFor(() => expect(b.applyCatalogCheckin).toHaveBeenLastCalledWith(checkin));
   await waitFor(() => expect(screen.queryByRole('group', { name: 'Shot references' })).toBeNull());
   expect(getMusicVideoCastAndSets).toHaveBeenCalledTimes(2);
 });
