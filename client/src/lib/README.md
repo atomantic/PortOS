@@ -28,3 +28,7 @@ node scripts/lib-catalog.js <term> --dir client/src/lib
 Each module opens with a one-sentence summary comment (at most 200 characters) that the catalog
 prints; `client/src/lib/moduleSummaries.test.js` enforces it.
 
+
+For Music Video stages, search for `musicVideoStageProgress`, `musicVideoChecklists`,
+`musicVideoPreviewSources`, or `musicVideoEstimates`. The `musicVideoStages.js` entry
+point preserves the existing imports.
