@@ -32,8 +32,8 @@ const DEFAULT_CLIENT_DIR = join(ROOT_DIR, 'client');
 const STAGE_PREFIX = '.dist-stage-';
 const ABANDONED_STAGE_AGE_MS = 24 * 60 * 60 * 1000;
 const PUBLISHED_BUILD_MANIFEST = '.published-builds.json';
-const RETAINED_BUILD_COUNT = 3;
-const STALE_ASSET_AGE_MS = 24 * 60 * 60 * 1000;
+const RETAINED_BUILD_COUNT = 2;
+const STALE_ASSET_AGE_MS = 2 * 60 * 60 * 1000;
 
 function localReferencePath(reference, stageDir) {
   if (!reference || reference.startsWith('//')) return null;
