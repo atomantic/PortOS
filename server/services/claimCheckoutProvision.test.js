@@ -67,16 +67,18 @@ describe('provisionClaimCheckout', () => {
     ['pnpm', 'missing receipt', 'unverified'],
     ['pnpm', 'absent', 'absent'],
     ['npm', 'matching', 'linked-match'],
+    ['npm', 'stale root range', 'stale'],
     ['npm', 'stale', 'stale'],
   ])('checks the %s root lockfile before linking a %s install', async (manager, receiptState, expectedStatus) => {
     const pnpm = manager === 'pnpm';
     const filename = pnpm ? 'pnpm-lock.yaml' : 'package-lock.json';
     const receiptPath = join(repo, 'node_modules', pnpm ? '.pnpm/lock.yaml' : '.package-lock.json');
-    const wanted = version => pnpm ? pnpmLock(version) : npmLock(version, {
-      '': { name: 'fixture' },
+    const wanted = (version, range = `^${version}`) => pnpm ? pnpmLock(version) : npmLock(version, {
+      '': { name: 'fixture', dependencies: { example: range } },
       'node_modules/platform-optional': { version: '1.0.0', optional: true },
     });
-    const installVersion = receiptState === 'matching' ? '2.0.0' : '1.0.0';
+    const installVersion = ['matching', 'stale root range'].includes(receiptState) ? '2.0.0' : '1.0.0';
+    const installRange = receiptState === 'stale root range' ? '2.0.0' : `^${installVersion}`;
     const receipt = pnpm ? pnpmLock(installVersion) : npmLock(installVersion);
     if (receiptState !== 'absent') await mkdir(join(repo, 'node_modules', '.pnpm'), { recursive: true });
     await mkdir(join(repo, 'client', 'node_modules'), { recursive: true });
@@ -87,8 +89,8 @@ describe('provisionClaimCheckout', () => {
     await execGit(['push', 'origin', 'HEAD:main'], repo);
     // A matching lockfile in the primary checkout cannot justify linking into
     // a claim whose fetched branch wants a different dependency version.
-    await writeFile(join(repo, filename), wanted(installVersion));
-    const hasReceipt = receiptState === 'matching' || receiptState === 'stale';
+    await writeFile(join(repo, filename), wanted(installVersion, installRange));
+    const hasReceipt = !['absent', 'missing receipt'].includes(receiptState);
     if (hasReceipt) await writeFile(receiptPath, receipt);
 
     const { claimCheckout } = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
@@ -100,7 +102,7 @@ describe('provisionClaimCheckout', () => {
       expect(realpathSync(root)).toBe(realpathSync(join(repo, 'node_modules')));
       expect(realpathSync(child)).toBe(realpathSync(join(repo, 'client', 'node_modules')));
     } else {
-      expect(claimCheckout.dependencies).toEqual([{ path: 'node_modules', status: expectedStatus, manager }]);
+      expect(claimCheckout.dependencies).toEqual([{ path: 'node_modules', status: expectedStatus, manager, hasInstalledChildren: true }]);
       expect(existsSync(root)).toBe(false);
       expect(existsSync(child)).toBe(false);
     }

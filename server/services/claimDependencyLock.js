@@ -32,12 +32,19 @@ async function declaredPackageManager(worktreePath) {
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-function compareNpmReceipt(lockfile, receipt) {
+const NPM_ROOT_INPUTS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'workspaces'];
+
+function compareNpmReceipt(lockfile, receipt, sourceLockfile) {
   const expected = JSON.parse(lockfile).packages;
   const installed = JSON.parse(receipt).packages;
   // npm's hidden lockfile omits the project root and may omit platform-specific
   // optional packages. Workspace links and their target records are included.
-  if (!isRecord(expected?.['']) || !isRecord(installed)) return 'unverified';
+  const sourceRoot = JSON.parse(sourceLockfile ?? 'null')?.packages?.[''];
+  if (!isRecord(expected?.['']) || !isRecord(installed) || !isRecord(sourceRoot)) return 'unverified';
+  // npm's receipt has no record of the ranges or workspace declarations used
+  // at the root. Check the source declaration and still require its receipt
+  // to independently agree with the claim's resolved packages.
+  if (!NPM_ROOT_INPUTS.every(key => isDeepStrictEqual(expected[''][key], sourceRoot[key]))) return 'stale';
   const matches = Object.entries(expected).every(([path, entry]) =>
     path === '' || (entry?.optional === true && !Object.hasOwn(installed, path)) ||
     isDeepStrictEqual(entry, installed[path])) &&
@@ -71,9 +78,11 @@ export async function inspectClaimDependencyLock(sourceWorkspace, worktreePath) 
   const receiptPath = manager === 'pnpm' ? join('.pnpm', 'lock.yaml') : '.package-lock.json';
   const receipt = await readText(join(sourceModules, receiptPath));
   if (!lockfile || !receipt) return { manager, status: 'unverified' };
-  const compare = manager === 'pnpm' ? comparePnpmReceipt : compareNpmReceipt;
   try {
-    return { manager, status: compare(lockfile, receipt) };
+    const status = manager === 'pnpm'
+      ? comparePnpmReceipt(lockfile, receipt)
+      : compareNpmReceipt(lockfile, receipt, (await readCheckoutFile(join(sourceWorkspace, LOCKFILES.npm)))?.text);
+    return { manager, status };
   } catch {
     return { manager, status: 'unverified' };
   }
@@ -96,7 +105,10 @@ export function formatClaimDependencyStatus(dependencies) {
       pnpm: 'with `pnpm install --frozen-lockfile`',
       npm: 'with `npm ci`',
     }[unavailable.manager] ?? 'using the repository’s documented install procedure';
-    return `Dependency provisioning: ${unavailable.path} ${source}. PortOS skipped dependency linking. After verifying the dependency paths are local to this worktree, install here ${install}.`;
+    const childGuidance = unavailable.hasInstalledChildren
+      ? ' Source child installs were also left unlinked. Install independently locked packages from their own worktree directories if needed.'
+      : '';
+    return `Dependency provisioning: ${unavailable.path} ${source}. PortOS skipped dependency linking. After verifying the dependency paths are local to this worktree, install here ${install}.${childGuidance}`;
   }
 
   if (dependencies.every(item => item.status === 'absent')) {

@@ -70,6 +70,8 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
   return ['node_modules', ...children.filter(Boolean)];
 }
 
+const hasInstalledDependencies = path => stat(path).then(info => info.isDirectory()).catch(() => false);
+
 /**
  * Make installed dependencies available to a fresh worktree without copying
  * or reinstalling them. Missing source directories are skipped so this also
@@ -79,16 +81,19 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  * so those links resolve inside the worktree, not the source (#12633).
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath, { verifyRootLockfile = false } = {}) {
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
   const lock = verifyRootLockfile ? await inspectClaimDependencyLock(sourceWorkspace, worktreePath) : null;
   // A missing or unverifiable root install can require a workspace-wide
   // reinstall. Leave child paths unlinked so it cannot write through them.
-  if (lock && lock.status !== 'matching') return [{ path: 'node_modules', ...lock }];
+  if (lock && lock.status !== 'matching') {
+    const installedChildren = await Promise.all(dependencyPaths.slice(1).map(path => hasInstalledDependencies(join(sourceWorkspace, path))));
+    return [{ path: 'node_modules', ...lock, hasInstalledChildren: installedChildren.some(Boolean) }];
+  }
 
-  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
   const outcomes = await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
-    const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
+    const sourceExists = await hasInstalledDependencies(sourcePath);
     const targetStat = await lstat(targetPath).catch(() => null);
     if (!sourceExists) return { path: relativePath, status: targetStat ? 'existing' : 'absent' };
     if (targetStat) {
