@@ -1162,7 +1162,9 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     const { storableProviderRecord } = await presetService();
     const stored = await storableProviderRecord({ ...existing, ...updates, id: req.params.id }, updates, existing);
 
-    const provider = await providerService.updateProvider(req.params.id, stored);
+    const provider = Array.isArray(updates.models) && !isDerivedPreset(existing)
+      ? await providerService.updateProvider(req.params.id, stored, { trackModelRemovals: true })
+      : await providerService.updateProvider(req.params.id, stored);
     res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
   }));
 

@@ -125,7 +125,7 @@ export function sharedModeUpdates(updates) {
   // A paired harness has one provider configuration as well as one connection.
   // Mirror shared settings from whichever mode the user edited; clone their
   // objects so legacy CLI/TUI records don't alias mutable values in memory.
-  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', ...MODE_SHARED_SETTINGS_KEYS, ...MODE_GROUPED_KEYS]
+  const shared = Object.fromEntries(['enabled', 'models', 'removedModels', 'modelContextWindows', ...MODE_SHARED_SETTINGS_KEYS, ...MODE_GROUPED_KEYS]
     .filter(key => Object.hasOwn(updates, key))
     .map(key => [key, detachModeValue(updates[key])]));
   return shared;
@@ -231,8 +231,10 @@ export function unifyProviderModes(data) {
     const enabled = group.some(provider => provider.enabled === true);
     const models = [...new Set(group.flatMap(provider => provider.models || []))];
     for (const provider of group) {
-      if (provider.enabled !== enabled || !isDeepStrictEqual(provider.models, models)) {
-        Object.assign(provider, { enabled, models: [...models] });
+      const removed = new Set(Array.isArray(provider.removedModels) ? provider.removedModels : []);
+      const offered = models.filter(model => !removed.has(model));
+      if (provider.enabled !== enabled || !isDeepStrictEqual(provider.models, offered)) {
+        Object.assign(provider, { enabled, models: offered });
         changed = true;
       }
     }

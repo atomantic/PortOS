@@ -300,6 +300,13 @@ describe('PUT /api/providers/:id on a derived preset', () => {
     expect(presetService.materializeStoredPreset).not.toHaveBeenCalled();
     expect(providerService.updateProvider).toHaveBeenCalledWith('claude-ollama', expect.objectContaining({ effort: 'low' }));
   });
+
+  it('records opt-outs when a user edits a legacy preset model list', async () => {
+    const res = await request(app()).put('/api/providers/claude-ollama').send({ models: [] });
+    expect(res.status).toBe(200);
+    expect(providerService.updateProvider).toHaveBeenCalledWith('claude-ollama',
+      expect.objectContaining({ models: [] }), { trackModelRemovals: true });
+  });
 });
 
 describe('POST /api/providers with preset structure', () => {

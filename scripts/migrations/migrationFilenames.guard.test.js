@@ -2,8 +2,8 @@
  * A shipped migration's filename is its applied-list identity (#16094).
  *
  * The number prefix is only an ordering hint: `run-migrations` keys the ledger
- * on the filename and sorts lexically, so two migrations sharing a prefix run
- * fine and renumbering a collision is churn. Renaming or deleting a migration
+ * on the filename and sorts lexically. Existing collisions stay in place,
+ * while new migrations must pick an unused number. Renaming or deleting a migration
  * that an install may already have applied is the real hazard — the renamed
  * file reads as "never applied" and re-runs on every install, and a deleted
  * one silently drops its transform for installs that have not run it yet.
@@ -311,6 +311,24 @@ export function missingShippedMigrations(baseNames, currentNames, retired = RETI
     .sort();
 }
 
+const LAST_LEGACY_PREFIX = 462;
+
+function collidingMigrationPrefixes(baseNames, currentNames) {
+  const base = new Set(baseNames);
+  const current = new Set(currentNames);
+  const byPrefix = new Map();
+  for (const name of new Set([...base, ...current])) {
+    if (!isShippedMigrationName(name)) continue;
+    const prefix = Number(name.slice(0, name.indexOf('-')));
+    const names = byPrefix.get(prefix) ?? [];
+    names.push(name);
+    byPrefix.set(prefix, names);
+  }
+  return [...byPrefix].filter(([prefix, names]) => names.length > 1 && names.some(name =>
+    current.has(name) && (prefix > LAST_LEGACY_PREFIX || !base.has(name)),
+  )).map(([, names]) => names);
+}
+
 const git = (...args) => execFileSync('git', args, {
   cwd: REPO_ROOT,
   encoding: 'utf8',
@@ -342,6 +360,9 @@ describe('shipped migration filenames stay stable', () => {
     expect(missingShippedMigrations(baseNames, currentNames),
       `Migrations shipped at ${base} were renamed or deleted; installs that applied them would re-run or lose them. Restore the file, or record a retirement in RETIRED_MIGRATIONS.`,
     ).toEqual([]);
+    expect(collidingMigrationPrefixes(baseNames, currentNames),
+      'New migrations must use an unused number. Keep previously shipped filenames intact.',
+    ).toEqual([]);
   });
 
   describe('filename identity matching', () => {
@@ -353,8 +374,23 @@ describe('shipped migration filenames stay stable', () => {
       expect(missingShippedMigrations(['011-backfill.js'], ['011-other.js'])).toEqual(['011-backfill.js']);
     });
 
-    it('allows a new migration that duplicates an existing prefix', () => {
-      expect(missingShippedMigrations(['011-backfill.js'], ['011-backfill.js', '011-other.js'])).toEqual([]);
+    it('grandfathers shipped collisions and ignores test siblings', () => {
+      const shipped = ['011-backfill.js', '011-other.js'];
+      expect(collidingMigrationPrefixes(shipped, [...shipped, '011-backfill.test.js'])).toEqual([]);
+    });
+
+    it('flags new collisions with both historical and newly added migrations', () => {
+      const shipped = ['011-backfill.js'];
+      expect(collidingMigrationPrefixes(shipped, [
+        ...shipped, '011-other.js', '463-first.js', '463-second.js',
+      ])).toEqual([
+        ['011-backfill.js', '011-other.js'], ['463-first.js', '463-second.js'],
+      ]);
+    });
+
+    it('keeps checking collisions after the legacy cutoff on a current base', () => {
+      const names = ['463-first.js', '463-second.js'];
+      expect(collidingMigrationPrefixes(names, names)).toEqual([names]);
     });
 
     it('honours an explicit retirement and ignores test siblings', () => {
