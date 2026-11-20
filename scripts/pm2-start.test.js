@@ -68,8 +68,8 @@ describe('production PM2 startup', () => {
     expect(pm2.mock.calls).toEqual([['delete', '0'], restart, ['save']]);
   });
 
-  it('recovers a legacy monitor after the retired dashboard was already removed', async () => {
-    const { pm2, start } = setup([...production('5559'), foreignDashboard]);
+  it.each(['5559', undefined])('recovers a monitor with saved port %j after the dashboard was removed', async (port) => {
+    const { pm2, start } = setup([...production(port), foreignDashboard]);
     await start();
     expect(pm2.mock.calls).toEqual([restart, ['save']]);
   });

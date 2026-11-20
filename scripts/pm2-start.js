@@ -26,7 +26,6 @@ const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROBE_TIMEOUT_MS = 15000;
 const ECOSYSTEM = 'ecosystem.config.cjs';
 const AUTOFIXER = 'portos-autofixer';
-const LEGACY_MONITOR_PORT = '5559';
 const DASHBOARD_PORT = '5560';
 
 const normalizePath = (path) => {
@@ -143,8 +142,7 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
 
   const monitors = processes.filter(({ name }) => name === AUTOFIXER);
   const monitor = monitors.find(({ pm2_env }) => runsFrom(pm2_env, root));
-  const upgradeMonitor = expectedApps.includes(AUTOFIXER)
-    && (savedPort(monitor) === LEGACY_MONITOR_PORT || (dashboards.length && savedPort(monitor) !== DASHBOARD_PORT));
+  const upgradeMonitor = expectedApps.includes(AUTOFIXER) && savedPort(monitor) !== DASHBOARD_PORT;
   if (dashboards.length || upgradeMonitor) {
     if (upgradeMonitor && monitors.length !== 1) throw new Error('Multiple PM2 Autofixer monitors are registered');
     retireDashboard(dashboards, pm2);
