@@ -624,6 +624,10 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   // The optional vocal stem (#8977) conditions performance shots and lives
   // under PATHS.music beside the master, so it rides the same entries.
   if (isStr(project?.vocalStemFilename)) audioNames.push(project.vocalStemFilename);
+  // Timeline audio layers (musicVideo/audioLayers.js) are uploads under PATHS.music too.
+  for (const layer of Array.isArray(project?.audioLayers) ? project.audioLayers : []) {
+    if (isStr(layer?.filename)) audioNames.push(layer.filename);
+  }
   for (const revision of project?.audioTimingRevisions || []) {
     if (isStr(revision.before?.audioFilename)) audioNames.push(revision.before.audioFilename);
     if (isStr(revision.before?.vocalStemFilename)) audioNames.push(revision.before.vocalStemFilename);

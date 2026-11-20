@@ -40,17 +40,30 @@ export function clipSoundVoices(plan) {
 }
 
 /**
- * The master (`mainLabel`) mixed with the bed and the clip sounds into
- * `outLabel`, or null when there is nothing to mix (the master plays as is).
- * `durationSec` bounds the bed to the song.
+ * The timeline's audio layers (`soundBed.layers`, audioLayers.js) on song time,
+ * each cut at the song's end; a layer starting at or after it drops out.
+ */
+export function songAudioLayerBeds(layers, durationSec) {
+  return (layers || []).flatMap((layer) => {
+    const length = durationSec != null ? Math.min(layer.durationSec, durationSec - layer.startSec) : layer.durationSec;
+    return length > 0 ? [{ ...layer, durationSec: length }] : [];
+  });
+}
+
+/**
+ * The master (`mainLabel`) mixed with the bed, the timeline's audio layers and
+ * the clip sounds into `outLabel`, or null when there is nothing to mix (the
+ * master plays as is). `durationSec` bounds the bed and the layers to the song.
  */
 export function buildSongAudioMix({ mainLabel, soundBed = null, voices = [], firstInputIdx, durationSec, outLabel }) {
-  if (!soundBed?.path && !voices.length) return null;
+  const layers = songAudioLayerBeds(soundBed?.layers, durationSec);
+  if (!soundBed?.path && !layers.length && !voices.length) return null;
   const ducks = voices.filter((v) => v.musicLevel < 1)
     .map((v) => `volume=enable='between(t,${fmtSec(v.startSec)},${fmtSec(v.startSec + v.durationSec)})':volume=${fmtSec(v.musicLevel)}`);
   const filters = [`${mainLabel}${[AUDIO_NORM, ...ducks].join(',')}[master]`];
   const beds = [
     ...(soundBed?.path ? [{ assetPath: soundBed.path, offsetSec: 0, durationSec, volume: soundBed.volume }] : []),
+    ...layers,
     ...voices,
   ];
   const bed = buildAudioBedMix({ beds, firstInputIdx, mainLabel: '[master]', outLabel, limitPeak: true });

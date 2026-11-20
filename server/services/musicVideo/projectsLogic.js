@@ -44,6 +44,7 @@ import { normalizeLyricMarkers, remapLyricMarkers } from '../../lib/lyricMarkers
 import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
+import { applyAudioLayersPatch, normalizeAudioLayers } from './audioLayers.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTemplateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
 import { normalizeOverscan } from '../../lib/musicVideo/musicVideoFilmLook.js';
@@ -208,6 +209,8 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
       || { mode: productionPolicy.strategy === 'code-first' ? 'document' : 'composed' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
+    // Audio files placed over the song on the editor timeline (audioLayers.js).
+    ...(Array.isArray(input.audioLayers) && input.audioLayers.length ? { audioLayers: normalizeAudioLayers(input.audioLayers) } : {}),
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
     ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
@@ -447,6 +450,8 @@ export function applyProjectPatch(project, patch) {
         ? { ...project.composition, ...patch.composition } : patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
+    // Timeline audio layers: moved, re-levelled, muted, renamed or dropped by id; only the upload route adds one.
+    ...('audioLayers' in patch ? { audioLayers: applyAudioLayersPatch(project.audioLayers, patch.audioLayers) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
     ...('templateEffects' in patch ? { templateEffects: normalizeTemplateEffects(patch.templateEffects) } : {}),

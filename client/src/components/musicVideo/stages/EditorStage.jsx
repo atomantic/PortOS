@@ -7,6 +7,11 @@ import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimelin
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { MUSIC_VIDEO_SCROLL_ID } from '../MusicVideoLayout.jsx';
+import toast from '../../ui/Toast';
+import { uploadMusicVideoAudioLayer } from '../../../services/apiMusicVideo.js';
+
+// What a PATCH of `audioLayers` may carry: the server keeps each layer's file and length.
+const layerPatch = ({ id, startSec, volume, muted, label }) => ({ id, startSec, volume, muted, label });
 
 /**
  * The height that takes `el` from where it sits to the bottom of the page's
@@ -100,6 +105,18 @@ export default function EditorStage({ board }) {
   const previewWidth = usePreviewFit(previewCell);
   const [screenEl, setScreenEl] = useState(null);
   const screenHeight = useScreenFill(screenEl);
+  // Audio layers over the song: shown at once, saved in order with the board's other project saves.
+  const editAudioLayers = (audioLayers) => {
+    board.editProjectLocal({ audioLayers });
+    return board.saveProjectFields({ audioLayers: audioLayers.map(layerPatch) });
+  };
+  const addAudioLayer = (file, startSec) => uploadMusicVideoAudioLayer(project.id, file, { startSec, silent: true })
+    .then(({ project: updated, layer }) => {
+      board.replaceProject(updated);
+      toast.success(`Added ${layer.label} at ${startSec.toFixed(2)}s — drag it along its row to move it`);
+      return layer;
+    })
+    .catch((err) => { toast.error(err?.message || 'Failed to add the audio layer'); throw err; });
   const editShot = (sceneId, patch) => { board.editSceneLocal(sceneId, patch); return board.saveScene(sceneId, patch); };
   const openShot = (scene) => {
     board.seekToScene?.(scene);
@@ -134,7 +151,9 @@ export default function EditorStage({ board }) {
       effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
       onSplitShot={board.locked || orderOwned || !board.onSplitScene ? null : (sceneId, atSec) => board.onSplitScene(sceneId, null, atSec)}
       onPreview={(t, play) => board.seekToScene?.({ startSec: t }, { play, pause: !play })}
-      libraryEl={desktop ? libraryEl : null} />
+      libraryEl={desktop ? libraryEl : null}
+      onAddAudioLayer={board.replaceProject ? addAudioLayer : null}
+      onEditAudioLayers={board.saveProjectFields ? editAudioLayers : null} />
   );
   const panelCls = 'min-h-0 overflow-y-auto rounded-lg border border-port-border bg-port-card';
   return (
