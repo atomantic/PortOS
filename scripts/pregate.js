@@ -28,7 +28,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
+import { moduleSpecifiers, resolveModuleCandidates } from './lib/moduleGraph.js';
 import { cosWorkerBudget, readMaxConcurrentAgents } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
@@ -394,7 +394,10 @@ function importNeedles(target) {
 
 /**
  * Which of `files` reference each of `targets` through a relative import,
- * `import()` or `vi.mock` specifier that resolves to it.
+ * `import()` or `vi.mock` specifier that resolves to it, read through the
+ * shared module graph's extractor and resolver (`scripts/lib/moduleGraph.js`).
+ * A file the tokenizer cannot read counts as a referrer of every target it
+ * spells, so an unknown edge set widens the local run instead of hiding a suite.
  *
  * @returns {Map<string, string[]>} target -> sorted, de-duplicated referrers
  */
@@ -403,12 +406,21 @@ async function referrersOf(targets, files, readText) {
   const referrers = new Map(targets.map(target => [target, new Set()]));
   const known = new Set(targets);
   // Cheap prefilter: a resolved specifier always spells one of the target's needles.
+  const needles = new Map(targets.map(target => [target, new RegExp(importNeedles(target).join('|'))]));
   const spelled = new RegExp([...new Set(targets.flatMap(importNeedles))].join('|'));
   await scanTexts(files, readText, (file, text) => {
     if (!spelled.test(text)) return;
-    for (const spec of testReferenceSpecifiers(text)) {
-      const target = resolveSpecifier(file, spec, known);
-      if (target && target !== file) referrers.get(target).add(file);
+    let specs;
+    try {
+      specs = moduleSpecifiers(text, file);
+    } catch {
+      for (const [target, needle] of needles) if (target !== file && needle.test(text)) referrers.get(target).add(file);
+      return;
+    }
+    for (const spec of [...specs.statics, ...specs.deferred, ...specs.mocked]) {
+      for (const target of resolveModuleCandidates(file, spec, known)) {
+        if (target !== file) referrers.get(target).add(file);
+      }
     }
   });
   return new Map([...referrers].map(([target, set]) => [target, [...set].sort()]));
