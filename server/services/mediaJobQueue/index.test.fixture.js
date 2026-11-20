@@ -29,11 +29,12 @@ export const catalogDispatch = { hydrate: vi.fn(async project => project) };
 // leak check in afterAll must only see this file's directories.
 const suiteRoot = mkdtempSync(join(tmpdir(), 'mediaJobQueue-suite-'));
 export let tempDataDir;
-// Counting wrapper around the real atomicWrite. persist() funnels every disk
-// write through atomicWrite, so spying on it lets tests assert *how many*
-// times state was flushed — used to pin the progress-persist debounce (it must
-// coalesce a burst of progress events into one write, not write per-event).
+// Observe each queue snapshot without replacing the real write.
 export let atomicWriteSpy;
+
+export function queueSnapshotJobs(path, payload) {
+  return path === join(tempDataDir, 'media-jobs.json') ? JSON.parse(payload).jobs : [];
+}
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -351,7 +352,7 @@ afterAll(() => {
   rmSync(suiteRoot, { recursive: true, force: true });
 });
 
-// Polling helper for the async settles this suite waits on (a debounced disk
+// Polling helper for the async settles this suite waits on (a durable disk
 // write, a worker tick). A predicate that THROWS counts as "not true yet" and
 // keeps polling: several predicates readFileSync the persisted snapshot, which
 // legitimately does not exist until the first write lands in the freshly-made

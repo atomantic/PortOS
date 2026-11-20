@@ -2,7 +2,7 @@
 // Shared mocks, stubs and per-test lifecycle live in ./index.test.fixture.js,
 // which must stay the first import that can resolve a mocked module.
 import { describe, it, expect, vi } from 'vitest';
-import { catalogDispatch, tempDataDir, atomicWriteSpy, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, audioGenEvents, importFresh, flush, remoteMediaParams, remoteImageMediaParams, remoteVideoMediaParams, waitFor, persistedJobs } from './index.test.fixture.js';
+import { catalogDispatch, tempDataDir, atomicWriteSpy, queueSnapshotJobs, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, audioGenEvents, importFresh, flush, remoteMediaParams, remoteImageMediaParams, remoteVideoMediaParams, waitFor, persistedJobs } from './index.test.fixture.js';
 import { mkdirSync, rmSync, writeFileSync, readFileSync, renameSync, lstatSync } from 'fs';
 import { createHash } from 'node:crypto';
 import { join } from 'path';
@@ -299,7 +299,7 @@ describe('mediaJobQueue', () => {
     const archiveWrite = new Promise(resolve => { releaseArchive = resolve; });
     let completedWrites = 0;
     atomicWriteSpy.mockImplementation(async (path, data) => {
-      if (data?.jobs?.some(job => job.id === jobId && job.status === 'completed')) {
+      if (queueSnapshotJobs(path, data).some(job => job.id === jobId && job.status === 'completed')) {
         completedWrites += 1;
         if (completedWrites === 1) await terminalWrite;
         if (completedWrites === 2) await archiveWrite;

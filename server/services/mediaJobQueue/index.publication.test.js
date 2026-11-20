@@ -2,7 +2,7 @@
 // Shared mocks, stubs and per-test lifecycle live in ./index.test.fixture.js,
 // which must stay the first import that can resolve a mocked module.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { tempDataDir, atomicWriteSpy, currentAdmission, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, audioGenEvents, importFresh, flush, waitFor, persistedJobs } from './index.test.fixture.js';
+import { tempDataDir, atomicWriteSpy, queueSnapshotJobs, currentAdmission, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, audioGenEvents, importFresh, flush, waitFor, persistedJobs } from './index.test.fixture.js';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
@@ -43,7 +43,7 @@ describe('backup snapshot admission for media completion', () => {
   const failTerminalWrites = (times, code = 'ENOSPC') => {
     const failures = { remaining: times, count: 0 };
     atomicWriteSpy.mockImplementation(async (path, data) => {
-      if (failures.remaining > 0 && data?.jobs?.some((j) => j.status === 'completed')) {
+      if (failures.remaining > 0 && queueSnapshotJobs(path, data).some((j) => j.status === 'completed')) {
         failures.remaining -= 1;
         failures.count += 1;
         throw Object.assign(new Error(code === 'ENOSPC' ? 'disk full' : 'destination busy'), { code });
@@ -252,7 +252,7 @@ describe('backup snapshot admission for media completion', () => {
     hookGate = new Promise((resolve) => { finishHook = resolve; });
     let writeHeld = false;
     atomicWriteSpy.mockImplementation(async (path, data) => {
-      if (data?.jobs?.some((j) => j.status === 'completed')) {
+      if (queueSnapshotJobs(path, data).some((j) => j.status === 'completed')) {
         writeHeld = true;
         await writeGate;
       }
