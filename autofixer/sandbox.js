@@ -25,7 +25,7 @@
  *                              the opt-in Docker profile), never on the host.
  *
  * Node builtins plus dependency-light `server/lib` modules, so the standalone
- * autofixer package — which installs only `express` — can import it.
+ * Autofixer process can import it without loading the main server.
  */
 
 import { spawn } from 'node:child_process';

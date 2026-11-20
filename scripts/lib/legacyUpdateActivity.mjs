@@ -16,7 +16,7 @@ const runFile = promisify(execFile);
 /** Attribute a still-bound service to its PID, without guessing from a cwd. */
 export async function portosServiceListeners(root, { platform = process.platform, env = process.env, run = runFile } = {}) {
   const dotenv = parseEnvFile(join(root, '.env'));
-  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER, PORTS.AUTOFIXER_UI]);
+  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER_UI]);
   const runner = new URL(env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL || `http://127.0.0.1:${PORTS.COS}`);
   if (['127.0.0.1', 'localhost', '[::1]'].includes(runner.hostname)) ports.add(Number(runner.port || (runner.protocol === 'https:' ? 443 : 80)));
   if (platform === 'win32') {

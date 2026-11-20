@@ -12,8 +12,8 @@ const updateId = process.env.PORTOS_DEFERRED_UPDATE_ID;
 const peerId = process.env.PORTOS_PEER_UPDATE_OPERATION_ID;
 const peerTarget = process.env.PORTOS_PEER_UPDATE_TARGET_SHA;
 const peerExpected = process.env.PORTOS_PEER_UPDATE_EXPECTED_SHA;
-const workspaces = ['.', 'client', 'server', 'autofixer'];
-const productionApps = 'portos-server,portos-cos,portos-autofixer,portos-autofixer-ui,portos-browser';
+const workspaces = ['.', 'client', 'server'];
+const productionApps = 'portos-server,portos-cos,portos-autofixer,portos-browser';
 const dataDir = join(root, 'data');
 const updateLog = join(dataDir, 'update.log');
 const marker = join(dataDir, 'update-complete.json');
@@ -104,6 +104,7 @@ async function stopApps() {
   stopped = true;
   await pm2('delete', 'ecosystem.config.cjs', '--silent');
   await pm2('delete', 'portos-ui', '--silent');
+  await pm2('delete', 'portos-autofixer-ui', '--silent');
   step('pm2-stop', 'done', 'Apps stopped');
   log();
 }
@@ -287,6 +288,7 @@ async function restart() {
     if (!(await node('scripts/pm2-daemon-refresh.js')).code) await pm2('update');
     await pm2('delete', 'ecosystem.config.cjs', '--silent');
     await pm2('delete', 'portos-ui', '--silent');
+    await pm2('delete', 'portos-autofixer-ui', '--silent');
     const { code } = await pm2(...pm2Start);
     if (code) fail(windows ? code : 1);
   } catch (error) {

@@ -7,7 +7,7 @@
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 
-export const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
+export const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package)(?:-lock)?\.json$/;
 
 // Workspaces the windows-server job installs (`npm ci --prefix <dir>`). Only
 // their manifests and .npmrc can change what that job runs, so a dependency or

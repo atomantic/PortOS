@@ -539,15 +539,9 @@ The selected work is split across parallel jobs:
   `PORTOS_SMOKE_BOOT=1` so no scheduler, agent recovery, or peer sync starts —
   `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
-  restored and its trusted-rebuild mark checks out. The impact job (which
-  always runs, even when the planner skips the server job) runs
-  `npm ci --prefix autofixer` — uncached and never skipped, because resolving
-  that workspace's tracked lockfile *is* the check — and `node --check
-  server/index.js`. It is the only CI step that installs `autofixer/`, which
-  `npm run setup` and `scripts/ensure-deps.js` install on every user's
-  machine; without it a lockfile that stopped resolving shipped green and
-  failed at setup time. (`browser/` gets no such step: zero dependencies, and
-  its lockfile is deliberately gitignored.)
+  restored and its trusted-rebuild mark checks out. Autofixer tests use the
+  server workspace's Express install. The impact job always checks the syntax
+  of `server/index.js`, even when the planner skips the server job.
 - **Client tests and build** — affected client tests, plus the production build
   whenever client source changed. The build runs on shard 1 only.
 - **Lint client** — Biome over the changed client sources, in its own job. It used
@@ -1262,7 +1256,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

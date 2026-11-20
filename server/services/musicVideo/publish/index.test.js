@@ -710,7 +710,7 @@ describe('publish drafts (#9282)', () => {
 
   it('disconnects the cross-link browser session when opening its tab fails', async () => {
     const id = await readyProject();
-    await recordPublishPost(id, 'x', { url: 'https://x.com/example/status/42' });
+    await recordPublishPost(id, 'x', { url: 'https://x.com/example/status/42', links: [] });
     await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/abc' });
     const pageError = new Error('Could not open a tab');
     const { connect, browsers } = fakeBrowser({ pageError });

@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
-  # server/, client/ and autofixer/ each carry their own package.json +
+  # server/ and client/ each carry their own package.json +
   # overrides and their own lockfile, so npm resolves each tree separately —
   # list every directory so none of those trees is invisible to Dependabot (a
   # critical node-tar advisory sat unreported). browser/ is deliberately absent:
@@ -40,11 +40,6 @@ updates:
       # still proposed.
       - dependency-name: "@cantoo/pdf-lib"
         versions: ["2.11.0"]
-  - package-ecosystem: npm
-    directory: /autofixer
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
   - package-ecosystem: github-actions
     directory: /
     schedule:

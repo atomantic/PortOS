@@ -135,7 +135,7 @@ describe('startup dependency reconciliation', () => {
       writeFileSync(join(dir, 'node_modules', 'installed-lock.json'), readFileSync(join(dir, 'package-lock.json')));
       writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}');
     `);
-    for (const label of ['root', 'client', 'server', 'autofixer']) {
+    for (const label of ['root', 'client', 'server']) {
       const dir = label === 'root' ? root : join(root, label);
       mkdirSync(dir, { recursive: true });
       if (label !== 'root') writeFileSync(join(dir, 'package.json'), label === 'server' ? '{"type":"module"}' : '{}');

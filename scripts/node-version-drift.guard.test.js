@@ -40,9 +40,9 @@ function pinSatisfiesSupportedRange(pin) {
   return satisfiesMinNode(raw);
 }
 
-const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json', 'autofixer/package.json'];
-const LOCKFILES = ['package-lock.json', 'client/package-lock.json', 'server/package-lock.json', 'autofixer/package-lock.json'];
-const NPMRCS = ['.npmrc', 'client/.npmrc', 'server/.npmrc', 'autofixer/.npmrc'];
+const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json'];
+const LOCKFILES = ['package-lock.json', 'client/package-lock.json', 'server/package-lock.json'];
+const NPMRCS = ['.npmrc', 'client/.npmrc', 'server/.npmrc'];
 const SUPPORTED_NODE_POINTS = [MIN_NODE, MIN_NODE_24, '26.0.0'];
 const REQUIRED_DEPENDENCIES = [
   ['server/package-lock.json', 'node_modules/undici'],

@@ -319,42 +319,11 @@ describe('ci.yml server node_modules cache', () => {
   });
 });
 
-describe('ci.yml autofixer workspace install', () => {
-  const jobs = workflowJobs(WORKFLOW);
-
-  /** Every job that resolves the autofixer lockfile. */
-  const installers = Object.entries(jobs)
-    .filter(([, body]) => body.includes('npm ci --prefix autofixer'));
-
-  it('resolves the autofixer lockfile and checks the server entry point on the job that always runs and each shard', () => {
-    // autofixer/ carries its own package.json, its own tracked lockfile, and
-    // its own .npmrc, and `npm run setup` / scripts/ensure-deps.js install it
-    // on every user's machine. When no CI job ran `npm ci` against it, a
-    // lockfile that stopped resolving shipped green and failed at setup time
-    // instead — the static parity checks in dependency-overrides.guard.test.js only
-    // parse the JSON. The impact job is the one that always runs, so the
-    // install and the `node --check` of the entry point live there.
-    // Named, so the loop below is never vacuously green on a deleted step.
-    expect(jobs.impact).toMatch(/- name: Install autofixer dependencies\n {8}run: node scripts\/ci-impact-diagnostics\.js autofixer-install -- npm ci --prefix autofixer/);
-    expect(jobs.impact).toMatch(/- name: Check server entry-point syntax\n {8}run: node scripts\/ci-impact-diagnostics\.js syntax -- node --check server\/index\.js/);
-    // Shards are separate checkouts and run ../autofixer tests, which import
-    // express from autofixer/node_modules, so they install it too.
-    expect(jobs.server).toMatch(/- name: Install autofixer dependencies\n {8}run: npm ci --prefix autofixer/);
-    expect(jobs.server).not.toContain('node --check server/index.js');
-  });
-
-  it('never lets a cache hit skip the resolution it exists to prove', () => {
-    // The server tree is cached and its `npm ci` is skipped on a hit, which is
-    // fine because that job's job is to run tests. This step's whole purpose is
-    // the install, so caching it (or gating it on a cache outcome) would put
-    // the hole straight back. It is cheap enough to pay on every plan.
-    for (const [id, body] of installers) {
-      const step = body.match(
-        /- name: Install autofixer dependencies\n(?<between>(?: {8}.*\n)*?) {8}run: (?:node scripts\/ci-impact-diagnostics\.js autofixer-install -- )?npm ci --prefix autofixer/,
-      );
-      expect(step, id).not.toBeNull();
-      expect(step.groups.between, id).not.toMatch(/^ {8}if:/m);
-      expect(body, id).not.toMatch(/path: autofixer\/node_modules/);
-    }
+describe('ci.yml sidecar dependencies', () => {
+  it('uses server dependencies for Autofixer tests and checks server syntax in the impact job', () => {
+    const jobs = workflowJobs(WORKFLOW);
+    expect(jobs.impact).toContain('ci-impact-diagnostics.js syntax -- node --check server/index.js');
+    expect(jobs.server).toContain('uses: ./.github/actions/setup-server');
+    expect(WORKFLOW).not.toMatch(/npm ci[^\n]*--prefix autofixer/);
   });
 });

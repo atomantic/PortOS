@@ -69,6 +69,11 @@ export function appsNeedingStart({ processes, expectedApps, root }) {
       reasons.push(`${name} runs from a different checkout`);
     }
   }
+  if (expectedApps.includes('portos-autofixer') && !missing.includes('portos-autofixer')
+    && processes.some(p => p.name === 'portos-autofixer-ui')) {
+    missing.push('portos-autofixer');
+    reasons.push('portos-autofixer needs the combined dashboard configuration');
+  }
   return { missing, reasons };
 }
 

@@ -41,9 +41,9 @@ import { isWorktreeRoot } from '../lib/dataRoot.js';
 // or when HEAD couldn't be read (tarball install / not a git repo).
 let bootCommit = null;
 
-// Workspaces `update.sh` installs (safe_install . client server autofixer).
+// Workspaces `update.sh` installs (safe_install . client server).
 // Order is cosmetic; '.' renders as 'root'.
-const DEP_WORKSPACES = ['.', 'client', 'server', 'autofixer'];
+const DEP_WORKSPACES = ['.', 'client', 'server'];
 
 // Directories never worth walking for client-source freshness.
 const WALK_SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);

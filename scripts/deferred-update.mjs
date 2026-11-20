@@ -297,7 +297,7 @@ export async function settleInterruptedUpdate(id, { admission = maintenance, cwd
   }
   const rows = await Promise.resolve().then(snapshot).catch(() => []);
   const inspected = Array.isArray(rows) ? rows : [];
-  const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js', 'autofixer/ui.js'];
+  const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js'];
   const alive = inspected.filter(row => !String(row.state ?? '').startsWith('Z'));
   const nodes = alive.map(row => ({ row, args: parseCommandArgs(String(row.command ?? '')) }))
     .filter(({ args }) => /^node(?:js|\.exe)?$/i.test(basename((args[0] ?? '').replaceAll('\\', '/'))));
