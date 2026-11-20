@@ -1674,7 +1674,7 @@ describe('autopilot clears the gates it was granted on its own', () => {
     analyzed({
       lyricCues: [
         { id: 'c1', text: 'rain on glass', startSec: 1, endSec: 4, words: [
-          { w: 'rain', startSec: 1, endSec: 2, conf: 'matched' }, { w: 'on', startSec: 2, endSec: 3, conf: 'matched' }, { w: 'glass', startSec: 3, endSec: 4, conf: 'matched' }] },
+          { w: 'rain', startSec: 0.9, endSec: 2, conf: 'matched' }, { w: 'on', startSec: 2, endSec: 3, conf: 'matched' }, { w: 'glass', startSec: 3, endSec: 4, conf: 'matched' }] },
         { id: 'c2', text: 'neon home', startSec: null, endSec: null },
       ],
       productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [shot] } },
@@ -1683,6 +1683,7 @@ describe('autopilot clears the gates it was granted on its own', () => {
     await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
     const project = store.get('mv-auto');
     expect(doubles.alignLyrics).toHaveBeenCalledWith('mv-auto');
+    expect(project.lyricCues[0].words[0]).toMatchObject({ startSec: 0.9, conf: 'matched' });
     expect(project.lyricCues[1]).toMatchObject({ startSec: 4, endSec: 20, words: [{ w: 'neon', conf: 'interpolated' }, { w: 'home' }] });
     expect(project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'autopilot', runId: runOf().id });
     expect(project.productionReview.draft.storyboard[0].lyricCueIds).toEqual(['c1', 'c2']);
@@ -1690,8 +1691,14 @@ describe('autopilot clears the gates it was granted on its own', () => {
   });
 
   // Uniquely catches verified timing on the source being re-judged (and held) on the copy.
-  it('carries a source\'s verified lyric timing over unchanged, without re-aligning', async () => {
+  it.each([
+    { timing: 'playable', endSec: 2, valid: true },
+    { timing: 'zero-duration', endSec: 0.9, valid: false },
+    { timing: 'out-of-master', endSec: 21, valid: false },
+    { timing: 'missing endpoint', endSec: null, valid: false },
+  ])('rechecks $timing word spans before carrying over verified source timing', async ({ endSec, valid }) => {
     const source = clone(SONG_SOURCE);
+    Object.assign(source.lyricCues[0].words[0], { startSec: 0.9, endSec });
     source.productionReview.alignmentBasis = actual.productionAlignmentBasis(source);
     store.set('mv-src', source);
     doubles.getTrack = vi.fn(async () => null);
@@ -1706,10 +1713,21 @@ describe('autopilot clears the gates it was granted on its own', () => {
       });
     });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], fromProjectId: 'mv-src', ...GRANT[0] }, GRANT[1]);
-    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    if (valid) {
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
+    } else {
+      await settled('needs-human');
+      expect(runOf().error).toContain('Every lyric line needs bounded, positive-duration word timings');
+      expect(actual.productionReadiness(store.get('mv-auto'))).toMatchObject({
+        alignment: { status: 'provisional' },
+        storyboard: { technicalProblemItems: expect.arrayContaining([expect.objectContaining({ code: 'word-timings' })]) },
+      });
+      expect(doubles.verifyAlignment).not.toHaveBeenCalled();
+      expect(doubles.startProduction).not.toHaveBeenCalled();
+    }
     expect(doubles.alignLyrics).not.toHaveBeenCalled();
     expect(doubles.analyzeSong).not.toHaveBeenCalled();
-    expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
   });
 
   // Uniquely catches a run granted the storyboard parking for the director when a lyric edit stales that approval mid-production.
@@ -1766,6 +1784,21 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: expect.stringContaining(reason) });
     // Skipped lines split the gap by word count instead of each taking the whole song.
     expect(store.get('mv-auto').lyricCues.map((c) => [c.startSec, c.endSec])).toEqual([[0, 12], [12, 20]]);
+    expect(doubles.verifyAlignment).not.toHaveBeenCalled();
+    expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
+
+  it('leaves a newly aligned line provisional when its zero-duration word cannot be repaired', async () => {
+    analyzed({
+      lyricCues: [{ id: 'c1', text: 'neon home', startSec: 2, endSec: 2.04, words: [
+        { w: 'neon', startSec: 2, endSec: 2, conf: 'matched' },
+        { w: 'home', startSec: 2.01, endSec: 2.04, conf: 'matched' },
+      ] }],
+      productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', storyboard: [shot] } },
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await settled('needs-human');
+    expect(runOf().error).toContain('Every lyric line needs bounded, positive-duration word timings');
     expect(doubles.verifyAlignment).not.toHaveBeenCalled();
     expect(doubles.startProduction).not.toHaveBeenCalled();
   });

@@ -132,6 +132,14 @@ export function lyricCueSpan(cue) {
   return { startSec: Math.min(own?.startSec ?? first, first), endSec: Math.max(own?.endSec ?? last, last) };
 }
 
+// A playable line can widen to fit forced-aligned words, but every word must fit the master.
+export function hasPlayableLyricWordTimings(cue, durationSec) {
+  const words = timedWords(cue);
+  if (!words || !finiteSec(durationSec) || words.some((word) => word.startSec < 0 || word.endSec > durationSec)) return false;
+  const { startSec, endSec } = lyricCueSpan(cue);
+  return startSec >= 0 && endSec <= durationSec;
+}
+
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
 export const normalizePhrases = (phrases) => normalizeList(phrases, 'mp', (phrase) => ({
   label: trimTo(phrase.label, 120),
