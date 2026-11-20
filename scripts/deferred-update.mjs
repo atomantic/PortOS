@@ -97,6 +97,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let reportedLegacyLimit = false;
   const heavyObservation = {};
   let manualLegacyWork = false;
+  let settledControl = null;
   const checkLegacy = legacyRunning ?? (async () => {
     const control = join(admission.directory, '..', 'update-detached');
     const raw = (await readControl(join(control, 'pid')).catch(() => '')).trim();
@@ -111,7 +112,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       return [];
     });
     const rows = await legacySnapshot(platform);
-    const observed = await observedLegacyUpdate({ root: cwd, priorPid: pid, priorAt, groups, platform,
+    const observed = await observedLegacyUpdate({ root: cwd, priorPid: pid, priorAt, groups, settledControl, platform,
       snapshot: async () => rows, probeCwds: legacyCwds });
     const exclusive = observed.running || observedDatabaseRestoreProcess(rows);
     if (exclusive && (observed.limitations.length || groupInspectionUnavailable) && !reportedLegacyLimit) {
@@ -139,6 +140,8 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let manualChecks = 0;
   let takeoverChecks = 0;
   try {
+    const previous = admission.deferredUpdate.get().result;
+    if (previous && platform !== 'win32') settledControl = join(admission.directory, '..', 'update-detached', previous.id);
     const handoff = await readControl(join(admission.directory, `update-handoff-${operation.id}.json`));
     const transferred = handoff ? JSON.parse(handoff) : null;
     const waitingTakeover = transferred?.successorId === operation.id && transferred.previous?.phase === 'waiting'
