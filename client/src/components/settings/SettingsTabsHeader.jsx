@@ -3,7 +3,7 @@ import { getNavSectionForPath, getSectionNavGroups, getSectionNavTabs } from '..
 import SectionTabsHeader from '../ui/SectionTabsHeader';
 import GroupedRouteTabsHeader from '../ui/GroupedRouteTabsHeader';
 import { buildSectionNavTabs } from '../../lib/pageNavTabs.js';
-import { NAV_DESTINATION_PRESENTATION } from '../../lib/navPresentation.js';
+import { NAV_PRESENTATION } from '../../lib/navPresentation.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 
 // Backward-compatible wrapper for the shared section child nav. Settings.jsx
@@ -22,7 +22,7 @@ export default function SettingsTabsHeader({ activeTab }) {
   const groups = getSectionNavGroups(section)
     .map(({ label, tabs }) => ({
       label,
-      tabs: buildSectionNavTabs(tabs.filter((tab) => isFeatureEnabled(tab.feature)), NAV_DESTINATION_PRESENTATION, section),
+      tabs: buildSectionNavTabs(tabs.filter((tab) => isFeatureEnabled(tab.feature)), NAV_PRESENTATION, section),
     }))
     .filter((group) => group.tabs.length > 0);
   if (groups.length === 0) {

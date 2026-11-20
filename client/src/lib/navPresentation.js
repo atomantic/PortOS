@@ -110,10 +110,14 @@ import { AudioLines,
   Plug,
   TerminalSquare,
 } from 'lucide-react';
-import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 
-// Destination icons also serve local navigation and saved Pinned/Recent rows.
-export const NAV_DESTINATION_PRESENTATION = {
+// NAV_COMMANDS owns every structural field shared with the sidebar. This map
+// intentionally contains presentation only: giving a manifest path an icon is
+// what opts that destination into the sidebar (a row with a manifest
+// `parentPath` renders nested under that parent). The same icons serve in-page
+// tab bars and saved Pinned/Recent rows. External and runtime-hydrated rows
+// have no manifest destination and stay explicitly local in the sidebar.
+export const NAV_PRESENTATION = {
   '/': { icon: Home, single: true },
   '/review': { icon: ClipboardList, single: true },
   '/eidoverse': { icon: Orbit, single: true },
@@ -314,21 +318,6 @@ export const NAV_DESTINATION_PRESENTATION = {
   '/post/rhetoric': { icon: Feather },
   '/post/wordplay': { icon: MessageCircle },
 };
-
-const hubTabGroups = new Set(['brain', 'calendar', 'cos', 'digital-twin', 'meatspace', 'messages']);
-const localDestinations = new Set(NAV_COMMANDS.filter((command) =>
-  hubTabGroups.has(command.tabGroup)
-  || command.section === 'POST'
-  || (command.section === 'Settings' && command.tabId)
-).map((command) => command.path));
-const inPageDestinations = new Set(NAV_COMMANDS
-  .filter(({ parentPath }) => parentPath)
-  .map(({ path }) => path));
-inPageDestinations.add('/media/threejs');
-
-// Dynamic project lists give direct access to individual records.
-export const NAV_PRESENTATION = Object.fromEntries(Object.entries(NAV_DESTINATION_PRESENTATION)
-  .filter(([path, { dynamic }]) => !localDestinations.has(path) && (dynamic || !inPageDestinations.has(path))));
 
 export const SECTIONS_BEFORE_GOALS = [
   'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create', 'Dev Tools',

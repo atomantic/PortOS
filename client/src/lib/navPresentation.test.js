@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { NAV_DESTINATION_PRESENTATION } from './navPresentation.js';
+import { NAV_PRESENTATION } from './navPresentation.js';
 import { buildSectionNavTabs } from './pageNavTabs.js';
 import { NAV_COMMANDS, getSectionNavTabs } from '../../../server/lib/navManifest.js';
 
@@ -18,18 +18,18 @@ const iconName = (icon) => icon?.displayName || icon?.name;
 // sub-nav collapses to icons and the icon is all the user sees.
 describe.each(SECTIONS)('%s destinations', (section, tabs) => {
   it('all resolve an icon, so the section can build its sub-nav', () => {
-    expect(() => buildSectionNavTabs(tabs, NAV_DESTINATION_PRESENTATION, section)).not.toThrow();
+    expect(() => buildSectionNavTabs(tabs, NAV_PRESENTATION, section)).not.toThrow();
   });
 
   it('use a different icon each', () => {
-    const names = tabs.map((tab) => iconName(NAV_DESTINATION_PRESENTATION[tab.to]?.icon));
+    const names = tabs.map((tab) => iconName(NAV_PRESENTATION[tab.to]?.icon));
     expect(names).toEqual([...new Set(names)]);
   });
 });
 
 describe('buildSectionNavTabs', () => {
   it('names the destination whose icon is missing instead of degrading the bar', () => {
-    expect(() => buildSectionNavTabs([{ id: 'x', to: '/not-a-nav-path' }], NAV_DESTINATION_PRESENTATION, 'Demo'))
+    expect(() => buildSectionNavTabs([{ id: 'x', to: '/not-a-nav-path' }], NAV_PRESENTATION, 'Demo'))
       .toThrow('Demo: no nav presentation icon for /not-a-nav-path');
   });
 });
