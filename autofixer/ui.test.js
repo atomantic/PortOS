@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
-const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
+const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, listen: vi.fn(), execPm2: vi.fn(), loadApps: vi.fn(), spawn: vi.fn(), listProcessesStrict: vi.fn() }));
 vi.mock('child_process', () => ({ spawn: harness.spawn }));
 vi.mock('node:module', async (original) => {
   const actual = await original();
@@ -27,7 +27,10 @@ vi.mock('../lib/sidecarAuthGate.js', async (original) => ({
 vi.mock('../lib/tailscale-https.js', () => ({
   createTailscaleServers: () => {
     const server = new EventEmitter();
-    server.listen = () => server.emit('listening');
+    server.listen = (...args) => {
+      harness.listen(...args);
+      server.emit('listening');
+    };
     server.address = () => ({ port: 5560 });
     return { server, httpsEnabled: false };
   },
@@ -47,13 +50,18 @@ beforeAll(async () => { passwordHash = await hashPassword(PASSWORD, SALT); }, 30
 beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'autofixer-authority-'));
   harness.spawn.mockReset();
+  harness.listen.mockClear();
   harness.listProcessesStrict.mockReset().mockResolvedValue([]);
   harness.execPm2.mockReset().mockResolvedValue({ stdout: 'ok', stderr: '' });
   harness.loadApps.mockReset().mockResolvedValue([{ pm2ProcessNames: ['example-process'] }]);
   harness.gates.length = 0;
   harness.routes.clear();
 });
-afterEach(async () => { vi.useRealTimers(); await rm(dataDir, { recursive: true, force: true }); });
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  await rm(dataDir, { recursive: true, force: true });
+});
 
 const loadUi = async (enabled = false, { corrupt = false } = {}) => {
   const settings = { secrets: { auth: { enabled, passwordHash, salt: SALT } } };
@@ -89,6 +97,16 @@ const mutate = async (action, address = '192.0.2.10', headers = {}, process = 'e
 };
 
 describe('Autofixer process-control authority', () => {
+  it.each([
+    ['5559', 5560],
+    [undefined, 5560],
+    ['4560', '4560'],
+  ])('binds the dashboard for PORT=%s', async (port, expected) => {
+    vi.stubEnv('PORT', port);
+    await loadUi();
+    expect(harness.listen).toHaveBeenCalledWith(expected, '0.0.0.0');
+  });
+
   it('retires only the legacy dashboard from this checkout during startup', async () => {
     harness.listProcessesStrict.mockResolvedValue([
       { name: 'portos-autofixer-ui', pm_id: 8, pm2_env: { pm_exec_path: '/example/other-install/autofixer/ui.js' } },

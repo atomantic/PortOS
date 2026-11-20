@@ -9,6 +9,7 @@ import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.
 import { certPaths } from '../lib/certPaths.js';
 import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
 import { isPm2ProcessName } from '../lib/pm2ProcessName.js';
+import { PORTS } from '../server/lib/ports.js';
 import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,7 +34,7 @@ async function retireLegacyDashboard() {
   }
 }
 
-export async function startAutofixerUi(stagedFixes, port = process.env.PORT || 5560) {
+export async function startAutofixerUi(stagedFixes, port = process.env.PORT || PORTS.AUTOFIXER_UI) {
   await retireLegacyDashboard();
   const app = express();
   const html = await readFile(UI_TEMPLATE_FILE, 'utf8');
@@ -228,7 +229,8 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || 5
   const { server, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR, httpMirror: false });
   const scheme = httpsEnabled ? 'https' : 'http';
   const listening = once(server, 'listening');
-  server.listen(port, '0.0.0.0');
+  // PM2 can resurrect the old monitor with its saved, unused port.
+  server.listen(String(port) === '5559' ? PORTS.AUTOFIXER_UI : port, '0.0.0.0');
   await listening;
   console.log(`🚀 [Autofixer UI] Running on ${scheme}://localhost:${server.address().port}`);
   const gated = await auth.isEnabled().catch(() => true);
