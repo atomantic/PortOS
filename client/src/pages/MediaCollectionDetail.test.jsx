@@ -15,12 +15,16 @@ const mockGetMediaCollection = vi.fn();
 const mockAddMediaCollectionItem = vi.fn();
 const mockRemoveMediaCollectionItem = vi.fn();
 const mockLocalizeMediaCollection = vi.fn();
+const mockGetMediaCollectionPrimary = vi.fn();
+const mockSetMediaCollectionPrimary = vi.fn();
 
 vi.mock('../services/api', () => ({
   listVideoHistory: (...args) => mockListVideoHistory(...args),
   listMediaCollections: (...args) => mockListMediaCollections(...args),
   getMediaCollection: (...args) => mockGetMediaCollection(...args),
   updateMediaCollection: vi.fn(),
+  getMediaCollectionPrimary: (...args) => mockGetMediaCollectionPrimary(...args),
+  setMediaCollectionPrimary: (...args) => mockSetMediaCollectionPrimary(...args),
   addMediaCollectionItem: (...args) => mockAddMediaCollectionItem(...args),
   removeMediaCollectionItem: (...args) => mockRemoveMediaCollectionItem(...args),
   deleteImage: vi.fn(),
@@ -165,6 +169,9 @@ beforeEach(() => {
   mockListVideoHistory.mockResolvedValue([VIDEO_C]);
   mockListMediaCollections.mockResolvedValue([REAL_COLLECTION]);
   mockGetMediaCollection.mockResolvedValue(REAL_COLLECTION);
+  mockGetMediaCollectionPrimary.mockResolvedValue({
+    instanceId: null, machines: [{ instanceId: 'inst-a', name: 'Studio' }], run: null,
+  });
   mockPullMissingMetadata.mockResolvedValue({ attempted: 1, recovered: 1 });
   mockUpdateAnnotation.mockResolvedValue({ ok: true, entry: null });
   mockAddMediaCollectionItem.mockResolvedValue({ id: 'col-target', name: 'Target Collection', items: [] });
@@ -270,6 +277,24 @@ describe('MediaCollectionDetail — Unsorted view', () => {
 // ── Non-unsorted view: button must NOT appear ─────────────────────────────────
 
 describe('MediaCollectionDetail — regular collection view', () => {
+  it('assigns the chosen primary and reports copies left queued or kept', async () => {
+    mockSetMediaCollectionPrimary.mockImplementationOnce(async () => {
+      mockGetMediaCollectionPrimary.mockResolvedValueOnce({
+        instanceId: 'inst-a',
+        machines: [{ instanceId: 'inst-a', name: 'Studio' }],
+        run: { running: false, completed: 1, total: 1, released: 1, pending: 1, kept: 1, failed: 0, details: [] },
+      });
+    });
+    const user = userEvent.setup();
+    renderReal();
+    const machine = await screen.findByRole('option', { name: 'Studio' });
+    await user.selectOptions(screen.getByLabelText('Primary machine'), machine);
+    await user.click(screen.getByRole('button', { name: 'Set primary and consolidate' }));
+
+    expect(mockSetMediaCollectionPrimary).toHaveBeenCalledWith(REAL_COLLECTION.id, 'inst-a', { silent: true });
+    expect(await screen.findByText(/1 releases queued at finish.*1 copies kept/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Consolidate again' })).toBeEnabled();
+  });
   it('does NOT render "Pull missing prompts" on a real collection', async () => {
     renderReal();
     await waitFor(() => screen.getByText('My Collection'));

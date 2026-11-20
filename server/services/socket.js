@@ -425,6 +425,9 @@ function setupPeerSyncEventForwarding() {
   peerSyncBus.on('media-history-changed', (payload) => {
     ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
   });
+  peerSyncBus.on('collection-primary-changed', (payload) => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:collection-primary:changed', payload);
+  });
   peerSyncBus.on('media-holders-changed', () => {
     ioInstance?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
   });

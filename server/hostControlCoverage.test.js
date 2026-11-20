@@ -42,6 +42,7 @@ const OPEN_WRITES = {
   'POST /api/instances/peers/announce': 'peer',
   'POST /api/instances/peers/sync-categories': 'peer',
   'POST /api/peer-media/delete': 'peer',
+  'POST /api/peer-media/copy': 'peer',
   'POST /api/peer-media/release': 'peer',
   'POST /api/peer-sync/push': 'peer',
   'POST /api/providers/fleet-host/key': 'peer',

@@ -11,12 +11,13 @@
  */
 import { extname, join } from 'path';
 import { existsSync } from 'fs';
-import { stat } from 'fs/promises';
-import { createHash } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
+import { link, stat } from 'fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { peerFetch, peerStreamRequest, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash, imageLiveStamp } from '../../lib/assetHash.js';
@@ -43,6 +44,7 @@ import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
 import { mediaTombstoneStamps } from '../mediaTombstones.js';
+import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { clearImageTombstoneSupersededByOwner } from '../imageGen/imageRecords.js';
 
@@ -358,6 +360,10 @@ const ASSET_KIND_EXTENSIONS = {
   model: new Set(['.glb']),
   audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
 };
+
+export function isTransferMediaFilename(kind, filename) {
+  return !filename.startsWith('.') && !/[\u0000-\u001f\u007f]/.test(filename) && ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase()) === true;
+}
 
 function hasAllowedAssetExtension(kind, filename) {
   if (ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase())) return true;
@@ -1036,6 +1042,64 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
   }
 }
 
+// Explicit collection moves can include long video renders. Stream them into
+// a sibling temp file so an authenticated copy is bounded without a RAM-sized
+// ceiling, and publish only after the complete payload verifies.
+export const VERIFIED_MEDIA_COPY_TIMEOUT_MS = 10 * 60_000;
+const VERIFIED_MEDIA_COPY_MAX_BYTES = 32 * 1024 ** 3;
+
+export async function pullVerifiedMediaCopy(peer, entry) {
+  const { kind, filename, sha256 } = entry;
+  if (!['image', 'video'].includes(kind) || sanitizeAssetFilename(filename) !== filename || !isTransferMediaFilename(kind, filename)) return;
+  if (blockedByImageTombstone(await deletedImageStamps([entry]), entry) || blockedByVideoTombstone(await deletedVideoIds([entry]), entry)) return;
+
+  const dir = directoryForAssetKind(kind);
+  const fullPath = join(dir, filename);
+  const base = peerBaseUrl(peer);
+  const url = `${base}${ASSET_KIND_TO_URL_PREFIX[kind]}/${encodeURIComponent(filename)}`;
+  await assetWriteQueue(assetDestinationKey(kind, filename), async () => {
+    if (existsSync(fullPath)) return;
+    await ensureDir(dir);
+    const temp = join(dir, `.media-copy-${randomUUID()}.tmp`);
+    try {
+      const size = await withAbortTimeout(VERIFIED_MEDIA_COPY_TIMEOUT_MS, async (signal) => {
+        const { status, headers, stream } = await peerStreamRequest(url, { signal }, peer);
+        try {
+          const size = Number(headers['content-length']);
+          if (status !== 200 || headers['x-portos-media-location'] === 'remote' ||
+              !Number.isSafeInteger(size) || size <= 0 || size > VERIFIED_MEDIA_COPY_MAX_BYTES) return null;
+          let received = 0;
+          await pipeline(stream, async function* (chunks) {
+            for await (const chunk of chunks) {
+              received += chunk.length;
+              if (received > size) throw new Error('Media copy exceeded its declared length');
+              yield chunk;
+            }
+          }, await createWriteStreamGuarded(temp, { flags: 'wx' }), { signal });
+          return received === size ? size : null;
+        } finally {
+          stream.destroy();
+        }
+      });
+      if (size === null || await sha256File(temp) !== sha256) return;
+      await assertFileNotMediaManifest(temp);
+      await withBackupAssetPublication(async () => {
+        // A hard link publishes atomically without replacing a file another
+        // writer created while this transfer was underway.
+        const published = await link(temp, fullPath).then(() => true).catch((err) => {
+          if (err.code === 'EEXIST') return false;
+          throw err;
+        });
+        if (published) await finishPulledAsset(peer, base, entry, fullPath, filename, size, true);
+      });
+    } finally {
+      await unlinkGuarded(temp).catch((err) => {
+        if (err.code !== 'ENOENT') throw err;
+      });
+    }
+  });
+}
+
 /**
  * Fetch a peer's static-mount asset URL into a size-capped Buffer, or null on
  * any failure. Centralizes the content-length guards shared by the generic
@@ -1259,12 +1323,16 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.
   await atomicWrite(fullPath, buffer);
+  await finishPulledAsset(peer, base, entry, fullPath, safeName, buffer.length, isNewHere);
+}
+
+async function finishPulledAsset(peer, base, entry, fullPath, safeName, size, isNewHere) {
   peerSyncEvents.emit('asset-arrived', {
     filename: safeName,
     kind: entry.kind,
     peerId: peer.instanceId,
   });
-  console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+  console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${size} bytes)`);
   // After a successful image pull, also fetch the gen-params sidecar if present
   // on the sender. Best-effort: the image is already safely written above;
   // a missing sidecar just means the image lands in Unsorted without a prompt.

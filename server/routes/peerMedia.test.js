@@ -144,6 +144,23 @@ describe('POST /api/peer-media/delete', () => {
   });
 });
 
+describe('POST /api/peer-media/copy', () => {
+  const copy = (auth, body) => request(buildApp(auth)).post('/api/peer-media/copy').send(body);
+
+  it('checks the caller and grant and refuses to replace distinct bytes', async () => {
+    const body = { kind: 'video', filename: 'copy-target.mp4' };
+    writeFileSync(join(PATHS.videos, body.filename), 'existing bytes');
+    expect((await copy({ authenticated: true, method: 'basic' }, body)).status).toBe(403);
+    expect((await copy(PEER_AUTH, body)).body.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect((await copy(PEER_AUTH, { ...body, sha256: 'a'.repeat(64) })).body.code).toBe('MEDIA_CONTENT_DIFFERS');
+    registry.peers = [peer({ mediaDeleteAllowed: false })];
+    expect((await copy(PEER_AUTH, { ...body, sha256: 'a'.repeat(64) })).body.code).toBe('MEDIA_DELETE_FORBIDDEN');
+    registry.peers = [peer({ directions: ['outbound'] })];
+    expect((await copy(PEER_AUTH, { ...body, sha256: 'a'.repeat(64) })).body.code).toBe('PEER_SYNC_NOT_ADMITTED');
+    expect(trashFiles).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/peer-media/release', () => {
   const release = (auth, body = {}) => request(buildApp(auth)).post('/api/peer-media/release')
     .send({ kind: 'video', filename: 'v1.mp4', primaryInstanceId: 'peer-p', primaryAt: '2026-07-01T00:00:00.000Z', ...body });

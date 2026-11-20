@@ -36,6 +36,7 @@ const [
   { errorMiddleware },
   { default: dataSyncRoutes },
   { default: peerMediaRoutes },
+  { default: mediaCollectionsRoutes },
   { default: videoGenRoutes },
   bus,
   relay,
@@ -57,6 +58,7 @@ const [
   import('../lib/errorHandler.js'),
   import('../routes/dataSync.js'),
   import('../routes/peerMedia.js'),
+  import('../routes/mediaCollections.js'),
   import('../routes/videoGen.js'),
   import('../services/peerSyncEventBus.js'),
   import('../services/peerSocketRelay.js'),
@@ -82,6 +84,7 @@ app.use(express.json());
 app.use(authGate);
 app.use('/api/sync', dataSyncRoutes);
 app.use('/api/peer-media', peerMediaRoutes);
+app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/video-gen', videoGenRoutes);
 // The video static mount as assetMounts.js serves it: local bytes, else the hosting peer's.
 app.use('/data/videos', express.static(PATHS.videos), hostedAssetFallback('/data/videos'));
@@ -146,9 +149,15 @@ const commands = {
     await mutateVideoHistory((history) => { history.unshift(row); return history; });
   },
   // A copy of a render this machine already holds the row of (copy-mode sync).
-  async copyBytes({ id }) {
+  async copyBytes({ id, bytes = `synthetic-video-${id}` }) {
     mkdirSync(PATHS.videos, { recursive: true });
-    writeFileSync(join(PATHS.videos, `${id}.mp4`), Buffer.from(`synthetic-video-${id}`));
+    writeFileSync(join(PATHS.videos, `${id}.mp4`), Buffer.from(bytes));
+  },
+  async collectionRequest({ path = '', body }) {
+    const res = await fetch(`http://127.0.0.1:${httpServer.address().port}/api/media/collections${path}`, body ? {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    } : {});
+    return { status: res.status, body: await res.json() };
   },
   async holders() {
     return holders.listMediaHolders();

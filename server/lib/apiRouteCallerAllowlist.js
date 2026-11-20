@@ -56,6 +56,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitors/v1/sessions/:id/actions',
     '/api/managed-visitors/v1/sessions/:id/leave',
     '/api/managed-visitors/v1/sessions/:id/observations',
+    '/api/peer-media/copy',
     '/api/peer-media/delete',
     '/api/peer-media/release',
     '/api/peer-sync/cos-agent-archive',

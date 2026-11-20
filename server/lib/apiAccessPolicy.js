@@ -64,6 +64,7 @@ export const PEER_API_SURFACE = Object.freeze([
   // requires the sender's media-delete capability on this install.
   { path: '/api/peer-media/delete', methods: Object.freeze(['POST']) },
   // Make-primary release (services/mediaHolders.js): same capability check.
+  { path: '/api/peer-media/copy', methods: Object.freeze(['POST']) },
   { path: '/api/peer-media/release', methods: Object.freeze(['POST']) },
   // Planning-only administration. Each exact endpoint independently verifies
   // the current paired identity and a host-local action grant. Never host control.

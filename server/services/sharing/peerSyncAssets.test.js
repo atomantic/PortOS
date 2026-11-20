@@ -33,6 +33,7 @@ vi.mock('../tracks/index.js', async () => ({
 
 const imageTombstones = new Map();
 vi.mock('../mediaTombstones.js', () => ({
+  listMediaTombstones: vi.fn(async () => []),
   mediaTombstoneStamps: vi.fn(async (kind) => (kind === 'image' ? imageTombstones : new Map())),
 }));
 vi.mock('./sidecarSync.js', () => ({

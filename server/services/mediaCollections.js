@@ -171,6 +171,7 @@ const SERIES_ID_MAX = 80;
 // `sanitizeItem`'s optional `origin`).
 export const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
 const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
+const sanitizePrimaryInstanceId = (raw) => typeof raw === 'string' && raw.length > 0 && raw.length <= 128 ? raw : null;
 
 const sanitizeCollection = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -225,6 +226,7 @@ const sanitizeCollection = (raw) => {
   // look far older than it is and skew LWW merges + the GC cutoff window.
   const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? updatedAt : null);
   const source = sanitizeSource(raw.source);
+  const primaryInstanceId = sanitizePrimaryInstanceId(raw.primaryInstanceId);
   return {
     id: raw.id,
     name,
@@ -233,6 +235,7 @@ const sanitizeCollection = (raw) => {
     universeId,
     seriesId,
     ...(source ? { source } : {}),
+    ...(primaryInstanceId ? { primaryInstanceId } : {}),
     items,
     ...(Object.keys(removedItems).length ? { removedItems } : {}),
     createdAt,
@@ -781,6 +784,20 @@ export const renameCollectionForUniverse = (universeId, newUniverseName) =>
 // clock every peer compares against) — see the `source` note below.
 const WIRE_VISIBLE_PATCH_FIELDS = ['name', 'description', 'coverKey'];
 
+// The selected machine is an operator preference for this install. Peers sync
+// each asset's primary through the existing media records.
+export async function setCollectionPrimaryMachine(id, instanceId) {
+  assertCollectionId(id);
+  if (!sanitizePrimaryInstanceId(instanceId)) throw codedError('Invalid primary machine', ERR_VALIDATION);
+  return store().queueRecordWrite(id, async () => {
+    const current = await getCollection(id);
+    if (current.primaryInstanceId === instanceId) return current;
+    const next = { ...current, primaryInstanceId: instanceId };
+    await store().saveOneNow(id, next);
+    return next;
+  });
+}
+
 export async function updateCollection(id, patch) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
@@ -1182,6 +1199,7 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
   let firstError = null;
   const outcomes = await mapWithConcurrency(remoteCollections, COLLECTION_WRITE_CONCURRENCY, (remote) => {
     const sanitized = sanitizeCollection(remote);
+    if (sanitized) delete sanitized.primaryInstanceId;
     if (!sanitized) return false;
     return store().queueRecordWrite(sanitized.id, async () => {
       const local = await store().loadOne(sanitized.id);
