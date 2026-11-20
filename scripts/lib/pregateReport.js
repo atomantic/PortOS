@@ -12,7 +12,7 @@
  * checkouts its own tests build.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -32,28 +32,36 @@ export const PREGATE_REPORT_VERSION = 5;
  * and `git commit` share the same ignore rules, so a commit of this same state
  * produces the same tree id.
  */
-export function validatedTreeHash(cwd, { env = process.env, indexPath } = {}) {
+export function createWorkingTreeHasher(cwd, { env = process.env, indexPath } = {}) {
   const git = (args, extraEnv = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...env, ...extraEnv } }).trim();
-  const scratch = mkdtempSync(join(tmpdir(), 'portos-pregate-index-'));
-  try {
-    const temporaryIndex = join(scratch, 'index');
-    const liveIndex = indexPath ?? resolve(cwd, git(['rev-parse', '--git-path', 'index']));
-    if (existsSync(liveIndex)) {
-      copyFileSync(liveIndex, temporaryIndex);
-      // Git rehashes an entry whose mtime is not older than the index file's
-      // ("racily clean"). A fresh copy is newer than every entry, so without
-      // the original timestamp a same-size edit made just after the index was
-      // written would be hashed as its old content. Millisecond rounding only
-      // makes more entries racy, never fewer.
-      const { atime, mtime } = statSync(liveIndex);
-      utimesSync(temporaryIndex, atime, mtime);
+  let previousIndex;
+  let previousTree;
+  return () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'portos-pregate-index-'));
+    try {
+      const temporaryIndex = join(scratch, 'index');
+      const liveIndex = indexPath ?? resolve(cwd, git(['rev-parse', '--git-path', 'index']));
+      if (existsSync(liveIndex)) {
+        copyFileSync(liveIndex, temporaryIndex);
+        // Preserve Git's racy-clean check for same-size edits. A plain copy
+        // would make the index newer than entries that Git needs to rehash.
+        const { atime, mtime } = statSync(liveIndex);
+        utimesSync(temporaryIndex, atime, mtime);
+      }
+      const indexEnv = { GIT_INDEX_FILE: temporaryIndex };
+      git(['add', '-A', '--', '.'], indexEnv);
+      const index = readFileSync(temporaryIndex);
+      // Each snapshot stages from the live index so ignore rules and staged
+      // membership still apply. Identical index bytes describe the same tree.
+      if (!previousIndex?.equals(index)) {
+        previousTree = git(['write-tree'], indexEnv);
+        previousIndex = index;
+      }
+      return previousTree;
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
     }
-    const indexEnv = { GIT_INDEX_FILE: temporaryIndex };
-    git(['add', '-A', '--', '.'], indexEnv);
-    return git(['write-tree'], indexEnv);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  };
 }
 
 /**
