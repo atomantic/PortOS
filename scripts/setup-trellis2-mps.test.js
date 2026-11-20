@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./setup-trellis2-mps.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/setup-trellis2-mps.py', import.meta.url));
 const wrapper = fileURLToPath(new URL('./setup-trellis2-mps.sh', import.meta.url));
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -22,9 +22,10 @@ spec = importlib.util.spec_from_file_location('installer', sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 root = pathlib.Path(sys.argv[2]); mode = sys.argv[3]
-scripts = root / 'scripts'; scripts.mkdir()
+scripts = root / 'scripts' / 'ml'
+(scripts / 'requirements').mkdir(parents=True)
 m.SCRIPTS = scripts
-(scripts / 'requirements-trellis2-mps.lock.txt').write_text('synthetic lock')
+(scripts / 'requirements' / 'requirements-trellis2-mps.lock.txt').write_text('synthetic lock')
 runtime = root / 'runtime'; runtime.mkdir()
 (runtime / 'weights.bin').write_text('retained weights')
 (runtime / '.venv').mkdir()

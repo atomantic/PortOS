@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
-import { inspectOperatorActivity, runReservationDisposition } from './reconcile-maintenance-reservations.mjs';
+import { inspectOperatorActivity, runReservationDisposition } from './ops/reconcile-maintenance-reservations.mjs';
 
 let root, gate;
 const deps = () => ({ gate, operator: 'local-operator', checkActivity: async () => {}, isDead: () => true });

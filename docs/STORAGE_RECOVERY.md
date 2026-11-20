@@ -9,7 +9,7 @@ machine-local runtime journal**. It must fence both the API and standalone CoS r
 before either can use PostgreSQL or start work. Its bounded live-operation set and
 operator hold are not app records and never federate. Data snapshots copy the
 `workflow-maintenance/` subtree as evidence, but no restore ever installs it (see
-`scripts/reconcile-maintenance-reservations.mjs` for reservation recovery).
+`scripts/ops/reconcile-maintenance-reservations.mjs` for reservation recovery).
 The schema is versioned; an absent file starts Normal, while corrupt/future state or
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
@@ -66,7 +66,7 @@ claiming any output was saved; failures after callback entry remain unresolved.
 Legacy generic `Output publication` reservations lack destination/batch identity.
 They cannot be swept as finished work. A dead admitting process is recorded as
 uncertainty, not deleted. After explicit operator disposition of
-inspected evidence, use `scripts/reconcile-maintenance-reservations.mjs` to
+inspected evidence, use `scripts/ops/reconcile-maintenance-reservations.mjs` to
 retire the unsettled reservation. This does not certify a complete
 transcript, clear transcript warnings, or change the original task outcome.
 
@@ -83,7 +83,7 @@ directory, stop both PM2 apps and any standalone processes using this journal:
 
 ```bash
 pm2 stop portos-server portos-cos
-node scripts/recover-maintenance-transaction.mjs --confirm "Inspected interrupted transaction and resolved disk problem"
+node scripts/ops/recover-maintenance-transaction.mjs --confirm "Inspected interrupted transaction and resolved disk problem"
 pm2 start portos-server portos-cos
 ```
 
@@ -181,9 +181,9 @@ checkout, or a reviewed checkout with its own dependencies, run:
 
 ```bash
 umask 077
-node scripts/reconcile-maintenance-reservations.mjs inspect --install-root /absolute/path/to/PortOS --reason "Reviewed inactive work" > /tmp/portos-reservation-request.json
+node scripts/ops/reconcile-maintenance-reservations.mjs inspect --install-root /absolute/path/to/PortOS --reason "Reviewed inactive work" > /tmp/portos-reservation-request.json
 # Review the request; remove entries from operations to select a smaller set.
-node scripts/reconcile-maintenance-reservations.mjs reconcile /tmp/portos-reservation-request.json --install-root /absolute/path/to/PortOS --confirm-disposition
+node scripts/ops/reconcile-maintenance-reservations.mjs reconcile /tmp/portos-reservation-request.json --install-root /absolute/path/to/PortOS --confirm-disposition
 ```
 
 The inspection and disposition each query the running install's activity and
@@ -207,7 +207,7 @@ update. Leave the journal files in place.
 
 ### Unsettled generic output publications
 
-Use `scripts/reconcile-maintenance-reservations.mjs` (see above) after journal
+Use `scripts/ops/reconcile-maintenance-reservations.mjs` (see above) after journal
 transaction recovery, with a normal maintenance hold in place. It never steals
 an interrupted transaction lock, resumes a hold, or settles an exclusive
 maintenance owner. Run from the install checkout. From a reviewed isolated
@@ -274,7 +274,7 @@ have no seed, migration, federation or automatic expiry.
 
 ### Machine-local maintenance receipts
 
-Manual reservation reconciliation uses `node scripts/reconcile-maintenance-reservations.mjs`
+Manual reservation reconciliation uses `node scripts/ops/reconcile-maintenance-reservations.mjs`
 (`inspect` / `reconcile`). Its receipts and the journal are machine-local and never
 federated or restored: a data snapshot copies the `workflow-maintenance/` subtree, but
 every file restore (full or scoped, preview and execution) preserves this machine's copy
@@ -348,8 +348,8 @@ For an install with an unusually large pre-v2 catalog, treat the update as plann
 Historical import is explicit and never runs at boot. From the repository root:
 
 ```sh
-node scripts/backfill-codex-image-usage.js --data-dir <install>/data --report <private-plan.json>
-node scripts/backfill-codex-image-usage.js --data-dir <install>/data --apply <private-plan.json> --journal <private-journal.json>
+node scripts/ops/backfill-codex-image-usage.js --data-dir <install>/data --report <private-plan.json>
+node scripts/ops/backfill-codex-image-usage.js --data-dir <install>/data --apply <private-plan.json> --journal <private-journal.json>
 ```
 
 Review the dry-run coverage before applying. The importer reads only PortOS

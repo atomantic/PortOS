@@ -50,12 +50,12 @@ export const CLIENT_FANOUT_TEST_FILES = 400;
 export { BROWSER_SUITES } from './lib/browserSuites.js';
 const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
-// Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph
+// Python sidecar scripts (`scripts/ml/generate_ltx2.py`, …). Vitest's import graph
 // cannot reach into them, but their contracts are pinned by suites that read
 // the .py source as text, so main() finds the suites naming each changed script
 // with `git grep` and the plan runs exactly those — failing closed to the full
 // suite for a script nothing names.
-const PYTHON_SCRIPT_RE = /^scripts\/[^/]+\.py$/;
+const PYTHON_SCRIPT_RE = /^scripts\/(?:ml\/)?[^/]+\.py$/;
 
 // Contract tests read a subject file with `readFileSync` (a cross-tree mirror
 // parity test, `server/lib/navManifest.js` reading 20+ client files by path)
@@ -506,23 +506,29 @@ export const FIXTURE_OWNERS = [
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
   {
-    re: /^scripts\/ltx25_cuda_currency\.py$/,
-    dir: 'scripts',
+    re: /^scripts\/ml\/ltx25_cuda_currency\.py$/,
+    dir: 'scripts/ml',
     fileRe: /^ltx25_cuda_currency\.py$/,
     tests: ['server/services/videoGen/runtimes.test.js'],
   },
   {
-    re: /^scripts\/(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    re: /^scripts\/setup-trellis2-mps\.sh$/,
     dir: 'scripts',
-    fileRe: /^(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    fileRe: /^setup-trellis2-mps\.sh$/,
+    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+  },
+  {
+    re: /^scripts\/ml\/requirements\/requirements-trellis2-mps(?:\.lock)?\.txt$/,
+    dir: 'scripts/ml/requirements',
+    fileRe: /^requirements-trellis2-mps(?:\.lock)?\.txt$/,
     tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
   },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
   // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
   // lyricForcedAlign.js). The installer-contract tests exercise those installers.
   {
-    re: /^scripts\/requirements-[^/]+\.txt$/,
-    dir: 'scripts',
+    re: /^scripts\/ml\/requirements\/requirements-[^/]+\.txt$/,
+    dir: 'scripts/ml/requirements',
     fileRe: /^requirements-[^/]+\.txt$/,
     tests: [
       'scripts/setup-image-video.test.js',

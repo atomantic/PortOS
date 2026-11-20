@@ -3,7 +3,7 @@
  *
  * H3 shipped as `supportedModes: ['text']` because PortOS only drove the port's
  * `t2va` path. The same pinned runtime already implements `fl2va` keyframe
- * conditioning, so `scripts/generate_minimax_h3.py` now forwards
+ * conditioning, so `scripts/ml/generate_minimax_h3.py` now forwards
  * `--image`/`--anchor` pairs and the entry advertises image + fflf.
  *
  * Two registry fields have to move together:

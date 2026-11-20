@@ -181,7 +181,7 @@ describe('hand-synced mirrors', () => {
   it('CUDA VRAM floors match PROFILE_MIN_VRAM_GB in the Python runner', () => {
     // The runner re-selects a recipe from the device's VRAM, which the server
     // cannot see; that only stays honest while the two tables agree.
-    const declared = repoFile('scripts', 'generate_minimax_h3_cuda.py')
+    const declared = repoFile('scripts', 'ml', 'generate_minimax_h3_cuda.py')
       .match(/^PROFILE_MIN_VRAM_GB = \((.*)\)$/m);
     expect(declared).not.toBeNull();
     const fromPython = [...declared[1].matchAll(/\("([^"]+)",\s*(\d+)\)/g)]

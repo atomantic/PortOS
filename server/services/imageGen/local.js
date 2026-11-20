@@ -126,7 +126,7 @@ const diffusersRenderArgs = ({ model, prompt, negativePrompt, width, height, ste
       { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
     );
   }
-  const scriptPath = join(PATHS.root, 'scripts', 'z_image_turbo.py');
+  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'z_image_turbo.py');
   const args = [
     scriptPath,
     '--model', modelId,
@@ -240,7 +240,7 @@ const flux2RenderArgs = (model, inputs) => {
       { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
     );
   }
-  const scriptPath = join(PATHS.root, 'scripts', 'flux2_macos.py');
+  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'flux2_macos.py');
   // No --metadata flag: local.js's proc.on('close') already writes the
   // canonical sidecar at <jobId>.metadata.json after a successful exit.
   // Letting the runner write its own would duplicate work and the JS
@@ -269,7 +269,7 @@ const flux2RenderArgs = (model, inputs) => {
   if (initImagePath) args.push('--image-path', initImagePath);
   if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
   // Multi-reference editing for FLUX.2. When the path list is non-empty,
-  // scripts/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
+  // scripts/ml/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
   // single-image Flux2KleinPipeline) and passes the refs as image=[PIL...].
   // The route always emits parallel referenceImageStrengths (defaulting to
   // 1.0 per ref); the runner honors them per-reference via a runtime patch
@@ -290,7 +290,7 @@ const flux2RenderArgs = (model, inputs) => {
 // args so the request still produces a normal txt2img result rather
 // than failing argparse with "unrecognized arguments".
 const mfluxWindowsArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [] }) => {
-  const scriptPath = join(PATHS.root, 'scripts', 'imagine_win.py');
+  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'imagine_win.py');
   return {
     bin: pythonPath,
     providerInputs: { initImagePath: null, referenceImagePaths: [] },

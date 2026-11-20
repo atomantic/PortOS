@@ -16,11 +16,11 @@ describe.skipIf(!python)('CTC Python transcript, Viterbi and checkpoint gate', (
   // Literal path reference: the CI test planner (path-contract index) selects this
   // suite for edits to the Python module only when a test names it (#15676).
   it('targets the production module', () => {
-    expect(existsSync(fileURLToPath(new URL('./align_lyrics_ctc.py', import.meta.url)))).toBe(true);
+    expect(existsSync(fileURLToPath(new URL('./ml/align_lyrics_ctc.py', import.meta.url)))).toBe(true);
   });
 
   it('runs the production boundary checks without downloading or deserializing a model', () => {
-    expect(() => execFileSync(python, [fileURLToPath(new URL('./align_lyrics_ctc_test.py', import.meta.url))],
+    expect(() => execFileSync(python, [fileURLToPath(new URL('./ml/align_lyrics_ctc_test.py', import.meta.url))],
       { timeout: PY_SUBPROCESS_TIMEOUT_MS, stdio: 'pipe', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } })).not.toThrow();
   }, PY_TEST_TIMEOUT_MS);
 });

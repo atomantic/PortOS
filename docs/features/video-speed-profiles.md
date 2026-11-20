@@ -76,7 +76,7 @@ down rather than re-derived per chunk.
 **3. An unavailable lever is reported, not assumed.** Two questions can only be
 answered inside the render process: is the pinned pipeline new enough to accept
 `enable_teacache`, and is the distilled adapter the schedule was measured with
-actually inside the model pack? `scripts/generate_ltx2.py` probes both, emits a
+actually inside the model pack? `scripts/ml/generate_ltx2.py` probes both, emits a
 `STATUS:` line for each one it can't apply, and finishes with a single
 `SPEEDPROFILE:<json>` line naming the outcome:
 
@@ -101,7 +101,7 @@ shows `Speed profile: fast — reduced: teacache unavailable`).
 | Durable on disk for existing installs | `scripts/migrations/295-video-speed-profiles.js` |
 | Request field | `speedProfileId` in `LOCAL_ONLY_VIDEO_PARAMS` (`server/routes/videoGen.js`) |
 | Applied to the render | `resolveVideoSpeedProfile` + `resolveVideoSampler` defined in `server/lib/videoSpeedProfiles.js`, applied in `server/services/videoGen/generateVideo.js` (and `chainedVideo.js`) |
-| Runner levers + capability probe | `--speed-profile` / `--teacache` / `--require-adapter` in `scripts/generate_ltx2.py` |
+| Runner levers + capability probe | `--speed-profile` / `--teacache` / `--require-adapter` in `scripts/ml/generate_ltx2.py` |
 | Outcome parsed back | `SPEEDPROFILE:` in `server/services/videoGen/generateVideoHelpers.js` |
 | Picker | `client/src/components/videoGen/AdvancedParamsPanel.jsx` |
 

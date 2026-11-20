@@ -64,7 +64,7 @@ const GUARD_PYTHON = IS_WIN
 const FALLBACK_GUARD_PYTHON = IS_WIN
   ? join(homedir(), '.portos', 'venv-prompt-guard', 'Scripts', 'python.exe')
   : join(homedir(), '.portos', 'venv-prompt-guard', 'bin', 'python3');
-const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'run_prompt_guard.py');
+const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'run_prompt_guard.py');
 const RUNTIME_PROBE_TIMEOUT_MS = 30_000;
 const MAX_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INSTALL_EVENT_CHARS = 300;

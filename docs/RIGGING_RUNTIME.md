@@ -1,6 +1,6 @@
 # Reviewed Blender rigging profile
 
-Settings displays `python3 scripts/setup-rigging.py`. Run it from the PortOS
+Settings displays `python3 scripts/ml/setup-rigging.py`. Run it from the PortOS
 checkout, with Conda available. This provisions the dedicated `rigging` environment
 only on an explicit user request. It does not install or update anything at boot.
 Existing environments remain usable through the unchanged real `import bpy`
@@ -16,7 +16,7 @@ a retry. Cleanup failure remains an explicit error; preserve any custom work
 before manually removing a remaining prefix.
 
 The profile fixes **Blender bpy 5.2.3**, its **CPython 3.13 ABI**, and the exact
-**Conda CPython 3.13.18 build** per target. `scripts/rigging-profile.json` contains
+**Conda CPython 3.13.18 build** per target. `scripts/ml/rigging-profile.json` contains
 every interpreter dependency artifact, build, URL, SHA-256, MD5 and upload date.
 Setup downloads and verifies the entire Conda closure before invoking an offline
 `@EXPLICIT` creation from local artifacts. Conda never solves dependencies here.
@@ -38,14 +38,14 @@ cutoff at least seven days before the maintenance date; this profile uses
 **2026-11-04T00:00:00Z**. Resolve the source requirements, never install them directly:
 
 ```sh
-uv pip compile scripts/requirements-rigging.txt --python-version 3.13.18 \
+uv pip compile scripts/ml/requirements/requirements-rigging.txt --python-version 3.13.18 \
   --python-platform aarch64-apple-darwin --only-binary :all: --generate-hashes \
   --exclude-newer 2026-11-04T00:00:00Z --no-config \
-  -o scripts/requirements-rigging-macos-arm64.lock.txt
-uv pip compile scripts/requirements-rigging.txt --python-version 3.13.18 \
+  -o scripts/ml/requirements/requirements-rigging-macos-arm64.lock.txt
+uv pip compile scripts/ml/requirements/requirements-rigging.txt --python-version 3.13.18 \
   --python-platform x86_64-manylinux_2_28 --only-binary :all: --generate-hashes \
   --exclude-newer 2026-11-04T00:00:00Z --no-config \
-  -o scripts/requirements-rigging-linux-x64.lock.txt
+  -o scripts/ml/requirements/requirements-rigging-linux-x64.lock.txt
 ```
 
 Conda solving is a maintenance-only step, in scratch space. The initial profiles
@@ -66,7 +66,7 @@ verify the SHA-256 and **upload time** for every artifact against
 insufficient. The Linux libuuid build is constrained because the newer build was
 uploaded after the cutoff. Never copy a fresh solver result without this check.
 
-Run `python3 scripts/audit-rigging.py` immediately before publishing updates.
+Run `python3 scripts/ml/audit-rigging.py` immediately before publishing updates.
 It queries every distinct PyPI identity in both locks, the Conda pip version,
 and each exact Conda artifact PURL through OSV, without filtering `MAL-` records.
 Pagination is followed per identity. Any advisory or incomplete response requires

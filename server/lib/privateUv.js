@@ -10,7 +10,7 @@
 // user-wide executable is not ours to do. So PortOS tools run a private copy, bootstrapped once into
 // ~/.portos/tools/uv-<version> exactly like the bundled bootstraps in scripts/setup-image-video.sh
 // (same directory, so the two share one install), from the hash-pinned
-// scripts/requirements-uv-bootstrap.lock.txt.
+// scripts/ml/requirements/requirements-uv-bootstrap.lock.txt.
 import { execFile } from './childProcess.js';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';

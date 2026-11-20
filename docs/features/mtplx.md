@@ -59,7 +59,7 @@ you are already on.
    into a PortOS-private virtualenv under `data/tools/mtplx` (Apple Silicon,
    macOS 14 or newer). PortOS uses its
    private, version-verified uv and a native managed CPython 3.11, then applies
-   `scripts/requirements-mtplx-mlx.lock.txt` with hash verification and wheel-only
+   `scripts/ml/requirements/requirements-mtplx-mlx.lock.txt` with hash verification and wheel-only
    `uv pip sync`. No package graph or build dependency is resolved during install,
    and no user-wide Python or Homebrew package is changed. Progress streams on
    the card; the default model remains a separate download.

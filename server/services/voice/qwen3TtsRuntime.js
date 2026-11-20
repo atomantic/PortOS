@@ -20,7 +20,7 @@ export const QWEN3_TTS_MODELS_DIR = join(homedir(), '.portos', 'voice', 'models'
 export const QWEN3_TTS_VENV_PYTHON = process.platform === 'win32'
   ? join(QWEN3_TTS_REPO_DIR, '.venv', 'Scripts', 'python.exe')
   : join(QWEN3_TTS_REPO_DIR, '.venv', 'bin', 'python3');
-export const QWEN3_TTS_RUNNER_SCRIPT = join(PATHS.root, 'scripts', 'qwen3_tts_runner.py');
+export const QWEN3_TTS_RUNNER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'qwen3_tts_runner.py');
 
 export const SUPPORTED_QWEN3_MODELS = Object.freeze([
   {

@@ -2,15 +2,15 @@
 
 The explicit AudioLDM2 Install/Repair action (`INSTALL_AUDIOLDM2=1`) installs
 the runtime in `~/.portos/venv-audioldm2`. Apple Silicon uses its own lock
-(`scripts/requirements-audioldm2-mlx.lock.txt`). Windows (Git Bash) and Linux
+(`scripts/ml/requirements/requirements-audioldm2-mlx.lock.txt`). Windows (Git Bash) and Linux
 are supported on x86_64 and need [uv](https://docs.astral.sh/uv/), which
 provisions a dedicated managed CPython 3.11. Repair reuses standalone 3.11
 environments and rebuilds other Python minors or Conda-based environments,
 which can fail to load torch DLLs on Windows. Intel macOS and non-x86_64
 Windows/Linux hosts have no lock and are refused.
 
-The installer selects `scripts/requirements-audioldm2-cuda-windows.lock.txt`
-or `scripts/requirements-audioldm2-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-audioldm2-cuda-windows.lock.txt`
+or `scripts/ml/requirements/requirements-audioldm2-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:` against the runtime
 interpreter. Every distribution, including torch and its transitive CUDA
 libraries, has an exact version and SHA-256 hashes. Repair removes packages
@@ -30,7 +30,7 @@ never download weights or generate audio.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-audioldm2-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-audioldm2-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=audioldm2-cuda

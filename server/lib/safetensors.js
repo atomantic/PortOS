@@ -1,7 +1,7 @@
 /**
  * Minimal safetensors header reader + FLUX.2 size-variant detector.
  *
- * Used by the LoRA service to tell a Klein-4B LoRA (transformer hidden dim 3072) from Klein-9B (4096) so the picker hides weights diffusers would reject with a tensor-shape mismatch (which `scripts/lora_utils.py` swallows into a silent base render). Civitai's `baseModel` also distinguishes them, but self-trained/hand-dropped LoRAs have no sidecar; the file header is the only ground truth. Layout: bytes[0..8) = little-endian u64 header length N, then bytes[8..8+N) = UTF-8 JSON (tensor name → { dtype, shape, data_offsets }, plus optional `__metadata__`). Only that header is read, never the tensor payload.
+ * Used by the LoRA service to tell a Klein-4B LoRA (transformer hidden dim 3072) from Klein-9B (4096) so the picker hides weights diffusers would reject with a tensor-shape mismatch (which `scripts/ml/lora_utils.py` swallows into a silent base render). Civitai's `baseModel` also distinguishes them, but self-trained/hand-dropped LoRAs have no sidecar; the file header is the only ground truth. Layout: bytes[0..8) = little-endian u64 header length N, then bytes[8..8+N) = UTF-8 JSON (tensor name → { dtype, shape, data_offsets }, plus optional `__metadata__`). Only that header is read, never the tensor payload.
  */
 
 import { open } from 'fs/promises';

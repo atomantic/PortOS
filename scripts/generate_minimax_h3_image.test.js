@@ -9,7 +9,7 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 // each row reads, so a wrong row renders garbage silently on a 69 GB model run
 // nobody can afford to bisect. Rendering itself needs MLX and the weights and is
 // verified on Apple Silicon, not here.
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_h3_image.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_minimax_h3_image.py');
 const pyBin = resolveTestPython();
 const hasNumpy = (() => {
   if (!pyBin) return false;

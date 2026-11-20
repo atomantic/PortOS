@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const dir = dirname(fileURLToPath(import.meta.url));
+const dir = join(dirname(fileURLToPath(import.meta.url)), 'ml');
 const script = join(dir, 'minimax_h3_cuda_history.py');
 const python = resolveTestPython();
 const run = (source) => execFileSync(python, ['-c', source, script], { encoding: 'utf8', timeout: 30_000 }).trim();

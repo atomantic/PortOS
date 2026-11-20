@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./setup-trellis2-cuda.py', import.meta.url));
-const auditScript = fileURLToPath(new URL('./audit-trellis2-cuda.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/setup-trellis2-cuda.py', import.meta.url));
+const auditScript = fileURLToPath(new URL('./ml/audit-trellis2-cuda.py', import.meta.url));
 
 // Exercise the real install workflow with fake external processes and tiny archives.
 // Catches repair deleting weights, setup-time solving, unsupported-host mutation,
@@ -20,10 +20,10 @@ spec.loader.exec_module(m)
 with tempfile.TemporaryDirectory() as directory:
     temporary = pathlib.Path(directory)
     m.SCRIPTS = temporary / 'scripts'
-    m.SCRIPTS.mkdir()
+    (m.SCRIPTS / 'requirements').mkdir(parents=True)
     actual = json.loads(pathlib.Path(sys.argv[1]).with_name('trellis2-cuda-profile.json').read_text())
     for lock in ['requirements-trellis2-cuda.lock.txt', 'requirements-trellis2-cuda-build.lock.txt']:
-        (m.SCRIPTS / lock).write_text('fixture==1 --hash=sha256:' + 'a' * 64)
+        (m.SCRIPTS / 'requirements' / lock).write_text('fixture==1 --hash=sha256:' + 'a' * 64)
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w:bz2') as archive:
         member = tarfile.TarInfo('bin/micromamba')

@@ -54,11 +54,11 @@ isolated environment and verified weights, run the following manually from
 the repository root (substitute the isolated Python executable and model root):
 
 ```sh
-python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+python scripts/ml/qwen3_tts_runner.py --models-dir <model-root> \
   --mode design --model-id Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
   --text 'The example garden gate is open.' --instructions 'A clear warm alto.' \
   --output-wav <scratch-dir>/design.wav
-python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+python scripts/ml/qwen3_tts_runner.py --models-dir <model-root> \
   --mode clone --model-id Qwen/Qwen3-TTS-12Hz-1.7B-Base \
   --reference-audio <scratch-dir>/design.wav \
   --reference-transcript 'The example garden gate is open.' \
@@ -75,7 +75,7 @@ ran successfully on macOS arm64 through the production runner at `4a8dafc3a`,
 with seed 42 and rate 1.0. No runtime code changes were needed. The reference
 was the generated design WAV, not a personal recording. Model acquisition used
 the runner's explicit `--download` operation for each model
-(`python scripts/qwen3_tts_runner.py --download --model-id <id> --models-dir <model-root>`); all required files
+(`python scripts/ml/qwen3_tts_runner.py --download --model-id <id> --models-dir <model-root>`); all required files
 passed upstream size/digest verification before inference loaded local snapshots
 with Hub/Transformers offline mode enabled.
 

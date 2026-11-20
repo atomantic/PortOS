@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_music3.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_minimax_music3.py');
 
 // Same probe as the other python-sidecar suites: on Windows a bare `python` is
 // often a Store alias stub that exits non-zero, so pick an interpreter that

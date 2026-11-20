@@ -1,6 +1,8 @@
 # Scripts reference
 
-Every top-level or fixture/experiment file in `scripts/` is either wired into something (CI, a test, a `package.json` script, the server) or listed here with when to run it. The guard in `server/scriptReferences.guard.test.js` fails a script that nothing references, so a new one needs a row here or a caller. Test files (`*.test.js`) are collected by the Vitest run and are not listed.
+Top-level scripts, ML runners, operator tools, and fixtures or experiments need a caller or a live documentation entry. The guard in `server/scriptReferences.guard.test.js` checks these references. Vitest collects `*.test.js` files directly.
+
+Python ML runners and probes live under `scripts/ml/`. Their input and lock files live under `scripts/ml/requirements/`. Manual maintenance and demo scripts live under `scripts/ops/`. npm entry points and setup wrappers run from `scripts/`.
 
 ## npm scripts
 
@@ -21,16 +23,18 @@ Every top-level or fixture/experiment file in `scripts/` is either wired into so
 
 | Script | When to run it |
 |--------|----------------|
-| `scripts/backfill-antigravity-usage.js` | Dry run by default; `--apply` repairs Antigravity usage rows in `data/usage.json`. Stop PortOS first. While it runs, use Reconcile now on the Usage page instead. |
-| `scripts/backfill-grok-usage.js` | Same contract as the Antigravity backfill, for Grok usage. Accepts `--home` and `--data` overrides. Cache rates are not rewritten. |
-| `scripts/repair-orphaned-issues.js --series=<seriesId> [--apply]` | Repairs pipeline issues stranded behind a defunct `seasonId` after an arc regeneration. Dry run by default. |
-| `scripts/show-deletions.mjs [--table= --action= --since= --id= --limit=]` | Reads the `record_audit` deletion log to answer what was deleted, when and by what. Connects with the standard `PG*` variables through `psql`. |
-| `scripts/jira-create-ticket.js --app <app> --summary "…"` | Creates a JIRA ticket through the PortOS JIRA service, using the app's config in `apps.json`. |
-| `scripts/jira-update-ticket.js --app <app> --ticket <KEY> [--transitions\|--transition\|--comment\|…]` | Updates, comments on, transitions or deletes a JIRA ticket. |
-| `scripts/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
-| `scripts/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
+| `scripts/ops/backfill-antigravity-usage.js` | Dry run by default; `--apply` repairs Antigravity usage rows in `data/usage.json`. Stop PortOS first. While it runs, use Reconcile now on the Usage page instead. |
+| `scripts/ops/backfill-codex-image-usage.js --data-dir <dir> --report <file>` | Builds a Codex image usage recovery report. A separate run with `--apply <file> --journal <file>` applies a reviewed report. |
+| `scripts/ops/backfill-grok-usage.js` | Same contract as the Antigravity backfill, for Grok usage. Accepts `--home` and `--data` overrides. Cache rates are not rewritten. |
+| `scripts/ops/repair-orphaned-issues.js --series=<seriesId> [--apply]` | Repairs pipeline issues stranded behind a defunct `seasonId` after an arc regeneration. Dry run by default. |
+| `scripts/ops/show-deletions.mjs [--table= --action= --since= --id= --limit=]` | Reads the `record_audit` deletion log to answer what was deleted, when and by what. Connects with the standard `PG*` variables through `psql`. |
+| `scripts/ops/recover-synced-test-fixtures.mjs` | Identifies previously synced test fixture records. Dry run by default. |
+| `scripts/ops/jira-create-ticket.js --app <app> --summary "…"` | Creates a JIRA ticket through the PortOS JIRA service, using the app's config in `apps.json`. |
+| `scripts/ops/jira-update-ticket.js --app <app> --ticket <KEY> [--transitions\|--transition\|--comment\|…]` | Updates, comments on, transitions or deletes a JIRA ticket. |
+| `scripts/ops/seed-readme-demo-data.mjs --root <empty-dir>` | Builds a synthetic data root for README screenshots from `data.reference/`. It never reads the install's `data/`. Give it an empty directory. |
+| `scripts/ml/align_lyrics_ctc_accuracy.py --model-dir <dir>` | Opt-in accuracy check of the lyric aligner against the real MMS_FA checkpoint (about 1.2 GB, downloaded on first use). CI never runs it. Run it with the `lyric-align` venv's interpreter. |
 | `scripts/prune-model-comparison-seed.js [--check]` | Prunes `data.reference/model-comparison.json` to models in provider scope and public benchmark observations. Run with `--check` in CI or after modifying `providers.json`. |
-| `scripts/diagnose_minimax_h3.py --output-dir <dir> [--run]` | Reproduces MiniMax H3 continuity scenarios (#8867) on synthetic keyframes without private inputs. See `docs/research/minimax-h3-continuity.md`. |
-| `scripts/diagnose_minimax_h3_processor.py --cases <all\|production\|undersized>` | Compares H3 torchvision vs PIL image-processor backends across synthetic canvas resolutions. |
-| `scripts/diagnose_minimax_h3_vision.py <torch\|mlx> --output-dir <dir>` | Inspects H3 vision precision across backends/devices with cached weights and synthetic inputs. |
-| `scripts/compare_minimax_h3_vision.py --actual <dir> --reference <dir>` | Compares synthetic H3 vision traces produced by `diagnose_minimax_h3_vision.py`. |
+| `scripts/ml/diagnose_minimax_h3.py --output-dir <dir> [--run]` | Reproduces MiniMax H3 continuity scenarios (#8867) on synthetic keyframes without private inputs. See `docs/research/minimax-h3-continuity.md`. |
+| `scripts/ml/diagnose_minimax_h3_processor.py --cases <all\|production\|undersized>` | Compares H3 torchvision vs PIL image-processor backends across synthetic canvas resolutions. |
+| `scripts/ml/diagnose_minimax_h3_vision.py <torch\|mlx> --output-dir <dir>` | Inspects H3 vision precision across backends/devices with cached weights and synthetic inputs. |
+| `scripts/ml/compare_minimax_h3_vision.py --actual <dir> --reference <dir>` | Compares synthetic H3 vision traces produced by `diagnose_minimax_h3_vision.py`. |

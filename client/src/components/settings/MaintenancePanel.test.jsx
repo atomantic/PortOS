@@ -51,7 +51,7 @@ describe('maintenance controls', () => {
     expect(screen.queryByRole('button', { name: 'Enter maintenance' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Reason')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy recovery steps' }));
-    expect(copyToClipboard).toHaveBeenCalledWith(expect.stringMatching(/pm2 stop portos-server portos-cos\nnode scripts\/recover-maintenance-transaction\.mjs --confirm .+\npm2 start portos-server portos-cos/), 'Recovery steps copied');
+    expect(copyToClipboard).toHaveBeenCalledWith(expect.stringMatching(/pm2 stop portos-server portos-cos\nnode scripts\/ops\/recover-maintenance-transaction\.mjs --confirm .+\npm2 start portos-server portos-cos/), 'Recovery steps copied');
     expect(screen.getByRole('button', { name: 'Refresh status' })).toBeEnabled();
     expect(fixture.begin).not.toHaveBeenCalled();
   });

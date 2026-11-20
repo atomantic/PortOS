@@ -136,7 +136,7 @@ an upscale on weights it was never trained for. Each runtime names its own pin
 and the dispatch resolves it from the local cache.
 
 Both runners implement one shared argv/grid/adapter contract
-(`scripts/_upscale_contract.py`), so a single `buildLtxUpscaleArgs()` emits the
+(`scripts/ml/_upscale_contract.py`), so a single `buildLtxUpscaleArgs()` emits the
 same argument set whichever backend the plan resolved — only the interpreter and
 the script path differ. What stays per-runner is what genuinely differs: the
 runtime it imports, the host it gates on, the pack layout it validates, and the
@@ -156,7 +156,7 @@ as-is.
 Both runtimes' `ICLoraPipeline` render their conditioned stage at half the size
 they are handed, so the runners request **twice** the output and skip the
 latent-upsample second stage (`PIPELINE_REQUEST_MULTIPLIER` in
-`scripts/_upscale_contract.py` records why).
+`scripts/ml/_upscale_contract.py` records why).
 
 On macOS the MLX q8 pack may hold the distilled model either pre-fused
 (`transformer-distilled.safetensors`) or as the dev transformer plus the
@@ -341,6 +341,6 @@ the generative runs. A source that "needs a trim" is a refusal by construction
 | Pad and crop-back / audio re-mux | `server/services/videoGen/upscaleFfmpeg.js` |
 | Routes | `server/routes/videoGen.js` |
 | Adapter registry entry (`pixel-upscale`) | `server/lib/icLoraWeights.js` |
-| Shared runner contract | `scripts/_upscale_contract.py` |
-| Runners | `scripts/upscale_ltx25.py` (MLX) · `scripts/upscale_ltx25_cuda.py` (CUDA) |
+| Shared runner contract | `scripts/ml/_upscale_contract.py` |
+| Runners | `scripts/ml/upscale_ltx25.py` (MLX) · `scripts/ml/upscale_ltx25_cuda.py` (CUDA) |
 | Method picker / disclosure drawer | `client/src/components/media/VideoUpscaleDrawer.jsx` |

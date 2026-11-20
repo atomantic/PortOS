@@ -69,7 +69,7 @@ import {
   assertByovRuntimeInstalled,
 } from './runtimes.js';
 
-const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_av_lora.py');
+const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_av_lora.py');
 
 // FFLF/ltx2 stage-2 peak memory scales with the pixel-frame count
 // (width × height × numFrames), so the cap is on that product. Anchors are
@@ -174,7 +174,7 @@ export const resolveT2vTwoStageOverride = ({
 
 // Resolve picker `{ filename, scale }` LoRA entries into absolute
 // `{ path, strength }` pairs the ltx2 helper fuses via the pipeline's
-// `_pending_loras` hook (see scripts/generate_ltx2.py). Validates each
+// `_pending_loras` hook (see scripts/ml/generate_ltx2.py). Validates each
 // basename can't escape PATHS.loras (assertSafeLoraFilename) and that the file
 // exists — a typo or a deleted LoRA would otherwise surface as an opaque
 // Python FileNotFoundError deep inside the render. Returns [] for no LoRAs.
@@ -482,7 +482,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
   // 'auto' (absence) is the bridge's own default, so an unswapped render's
   // argv stays byte-identical to one from before this setting existed. The
   // bridge, not this builder, decides whether the resolved MODE's pinned
-  // pipeline can honor it — see scripts/generate_ltx2.py#resolve_streaming_policy.
+  // pipeline can honor it — see scripts/ml/generate_ltx2.py#resolve_streaming_policy.
   if (!isDefaultVideoStreamingMode(streamingMode)) {
     args.push('--streaming-mode', streamingMode);
   }
@@ -609,7 +609,7 @@ export const fastvideoFamily = (model) =>
 // directory instead. A row that names one of these formats is pointing at that
 // upstream snapshot and wants the helper to run FastVideo's own converter once;
 // a row that omits it already ships the quantized DiT beside its model root.
-// Mirrors MLX_DIT_FORMATS in scripts/generate_fastvideo.py, itself the
+// Mirrors MLX_DIT_FORMATS in scripts/ml/generate_fastvideo.py, itself the
 // converter's own format list. Kept in sync by hand — the helper's argparse
 // `choices=` is the enforcement; this list is what lets the server reject a
 // bad value before queueing a render.
@@ -1320,7 +1320,7 @@ export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, u
   // Every BYOV runtime has declined above; the remaining declared CUDA runtime
   // is the legacy LTX-Video 0.9.5 diffusers wrapper.
   if (routesToWindowsHelper(model)) {
-    const scriptPath = join(PATHS.root, 'scripts', 'generate_win.py');
+    const scriptPath = join(PATHS.root, 'scripts', 'ml', 'generate_win.py');
     const args = [scriptPath, '--model', modelId, '--prompt', prompt, '--height', String(height), '--width', String(width), '--num-frames', String(numFrames), '--fps', String(fps), '--steps', String(steps), '--guidance', String(guidance), '--seed', String(seed), '--output', outputPath];
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (sourceImagePath) args.push('--image', sourceImagePath);
@@ -1328,7 +1328,7 @@ export const buildArgs = ({ continuityStrategy, contextFrames, historyContext, u
     return { bin: pythonPath, args };
   }
   // Flags shared by the bare `mlx_video.generate_av` CLI and the LoRA wrapper
-  // (scripts/generate_av_lora.py forwards these untouched to generate_av.main()).
+  // (scripts/ml/generate_av_lora.py forwards these untouched to generate_av.main()).
   const flags = [
     '--prompt', prompt,
     '--height', String(height),

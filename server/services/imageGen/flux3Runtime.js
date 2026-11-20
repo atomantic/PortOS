@@ -16,7 +16,7 @@ export const flux3Python = () => join(flux3Venv(), 'bin', 'python3');
 // Every transitive package is version- and hash-pinned in the lock so a repair
 // cannot resolve a newly published (or tampered) release. The probe asserts the
 // whole locked set, not just the direct pins.
-export const flux3LockPath = () => join(PATHS.root, 'scripts', 'requirements-flux3-mlx.lock.txt');
+export const flux3LockPath = () => join(PATHS.root, 'scripts', 'ml', 'requirements', 'requirements-flux3-mlx.lock.txt');
 let lockedPins = null;
 function flux3LockedPins() {
   lockedPins ??= readFileSync(flux3LockPath(), 'utf8').split('\n')

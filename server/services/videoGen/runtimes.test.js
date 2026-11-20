@@ -566,7 +566,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')`, info.currencyProbeArgs[0], lo
 
   it('keeps the cache contract aligned with the Python runner', () => {
     const runner = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'generate_ltx25_cuda.py'),
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'ml', 'generate_ltx25_cuda.py'),
       'utf8',
     );
     for (const relative of [
@@ -595,7 +595,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')`, info.currencyProbeArgs[0], lo
 describe('MiniMax H3 CUDA offload profiles', () => {
   it('matches OFFLOAD_PROFILES in the Python runner', () => {
     const runner = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'generate_minimax_h3_cuda.py'),
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'ml', 'generate_minimax_h3_cuda.py'),
       'utf8',
     );
     const declared = runner.match(/^OFFLOAD_PROFILES = \(([^)]*)\)/m);

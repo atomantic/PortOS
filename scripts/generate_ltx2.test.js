@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_ltx2.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_ltx2.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name — on
 // Windows a bare `python` can be a Store alias STUB that exists and exits
@@ -1877,7 +1877,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py split prompt residency (#13613)', () =
   it.each(['markers-before', 'markers-after', 'gemma3', 'failures'])('preserves embeddings and resource lifetimes: %s', (scenario) => {
     const result = JSON.parse(runPython(`${importRunner}
 import runpy, json
-fixture = runpy.run_path(str(script.parent / 'fixtures' / 'ltx_prompt_encoding.py'))
+fixture = runpy.run_path(str(script.parent.parent / 'fixtures' / 'ltx_prompt_encoding.py'))
 print(json.dumps(fixture['exercise'](runner, ${JSON.stringify(scenario)})))
 `));
     expect(result.equivalent).toBe(true);
@@ -1886,7 +1886,7 @@ print(json.dumps(fixture['exercise'](runner, ${JSON.stringify(scenario)})))
   });
 
   it('requires reassessing the lifecycle whenever the runtime is re-pinned', () => {
-    const runtimes = readFileSync(join(dirname(script), '../server/services/videoGen/runtimes.js'), 'utf8');
+    const runtimes = readFileSync(new URL('../server/services/videoGen/runtimes.js', import.meta.url), 'utf8');
     const expected = runtimes.match(/export const LTX25_EXPECTED_REVISION = '([a-f0-9]+)'/)[1];
     expect(runPython(`${importRunner}\nprint(runner._SPLIT_PROMPT_REVISION)`).trim()).toBe(expected);
   });
@@ -1940,7 +1940,7 @@ print('verified')
 // else runs it, so this wrapper is its only CI entry point.
 describe.skipIf(!pyBin)('generate_ltx2_teacache_test.py unit suite', () => {
   it('passes the unittest suite', () => {
-    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./generate_ltx2_teacache_test.py', import.meta.url))], {
+    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./ml/generate_ltx2_teacache_test.py', import.meta.url))], {
       encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS, stdio: 'pipe',
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     })).not.toThrow();

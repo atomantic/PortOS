@@ -183,7 +183,7 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   }),
   // LTX audio-to-video on this machine: the song slice is the audio latent the
   // picture is denoised against, held fixed through both passes
-  // (scripts/generate_ltx2.py `_install_a2v_stage2_audio_freeze`). The model is
+  // (scripts/ml/generate_ltx2.py `_install_a2v_stage2_audio_freeze`). The model is
   // the project's local LTX pick, checked at submission; 20s keeps one take
   // inside what LTX-2.5 renders well and within a Mac's memory.
   local: localAudioLane('lipsync'),

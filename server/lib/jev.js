@@ -218,7 +218,7 @@ export const jevScoreRequestSchema = z.object({
 
 const probability = z.number().min(0).max(1);
 
-/** What `scripts/run_jev.py` returns from `POST /score`. */
+/** What `scripts/ml/run_jev.py` returns from `POST /score`. */
 export const jevScoreResponseSchema = z.object({
   schemaVersion: z.literal(1),
   complete: z.literal(true),

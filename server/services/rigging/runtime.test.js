@@ -21,7 +21,7 @@ const FAKE_PYTHON = resolveRiggingPython({ exists: (p) => posixPath(p).startsWit
 describe('rigging runtime — install descriptor', () => {
   it('routes provisioning through the reviewed profile instead of an install-time solver', () => {
     expect(RIGGING_MODULE_REQUIREMENT).toBe(`${RIGGING_RUNTIME.module}==${RIGGING_RUNTIME.moduleVersion}`);
-    expect(RIGGING_INSTALL_COMMAND).toBe('python3 scripts/setup-rigging.py');
+    expect(RIGGING_INSTALL_COMMAND).toBe('python3 scripts/ml/setup-rigging.py');
   });
 });
 

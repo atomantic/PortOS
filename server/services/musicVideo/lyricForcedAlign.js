@@ -12,10 +12,10 @@ import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { lyricTokens } from './timedText.js';
 import { sliceWav, wavDurationSec } from './lyricAlignCore.js';
 
-const SCRIPT = fileURLToPath(new URL('../../../scripts/align_lyrics_ctc.py', import.meta.url));
+const SCRIPT = fileURLToPath(new URL('../../../scripts/ml/align_lyrics_ctc.py', import.meta.url));
 // Every transitive package, including a patched torch, is version- and hash-pinned;
 // pip resolves nothing at install time. Regeneration: the lock's header.
-const LOCK = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.lock.txt', import.meta.url));
+const LOCK = fileURLToPath(new URL('../../../scripts/ml/requirements/requirements-lyric-align.lock.txt', import.meta.url));
 const MIN_MINOR = 11;
 const MAX_MINOR = 14;
 let provisioning = null;

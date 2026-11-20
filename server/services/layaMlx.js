@@ -14,7 +14,7 @@ const root = () => join(PATHS.data, 'python', 'laya-mlx');
 const python = () => join(root(), 'venv', 'bin', 'python3');
 const model = () => join(root(), 'model');
 const marker = () => join(root(), 'installed.json');
-const script = () => join(PATHS.root, 'scripts', 'run_laya_mlx.py');
+const script = () => join(PATHS.root, 'scripts', 'ml', 'run_laya_mlx.py');
 let installation = null;
 let stage = null;
 let installError = null;

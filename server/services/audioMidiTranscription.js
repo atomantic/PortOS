@@ -6,7 +6,7 @@
  * MuScriptor (https://github.com/muscriptor/muscriptor) is a local
  * multi-instrument music-transcription model. It runs in an opt-in venv
  * (`INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh`) through the
- * sidecar `scripts/transcribe_muscriptor.py`, which mirrors the generate_*
+ * sidecar `scripts/ml/transcribe_muscriptor.py`, which mirrors the generate_*
  * audio sidecars' STAGE:/RESULT: wire protocol. Model weights auto-download
  * from HuggingFace on first use; the sidecar emits a distinct `download-model`
  * stage (vs `load-model` for a cached load) so the client can show an honest
@@ -43,7 +43,7 @@ import { ServerError } from '../lib/errorHandler.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // The sidecar lives at the repo root — resolve module-relative so the path is
 // correct regardless of the server process's cwd (mirrors pipeline/musicGen.js).
-const MUSCRIPTOR_SCRIPT = join(__dirname, '../../scripts/transcribe_muscriptor.py');
+const MUSCRIPTOR_SCRIPT = join(__dirname, '../../scripts/ml/transcribe_muscriptor.py');
 
 // MuScriptor model sizes (weights auto-download on first use). Medium is the
 // library default — a quality/speed balance; small is the CPU-friendly tier.
@@ -54,7 +54,7 @@ export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
 export const resolveMuscriptorModel = (model) =>
   (MUSCRIPTOR_MODELS.includes(model) ? model : DEFAULT_MUSCRIPTOR_MODEL);
 
-// The sidecar's `@install_hf_error_handler` (scripts/_runner_common.py) emits a
+// The sidecar's `@install_hf_error_handler` (scripts/ml/_runner_common.py) emits a
 // structured `USER_ERROR:gated_repo:<repo>` line on a gated download — prefer it
 // over prose-matching a stderr tail that sidecarProcess has already truncated to
 // the last few lines. The repo group is optional (older/marker-less output).

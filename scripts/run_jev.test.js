@@ -8,7 +8,7 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 import { normalizeJevScores } from '../server/lib/jev.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./run_jev.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/run_jev.py', import.meta.url));
 
 // Synthetic tokenizer/model doubles exercise the shipped Python runner without
 // downloading 9 GB of weights or invoking a provider in the test suite.

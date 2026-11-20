@@ -11,7 +11,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { whichFirst } from '../../lib/processEnv.js';
 
-const LOCK = fileURLToPath(new URL('../../../scripts/requirements-demucs.lock.txt', import.meta.url));
+const LOCK = fileURLToPath(new URL('../../../scripts/ml/requirements/requirements-demucs.lock.txt', import.meta.url));
 const TIMEOUT = 45 * 60_000;
 const fail = (message, code = 'DEMUCS_INSTALL_FAILED') => new ServerError(message, { status: 503, code });
 const lockVersion = (text, name) => new RegExp(`^${name}==([^\\s;\\\\]+)`, 'm').exec(text)?.[1];

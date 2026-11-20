@@ -68,7 +68,7 @@ const JEV_PYTHON = IS_WIN
 const FALLBACK_JEV_PYTHON = IS_WIN
   ? join(homedir(), '.portos', 'venv-jev', 'Scripts', 'python.exe')
   : join(homedir(), '.portos', 'venv-jev', 'bin', 'python3');
-const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'run_jev.py');
+const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'run_jev.py');
 const SIDECAR_ORIGIN = `http://127.0.0.1:${PORTS.JEV}`;
 const RUNTIME_PROBE_TIMEOUT_MS = 30_000;
 const MAX_INSTALL_EVENT_CHARS = 300;

@@ -7,16 +7,16 @@ appears as needing an upgrade.
 
 | Runtime | Upstream revision | SHA-256 of upstream `uv.lock` | Inference lock |
 | --- | --- | --- | --- |
-| LTX-2.3 MLX | [dgrauet/ltx-2-mlx at 1192051](https://github.com/dgrauet/ltx-2-mlx/blob/1192051fd380e0501adb5f3c0e9a216e679cb123/uv.lock) | `0dd7510a74a99f13b621b4d4a42ad2b0a07b05f4fe98544313e308c189d3eb54` | [LTX-2.3 lock](../scripts/requirements-ltx23-mlx.lock.txt) |
-| LTX-2.5 MLX | [MrMoferFRAN/ltx-2-mlx at 5795228](https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/uv.lock) | `d5e10ec955678f72c950b1af5f297d02161fb3f59b38f84493fc06284c5cb1d8` | [LTX-2.5 lock](../scripts/requirements-ltx25-mlx.lock.txt) |
-| Wan 2.2 MLX | [lpalbou/mlx-gen at 2452f0c](https://github.com/lpalbou/mlx-gen/blob/2452f0c12edcc8886eebf15772205ce9c417a618/uv.lock) | `437647576a6673afb4f94512d8ce59cd504fc203cafe1de613b78006cd2f3033` | [Wan 2.2 lock](../scripts/requirements-wan22-mlx.lock.txt) |
-| FastVideo MLX | [hao-ai-lab/FastVideo at fa2d132](https://github.com/hao-ai-lab/FastVideo/tree/fa2d1324c60050cd65209c6aaeac470e7fb412f5) | N/A (pyproject-locked) | [FastVideo lock](../scripts/requirements-fastvideo-mlx.lock.txt) |
+| LTX-2.3 MLX | [dgrauet/ltx-2-mlx at 1192051](https://github.com/dgrauet/ltx-2-mlx/blob/1192051fd380e0501adb5f3c0e9a216e679cb123/uv.lock) | `0dd7510a74a99f13b621b4d4a42ad2b0a07b05f4fe98544313e308c189d3eb54` | [LTX-2.3 lock](../scripts/ml/requirements/requirements-ltx23-mlx.lock.txt) |
+| LTX-2.5 MLX | [MrMoferFRAN/ltx-2-mlx at 5795228](https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/uv.lock) | `d5e10ec955678f72c950b1af5f297d02161fb3f59b38f84493fc06284c5cb1d8` | [LTX-2.5 lock](../scripts/ml/requirements/requirements-ltx25-mlx.lock.txt) |
+| Wan 2.2 MLX | [lpalbou/mlx-gen at 2452f0c](https://github.com/lpalbou/mlx-gen/blob/2452f0c12edcc8886eebf15772205ce9c417a618/uv.lock) | `437647576a6673afb4f94512d8ce59cd504fc203cafe1de613b78006cd2f3033` | [Wan 2.2 lock](../scripts/ml/requirements/requirements-wan22-mlx.lock.txt) |
+| FastVideo MLX | [hao-ai-lab/FastVideo at fa2d132](https://github.com/hao-ai-lab/FastVideo/tree/fa2d1324c60050cd65209c6aaeac470e7fb412f5) | N/A (pyproject-locked) | [FastVideo lock](../scripts/ml/requirements/requirements-fastvideo-mlx.lock.txt) |
 
 The installer first syncs registry wheels with `--require-hashes --only-binary
 :all:`. It then builds the two editable LTX inference packages or the MLX-Gen
 wheel. The isolated builds use
 `--no-deps --require-build-hashes` and the separate
-[`requirements-mlx-video-build.lock.txt`](../scripts/requirements-mlx-video-build.lock.txt).
+[`requirements-mlx-video-build.lock.txt`](../scripts/ml/requirements/requirements-mlx-video-build.lock.txt).
 This keeps the build dependencies out of the inference environment. FastVideo MLX
 locks its build backend (`setuptools>=61.0` and `wheel`) directly in the runtime lock
 and installs its editable checkout with `--no-deps --no-build-isolation`, preventing
@@ -73,7 +73,7 @@ following script. Verify the checkout and upstream lock digest against the
 table first. The output includes every package/version and its advisory IDs.
 
 ```bash
-python3.11 - /path/to/checkout/uv.lock scripts/requirements-mlx-video-build.lock.txt "$inference_lock" <<'PY'
+python3.11 - /path/to/checkout/uv.lock scripts/ml/requirements/requirements-mlx-video-build.lock.txt "$inference_lock" <<'PY'
 import json
 import re
 import sys

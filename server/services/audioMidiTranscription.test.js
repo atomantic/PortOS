@@ -24,14 +24,14 @@ describe('buildMuscriptorArgs', () => {
   it('builds the sidecar argv with the resolved model', () => {
     const { bin, args } = buildMuscriptorArgs({
       pythonPath: '/venv/bin/python3',
-      scriptPath: '/repo/scripts/transcribe_muscriptor.py',
+      scriptPath: '/repo/scripts/ml/transcribe_muscriptor.py',
       audioPath: '/data/uploads/song.wav',
       outputPath: '/tmp/out.mid',
       model: 'large',
     });
     expect(bin).toBe('/venv/bin/python3');
     expect(args).toEqual([
-      '/repo/scripts/transcribe_muscriptor.py',
+      '/repo/scripts/ml/transcribe_muscriptor.py',
       '--audio', '/data/uploads/song.wav',
       '--output', '/tmp/out.mid',
       '--model', 'large',

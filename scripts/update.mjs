@@ -257,11 +257,11 @@ async function prepareData() {
   if (process.platform === 'darwin' && process.arch === 'arm64') {
     try { accessSync(python, constants.X_OK); hasMuscriptor = true; } catch { /* the runtime is opt-in */ }
   }
-  if (hasMuscriptor && (await run(python, ['scripts/transcribe_muscriptor.py', '--check-runtime'])).code) {
+  if (hasMuscriptor && (await run(python, ['scripts/ml/transcribe_muscriptor.py', '--check-runtime'])).code) {
     step('muscriptor', 'running', 'Refreshing the MuScriptor MIDI runtime...');
     const pip = await run(python, ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--require-hashes', '--no-deps',
-      '-r', 'scripts/requirements-muscriptor-mlx.lock.txt']);
-    const refreshed = !pip.code && !(await run(python, ['scripts/transcribe_muscriptor.py', '--check-runtime'])).code;
+      '-r', 'scripts/ml/requirements/requirements-muscriptor-mlx.lock.txt']);
+    const refreshed = !pip.code && !(await run(python, ['scripts/ml/transcribe_muscriptor.py', '--check-runtime'])).code;
     step('muscriptor', 'done', refreshed ? 'MuScriptor MIDI runtime refreshed' : 'MuScriptor refresh failed (see update log for the repair command)');
   }
   step('migrations', 'running', 'Running data migrations...');

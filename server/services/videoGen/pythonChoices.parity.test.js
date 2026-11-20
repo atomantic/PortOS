@@ -10,7 +10,7 @@ import { FASTVIDEO_FAMILIES } from './renderArgs.js';
 // helper must run standalone) and again in JS. Pin each pair so adding or
 // renaming a value on one side fails here, not at render time with argparse
 // exit code 2.
-const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts');
+const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'ml');
 const strings = (text) => [...text.matchAll(/["']([^"']+)["']/g)].map(([, v]) => v);
 const read = (name) => readFileSync(join(scriptsDir, name), 'utf8');
 

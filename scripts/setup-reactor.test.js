@@ -117,8 +117,8 @@ it('installs only from the hash-pinned lock, never by resolving the direct pin',
 
 it('locks the direct reactor-sdk pin with a hash and bootstraps a patched uv', () => {
   const read = (name) => readFileSync(new URL(name, import.meta.url), 'utf8');
-  const pin = read('./requirements-reactor.txt').match(/^reactor-sdk==([0-9.]+)/m)[1];
-  const lock = read('./requirements-reactor.lock.txt');
+  const pin = read('./ml/requirements/requirements-reactor.txt').match(/^reactor-sdk==([0-9.]+)/m)[1];
+  const lock = read('./ml/requirements/requirements-reactor.lock.txt');
   expect(lock).toContain(`reactor-sdk==${pin} ;`);
   expect(lock).toMatch(/--hash=sha256:[0-9a-f]{64}/);
   // GHSA-hq85-5cpj-mr62 (compromised CA, wheel extraction) is fixed in uv 0.13.4.

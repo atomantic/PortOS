@@ -144,7 +144,7 @@ export function validateReactorRequest({
 
 function captureClip(entry, input, pythonPath, job, jobId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'ml', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '';
     let outputBytes = 0;
     let complete = null;

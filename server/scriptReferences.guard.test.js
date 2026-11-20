@@ -1,5 +1,5 @@
 /**
- * Tree-wide guard: every top-level and fixture/experiment scripts/ file must be
+ * Tree-wide guard: every top-level, ML, operator and fixture/experiment script must be
  * referenced by something live in the repo (code, a workflow, package.json or a doc),
  * so a script no one can find or run is either documented in docs/SCRIPTS.md or
  * deleted (#16089, #16909).
@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:fixtures|experiments)\/.+)$/;
+export const CANDIDATE_SCRIPT = /^scripts\/(?:[^/]+|(?:ml|ops|fixtures|experiments)\/.+)$/;
 export const VITEST_COLLECTED = /\.test\.js$/;
 export const HISTORICAL = /^docs\/(?:decisions|plans|research)\/|^scripts\/migrations\//;
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -107,10 +107,18 @@ describe('scripts/ reference guard (#16089, #16909)', () => {
     // Candidate pattern covers subdirectories fixtures and experiments
     expect(CANDIDATE_SCRIPT.test('scripts/fixtures/minimax_h3_history.py')).toBe(true);
     expect(CANDIDATE_SCRIPT.test('scripts/experiments/synthid_jamming_eval.py')).toBe(true);
+    expect(CANDIDATE_SCRIPT.test('scripts/ml/generate_ltx2.py')).toBe(true);
+    expect(CANDIDATE_SCRIPT.test('scripts/ml/requirements/requirements-lyric-align.lock.txt')).toBe(true);
+    expect(CANDIDATE_SCRIPT.test('scripts/ops/backfill-codex-image-usage.js')).toBe(true);
     expect(CANDIDATE_SCRIPT.test('scripts/lib/directInvocation.js')).toBe(false);
   });
 
-  it('every top-level and fixture/experiment scripts/ file is referenced by code, a workflow, package.json or a live doc', () => {
+  it('files Python sidecars and requirements under scripts/ml', () => {
+    const rootFiles = trackedFiles(REPO_ROOT).filter((path) => /^scripts\/[^/]+$/.test(path));
+    expect(rootFiles.filter((path) => path.endsWith('.py') || /^scripts\/requirements-.*\.txt$/.test(path))).toEqual([]);
+  });
+
+  it('every script is referenced by code, a workflow, package.json or a live doc', () => {
     const files = trackedFiles(REPO_ROOT);
     expect(files.length).toBeGreaterThan(100);
     const candidates = files.filter((path) => CANDIDATE_SCRIPT.test(path) && !VITEST_COLLECTED.test(path));

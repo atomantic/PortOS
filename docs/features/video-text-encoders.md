@@ -74,7 +74,7 @@ back to Stock rather than leaving it on a value the server would reject.
 
 The pinned MLX runtime (`PipeNetwork/minimax-h3-mlx`) is verified clean before
 every render — PortOS never edits it. Two adapters in
-`scripts/generate_minimax_h3.py` bridge the gap instead:
+`scripts/ml/generate_minimax_h3.py` bridge the gap instead:
 
 **1. A composed checkpoint root.** `build_encoder_shim()` creates a directory of
 symlinks under `~/.portos/minimax-h3-encoder-shims/<id>/` — everything from the
@@ -195,7 +195,7 @@ that directory unconditionally whenever its `config.json` reports
 `--gemma`, the flag the LTX-2.3 runtime uses, cannot substitute anything here.
 A 2.5 substitution overrides that **resolution** instead.
 
-**The shim.** `build_ltx25_encoder_shim()` in `scripts/generate_ltx2.py` builds
+**The shim.** `build_ltx25_encoder_shim()` in `scripts/ml/generate_ltx2.py` builds
 `~/.portos/ltx25-encoder-shims/<id>/` from scratch each render: every pinned file
 of the substitute linked in by basename (the shards, their
 `model.safetensors.index.json`, the tokenizer and generation configs), plus a
@@ -325,8 +325,8 @@ improve at least two target prompts on both seeds before it can be enabled.
 ## Related
 
 - `server/lib/videoTextEncoders.js` — the registry, and the one place a new entry goes
-- `scripts/generate_minimax_h3.py` — the H3 shim builder and key remap
-- `scripts/generate_ltx2.py` — the LTX-2.5 shim builder and resolution override
+- `scripts/ml/generate_minimax_h3.py` — the H3 shim builder and key remap
+- `scripts/ml/generate_ltx2.py` — the LTX-2.5 shim builder and resolution override
 - `server/services/videoGen/local.js` — cache resolution and argv
 - `client/src/components/videoGen/TextEncoderPicker.jsx` — the control
 - `client/src/hooks/useModelDownloadStatus.js` — `startWhenIdle`, the select-starts-the-pull mechanism (generic: any gated-weight picker can adopt it)

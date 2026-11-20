@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_music3_mlx.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_minimax_music3_mlx.py');
 const pyBin = resolveTestPython();
 const hasNumpy = (() => {
   if (!pyBin) return false;

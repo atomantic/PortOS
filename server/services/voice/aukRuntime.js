@@ -16,7 +16,7 @@ import { isAppleSilicon } from '../../lib/platform.js';
 
 const run = promisify(execFile);
 const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
-// scripts/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would need a different filelock).
+// scripts/ml/requirements/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would need a different filelock).
 const AUK_PYTHON = '3.11';
 const INSTALL_TIMEOUT_MS = 30 * 60_000;
 const root = join(homedir(), '.portos', 'auk');
@@ -104,7 +104,7 @@ export function unloadAuk() {
 
 function ensureWorker() {
   if (worker) return worker;
-  const child = spawn(python, [join(PATHS.root, 'scripts', 'auk_voice_worker.py'), root],
+  const child = spawn(python, [join(PATHS.root, 'scripts', 'ml', 'auk_voice_worker.py'), root],
     safeChildProcessOptions({ cwd: root, env: withSpawnCwdEnv(process.env, root), stdio: ['pipe', 'pipe', 'pipe'] }));
   worker = child;
   // Drain diagnostics without copying prompts, paths, or model data into shared logs.

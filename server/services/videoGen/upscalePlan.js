@@ -50,7 +50,7 @@ export const ltxUpscaleBaseModelId = (runtime) => (
   LTX_UPSCALE_BASE_MODEL_BY_RUNTIME[runtime] || null
 );
 
-// The LTX-2.5 grid, mirrored from `scripts/_upscale_contract.py`: output
+// The LTX-2.5 grid, mirrored from `scripts/ml/_upscale_contract.py`: output
 // dimensions divisible by 64 and `frames % 8 == 1` with a floor of 9.
 // The upscaler is a single-stage IC-LoRA pass at the OUTPUT size with the source
 // as a reference at half of it. The video VAE compresses spatially by 32, so the

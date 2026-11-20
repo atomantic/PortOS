@@ -1,7 +1,7 @@
 /**
  * MiniMax H3-Image on Apple Silicon. Upstream only publishes a CUDA (SGLang)
  * pipeline, so PortOS renders it through its own MLX adapter
- * (`scripts/generate_minimax_h3_image.py`) on the same pinned PipeNetwork H3
+ * (`scripts/ml/generate_minimax_h3_image.py`) on the same pinned PipeNetwork H3
  * MLX checkout and venv that H3 video installs. That shared runtime is
  * installed and repaired from the Video Gen runtime installer; the image entry
  * only names it.
@@ -31,7 +31,7 @@ export async function loadMinimaxH3Runtime() {
   return { python: MINIMAX_H3_VENV_PYTHON, repoDir: MINIMAX_H3_REPO_DIR, revision: MINIMAX_H3_EXPECTED_REVISION };
 }
 
-export const MINIMAX_H3_IMAGE_SCRIPT = () => join(PATHS.root, 'scripts', 'generate_minimax_h3_image.py');
+export const MINIMAX_H3_IMAGE_SCRIPT = () => join(PATHS.root, 'scripts', 'ml', 'generate_minimax_h3_image.py');
 export const MINIMAX_H3_IMAGE_MAX_REFERENCES = 16;
 export const MINIMAX_H3_IMAGE_STEPS = 6;
 // The adapter renders on a 32px-aligned same-aspect canvas (enlarged below

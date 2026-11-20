@@ -1,10 +1,9 @@
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import { describe, expect, it } from 'vitest';
 import { parseImageExecutionMarker } from '../server/services/imageGen/local.js';
 
-const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const scriptsDir = fileURLToPath(new URL('./ml/', import.meta.url));
 
 describe('local image execution marker', () => {
   const emitMarker = (requestedDevice, effectiveDevice, placement) => {

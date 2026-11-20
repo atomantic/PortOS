@@ -56,7 +56,7 @@ export const loraFamilyOf = (lora) => lora?.loraCompatKey || lora?.runnerFamily 
 // A LoRA-quantization marker (`q4` / `q8`) in a model's id/repo/name: leading boundary (not inside `seq4uence`) and trailing non-digit lookahead (matches `-q4`, `q8_0`, `q4bit`, `q8gguf`, not `q40`). Scopes mlx_video LoRA fusion to bf16 models (isMlxVideoLtxLoraCapable).
 const QUANTIZED_LTX_RE = /(?:^|[-_/\s])q(?:4|8)(?![0-9])/i;
 
-// True when an mlx_video-runtime model is an LTX-2.x model whose LoRAs PortOS can fuse. notapalindrome's `mlx_video.generate_av` has no `--lora` flag but ships `mlx_video.lora`, so scripts/generate_av_lora.py
+// True when an mlx_video-runtime model is an LTX-2.x model whose LoRAs PortOS can fuse. notapalindrome's `mlx_video.generate_av` has no `--lora` flag but ships `mlx_video.lora`, so scripts/ml/generate_av_lora.py
 // merges deltas into the transformer weights before generation. Scoped to NON-quantized (bf16) models (q4/q8 need a separate dequantize→merge→requantize pass); the CUDA LTX-Video 0.9.5 model
 // has no "ltx-2" marker and runs through generate_win.py, so it is excluded.
 export const isMlxVideoLtxLoraCapable = (model) => {
@@ -68,8 +68,8 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 };
 
 // Map a video-model registry entry (which carries `runtime`, not `runner`) to the LoRA family the picker filters on. Runtimes that can fuse user LoRAs:
-//   - `ltx2` / `ltx25`: `ltx_pipelines_mlx` honors a `_pending_loras` hook (scripts/generate_ltx2.py).
-//   - `mlx_video` on a non-quantized LTX-2.x model: fused offline into the transformer weights (isMlxVideoLtxLoraCapable + scripts/generate_av_lora.py).
+//   - `ltx2` / `ltx25`: `ltx_pipelines_mlx` honors a `_pending_loras` hook (scripts/ml/generate_ltx2.py).
+//   - `mlx_video` on a non-quantized LTX-2.x model: fused offline into the transformer weights (isMlxVideoLtxLoraCapable + scripts/ml/generate_av_lora.py).
 //   - `minimax_h3` / `minimax_h3_cuda`, ONLY when the installed runner plus PortOS's activation-space adapter can apply LoRAs to the quantized DiT at runtime: a property of the installed checkout, so
 //     listVideoModels() decorates each model with `runtimeLoraCapable` from services/videoGen/runtimes.js and this reads it (like `lastFrameAnchored`); undecorated reads "not capable" (fails closed).
 // wan22 / fastvideo (and quantized mlx_video) have no LoRA path and return null, hiding the VideoGen picker.
@@ -87,7 +87,7 @@ export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
 export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
 export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
 
-// Model runs through the generic diffusers runner script (`scripts/z_image_turbo.py`): Z-Image, ERNIE, HiDream and Qwen share one entry point that branches on `--pipeline-class` / `--text-encoder-repo`.
+// Model runs through the generic diffusers runner script (`scripts/ml/z_image_turbo.py`): Z-Image, ERNIE, HiDream and Qwen share one entry point that branches on `--pipeline-class` / `--text-encoder-repo`.
 // Keep aligned with the dispatch in `server/services/imageGen/local.js`.
 export const usesDiffusersRunner = (model) =>
   isZImage(model) || isErnie(model) || isHiDream(model) || isQwen(model);

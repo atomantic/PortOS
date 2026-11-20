@@ -13,7 +13,7 @@ const hasImageStack = (() => {
     return false;
   }
 })();
-const script = fileURLToPath(new URL('./diagnose_minimax_h3_processor.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/diagnose_minimax_h3_processor.py', import.meta.url));
 const run = (source) => execFileSync(python, ['-c', source, script], { encoding: 'utf8' });
 
 // A stand-in transformers exposing the checkpoint-declared processor and its

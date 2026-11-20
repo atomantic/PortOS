@@ -79,7 +79,7 @@ import minimax_h3_cuda_lora as adapter
 adapter.file_digest = lambda path: adapter.CONTRACT['adapter']['sha256']
 runner.validate_args(args)
 print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.speed_adapter,'scales':args.lora_scale}))`;
-    const result = JSON.parse(execFileSync(python, ['-c', source, join(PATHS.root, 'scripts/generate_minimax_h3_cuda.py'), JSON.stringify(args.slice(1))], { encoding: 'utf8', timeout: 10000 }));
+    const result = JSON.parse(execFileSync(python, ['-c', source, join(PATHS.root, 'scripts/ml/generate_minimax_h3_cuda.py'), JSON.stringify(args.slice(1))], { encoding: 'utf8', timeout: 10000 }));
     expect(result).toEqual({ id: profile.id, steps: 5, adapter: speedProfile.adapterPath, scales: [0.7] });
     expect(modelDownloadTargets(model, { speedProfileId: profile.id })).toEqual([
       { repo: profile.adapter.repo, revision: profile.adapter.revision, only: [profile.adapter.file] },

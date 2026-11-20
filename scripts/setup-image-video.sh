@@ -345,7 +345,7 @@ portos_uv() {
     fi
     echo "📦 Bootstrapping PortOS-private uv 0.13.7..." >&2
     "$bootstrap_python" -m venv --clear "$tool_dir" >&2 || return
-    "$(venv_python "$tool_dir")" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt" >&2 || return
+    "$(venv_python "$tool_dir")" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/ml/requirements/requirements-uv-bootstrap.lock.txt" >&2 || return
     banner="$("$bin" --version 2>/dev/null || true)"
     if [[ ! "$banner" =~ ^uv\ 0\.13\.7($|[[:space:]]) ]]; then
       echo "❌ PortOS-private uv did not report the locked version 0.13.7. Retry Repair." >&2
@@ -356,7 +356,7 @@ portos_uv() {
 }
 
 # Runtimes installed from x86_64 Windows/Linux cu126 hash locks
-# (scripts/requirements-<name>-cuda-{windows,linux}.lock.txt) share this flow.
+# (scripts/ml/requirements/requirements-<name>-cuda-{windows,linux}.lock.txt) share this flow.
 # $1 = label for messages, $2 = doc that explains regenerating the locks.
 require_cuda_lock_host() {
   case "$(uname -m)" in
@@ -377,7 +377,7 @@ require_cuda_lock_host() {
 sync_cuda_lock_venv() {
   local label="$1" venv="$2" lock py
   local sync_args=("${@:4}")
-  if is_windows; then lock="${SCRIPT_DIR}/$3-windows.lock.txt"; else lock="${SCRIPT_DIR}/$3-linux.lock.txt"; fi
+  if is_windows; then lock="${SCRIPT_DIR}/ml/requirements/$3-windows.lock.txt"; else lock="${SCRIPT_DIR}/ml/requirements/$3-linux.lock.txt"; fi
   if venv_exists "$venv"; then
     py="$(venv_python "$venv")"
     if ! "$py" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
@@ -498,7 +498,7 @@ sync_locked_mlx_video() (
     set -- --no-binary mlx-gen "$build_dir"
   fi
   echo "📦 Building pinned ${label} source with hash-locked build tools..."
-  portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
+  portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/ml/requirements/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
   portos_uv --no-config pip check --python "$python"
   pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
 )
@@ -582,7 +582,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     exit 1
   fi
   # Complete Apple Silicon closure; never resolve a fallback on other hosts.
-  MFLUX_LOCK="$SCRIPT_DIR/requirements-mflux-mlx.lock.txt"
+  MFLUX_LOCK="$SCRIPT_DIR/ml/requirements/requirements-mflux-mlx.lock.txt"
   MFLUX_MIN_MINOR=11
   MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
   # The historical layout installs mflux with `pip install --user` against
@@ -667,7 +667,7 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
         exit 1
         ;;
     esac
-    VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
+    VIDEO_LOCK="$SCRIPT_DIR/ml/requirements/requirements-mflux-video-mlx.lock.txt"
     "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
     # Uninstalling the wrong-namesake `mlx_video` can delete files the real
     # package shares, and a satisfied-looking lock install would not restore
@@ -740,7 +740,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
-  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" "$SCRIPT_DIR/requirements-ltx23-mlx.lock.txt" \
+  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" "$SCRIPT_DIR/ml/requirements/requirements-ltx23-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -767,7 +767,7 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   # does not renders a coherent clip unrelated to the picture the user handed
   # in. Moving this pin means re-reading that loop and moving
   # `i2vAnchorVerifiedRevision` in server/services/videoGen/runtimes.js with it
-  # (runtimes.test.js fails until both agree); scripts/generate_ltx2.py also
+  # (runtimes.test.js fails until both agree); scripts/ml/generate_ltx2.py also
   # checks the LIVE checkout at render time and refuses rather than drifting.
   LTX25_AUDITED_REVISION="57952288076766abe27dda3a774b2c24f7346977"
   LTX25_PIN="${LTX25_PIN:-$LTX25_AUDITED_REVISION}"
@@ -784,7 +784,7 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
-  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" "$SCRIPT_DIR/requirements-ltx25-mlx.lock.txt" \
+  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" "$SCRIPT_DIR/ml/requirements/requirements-ltx25-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -807,7 +807,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
 
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
-  FASTVIDEO_LOCK="${SCRIPT_DIR}/requirements-fastvideo-mlx.lock.txt"
+  FASTVIDEO_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-fastvideo-mlx.lock.txt"
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${FASTVIDEO_DIR}/.git" ]]; then
     echo "📦 Cloning hao-ai-lab/FastVideo..."
@@ -829,9 +829,9 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     exit 1
   fi
   # FastVideo MLX on Apple Silicon installs only from the hash-pinned lock
-  # (scripts/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
+  # (scripts/ml/requirements/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
   # so a new or compromised transitive release can't land on the next Repair.
-  # Direct pins: scripts/requirements-fastvideo-mlx.txt. The checkout itself
+  # Direct pins: scripts/ml/requirements/requirements-fastvideo-mlx.txt. The checkout itself
   # is installed with --no-deps and --no-build-isolation so no unpinned dependencies
   # resolve from PyPI during the editable build.
   # --python is mandatory: `uv pip sync` and `uv pip install` resolve their
@@ -889,7 +889,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "$SCRIPT_DIR/requirements-wan22-mlx.lock.txt" --wan22-source
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "$SCRIPT_DIR/ml/requirements/requirements-wan22-mlx.lock.txt" --wan22-source
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -916,7 +916,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   MINIMAX_H3_PIN="${MINIMAX_H3_PIN:-fcd9e9b79a1d6018d91ac477c0968de1fa067e49}"
   MINIMAX_H3_DIR="${HOME}/.portos/minimax-h3-mlx"
   MINIMAX_H3_PY="${MINIMAX_H3_DIR}/.venv/bin/python3"
-  MINIMAX_H3_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-mlx.lock.txt"
+  MINIMAX_H3_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-minimax-h3-mlx.lock.txt"
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${MINIMAX_H3_DIR}/.git" ]]; then
     echo "📦 Cloning MiniMax H3 MLX..."
@@ -951,7 +951,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   probe_or_fail \
     "MiniMax H3 MLX synced but its runtime probe failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
-    "$MINIMAX_H3_PY" "${SCRIPT_DIR}/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" --verify-seams
+    "$MINIMAX_H3_PY" "${SCRIPT_DIR}/ml/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" --verify-seams
   echo "✅ MiniMax H3 MLX runtime ready: ${MINIMAX_H3_PY}"
   echo "   Weights remain uninstalled until you accept the model terms and choose Download in Video Gen."
 fi
@@ -1018,9 +1018,9 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   MINIMAX_H3_CUDA_DIR="${HOME}/.portos/minimax-h3-cuda"
   MINIMAX_H3_CUDA_VENV="${MINIMAX_H3_CUDA_DIR}/.venv"
   if is_windows; then
-    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-windows.lock.txt"
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-minimax-h3-cuda-windows.lock.txt"
   else
-    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-linux.lock.txt"
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-minimax-h3-cuda-linux.lock.txt"
   fi
   mkdir -p "${MINIMAX_H3_CUDA_DIR}"
   reset_universal_venv "$MINIMAX_H3_CUDA_VENV" "$PYTHON_BIN"
@@ -1077,9 +1077,9 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"
   LTX25_CUDA_VENV="${LTX25_CUDA_DIR}/.venv"
   if is_windows; then
-    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-windows.lock.txt"
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-ltx25-cuda-windows.lock.txt"
   else
-    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-linux.lock.txt"
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-ltx25-cuda-linux.lock.txt"
   fi
   mkdir -p "${LTX25_CUDA_DIR}"
   reset_universal_venv "$LTX25_CUDA_VENV" "$PYTHON_BIN"
@@ -1100,7 +1100,7 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   echo "📦 Syncing the hash-pinned LTX-2.5 CUDA runtime..."
   # Only the two hash-verified LTX archives may build. Bootstrap their sole
   # backend from its own hash lock, then disable isolated build resolution.
-  portos_uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/requirements-ltx25-cuda-build.lock.txt"
+  portos_uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/ml/requirements/requirements-ltx25-cuda-build.lock.txt"
   portos_uv pip sync --require-hashes --only-binary :all: --no-binary ltx-core,ltx-pipelines --no-build-isolation --index-strategy unsafe-best-match --python "$LTX25_CUDA_PY" "$LTX25_CUDA_LOCK"
   pin_venv_arm64 "$LTX25_CUDA_VENV"
 
@@ -1129,9 +1129,9 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
   WAN22_CUDA_DIR="${HOME}/.portos/wan2.2-cuda"
   WAN22_CUDA_VENV="${WAN22_CUDA_DIR}/.venv"
   if is_windows; then
-    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-windows.lock.txt"
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-wan22-cuda-windows.lock.txt"
   else
-    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-linux.lock.txt"
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/ml/requirements/requirements-wan22-cuda-linux.lock.txt"
   fi
   mkdir -p "$WAN22_CUDA_DIR"
   reset_universal_venv "$WAN22_CUDA_VENV" "$PYTHON_BIN"
@@ -1166,7 +1166,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
   # 4c.2). Meta's MusicGen runs on Apple Silicon via MLX, but the MLX
   # implementation lives in ml-explore/mlx-examples (`musicgen/`), which isn't
   # a pip package — so we clone the repo and build a sibling venv. The sidecar
-  # `scripts/generate_musicgen.py` imports `MusicGen` from the clone;
+  # `scripts/ml/generate_musicgen.py` imports `MusicGen` from the clone;
   # server/lib/pythonSetup.js (resolveMusicgenPython) looks for python3 here.
   if ! is_apple_silicon; then
     echo "⚠️ INSTALL_MUSICGEN=1 is macOS / Apple-Silicon only (MLX). Skipping." >&2
@@ -1197,16 +1197,16 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
       "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
     fi
     echo "📦 Installing MusicGen (MLX) packages into ${MUSICGEN_VENV}..."
-    # Install only from the hash-pinned lock (scripts/requirements-musicgen-mlx.lock.txt):
+    # Install only from the hash-pinned lock (scripts/ml/requirements/requirements-musicgen-mlx.lock.txt):
     # no install-time resolution, so a new or compromised transitive release can't
-    # land on the next Repair. Direct pins: scripts/requirements-musicgen-mlx.txt.
+    # land on the next Repair. Direct pins: scripts/ml/requirements/requirements-musicgen-mlx.txt.
     # mlx + numpy run the model; transformers (<5 for MLX compat) + sentencepiece
     # provide the T5 text conditioner's tokenizer; scipy is imported by the
     # mlx-examples musicgen utils. torch is required because MusicGen.from_pretrained
     # loads the upstream PyTorch checkpoints (torch.load) before converting to MLX —
     # without it generation fails at model-load even though the class imports fine.
     # We write WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-    "$MUSICGEN_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-musicgen-mlx.lock.txt"
+    "$MUSICGEN_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-musicgen-mlx.lock.txt"
     pin_venv_arm64 "$MUSICGEN_VENV"
     # Verify BOTH that the class imports AND that torch loaded — the import alone
     # passed even when torch was missing, so install used to report ready and
@@ -1226,7 +1226,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   # (Phase 4c.2, second backend alongside MusicGen). AudioLDM2 is a latent
   # diffusion text-to-audio model shipped in HuggingFace `diffusers` (a pip
   # package — no clone needed), so this is just a sibling torch venv. The sidecar
-  # `scripts/generate_audioldm2.py` imports `AudioLDM2Pipeline` from diffusers;
+  # `scripts/ml/generate_audioldm2.py` imports `AudioLDM2Pipeline` from diffusers;
   # server/lib/pythonSetup.js (resolveAudioldm2Python) discovers this venv.
   # Runs on Apple-Silicon MPS, CUDA, or CPU — not gated to macOS like MusicGen.
   # Git Bash on Windows creates Scripts/python.exe even though this is a bash
@@ -1252,9 +1252,9 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
     echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
-    # (scripts/requirements-audioldm2-mlx.lock.txt): no install-time resolution,
+    # (scripts/ml/requirements/requirements-audioldm2-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
-    # Direct pins: scripts/requirements-audioldm2-mlx.txt.
+    # Direct pins: scripts/ml/requirements/requirements-audioldm2-mlx.txt.
     # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
     # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
     if ! "$AUDIOLDM2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
@@ -1262,9 +1262,9 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
+    "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-audioldm2-mlx.lock.txt"
   else
-    # Direct pins: scripts/requirements-audioldm2-cuda.txt.
+    # Direct pins: scripts/ml/requirements/requirements-audioldm2-cuda.txt.
     sync_cuda_lock_venv AudioLDM2 "$AUDIOLDM2_VENV" requirements-audioldm2-cuda
     AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
   fi
@@ -1285,7 +1285,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   # takes a style/tags prompt AND lyrics and renders a structured song with
   # vocals. It installs as the `acestep` pip package (from git — no clone to
   # import from), so this is a sibling torch venv. The sidecar
-  # `scripts/generate_acestep.py` imports `ACEStepPipeline` from acestep;
+  # `scripts/ml/generate_acestep.py` imports `ACEStepPipeline` from acestep;
   # server/lib/pythonSetup.js (resolveAcestepPython) discovers this venv.
   # Runs on Apple-Silicon MPS, CUDA, or CPU. Git Bash on Windows creates
   # Scripts/python.exe, so resolve the venv path after it is created.
@@ -1314,9 +1314,9 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
     echo "📦 Installing ACE-Step into ${ACESTEP_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
-    # (scripts/requirements-acestep-mlx.lock.txt): no install-time resolution,
+    # (scripts/ml/requirements/requirements-acestep-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
-    # Direct pins: scripts/requirements-acestep-mlx.txt.
+    # Direct pins: scripts/ml/requirements/requirements-acestep-mlx.txt.
     # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
     # dropped 3.10.
     if ! "$ACESTEP_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
@@ -1331,17 +1331,17 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
     # docopt/unidic-lite are source-only; mojimoji also builds on newer Python.
     # Bootstrap their tools from a hash lock, then disable build resolution.
-    portos_uv pip install --require-hashes --no-deps --only-binary :all: --python "$ACESTEP_PY" -r "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
-    portos_uv pip sync --require-hashes --no-build-isolation --python "$ACESTEP_PY" "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
+    portos_uv pip install --require-hashes --no-deps --only-binary :all: --python "$ACESTEP_PY" -r "$SCRIPT_DIR/ml/requirements/requirements-acestep-mlx-build.lock.txt"
+    portos_uv pip sync --require-hashes --no-build-isolation --python "$ACESTEP_PY" "$SCRIPT_DIR/ml/requirements/requirements-acestep-mlx.lock.txt"
     portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   else
-    # Direct pins: scripts/requirements-acestep-cuda.txt. docopt and unidic-lite
+    # Direct pins: scripts/ml/requirements/requirements-acestep-cuda.txt. docopt and unidic-lite
     # publish only (hashed) source distributions, so exactly those two may build.
     # The acestep package is installed from the ACESTEP_PIN checkout with
     # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
     # The shared build lock is universal despite its historical mlx filename.
     # Hash-check isolated build dependencies as well as the source archives.
-    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-acestep-mlx-build.lock.txt"
+    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/ml/requirements/requirements-acestep-mlx-build.lock.txt"
     ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
@@ -1388,9 +1388,9 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
     ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
     echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
-    # (scripts/requirements-acestep15-mlx.lock.txt): no install-time resolution,
+    # (scripts/ml/requirements/requirements-acestep15-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
-    # Direct pins: scripts/requirements-acestep15-mlx.txt.
+    # Direct pins: scripts/ml/requirements/requirements-acestep15-mlx.txt.
     # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
     # dropped 3.10.
     if ! "$ACESTEP15_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
@@ -1403,10 +1403,10 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
       git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
     fi
     git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
-    "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"
+    "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-acestep15-mlx.lock.txt"
     "$ACESTEP15_PY" -m pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"
   else
-    # Direct pins: scripts/requirements-acestep15-cuda.txt. The package is
+    # Direct pins: scripts/ml/requirements/requirements-acestep15-cuda.txt. The package is
     # installed from the ACESTEP15_PIN checkout (the v0.1.8 release commit) with
     # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
     # --no-deps also keeps the package's own cu128 torch pins from displacing the
@@ -1477,11 +1477,11 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
       exit 1
     fi
     echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
-    # Install only from the hash-pinned lock (scripts/requirements-minimax-music3-mlx.lock.txt):
+    # Install only from the hash-pinned lock (scripts/ml/requirements/requirements-minimax-music3-mlx.lock.txt):
     # no install-time resolution, so a new or compromised transitive release can't
-    # land on the next Repair. Direct pins: scripts/requirements-minimax-music3-mlx.txt
+    # land on the next Repair. Direct pins: scripts/ml/requirements/requirements-minimax-music3-mlx.txt
     # (mlx-audio 0.5.0, the first release with the MiniMax Music 3 merge).
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/ml/requirements/requirements-minimax-music3-mlx.lock.txt"
     pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
@@ -1498,7 +1498,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   # (https://github.com/muscriptor/muscriptor) that installs as the
   # `muscriptor` pip package — it declares its own torch stack, so this is a
   # sibling venv kept apart from the music-generation piles. The sidecar
-  # `scripts/transcribe_muscriptor.py` imports `TranscriptionModel` from
+  # `scripts/ml/transcribe_muscriptor.py` imports `TranscriptionModel` from
   # muscriptor; server/lib/pythonSetup.js (resolveMuscriptorPython) looks for
   # python3 here. Runs on Apple-Silicon MPS, CUDA, or CPU. Model weights
   # (small/medium/large) auto-download from HuggingFace on first transcription,
@@ -1525,9 +1525,9 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
     MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
     echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
     # Apple Silicon installs only from the hash-pinned lock
-    # (scripts/requirements-muscriptor-mlx.lock.txt): no install-time resolution,
+    # (scripts/ml/requirements/requirements-muscriptor-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
-    # Direct pins: scripts/requirements-muscriptor-mlx.txt.
+    # Direct pins: scripts/ml/requirements/requirements-muscriptor-mlx.txt.
     # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
     # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
     if ! "$MUSCRIPTOR_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
@@ -1535,9 +1535,9 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
+    "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-muscriptor-mlx.lock.txt"
   else
-    # Direct pins: scripts/requirements-muscriptor-cuda.txt.
+    # Direct pins: scripts/ml/requirements/requirements-muscriptor-cuda.txt.
     sync_cuda_lock_venv MuScriptor "$MUSCRIPTOR_VENV" requirements-muscriptor-cuda
     MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
   fi
@@ -1601,7 +1601,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
     fi
     FLUX2_PY="$(venv_python "$FLUX2_VENV")"
     echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
-    # Direct pins: scripts/requirements-flux2-mlx.txt.
+    # Direct pins: scripts/ml/requirements/requirements-flux2-mlx.txt.
     # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
     # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
     if ! "$FLUX2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
@@ -1609,9 +1609,9 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    "$FLUX2_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+    "$FLUX2_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/ml/requirements/requirements-flux2-mlx.lock.txt"
   else
-    # Direct pins: scripts/requirements-flux2-cuda.txt.
+    # Direct pins: scripts/ml/requirements/requirements-flux2-cuda.txt.
     sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda
     FLUX2_PY="$(venv_python "$FLUX2_VENV")"
   fi

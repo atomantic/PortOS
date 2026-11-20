@@ -2,7 +2,7 @@
  * Pin flux2-klein-9b's tokenizerRepo to the KV repo so multi-reference editing
  * loads without an extra HF license step.
  *
- * scripts/flux2_macos.py now branches into `Flux2KleinKVPipeline` when the
+ * scripts/ml/flux2_macos.py now branches into `Flux2KleinKVPipeline` when the
  * route forwards reference images, and the runner probes HF auth against the
  * configured `tokenizerRepo`. Pinning the SDNQ 9B entry to
  * `black-forest-labs/FLUX.2-klein-9B-kv` (same Qwen3 tokenizer as the base 9B

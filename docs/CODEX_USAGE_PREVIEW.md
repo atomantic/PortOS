@@ -3,7 +3,7 @@
 Run an explicit, bounded preview without loading or changing the PortOS usage ledger:
 
 ```bash
-node scripts/preview-codex-usage.js --from 2026-07-01 --to 2026-07-07
+node scripts/ops/preview-codex-usage.js --from 2026-07-01 --to 2026-07-07
 ```
 
 Both dates are required, inclusive UTC calendar days, at most 366 days apart

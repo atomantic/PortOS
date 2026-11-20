@@ -21,8 +21,8 @@ The upstream [performance report](https://github.com/browser-use/jev-ultrafast/b
 | Fast voice routing | `client/src/services/voiceFastPath.js`: deterministic navigation, optional browser Nano, server fallback | Preserve successful exact navigation; adding inference there can only add latency. Dictation and confirmation follow-ups already bypass the fast tiers. |
 | Voice orchestration | `server/services/voice/pipeline.js`: STT/text input, session state, tool loop, TTS, cancellation, UI acknowledgements | Insert a bounded decision stage into this workflow, not a second independent agent. |
 | Tool execution | `server/services/voice/tools.js` and `tools/ui.js` | Reuse `dispatchTool`, navigation resolution, existing UI references, confirmation flow, and server-derived host-control authority. |
-| Local closed-set inference | `server/services/jev.js`, `server/lib/jev.js`, `scripts/run_jev.py` | Pinned OpenJEV Qwen3.5 4B NLI; offline local process, separate from chat providers. |
-| Decision definitions and training | `server/lib/jevDecisions.js`, `scripts/train_jev_head.py` | Existing closed-set contracts and optional trained heads are reusable infrastructure, not evidence of voice accuracy. |
+| Local closed-set inference | `server/services/jev.js`, `server/lib/jev.js`, `scripts/ml/run_jev.py` | Pinned OpenJEV Qwen3.5 4B NLI; offline local process, separate from chat providers. |
+| Decision definitions and training | `server/lib/jevDecisions.js`, `scripts/ml/train_jev_head.py` | Existing closed-set contracts and optional trained heads are reusable infrastructure, not evidence of voice accuracy. |
 
 PortOS's [existing Jev decision](../decisions/2026-09-18-local-jev-decision-service.md) deliberately keeps inference machine-local and allows abstention. Its NLI output measures each premise/hypothesis pair independently; those entailment scores are not the upstream API's normalized distribution over choices. No adapter should relabel one as the other or assume equal model quality.
 

@@ -7,8 +7,8 @@ import { fileURLToPath } from 'url';
 import { forceAlignLyrics, _lyricAlignRuntimePlan } from './lyricForcedAlign.js';
 import { encodePcm16Wav, wavDurationSec } from './lyricAlignCore.js';
 
-const LOCK_PATH = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.lock.txt', import.meta.url));
-const SOURCE_PATH = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.txt', import.meta.url));
+const LOCK_PATH = fileURLToPath(new URL('../../../scripts/ml/requirements/requirements-lyric-align.lock.txt', import.meta.url));
+const SOURCE_PATH = fileURLToPath(new URL('../../../scripts/ml/requirements/requirements-lyric-align.txt', import.meta.url));
 const LINUX = _lyricAlignRuntimePlan({ platform: 'linux' });
 const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });

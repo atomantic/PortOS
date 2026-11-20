@@ -60,7 +60,7 @@ export const JEV_HEAD_MAX_HIDDEN = 256;
  * The pooling both sides must agree on. The checkpoint is a causal decoder, so
  * the LAST non-padding token is the only position that has attended to the
  * whole pair. Declared in the artifact so a future change makes an old head
- * unloadable instead of silently re-pooled; `scripts/jev_head_kit.py` mirrors
+ * unloadable instead of silently re-pooled; `scripts/ml/jev_head_kit.py` mirrors
  * this string and refuses one it does not implement.
  */
 export const JEV_HEAD_POOLING = 'last-token';

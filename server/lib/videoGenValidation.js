@@ -120,7 +120,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.DRAFT_DECODE]: z.enum(DRAFT_DECODE_IDS).optional(),
   // Block-streaming request for LTX-2/2.5 MLX renders (#6499). Unlike
   // draftDecode/speedProfileId this is NOT a "degrade, never reject" knob:
-  // scripts/generate_ltx2.py#resolve_streaming_policy() refuses an explicit
+  // scripts/ml/generate_ltx2.py#resolve_streaming_policy() refuses an explicit
   // 'stream' request before loading weights when the mode's pinned pipeline
   // has no streaming parameter (Extend), so this stays a validated pass-
   // through rather than a route-level 400 — the bridge, which can inspect
