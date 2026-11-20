@@ -12,7 +12,7 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { readBranchPolicyArchiveIndex } from '../../lib/cos/branchPolicyArchiveSource.js';
 import {
-  BRANCH_POLICY_REVISION_FILE, insertArchivePolicyRows, readArchivePolicyBackfill, readArchivePolicyRows, readBranchPolicyArchiveStamp,
+  BRANCH_POLICY_REVISION_FILE, archivePolicyUnstable, insertArchivePolicyRows, readArchivePolicyBackfill, readArchivePolicyRows, readBranchPolicyArchiveStamp,
   replaceArchivePolicyRows, writeArchivePolicyStamp,
 } from '../../lib/cos/branchPolicyArchiveRows.js';
 
@@ -96,14 +96,18 @@ export async function readIndexedArchivePolicies(dir, repoPath, branches) {
   const stamp = await readBranchPolicyArchiveStamp(dir, { recoverPending: true });
   if (!stamp) return null;
   const store = await backend();
-  const rows = await store.read(stamp, repoPath, branches);
-  if (rows !== null) return rows;
-  // A first read, a restored archive/database or a failed publication can all
-  // land here. Publish a complete replacement only for the same source revision.
-  const records = await readArchivePolicyBackfill(dir, stamp);
-  if (records === null) return null;
-  await store.write(stamp, null, records);
-  return store.read(stamp, repoPath, branches);
+  let rows = await store.read(stamp, repoPath, branches);
+  if (rows === null) {
+    // A first read, a restore or a failed publication can all land here.
+    const records = await readArchivePolicyBackfill(dir, stamp);
+    if (records === null) throw archivePolicyUnstable();
+    await store.write(stamp, null, records);
+    rows = await store.read(stamp, repoPath, branches);
+  }
+  // A standalone process doesn't share the local queue. Recheck the source
+  // after the database roundtrip even when the transaction found the old stamp.
+  if (await readBranchPolicyArchiveStamp(dir) !== stamp) throw archivePolicyUnstable();
+  return rows;
 }
 
 /** Keep live-agent shadowing and archive observation in the same archive turn. */

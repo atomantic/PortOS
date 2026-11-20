@@ -9,7 +9,11 @@ import { atomicWrite } from '../fileUtils.js';
 import { processLiveness } from '../processIdentity.js';
 
 export const BRANCH_POLICY_REVISION_FILE = '.branch-policy-revision';
-export const BRANCH_POLICY_PUBLICATION_PENDING = 'COS_BRANCH_POLICY_PUBLICATION_PENDING';
+export const BRANCH_POLICY_ARCHIVE_UNSTABLE = 'COS_BRANCH_POLICY_ARCHIVE_UNSTABLE';
+
+export function archivePolicyUnstable() {
+  return Object.assign(new Error('archive metadata publication is in progress or changed during the read'), { code: BRANCH_POLICY_ARCHIVE_UNSTABLE });
+}
 const BATCH = 50;
 
 /** The revision changes before metadata replacement. The index stat also binds
@@ -27,9 +31,7 @@ export async function readBranchPolicyArchiveStamp(dir, { recoverPending = false
     // Recovery runs under the local archive queue. A separate live process
     // may still be publishing; its pending revision is never indexable.
     if (!recoverPending) return null;
-    if (pid !== process.pid && processLiveness(pid) !== 'dead') {
-      throw Object.assign(new Error('archive metadata publication is pending'), { code: BRANCH_POLICY_PUBLICATION_PENDING });
-    }
+    if (pid !== process.pid && processLiveness(pid) !== 'dead') throw archivePolicyUnstable();
     await atomicWrite(revisionPath, randomUUID());
     return readBranchPolicyArchiveStamp(dir);
   }

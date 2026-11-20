@@ -4,13 +4,23 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
-import { readBranchPolicyArchiveStamp } from '../lib/cos/branchPolicyArchiveRows.js';
+import { BRANCH_POLICY_REVISION_FILE, readBranchPolicyArchiveStamp } from '../lib/cos/branchPolicyArchiveRows.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { readBranchCompletionHold, readBranchCompletionPolicies } from './branchCompletionPolicy.js';
 import { publishArchivePolicyChange } from './cos/cosBranchPolicyArchive.js';
 import { up as backfill } from '../scripts/db-migrations/033-cos-branch-completion-policy.js';
 
-const fixture = vi.hoisted(() => ({ dir: null, live: {}, metadataReads: 0 }));
+const fixture = vi.hoisted(() => ({ dir: null, live: {}, metadataReads: 0, afterLookup: null }));
+vi.mock('../lib/db.js', async importOriginal => {
+  const db = await importOriginal();
+  return { ...db, async query(sql, params) {
+    const result = await db.query(sql, params);
+    if (typeof sql === 'string' && sql.includes('LEFT JOIN cos_branch_completion_policies')) {
+      await fixture.afterLookup?.();
+    }
+    return result;
+  } };
+});
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal();
   return { ...fs, readFile(path, ...options) {
@@ -61,6 +71,7 @@ describe.skipIf(!runDb)('PostgreSQL branch policy projection', () => {
     await reset();
     fixture.dir = await mkdtemp(join(tmpdir(), 'portos-policy-db-'));
     fixture.live = {};
+    fixture.afterLookup = null;
     fixture.metadataReads = 0;
     await writeAgent(agent('agent-a'));
     await writeAgent(agent('agent-b', repoPath, 'feature/b'));
@@ -110,6 +121,19 @@ describe.skipIf(!runDb)('PostgreSQL branch policy projection', () => {
     await expect(hold()).resolves.toBe('pr-completion-human-handoff');
     await expect(hold({ branch: 'feature/moved' })).resolves.toBeNull();
     expect(fixture.metadataReads).toBe(7);
+  });
+
+  it('withholds cleanup when the source changes during an otherwise matching indexed lookup', async () => {
+    await withTransaction(backfill);
+    const newBranch = 'feature/handoff-new';
+    fixture.afterLookup = async () => {
+      fixture.afterLookup = null;
+      // Model publication from a separate process, outside the read queue.
+      await writeAgent(agent('agent-a', repoPath, newBranch));
+      await writeFile(join(dir(), BRANCH_POLICY_REVISION_FILE), 'synthetic-next-revision');
+    };
+    await expect(hold({ branch: newBranch })).resolves.toBe('pr-completion-policy-unavailable');
+    await expect(hold({ branch: newBranch })).resolves.toBe('pr-completion-human-handoff');
   });
 
   it('rebuilds after a file-only restore and carries unreadable scope through the index', async () => {

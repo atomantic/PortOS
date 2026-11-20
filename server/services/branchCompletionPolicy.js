@@ -10,7 +10,7 @@ import {
   branchPolicyScope, normalizedPolicyWorkspace, projectPolicyAgent, registeredCompletion, reviewTargetBranches,
 } from '../lib/cos/branchCompletionProjection.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from '../lib/prDisposition.js';
-import { BRANCH_POLICY_PUBLICATION_PENDING } from '../lib/cos/branchPolicyArchiveRows.js';
+import { BRANCH_POLICY_ARCHIVE_UNSTABLE } from '../lib/cos/branchPolicyArchiveRows.js';
 import {
   readBranchPolicyArchiveIndex, readBranchPolicyArchiveRecord, validateBranchPolicyArchiveRow,
 } from '../lib/cos/branchPolicyArchiveSource.js';
@@ -53,7 +53,7 @@ async function readScopedPolicies(repoPath, branches, repairIndex) {
   return withArchivePolicyRead(async () => {
     const live = await readLivePolicyAgents();
     const rows = await readIndexedArchivePolicies(policyArchiveDir(), repoPath, branches).catch(error => {
-      if (error.code === BRANCH_POLICY_PUBLICATION_PENDING) throw error;
+      if (error.code === BRANCH_POLICY_ARCHIVE_UNSTABLE) throw error;
       return null;
     });
     if (rows === null) return readPolicies(repairIndex, repoPath, live);
