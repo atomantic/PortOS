@@ -5,11 +5,11 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../components/Layout', () => ({ default: () => <div>Owner layout</div> }));
 vi.mock('./Dashboard', () => ({ default: () => null }));
-vi.mock('../hooks/useCatalogTypes.jsx', () => ({ CatalogTypesProvider: vi.fn(({ children }) => children) }));
+vi.mock('../components/CatalogTypesContext.jsx', () => ({ CatalogTypesProvider: vi.fn(({ children }) => children) }));
 vi.mock('../services/api', () => ({ getSettings: vi.fn(), updateSettings: vi.fn(), getSelfInstance: vi.fn(), PORTOS_APP_ID: 'example-app' }));
 import App from '../App';
 import * as api from '../services/api';
-import { CatalogTypesProvider } from '../hooks/useCatalogTypes.jsx';
+import { CatalogTypesProvider } from '../components/CatalogTypesContext.jsx';
 
 const ticket = 'a'.repeat(48);
 const mount = () => render(<MemoryRouter initialEntries={['/eidoverse/guest']}><App /></MemoryRouter>);

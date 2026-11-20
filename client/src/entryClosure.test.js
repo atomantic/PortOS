@@ -31,6 +31,20 @@ const VOICE_STACK_MODULES = [
   'lib/audioRecorder.js',
   'lib/audioContext.js',
 ];
+// Shell overlays and domain-specific helpers stay out of the cold-load bundle
+// until invoked (#17007): CmdKSearch and KeyboardHelp sit behind thin hotkey
+// gates, OutputBlocks/MarkdownOutput load when a toast expands, and
+// CatalogTypesProvider populates lazily when a consumer mounts.
+const LAZY_SHELL_MODULES = [
+  'components/CmdKSearch.jsx',
+  'components/KeyboardHelp.jsx',
+  'components/cos/OutputBlocks.jsx',
+  'components/cos/MarkdownOutput.jsx',
+  'lib/creativeLibraries.js',
+  'lib/catalogTypes.js',
+  '../../server/lib/greyboxVocabulary.js',
+  '../../server/lib/bibleLimits.js',
+];
 // The landing Dashboard page and its widgets are in the same first-paint path as the
 // shell, so they follow the same barrel rule (#16813). Each is a separate root: the
 // walk from every one must stay clear of the api barrel.
@@ -107,8 +121,18 @@ describe('cold-load entry closure (#16562)', () => {
     ).toBeFalsy();
   });
 
-  it('still reaches the gate that loads the voice stack on demand', () => {
+  it.each(LAZY_SHELL_MODULES)('main.jsx never statically reaches lazy shell or domain module %s (#17007)', (module) => {
+    const chain = findStaticPath(ENTRY, resolve(SRC, module));
+    expect(
+      chain && chain.map((file) => (file.startsWith(SRC) ? file.slice(SRC.length + 1) : file)).join(' -> '),
+      'load this overlay or domain helper lazily instead of importing it into the cold-load shell',
+    ).toBeNull();
+  });
+
+  it('still reaches the gates that load the voice stack and shell overlays on demand', () => {
     expect(chainFromEntry('components/voice/VoiceWidgetGate.jsx')).not.toBeNull();
+    expect(chainFromEntry('components/CmdKSearchGate.jsx')).not.toBeNull();
+    expect(chainFromEntry('components/KeyboardHelpGate.jsx')).not.toBeNull();
   });
 
   it('follows static imports and re-exports, but not dynamic import()', () => {

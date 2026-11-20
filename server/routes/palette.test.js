@@ -106,6 +106,14 @@ describe('GET /api/palette/manifest', () => {
     expect(brainCapture.parameters?.properties?.text).toBeTruthy();
   });
 
+  it('returns only actions when actionsOnly=1 is requested (#17007)', async () => {
+    const res = await request(makeApp()).get('/api/palette/manifest?actionsOnly=1');
+    expect(res.status).toBe(200);
+    expect(res.body.nav).toBeUndefined();
+    expect(Array.isArray(res.body.actions)).toBe(true);
+    expect(res.body.actions.length).toBeGreaterThan(10);
+  });
+
   it('excludes DOM-driving ui_* tools (ui_click / ui_fill / ui_navigate need a live voice DOM); ui_ask is the explicit exception', async () => {
     const res = await request(makeApp()).get('/api/palette/manifest');
     const ids = res.body.actions.map((a) => a.id);

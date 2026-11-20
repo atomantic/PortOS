@@ -18,8 +18,9 @@ import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWor
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
-import { ingredientPath } from '../lib/creativeLibraries.js';
+import { ingredientPath } from '../lib/ingredientPath.js';
 import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
+import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
 
@@ -83,13 +84,18 @@ function Highlight({ text, query }) {
   );
 }
 
+const BUNDLED_NAV = NAV_COMMANDS.map(precompute);
+
 // Curated default shortlist — shown when the palette opens with no query so
 // Enter always does something useful.
 const DEFAULT_NAV_IDS = new Set(['nav.dashboard', 'nav.brain.inbox', 'nav.cos.tasks', 'nav.goals', 'nav.review-hub']);
 const DEFAULT_ACTION_IDS = new Set(['brain_capture', 'time_now', 'goal_list', 'meatspace_summary_today']);
 
-export default function CmdKSearch() {
-  const { open, setOpen } = useCmdKSearch();
+export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSetOpen } = {}) {
+  const isControlled = controlledOpen !== undefined;
+  const fallback = useCmdKSearch(isControlled);
+  const open = isControlled ? controlledOpen : fallback.open;
+  const setOpen = isControlled ? controlledSetOpen : fallback.setOpen;
   const navigate = useNavigate();
   const location = useLocation();
   const paletteId = useId();
@@ -160,12 +166,15 @@ export default function CmdKSearch() {
     // The ref only flips to true after a SUCCESSFUL apply — if the fetch
     // fails or the user closes the palette before it resolves, the next
     // open will re-fetch instead of being stuck with empty nav/actions.
-    getPaletteManifest()
-      .catch(() => { fetchOk = false; return { nav: [], actions: [] }; })
+    // NAV_COMMANDS is already bundled by App/Layout; request only server-side
+    // palette actions over HTTP (`actionsOnly: true`). If a response (e.g. a
+    // test fixture) includes `nav`, honour it; otherwise use `BUNDLED_NAV`.
+    getPaletteManifest({ actionsOnly: true })
+      .catch(() => { fetchOk = false; return { actions: [] }; })
       .then((data) => {
         if (cancelled) return;
         if (fetchOk) navActionsFetchedRef.current = true;
-        const nav = (data?.nav || []).map(precompute);
+        const nav = Array.isArray(data?.nav) ? data.nav.map(precompute) : BUNDLED_NAV;
         const actions = (data?.actions || []).map(precompute);
         setManifest((prev) => ({
           nav,

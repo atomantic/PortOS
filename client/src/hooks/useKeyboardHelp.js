@@ -6,10 +6,11 @@
 
 import { useState, useEffect } from 'react';
 
-export function useKeyboardHelp() {
+export function useKeyboardHelp(disabled = false) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    if (disabled) return undefined;
     const handler = (e) => {
       // Escape always closes, even from inputs/textareas
       if (e.key === 'Escape') {
@@ -27,7 +28,7 @@ export function useKeyboardHelp() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, []);
+  }, [disabled]);
 
   return { open, setOpen };
 }
