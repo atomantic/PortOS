@@ -6,6 +6,7 @@
  * constants and `sanitizeTaskMetadata` / `reviewerConfigMetadata` live in `cosTaskMetadata.js`.
  */
 
+import { CODEX_SPEED_PROBE_FAILURES } from '../executionOptions.js';
 import { executionOptionsSchema } from '../aiToolkit/internal/executionOptionsValidation.js';
 import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../../lib/issueContext.js';
 import { z } from 'zod';
@@ -714,6 +715,7 @@ export const codeReviewSettingsSchema = z.object({
     pausedUntil: z.number().int().positive().optional(),
     reason: z.string().optional(),
     code: z.string().optional(),
+    probeFailure: z.enum(CODEX_SPEED_PROBE_FAILURES).optional(),
     message: z.string().optional(),
     failureCount: z.number().int().nonnegative().optional(),
     lastFailureAt: z.number().int().positive().optional(),

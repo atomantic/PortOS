@@ -1,8 +1,24 @@
 /** Bounded, versioned execution settings; never interpreted as arbitrary argv. */
 export const EXECUTION_OPTIONS_VERSION = 1;
 export const EXECUTION_OPTIONS_ERROR = 'EXECUTION_OPTIONS_UNSUPPORTED';
-export function executionOptionsError(message) {
-  return Object.assign(new Error(message), { code: EXECUTION_OPTIONS_ERROR, status: 400 });
+const CODEX_SPEED_PROBE_FAILURE_MESSAGES = Object.freeze({
+  launch: 'The Codex speed probe could not start. Check the configured Codex executable and its permissions, then refresh capabilities.',
+  timeout: 'The Codex speed probe did not respond before its deadline. Retry capability inspection and check that Codex app-server responds.',
+  required_rpc: 'Codex app-server did not provide a required speed capability RPC response. Update Codex to a compatible version, then refresh capabilities.',
+  early_exit: 'Codex app-server exited before returning speed capabilities. Check that the configured Codex runtime starts successfully.',
+  invalid_response: 'Codex app-server returned an unusable speed capability response. Refresh capabilities after updating Codex.',
+  unknown: 'This runtime could not verify speed capabilities. Refresh capabilities or update Codex.',
+});
+export const CODEX_SPEED_PROBE_FAILURES = Object.freeze(Object.keys(CODEX_SPEED_PROBE_FAILURE_MESSAGES));
+
+export function codexSpeedProbeFailureMessage(category) {
+  return typeof category === 'string' && Object.hasOwn(CODEX_SPEED_PROBE_FAILURE_MESSAGES, category)
+    ? CODEX_SPEED_PROBE_FAILURE_MESSAGES[category] : undefined;
+}
+
+export function executionOptionsError(message, probeFailure) {
+  return Object.assign(new Error(message), { code: EXECUTION_OPTIONS_ERROR, status: 400 },
+    codexSpeedProbeFailureMessage(probeFailure) ? { probeFailure } : {});
 }
 export const EXECUTION_OPTION_DEFINITIONS = Object.freeze({
   serviceTier: Object.freeze({

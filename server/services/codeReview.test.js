@@ -393,6 +393,30 @@ describe('codeReview helpers', () => {
       expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
     })
 
+    it.each([
+      ['launch', 'Check the configured Codex executable'],
+      ['timeout', 'Retry capability inspection'],
+      ['required_rpc', 'Update Codex to a compatible version'],
+    ])('keeps the %s speed probe category and projects approved health guidance', async (probeFailure, action) => {
+      const reviewer = 'provider:example-cli'
+      const code = 'EXECUTION_OPTIONS_UNSUPPORTED'
+      const raw = 'synthetic private process output'
+      mockedSettings.current = { codeReview: { reviewers: [reviewer] } }
+      await reportReviewerFailure(reviewer, { code, probeFailure, error: raw }, 100)
+      const config = mockedSettings.current.codeReview
+      expect(config.reviewerHealth[reviewer]).toEqual({ code, reason: 'configuration', probeFailure, failureCount: 1, lastFailureAt: 100 })
+      expect(codeReviewSettingsSchema.parse(config)).toEqual(config)
+      expect(await getReviewerConfigHealth()).toMatchObject({ status: 'warning', configFaults: {
+        [reviewer]: { code, probeFailure, message: expect.stringContaining(action) },
+      } })
+      expect(pickCodeReviewDefaults(mockedSettings.current).reviewerConfigFaults[reviewer].message).toContain(action)
+      await reportReviewerFailure(reviewer, { code, probeFailure: raw, error: raw }, 200)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({ [reviewer]: { code, lastFailureAt: 200 } })
+      expect(JSON.stringify(mockedSettings.current)).not.toContain(raw)
+      await reportReviewerSuccess(reviewer, 300)
+      expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
+    })
+
     it('records a headless command refusal as a warning without pausing or changing optional policy, then clears it', async () => {
       const reviewer = 'provider:example-cli'
       const config = { reviewers: [reviewer], optionalReviewers: [reviewer] }
