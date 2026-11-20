@@ -506,7 +506,9 @@ describe('PortOS production process manifest', () => {
   it.each([false, true])('matches production startup and repairs legacy manifests (existing: %s)', async (existing) => {
     const seed = JSON.parse(readFileSync(new URL('../../data.reference/apps.json', import.meta.url), 'utf8')).apps[PORTOS_APP_ID];
     const scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts;
-    const expectedNames = scripts.start.match(/--only "([^"]+)"/)[1].split(',');
+    const startupSelection = scripts.start.match(/pm2-start\.js ([\w,-]+)$/);
+    expect(startupSelection).not.toBeNull();
+    const expectedNames = startupSelection[1].split(',');
     readJSONFile.mockResolvedValue({ apps: existing ? {
       [PORTOS_APP_ID]: {
         ...seed,
