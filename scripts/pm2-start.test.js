@@ -83,6 +83,7 @@ describe('production PM2 startup', () => {
   it.each([
     ['with no legacy entries', []],
     ['with a foreign dashboard', [foreignDashboard]],
+    ['with a stopped duplicate', [proc('portos-cos', 'stopped')]],
   ])('leaves a healthy current install alone %s', async (_case, foreignEntries) => {
     const { pm2, start } = setup([...foreignEntries, ...production(5560)]);
     await start();
@@ -93,6 +94,19 @@ describe('production PM2 startup', () => {
     const { pm2, start } = setup(production(5559), production(5559));
     await expect(start()).rejects.toThrow('did not apply the combined Autofixer');
     expect(pm2.mock.calls).toEqual([restart]);
+  });
+
+  it('retries just the monitor after a failed restart followed retirement of the dashboard', async () => {
+    const { pm2, list, start } = setup([...production(undefined), legacyDashboard(root, 5)]);
+    list.mockResolvedValueOnce(production(undefined));
+    pm2.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+      throw new Error('PM2 restart failed');
+    });
+    await expect(start()).rejects.toThrow('PM2 restart failed');
+    expect(pm2.mock.calls).toEqual([['delete', '5'], restart]);
+    pm2.mockClear();
+    await start();
+    expect(pm2.mock.calls).toEqual([restart, ['save']]);
   });
 
   it('refuses to restart by name when a second monitor belongs to another checkout', async () => {

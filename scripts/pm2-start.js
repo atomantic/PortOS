@@ -19,6 +19,7 @@ import { execFileSync } from 'child_process';
 import { realpathSync } from 'fs';
 import { dirname, join, sep } from 'path';
 import { fileURLToPath } from 'url';
+import { PORTS } from '../server/lib/ports.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { redactPaths } from './pm2-daemon-refresh.js';
 
@@ -26,7 +27,7 @@ const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROBE_TIMEOUT_MS = 15000;
 const ECOSYSTEM = 'ecosystem.config.cjs';
 const AUTOFIXER = 'portos-autofixer';
-const DASHBOARD_PORT = '5560';
+const DASHBOARD_PORT = String(PORTS.AUTOFIXER_UI);
 
 const normalizePath = (path) => {
   let resolved = path;
@@ -45,6 +46,7 @@ const isInside = (child, root) => {
 };
 
 const runsFrom = (env, root) => env?.pm_exec_path && isInside(env.pm_exec_path, root);
+const isOnlineHere = ({ pm2_env: env }, root) => env?.status === 'online' && runsFrom(env, root);
 
 /**
  * Which expected apps need a (re)start.
@@ -60,6 +62,7 @@ export function appsNeedingStart({ processes, expectedApps, root }) {
   const reasons = [];
   for (const name of expectedApps) {
     const matches = processes.filter((p) => p.name === name);
+    if (matches.some(proc => isOnlineHere(proc, root))) continue;
     const proc = matches.find(({ pm2_env }) => runsFrom(pm2_env, root)) ?? matches[0];
     const env = proc?.pm2_env;
     if (!env) {
@@ -141,7 +144,7 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
   }
 
   const monitors = processes.filter(({ name }) => name === AUTOFIXER);
-  const monitor = monitors.find(({ pm2_env }) => runsFrom(pm2_env, root));
+  const monitor = monitors.find(proc => isOnlineHere(proc, root));
   const upgradeMonitor = expectedApps.includes(AUTOFIXER) && savedPort(monitor) !== DASHBOARD_PORT;
   if (dashboards.length || upgradeMonitor) {
     if (upgradeMonitor && monitors.length !== 1) throw new Error('Multiple PM2 Autofixer monitors are registered');
@@ -150,8 +153,7 @@ export async function startProductionApps({ expectedApps, root, list, pm2 }) {
       pm2('restart', ECOSYSTEM, '--only', AUTOFIXER);
       // PM2 can exit successfully after an individual ecosystem restart fails.
       const refreshed = (await list()).find(({ name }) => name === AUTOFIXER);
-      if (refreshed?.pm2_env?.status !== 'online' || !runsFrom(refreshed.pm2_env, root)
-        || savedPort(refreshed) !== DASHBOARD_PORT) {
+      if (!refreshed || !isOnlineHere(refreshed, root) || savedPort(refreshed) !== DASHBOARD_PORT) {
         throw new Error('PM2 did not apply the combined Autofixer dashboard configuration');
       }
     }
