@@ -3,7 +3,7 @@
  *
  *     buildScopeAdherenceCorpus()   ← forge reads + the operator's own clauses
  *       ↓ train.jsonl / gold.jsonl, split disjointness already REFUSED on overlap
- *     scripts/train_jev_head.py     ← venv-jev, frozen encoder, offline
+ *     scripts/ml/train_jev_head.py     ← venv-jev, frozen encoder, offline
  *       ↓ candidate head + three gold scores
  *     saveCandidateJevHead()        ← a CANDIDATE. Never adopted here.
  *
@@ -50,7 +50,7 @@ const jevLifecycle = () => import('./jev.js');
 const corpusBuilder = () => import('./jevCorpusBuilder.js');
 
 const execFileAsync = promisify(execFile);
-const TRAINER_SCRIPT = join(PATHS.root, 'scripts', 'train_jev_head.py');
+const TRAINER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'train_jev_head.py');
 // Generous: the dominant cost is one forward pass per (clause, change) pair on
 // a cold cache, which on a CPU-only host is minutes. A warm cache is seconds.
 const TRAIN_TIMEOUT_MS = 60 * 60 * 1000;

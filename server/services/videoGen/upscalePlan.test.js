@@ -4,7 +4,7 @@ import {
   ltxUpscaleRuntimeId, UPSCALE_PROVENANCE_FIELDS, LANCZOS_PROVENANCE_FIELDS,
 } from './upscalePlan.js';
 
-// The grid is the model's, not ours: `scripts/generate_ltx25_cuda.py`'s
+// The grid is the model's, not ours: `scripts/ml/generate_ltx25_cuda.py`'s
 // validate_args rejects a render that violates it, so a plan that quietly
 // reports "no padding needed" for a non-conforming source would hand the user a
 // disclosure that the render then contradicts.

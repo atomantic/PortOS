@@ -1265,14 +1265,14 @@ describe('CI test impact planner', () => {
   it('runs the parsing contracts for a python sidecar script instead of the full suite', () => {
     const tracked = [
       ...TRACKED,
-      'scripts/generate_ltx2.py',
-      'scripts/_runner_common.py',
+      'scripts/ml/generate_ltx2.py',
+      'scripts/ml/_runner_common.py',
       'scripts/generate_ltx2.test.js',
       'server/services/videoGen/runtimes.test.js',
       'client/src/lib/videoRenderPhase.test.js',
     ];
     const pathContractTests = {
-      'scripts/_runner_common.py': [
+      'scripts/ml/_runner_common.py': [
         'scripts/generate_ltx2.test.js',
         'server/services/videoGen/runtimes.test.js',
         'client/src/lib/videoRenderPhase.test.js',
@@ -1280,7 +1280,7 @@ describe('CI test impact planner', () => {
       ],
     };
 
-    const plan = buildCiTestPlan(['scripts/_runner_common.py'], { trackedFiles: tracked, pathContractTests });
+    const plan = buildCiTestPlan(['scripts/ml/_runner_common.py'], { trackedFiles: tracked, pathContractTests });
 
     expect(plan).toMatchObject({
       full: false,
@@ -1301,7 +1301,7 @@ describe('CI test impact planner', () => {
 
     // A JS source in the same diff keeps its own import-graph selection; the
     // python contracts ride along as explicit files.
-    const mixed = buildCiTestPlan(['scripts/_runner_common.py', 'server/services/auth.js'], {
+    const mixed = buildCiTestPlan(['scripts/ml/_runner_common.py', 'server/services/auth.js'], {
       trackedFiles: tracked,
       pathContractTests,
     });
@@ -1418,8 +1418,8 @@ describe('CI test impact planner', () => {
     it('selects installer and route contracts for the TRELLIS.2 shell and wheel locks', () => {
       const inputs = [
         'scripts/setup-trellis2-mps.sh',
-        'scripts/requirements-trellis2-mps.txt',
-        'scripts/requirements-trellis2-mps.lock.txt',
+        'scripts/ml/requirements/requirements-trellis2-mps.txt',
+        'scripts/ml/requirements/requirements-trellis2-mps.lock.txt',
       ];
       const owners = ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'];
       for (const input of inputs) {
@@ -1431,45 +1431,45 @@ describe('CI test impact planner', () => {
 
     it('scopes a requirements-pin change to the installer contract', () => {
       const requirements = [
-        'scripts/requirements-ltx25-cuda.txt',
-        'scripts/requirements-ltx25-cuda-windows.lock.txt',
-        'scripts/requirements-ltx25-cuda-linux.lock.txt',
-        'scripts/requirements-ltx25-cuda-build.lock.txt',
-        'scripts/requirements-flux3-mlx.lock.txt',
-        'scripts/requirements-minimax-h3-cuda.txt',
-        'scripts/requirements-minimax-h3-cuda-windows.lock.txt',
-        'scripts/requirements-minimax-h3-cuda-linux.lock.txt',
-        'scripts/requirements-minimax-h3-mlx.lock.txt',
-        'scripts/requirements-minimax-music3-mlx.lock.txt',
-        'scripts/requirements-minimax-music3-cuda.txt',
-        'scripts/requirements-minimax-music3-cuda-windows.lock.txt',
-        'scripts/requirements-minimax-music3-cuda-linux.lock.txt',
-        'scripts/requirements-musicgen-mlx.lock.txt',
-        'scripts/requirements-audioldm2-mlx.lock.txt',
-        'scripts/requirements-audioldm2-cuda.txt',
-        'scripts/requirements-audioldm2-cuda-windows.lock.txt',
-        'scripts/requirements-audioldm2-cuda-linux.lock.txt',
-        'scripts/requirements-acestep-mlx.lock.txt',
-        'scripts/requirements-acestep-cuda.txt',
-        'scripts/requirements-acestep-cuda-windows.lock.txt',
-        'scripts/requirements-acestep-cuda-linux.lock.txt',
-        'scripts/requirements-acestep15-mlx.lock.txt',
-        'scripts/requirements-acestep15-cuda.txt',
-        'scripts/requirements-acestep15-cuda-windows.lock.txt',
-        'scripts/requirements-acestep15-cuda-linux.lock.txt',
-        'scripts/requirements-flux2-mlx.lock.txt',
-        'scripts/requirements-flux2-cuda.txt',
-        'scripts/requirements-flux2-cuda-windows.lock.txt',
-        'scripts/requirements-flux2-cuda-linux.lock.txt',
-        'scripts/requirements-fastvideo-mlx.lock.txt',
-        'scripts/requirements-muscriptor-mlx.lock.txt',
-        'scripts/requirements-muscriptor-cuda.txt',
-        'scripts/requirements-muscriptor-cuda-windows.lock.txt',
-        'scripts/requirements-muscriptor-cuda-linux.lock.txt',
-        'scripts/requirements-mflux-mlx.lock.txt',
-        'scripts/requirements-wan22-cuda.txt',
-        'scripts/requirements-lyric-align.txt',
-        'scripts/requirements-lyric-align.lock.txt',
+        'scripts/ml/requirements/requirements-ltx25-cuda.txt',
+        'scripts/ml/requirements/requirements-ltx25-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-ltx25-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-ltx25-cuda-build.lock.txt',
+        'scripts/ml/requirements/requirements-flux3-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-h3-cuda.txt',
+        'scripts/ml/requirements/requirements-minimax-h3-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-h3-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-h3-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-music3-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-music3-cuda.txt',
+        'scripts/ml/requirements/requirements-minimax-music3-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-minimax-music3-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-musicgen-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-audioldm2-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-audioldm2-cuda.txt',
+        'scripts/ml/requirements/requirements-audioldm2-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-audioldm2-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-acestep-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-acestep-cuda.txt',
+        'scripts/ml/requirements/requirements-acestep-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-acestep-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-acestep15-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-acestep15-cuda.txt',
+        'scripts/ml/requirements/requirements-acestep15-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-acestep15-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-flux2-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-flux2-cuda.txt',
+        'scripts/ml/requirements/requirements-flux2-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-flux2-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-fastvideo-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-muscriptor-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-muscriptor-cuda.txt',
+        'scripts/ml/requirements/requirements-muscriptor-cuda-windows.lock.txt',
+        'scripts/ml/requirements/requirements-muscriptor-cuda-linux.lock.txt',
+        'scripts/ml/requirements/requirements-mflux-mlx.lock.txt',
+        'scripts/ml/requirements/requirements-wan22-cuda.txt',
+        'scripts/ml/requirements/requirements-lyric-align.txt',
+        'scripts/ml/requirements/requirements-lyric-align.lock.txt',
       ];
       const owners = [
         'scripts/setup-image-video.test.js',
@@ -1553,9 +1553,9 @@ describe('CI test impact planner', () => {
 
   it('fails closed to the full suite for a python script nothing pins', () => {
     // Per script: a pinned sibling in the same diff does not vouch for the orphan.
-    const plan = buildCiTestPlan(['scripts/generate_ltx2.py', 'scripts/orphan.py'], {
-      trackedFiles: [...TRACKED, 'scripts/generate_ltx2.py', 'scripts/orphan.py', 'scripts/generate_ltx2.test.js'],
-      pathContractTests: { 'scripts/generate_ltx2.py': ['scripts/generate_ltx2.test.js'] },
+    const plan = buildCiTestPlan(['scripts/ml/generate_ltx2.py', 'scripts/orphan.py'], {
+      trackedFiles: [...TRACKED, 'scripts/ml/generate_ltx2.py', 'scripts/orphan.py', 'scripts/generate_ltx2.test.js'],
+      pathContractTests: { 'scripts/ml/generate_ltx2.py': ['scripts/generate_ltx2.test.js'] },
     });
     expect(plan.full).toBe(true);
     expect(plan.reason).toMatch(/python script with no parsing contract: scripts\/orphan\.py/);
@@ -1565,9 +1565,9 @@ describe('CI test impact planner', () => {
   });
 
   it('matches the way tests name one python script, not every one', () => {
-    const re = new RegExp(sourceReferencePattern('scripts/generate_ltx2.py'));
+    const re = new RegExp(sourceReferencePattern('scripts/ml/generate_ltx2.py'));
     expect(re.test("join(SCRIPTS, 'generate_ltx2.py')")).toBe(true);
-    expect(re.test('readFileSync("scripts/generate_ltx2.py", "utf8")')).toBe(true);
+    expect(re.test('readFileSync("scripts/ml/generate_ltx2.py", "utf8")')).toBe(true);
     expect(re.test('"generate_ltx2.py"')).toBe(true);
     expect(re.test("'generate_ltx2_cuda.py'")).toBe(false);
     expect(re.test("'my_generate_ltx2.py'")).toBe(false);

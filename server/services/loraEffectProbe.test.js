@@ -3,7 +3,7 @@
  * never-fatal contract.
  *
  * The Python measurement has its own runnable suite
- * (scripts/lora_effect_probe_test.py). What matters here is everything AROUND
+ * (scripts/ml/lora_effect_probe_test.py). What matters here is everything AROUND
  * it: that a passive read never lands in this module, that a missing numpy
  * advances to the next interpreter instead of becoming a verdict about the
  * adapter, and that no failure path can throw into a render.

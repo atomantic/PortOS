@@ -3,15 +3,15 @@
 The explicit FLUX.2 Install/Repair action (`INSTALL_FLUX2=1`) installs the
 shared FLUX.2 / Qwen-Image 2.1 / Z-Image diffusers runtime in
 `~/.portos/venv-flux2`. Apple Silicon uses its own lock
-(`scripts/requirements-flux2-mlx.lock.txt`). Windows (Git Bash) and Linux are
+(`scripts/ml/requirements/requirements-flux2-mlx.lock.txt`). Windows (Git Bash) and Linux are
 supported on x86_64 and need [uv](https://docs.astral.sh/uv/), which provisions
 a dedicated managed CPython 3.11; Repair reuses standalone 3.11 environments and
 rebuilds other Python minors or Conda-based environments, which can fail to load
 torch DLLs on Windows. Intel macOS and non-x86_64 Windows/Linux hosts have no
 lock and are refused.
 
-The installer selects `scripts/requirements-flux2-cuda-windows.lock.txt` or
-`scripts/requirements-flux2-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-flux2-cuda-windows.lock.txt` or
+`scripts/ml/requirements/requirements-flux2-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:` against the runtime
 interpreter. Every distribution, including torch and its transitive CUDA
 libraries, has an exact version and SHA-256 hashes. Repair removes packages
@@ -21,7 +21,7 @@ flow is shared with the other CUDA runtimes (`require_cuda_lock_host` and
 installer on Windows/Linux runs the same script instead of resolving packages
 itself.
 
-The direct pins (`scripts/requirements-flux2-cuda.txt`) are the Apple Silicon
+The direct pins (`scripts/ml/requirements/requirements-flux2-cuda.txt`) are the Apple Silicon
 set with torch 2.14.1+cu126 (the build the other cu126 runtimes share).
 diffusers 0.42.1 is a tagged release carrying `Flux2KleinPipeline` and
 `QwenImage21Pipeline` and sdnq is on PyPI, so no git source, which a hash lock
@@ -36,7 +36,7 @@ repairing never download weights.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-flux2-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-flux2-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=flux2-cuda

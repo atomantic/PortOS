@@ -7,7 +7,7 @@ import { copyToClipboard } from '../../lib/clipboard.js';
 
 const recoveryCommands = [
   'pm2 stop portos-server portos-cos',
-  'node scripts/recover-maintenance-transaction.mjs --confirm "Reviewed interrupted maintenance transaction"',
+  'node scripts/ops/recover-maintenance-transaction.mjs --confirm "Reviewed interrupted maintenance transaction"',
   'pm2 start portos-server portos-cos',
 ].join('\n');
 const recoveryCauses = {

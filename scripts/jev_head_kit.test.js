@@ -32,7 +32,7 @@ kit = runpy.run_path(sys.argv[1])
 
 const run = (body) => execFileSync(
   python,
-  ['-c', HARNESS + body, join(scriptsDir, 'jev_head_kit.py')],
+  ['-c', HARNESS + body, join(scriptsDir, 'ml', 'jev_head_kit.py')],
   { encoding: 'utf8', timeout: 20_000 },
 );
 

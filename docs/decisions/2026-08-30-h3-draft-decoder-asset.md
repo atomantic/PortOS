@@ -5,7 +5,7 @@
 - **Related:** issue #5423,
   [`server/lib/videoDraftDecoders.js`](../../server/lib/videoDraftDecoders.js),
   `build_draft_decoder_shim` in
-  [`scripts/generate_minimax_h3.py`](../../scripts/generate_minimax_h3.py),
+  [`scripts/ml/generate_minimax_h3.py`](../../scripts/ml/generate_minimax_h3.py),
   [`server/services/videoGen/generateVideo.js`](../../server/services/videoGen/generateVideo.js)
 
 ## Decision

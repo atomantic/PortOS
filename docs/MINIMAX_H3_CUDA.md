@@ -8,8 +8,8 @@ Repair keeps a standalone 3.11 environment and rebuilds other Python minors
 or Conda-based environments in the same location. Weights and LightX2V adapters
 remain separate explicit downloads; installing the runtime never renders.
 
-Install and Repair select `scripts/requirements-minimax-h3-cuda-windows.lock.txt`
-or `scripts/requirements-minimax-h3-cuda-linux.lock.txt` and run `uv pip sync
+Install and Repair select `scripts/ml/requirements/requirements-minimax-h3-cuda-windows.lock.txt`
+or `scripts/ml/requirements/requirements-minimax-h3-cuda-linux.lock.txt` and run `uv pip sync
 --require-hashes --only-binary :all:`. All distributions, including torch,
 torchvision, torchao and transitive dependencies, have exact versions and
 SHA-256 hashes. Repair removes packages outside the lock. No pip bootstrap,
@@ -26,7 +26,7 @@ own index policy.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-minimax-h3-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-minimax-h3-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=minimax-h3-cuda
@@ -52,7 +52,7 @@ range ends at Accelerate 1.14.0; the locks select 1.15.0. This is a database
 range assessment, **not evidence that upstream fixed checkpoint containment**:
 static inspection of 1.15.0 still finds `load_checkpoint_in_model` joining
 untrusted `weight_map` shard names to the checkpoint folder without containment
-checks. Keep `scripts/_checkpoint_index_guard.py` and the runner's validation
+checks. Keep `scripts/ml/_checkpoint_index_guard.py` and the runner's validation
 before pipeline loading. Existing public runner regressions reject traversal,
 cache-escaping symlinks and non-regular shards before the loader. Never waive
 an OSV match because this guard exists; an upstream/compatibility blocker must

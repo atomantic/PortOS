@@ -8,7 +8,7 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 // runner and tested twice, which is exactly the shape that lets a fix land in
 // one copy and leave the other broken — the lexical-snapshot-root rule below
 // being the one where that would be silent. One module, one suite.
-const script = join(dirname(fileURLToPath(import.meta.url)), '_minimax_h3_common.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', '_minimax_h3_common.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name. On
 // Windows a box with no Store-installed Python still has `python` on PATH as an

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 import { RIGGING_RUNTIME, RIGGING_INSTALL_COMMAND, resolveRiggingPython } from '../server/services/rigging/runtime.js';
 
-const scripts = fileURLToPath(new URL('.', import.meta.url));
+const scripts = fileURLToPath(new URL('./ml/', import.meta.url));
 const profile = JSON.parse(readFileSync(`${scripts}rigging-profile.json`, 'utf8'));
 const python = resolveTestPython();
 
@@ -102,15 +102,15 @@ describe('reviewed rigging provisioning', () => {
   it('keeps source, descriptor, ABI, interpreter artifacts and target locks in parity', () => {
     expect(profile.bpy).toBe(RIGGING_RUNTIME.moduleVersion);
     expect(profile.python.startsWith(`${RIGGING_RUNTIME.pythonVersion}.`)).toBe(true);
-    expect(RIGGING_INSTALL_COMMAND).toBe('python3 scripts/setup-rigging.py');
-    expect(readFileSync(`${scripts}requirements-rigging.txt`, 'utf8')).toContain(`bpy==${profile.bpy}`);
+    expect(RIGGING_INSTALL_COMMAND).toBe('python3 scripts/ml/setup-rigging.py');
+    expect(readFileSync(`${scripts}requirements/requirements-rigging.txt`, 'utf8')).toContain(`bpy==${profile.bpy}`);
     for (const target of Object.values(profile.profiles)) {
       expect(target.condaArtifacts.find((a) => a.name === 'python').version).toBe(profile.python);
       for (const artifact of target.condaArtifacts) {
         expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
         expect(Date.parse(artifact.uploadedAt)).toBeLessThan(Date.parse(profile.registryCutoff));
       }
-      const lock = readFileSync(`${scripts}${target.requirements}`, 'utf8');
+      const lock = readFileSync(`${scripts}requirements/${target.requirements}`, 'utf8');
       expect(lock).toContain(`bpy==${profile.bpy}`);
       expect(lock).toContain(`--exclude-newer ${profile.registryCutoff}`);
       const requirements = lock.split(/\n(?=[a-z])/).filter((entry) => /^[\w-]+==/.test(entry));

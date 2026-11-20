@@ -417,7 +417,7 @@ const LTX25_CUDA_REPO_FILES = Object.freeze([
 // port's at both ends: frames are snapped up to the next 17n+5 and the RESULTING
 // duration must land in 5-15 s, so 107 (4.46 s) is under the floor and 362
 // (15.08 s) is over the ceiling. Mirrored by MIN_FRAMES / MAX_FRAMES in
-// scripts/generate_minimax_h3_cuda.py, which rejects the same values.
+// scripts/ml/generate_minimax_h3_cuda.py, which rejects the same values.
 const MINIMAX_H3_CUDA_FRAME_OPTIONS = h3FrameGrid(124, 345);
 
 const sameValues = (left, right) => (
@@ -476,7 +476,7 @@ export const upgradeMiniMaxH3OutputControls = (list) => {
 
 // FastMetal 14B ships its MLX DiT TWICE — `mlx_dit.safetensors` at the repo
 // root and an `ema/` copy of the same 14.14 GB tensor. The render path reads
-// only the root one: scripts/generate_fastvideo.py defaults `mlx_checkpoint`
+// only the root one: scripts/ml/generate_fastvideo.py defaults `mlx_checkpoint`
 // to the model root for the fastmetal family and ALWAYS forwards it, so
 // mlx_wan_prompt_to_video.py takes `resolve_mlx_checkpoint`'s explicit branch
 // and loads `mlx_dit.json` + `mlx_dit.safetensors` from that one directory.
@@ -1079,7 +1079,7 @@ const DEFAULT_REGISTRY = {
         // conditioner's leaves are streamed from CPU memory, so ~75 GB of the
         // weights are resident off-GPU for the whole render. The card itself
         // needs ~24 GB, and the runner steps down to a leaner offload profile
-        // on a smaller one (see scripts/generate_minimax_h3_cuda.py).
+        // on a smaller one (see scripts/ml/generate_minimax_h3_cuda.py).
         memoryGb: 96,
         steps: 8,
         guidance: 0,
@@ -1150,7 +1150,7 @@ const DEFAULT_REGISTRY = {
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
       // KV repo's tokenizer is the same Qwen3 tokenizer as the base 9B repo,
-      // but the multi-reference editing path in scripts/flux2_macos.py probes
+      // but the multi-reference editing path in scripts/ml/flux2_macos.py probes
       // HF auth against this value — pinning to the KV repo means accepting
       // its license once enables both single-ref + multi-ref renders.
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
@@ -1184,7 +1184,7 @@ const DEFAULT_REGISTRY = {
       // base 9B (its transformer is tuned for the K/V reference-editing task).
       // The plain text/i2i bf16 path stays on `repo`. Same FLUX.2-klein
       // license — accept once at huggingface.co. Threaded to the runner as
-      // `--kv-repo`; see scripts/flux2_macos.py.
+      // `--kv-repo`; see scripts/ml/flux2_macos.py.
       kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
       steps: 20,
       guidance: 3.5,

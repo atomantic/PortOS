@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./diagnose_minimax_h3_vision.py', import.meta.url));
-const compare = fileURLToPath(new URL('./compare_minimax_h3_vision.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/diagnose_minimax_h3_vision.py', import.meta.url));
+const compare = fileURLToPath(new URL('./ml/compare_minimax_h3_vision.py', import.meta.url));
 const hasNumpy = python && spawnSync(python, ['-c', 'import numpy'], { stdio: 'ignore' }).status === 0;
 
 describe.skipIf(!python)('H3 vision diagnostic evidence boundary', () => {

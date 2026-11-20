@@ -55,7 +55,7 @@ function cudaSourceRoot(base, exists = existsSync) {
 
 /** Both Install and Repair rebuild only the private environment, retaining model assets. */
 export function installTrellis2Cuda({ base, onEvent, env, spawnImpl = spawn } = {}) {
-  const script = fileURLToPath(new URL('../../../scripts/setup-trellis2-cuda.py', import.meta.url));
+  const script = fileURLToPath(new URL('../../../scripts/ml/setup-trellis2-cuda.py', import.meta.url));
   return runInstallSteps({
     steps: [{ stage: 'bootstrap', command: 'python3', args: [script, trellis2CudaRoot(base)] }],
     label: LABEL,

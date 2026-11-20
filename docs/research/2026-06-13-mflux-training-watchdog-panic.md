@@ -277,7 +277,7 @@ feature (git history). Key takeaways:
 - **Negative result — do NOT add an `mx.eval`-cadence "fix" to the trainer.**
   Phosphene's `LTX2_DIT_EVAL_EVERY` flush bounds the Metal command buffer on the
   *inference* denoise loop (no autodiff), and PortOS already uses it on the LTX-2
-  generation path (`scripts/generate_ltx2.py:63`). It does **not** transfer to
+  generation path (`scripts/ml/generate_ltx2.py:63`). It does **not** transfer to
   mflux training: mflux reads no such env var, its step fuses forward+backward
   under `nn.value_and_grad` materialized by a single `mx.eval`
   (`mflux/.../training/trainer.py:141-143`) which a per-block flush can't split,

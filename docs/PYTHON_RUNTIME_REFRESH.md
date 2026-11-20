@@ -1,6 +1,6 @@
 # Python runtime refresh reference
 
-Reference for the managed Python runtime profiles (`scripts/requirements-*.txt`
+Reference for the managed Python runtime profiles (`scripts/ml/requirements/requirements-*.txt`
 sources and their `*.lock.txt` complete locks): which pins are deliberately held
 back, and how to refresh one dependency without churning the rest of a lock.
 Evidence for each past bump (uv versions, hash counts, probe results) lives in
@@ -56,7 +56,7 @@ that upstream moves or the caller is migrated.
 | `cuda-bindings==13.5.0` | LTX CUDA | Cooldown exception (#15454) | 28 artifacts postdate the fixed `2026-11-05T00:00:00Z` cutoff. Retained deliberately; do not claim every source meets the cutoff. |
 | `trellis2-apple` revision `c873bde81ebe1e56535c6caddb4b21267364a923` | TRELLIS.2 Metal | Cooldown exception (#15708) | Commit dated 2026-11-09T16:25:19Z (seven days on 2026-11-16T16:25:19Z); carries the autorelease-pool leak repair. Preserve the repair. |
 | Annotated-Types 0.7.0 | Pixal3D Metal | Retained distinct artifact | MiniMax H3 MLX uses 0.8.0; keep each profile's own resolution. |
-| tokenizers 0.23.3 (upstream `<0.23` guard overridden) | FastVideo MLX | Pinned together with Transformers 5.22.x | Upstream's `<0.23` guard addressed a CLIP RobertaProcessing keyword mismatch that Transformers 5.22.x avoids (positional arguments); validated against actual CLIP load/save. Recorded as an inline comment in `scripts/requirements-fastvideo-mlx.txt`. |
+| tokenizers 0.23.3 (upstream `<0.23` guard overridden) | FastVideo MLX | Pinned together with Transformers 5.22.x | Upstream's `<0.23` guard addressed a CLIP RobertaProcessing keyword mismatch that Transformers 5.22.x avoids (positional arguments); validated against actual CLIP load/save. Recorded as an inline comment in `scripts/ml/requirements/requirements-fastvideo-mlx.txt`. |
 
 Immutable native source revisions, Torch/CUDA/MLX pins, platform markers and
 artifact allowlists are never changed by a helper-package refresh.
@@ -99,7 +99,7 @@ version, marker, hash block and provenance comment stays byte-identical.
    `scripts/_minimax_h3_mlx_pins.test.js`) and hash-required dry install plans
    for each declared target. Dry plans select artifacts without executing those
    runtimes; native or model execution claims need their own validation.
-   `scripts/cooled_runtime_probe.py` is an opt-in offline probe (SentencePiece,
+   `scripts/ml/cooled_runtime_probe.py` is an opt-in offline probe (SentencePiece,
    Reactor SDK, Pydantic) that enforces exact baseline/candidate versions: run it
    only in isolated scratch environments, baseline first (`--baseline`), then the
    candidate with the same fixtures directory, never in an installed runtime.

@@ -950,7 +950,7 @@ describe('generateVideo — first render child dies during the accelerator hando
 
 // ── verified post-completion native teardown abort (#6501) ───────────────────
 // The MiniMax H3 MLX runner can finish its render, mux the clip, print the
-// `emit_result` completion contract from scripts/_minimax_h3_common.py, and THEN
+// `emit_result` completion contract from scripts/ml/_minimax_h3_common.py, and THEN
 // abort inside native interpreter teardown. The clip on disk is complete; only
 // the interpreter died. A real abort can't be produced here, so the child is
 // driven directly — the result line goes onto its stdout and it is closed on

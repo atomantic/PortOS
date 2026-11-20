@@ -117,8 +117,8 @@ export { usesTorchVenv as modelUsesFluxVenv };
 // Whether a model RELIABLY does the img2img round-trip regen needs, i.e. honors the init image rather than
 // silently degrading to txt2img (which would make `regenerated: true` a lie). Capability, not installed-state.
 //
-//   - FLUX.2 (`scripts/flux2_macos.py`): the intended i2i path; --image-path is forwarded. Regen-capable everywhere.
-//   - The diffusers family (Z-Image / ERNIE / HiDream / Qwen via `scripts/z_image_turbo.py`) is EXCLUDED: that
+//   - FLUX.2 (`scripts/ml/flux2_macos.py`): the intended i2i path; --image-path is forwarded. Regen-capable everywhere.
+//   - The diffusers family (Z-Image / ERNIE / HiDream / Qwen via `scripts/ml/z_image_turbo.py`) is EXCLUDED: that
 //     runner "falls back to txt2img and ignores the init image" for a family with no i2i sibling, so JS can't know
 //     whether the round-trip happened.
 //   - Legacy mflux: reliable i2i on macOS (`--image-path`); Windows `imagine_win.py` drops the init-image args, so

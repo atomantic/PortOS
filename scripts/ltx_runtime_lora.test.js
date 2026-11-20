@@ -35,7 +35,7 @@ const python = candidates.find((candidate) => {
     return false;
   }
 }) || null;
-const testScript = fileURLToPath(new URL('./ltx_runtime_lora_test.py', import.meta.url));
+const testScript = fileURLToPath(new URL('./ml/ltx_runtime_lora_test.py', import.meta.url));
 
 describe.skipIf(!python)('ltx_runtime_lora.py', () => {
   it('keeps quantized deltas, IC roles and reversible A2V stages across CPU, streamed and failure paths', () => {

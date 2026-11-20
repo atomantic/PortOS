@@ -142,7 +142,7 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
     expect(call).toBeTruthy();
     const args = call[1];
     // wrapper script, NOT the bare `-m mlx_video.generate_av` module path
-    expect(args[0]).toBe(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+    expect(args[0]).toBe(join(MOCK_PATHS.root, 'scripts', 'ml', 'generate_av_lora.py'));
     expect(args).not.toContain('-m');
     // the generate_av flags still flow through the wrapper
     expect(args).toContain('--model-repo');
@@ -172,7 +172,7 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
     );
     expect(call).toBeTruthy();
     expect(call[1]).not.toContain('--user-loras');
-    expect(call[1]).not.toContain(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+    expect(call[1]).not.toContain(join(MOCK_PATHS.root, 'scripts', 'ml', 'generate_av_lora.py'));
   });
 
   it.skipIf(process.platform === 'win32')('rejects LoRAs on a quantized (out-of-scope) mlx_video model', async () => {

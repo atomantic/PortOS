@@ -1,7 +1,7 @@
 /**
  * The reactor.inc `fast-h3` clip contract: what one enqueued clip may ask for.
  *
- * fast-h3 renders 24fps clips and `enqueue` accepts a CONTINUOUS `seconds` bounded to 5.167–14.375 (124–345 frames; `scripts/reactor-render.py` re-checks them), with the prompt capped at 800 characters (rejected by the API, not truncated, so the form must stop it). Its own dependency-free module (the `grokVideoClip.js` reason) because the route schema, the FableLoom prompt compiler and the VideoGen picker all need these numbers (`routes/videoGen.js` once accepted 1–60 seconds for a backend rejecting everything outside the range). `REACTOR_CLIP_LENGTHS` is a PICKER list, not an API constraint: a free-text seconds box mostly invites values the API refuses, so it is the two exact endpoints plus every whole second between (frame-aligned at 24fps, each a real frame count).
+ * fast-h3 renders 24fps clips and `enqueue` accepts a CONTINUOUS `seconds` bounded to 5.167–14.375 (124–345 frames; `scripts/ml/reactor-render.py` re-checks them), with the prompt capped at 800 characters (rejected by the API, not truncated, so the form must stop it). Its own dependency-free module (the `grokVideoClip.js` reason) because the route schema, the FableLoom prompt compiler and the VideoGen picker all need these numbers (`routes/videoGen.js` once accepted 1–60 seconds for a backend rejecting everything outside the range). `REACTOR_CLIP_LENGTHS` is a PICKER list, not an API constraint: a free-text seconds box mostly invites values the API refuses, so it is the two exact endpoints plus every whole second between (frame-aligned at 24fps, each a real frame count).
  */
 
 /** Longest prompt fast-h3 accepts, in characters. */

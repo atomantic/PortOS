@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SCRIPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts');
+const REQUIREMENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'ml', 'requirements');
 
 const APPLE_SILICON = { platform: 'darwin', arch: 'arm64' };
 
@@ -25,37 +25,37 @@ export const LOCK_PROFILES = Object.freeze({
   mflux: {
     id: 'mflux',
     label: 'shared mflux runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-mflux-mlx.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
   'mflux-video': {
     id: 'mflux-video',
     label: 'mflux + mlx_video + mlx_vlm runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-mflux-video-mlx.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-mflux-video-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
   'auk-mlx': {
     id: 'auk-mlx',
     label: 'AuK-Flash MLX runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-auk-mlx.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-auk-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
   'mtplx-mlx': {
     id: 'mtplx-mlx',
     label: 'MTPLX server MLX runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-mtplx-mlx.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-mtplx-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
   'laya-mlx': {
     id: 'laya-mlx',
     label: 'Laya-MLX runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-laya-mlx.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-laya-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
   'uv-bootstrap': {
     id: 'uv-bootstrap',
     label: 'private uv bootstrap',
-    lockFile: join(SCRIPTS_DIR, 'requirements-uv-bootstrap.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-uv-bootstrap.lock.txt'),
     environments: [
       APPLE_SILICON,
       { platform: 'darwin', arch: 'x64' },
@@ -67,7 +67,7 @@ export const LOCK_PROFILES = Object.freeze({
   'guard-runtime': {
     id: 'guard-runtime',
     label: 'Prompt Guard / jev classifier runtime',
-    lockFile: join(SCRIPTS_DIR, 'requirements-guard-runtime.lock.txt'),
+    lockFile: join(REQUIREMENTS_DIR, 'requirements-guard-runtime.lock.txt'),
     environments: [
       APPLE_SILICON,
       { platform: 'linux', arch: 'x64' },

@@ -100,7 +100,7 @@ alive:
 
 Separately, the allocator cache is now cleared on CUDA as well as MPS. That
 became `empty_device_cache(device, *, synchronize=False)` in
-`scripts/_runner_common.py` — the shared runner module — rather than a local
+`scripts/ml/_runner_common.py` — the shared runner module — rather than a local
 helper, since `flux2_macos.py` and `z_image_turbo.py` already carry their own
 copies of the same dispatch. It keys on the **resolved device string** rather
 than `torch.cuda.is_available()`, so a `--device cpu` run on a CUDA box no
@@ -178,7 +178,7 @@ It continued **11→20** rather than restarting a fresh 1→20, confirming the
 
 ### Inference round-trip — VALIDATED
 
-The trained adapter loaded through `scripts/flux2_macos.py --lora-paths` on the
+The trained adapter loaded through `scripts/ml/flux2_macos.py --lora-paths` on the
 bf16 pipeline (same base it trained on):
 
 ```
@@ -189,7 +189,7 @@ bf16 pipeline (same base it trained on):
 ```
 
 Produced a coherent 512-px portrait. Note the mflux→diffusers `to_out` key remap
-(`scripts/lora_utils.py`) does **not** fire here and should not: a torch/peft
+(`scripts/ml/lora_utils.py`) does **not** fire here and should not: a torch/peft
 adapter is already in diffusers key form, unlike the mflux adapter in the
 2026-07-18 run. 20 steps is far too few to bind identity — same caveat as that
 run's 50 — so the render is a generic portrait, not the mascot. Pipeline
@@ -215,7 +215,7 @@ That last pair matters: an earlier draft of this test keyed on one `with`
 statement's shape and went red on the nesting refactor while *passing* three of
 the regressions above.
 
-`scripts/_runner_common_test.py` covers the relocated helper directly, stubbing
+`scripts/ml/_runner_common_test.py` covers the relocated helper directly, stubbing
 `sys.modules["torch"]` (the helper defers its import) to assert it dispatches on
 the resolved device and clears nothing on `cpu`.
 

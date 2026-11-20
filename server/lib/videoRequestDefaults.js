@@ -24,7 +24,7 @@ export const isDefaultSpeedProfile = (id) => id == null || id === '' || id === S
 
 /**
  * Modes that route through the LTX two-stage pipeline (`run_two_stage` in
- * scripts/generate_ltx2.py), which is the only pipeline the shipped schedules
+ * scripts/ml/generate_ltx2.py), which is the only pipeline the shipped schedules
  * were measured on. Declared once so a new profile can't quietly widen
  * itself past what was validated.
  */

@@ -631,7 +631,7 @@ export function resolveMinimaxMusic3MlxPython() {
 
 // Every venv PortOS provisions with `huggingface_hub` installed, in preference
 // order. hfDownload.js falls back through these to find an interpreter that can
-// run scripts/hf_download_repo.py when no image-gen runtime is configured — a
+// run scripts/ml/hf_download_repo.py when no image-gen runtime is configured — a
 // music-only install still has to be able to download its own weights.
 //
 // ADDING A RUNTIME: if its setup-image-video.sh block pip-installs
@@ -647,7 +647,7 @@ export const HF_HUB_PYTHON_RESOLVERS = Object.freeze([
 ]);
 
 // Every venv PortOS provisions that carries numpy, in preference order — the
-// interpreter pool for numpy-only sidecars like scripts/lora_effect_probe.py,
+// interpreter pool for numpy-only sidecars like scripts/ml/lora_effect_probe.py,
 // which needs to run wherever the user happens to have set up a runtime (a bare
 // system python3 usually has no numpy at all).
 //
@@ -678,7 +678,7 @@ export const NUMPY_PYTHON_RESOLVERS = Object.freeze([
 // stack, kept apart from the music-generation venvs above. Model weights
 // auto-download from HuggingFace on first transcription (small/medium/large).
 // `INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh` provisions the venv;
-// the sidecar is `scripts/transcribe_muscriptor.py`.
+// the sidecar is `scripts/ml/transcribe_muscriptor.py`.
 const MUSCRIPTOR_VENV_CANDIDATES = IS_WIN
   ? [
       join(HOME, '.portos', 'venv-muscriptor', 'Scripts', 'python.exe'),

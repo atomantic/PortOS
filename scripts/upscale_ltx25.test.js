@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { resolveTestPython, PY_TEST_TIMEOUT_MS, PY_SUBPROCESS_TIMEOUT_MS } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'upscale_ltx25.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'upscale_ltx25.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name — on
 // Windows a bare `python` can be a Store alias STUB that exists and exits

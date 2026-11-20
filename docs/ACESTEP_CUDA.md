@@ -2,15 +2,15 @@
 
 The explicit ACE-Step Install/Repair action (`INSTALL_ACESTEP=1`) installs the
 full-song music runtime in `~/.portos/venv-acestep`. Apple Silicon uses its own
-lock (`scripts/requirements-acestep-mlx.lock.txt`). Windows (Git Bash) and Linux
+lock (`scripts/ml/requirements/requirements-acestep-mlx.lock.txt`). Windows (Git Bash) and Linux
 are supported on x86_64 and need [uv](https://docs.astral.sh/uv/), which
 provisions a dedicated managed CPython 3.11; Repair rebuilds other Python minors
 and Conda-based environments. Intel macOS and non-x86_64 Windows/Linux hosts
 have no lock and are refused. ACE-Step 1.5 is a separate runtime: see
 [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md).
 
-The installer selects `scripts/requirements-acestep-cuda-windows.lock.txt` or
-`scripts/requirements-acestep-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-acestep-cuda-windows.lock.txt` or
+`scripts/ml/requirements/requirements-acestep-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite`
 with `--preview-features build-dependency-hashes --require-build-hashes` and the
 universal `requirements-acestep-mlx-build.lock.txt` as build constraints.
@@ -33,7 +33,7 @@ Two caveats follow from upstream packaging:
   (the lock carries the `setuptools` and `wheel` that build needs). A git SHA
   cannot satisfy `--require-hashes`, so the package itself is pinned by commit.
 
-Direct pins are in `scripts/requirements-acestep-cuda.txt`: the Apple Silicon
+Direct pins are in `scripts/ml/requirements/requirements-acestep-cuda.txt`: the Apple Silicon
 dependency set with torch 2.14.1+cu126 (the build the other cu126 runtimes
 share). torchvision 0.29.2 and torchaudio 2.11.1 are the PyPI wheels that pair
 with that torch (no matching `+cu126` builds exist). A different
@@ -43,7 +43,7 @@ generation, never during install.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-acestep-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-acestep-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=acestep-cuda
@@ -54,7 +54,7 @@ COMPILE_EXTRA=(
   --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5
   --no-binary docopt --no-binary unidic-lite
   --preview-features build-dependency-hashes --require-build-hashes
-  --build-constraints "$PWD/scripts/requirements-acestep-mlx-build.lock.txt"
+  --build-constraints "$PWD/scripts/ml/requirements/requirements-acestep-mlx-build.lock.txt"
 )
 ```
 

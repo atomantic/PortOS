@@ -20,7 +20,7 @@ let preparation;
 const probe = (python, expected) => execute(python, ['-c', 'import sys; from importlib.metadata import version; assert version("reactor-sdk") == sys.argv[1]; from reactor_sdk import Reactor; Reactor("reactor/fast-h3")', expected], { timeout: 15_000, maxBuffer: 1024 * 1024 }).then(() => true, () => false);
 
 export async function ensureReactorRuntime() {
-  const requirements = await readFile(join(PATHS.root, 'scripts', 'requirements-reactor.txt'), 'utf8');
+  const requirements = await readFile(join(PATHS.root, 'scripts', 'ml', 'requirements', 'requirements-reactor.txt'), 'utf8');
   const expected = requirements.match(/^reactor-sdk==([0-9.]+)\r?$/m)?.[1];
   if (!expected) throw new Error('Reactor SDK version pin is missing');
   const override = process.env.REACTOR_PYTHON_PATH || readPortosEnvValue('REACTOR_PYTHON_PATH');

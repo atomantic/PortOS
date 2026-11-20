@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'music_benchmark.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'music_benchmark.py');
 const pyBin = resolveTestPython();
 const PRELUDE = [
   'import importlib.util, json, math, os, struct, sys, tempfile, wave',

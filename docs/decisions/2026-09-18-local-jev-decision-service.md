@@ -6,7 +6,7 @@
   the substrate), #7642 (switching callers), #7643 (training a head),
   [`server/lib/jev.js`](../../server/lib/jev.js),
   [`server/services/jev.js`](../../server/services/jev.js),
-  [`scripts/run_jev.py`](../../scripts/run_jev.py),
+  [`scripts/ml/run_jev.py`](../../scripts/ml/run_jev.py),
   [`docs/JEV_SETUP.md`](../JEV_SETUP.md),
   [`docs/features/messages-security.md`](../features/messages-security.md).
 

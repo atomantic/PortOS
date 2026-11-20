@@ -7,9 +7,9 @@ requires `uv`, macOS 14+ and Apple Silicon; the shipped profiles require 32 GB
 unified memory. Runtime packages and model weights are separate downloads.
 
 The runtime lives at `<data>/python/venv-flux3`. Direct pins (mflux 0.24.0,
-MLX, Transformers, Pillow) are in `scripts/requirements-flux3-mlx.txt`; the
+MLX, Transformers, Pillow) are in `scripts/ml/requirements/requirements-flux3-mlx.txt`; the
 installer syncs the fully resolved, hash-pinned
-`scripts/requirements-flux3-mlx.lock.txt` (regeneration steps are in its
+`scripts/ml/requirements/requirements-flux3-mlx.lock.txt` (regeneration steps are in its
 header). It does not upgrade the older shared FLUX.1 or video environment. The
 installer verifies every locked version and both CLI imports without loading
 weights; a venv from an older lock reports as needing repair.

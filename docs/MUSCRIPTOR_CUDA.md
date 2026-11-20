@@ -2,7 +2,7 @@
 
 The explicit MuScriptor Install/Repair action (`INSTALL_MUSCRIPTOR=1`) installs
 the audio → MIDI transcription runtime in `~/.portos/venv-muscriptor`. Apple
-Silicon uses its own lock (`scripts/requirements-muscriptor-mlx.lock.txt`).
+Silicon uses its own lock (`scripts/ml/requirements/requirements-muscriptor-mlx.lock.txt`).
 Windows (Git Bash) and Linux are supported on x86_64 and need
 [uv](https://docs.astral.sh/uv/), which provisions a dedicated managed CPython
 3.11. Repair reuses standalone 3.11 environments and rebuilds other Python
@@ -18,8 +18,8 @@ transcription failure stays visible with a retry button after navigating away
 or reloading. Audio that libsndfile cannot open, including Suno AAC/M4A imports,
 is decoded to a temporary WAV with FFmpeg before transcription.
 
-The installer selects `scripts/requirements-muscriptor-cuda-windows.lock.txt`
-or `scripts/requirements-muscriptor-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-muscriptor-cuda-windows.lock.txt`
+or `scripts/ml/requirements/requirements-muscriptor-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:` against the runtime
 interpreter. Every distribution, including torch and its transitive CUDA
 libraries, has an exact version and SHA-256 hashes. Repair removes packages
@@ -27,7 +27,7 @@ outside the lock. No pip/bootstrap upgrades run on this path. The flow is
 shared with AudioLDM2 and MiniMax Music 3 CUDA (`require_cuda_lock_host` and
 `sync_cuda_lock_venv` in `scripts/setup-image-video.sh`).
 
-The direct pins (`scripts/requirements-muscriptor-cuda.txt`) are torch
+The direct pins (`scripts/ml/requirements/requirements-muscriptor-cuda.txt`) are torch
 2.14.1+cu126 (the build the other cu126 runtimes share), muscriptor 0.4.0 and
 huggingface-hub 2.4.0 with hf-xet, matching the Apple Silicon lock's
 muscriptor and hub pins. The resolved torchaudio 2.11.1 (a `py3-none` wheel
@@ -45,7 +45,7 @@ and repairing never download weights or transcribe audio.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-muscriptor-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-muscriptor-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=muscriptor-cuda

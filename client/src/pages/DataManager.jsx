@@ -18,7 +18,7 @@ import DataSelectionPanel from '../components/dataManager/DataSelectionPanel';
 import { DATA_KINDS, DATA_KIND_ORDER, HATCH_STYLE, dataKindOf } from '../components/dataManager/dataKinds';
 
 // Plural labels for tombstone record kinds — shared between the in-page
-// TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
+// TombstoneGcSection toast and `scripts/ops/gc-tombstones-now.js` (the CLI
 // echoes the same wording). The dedupe in the rendering call sites handles
 // the series/issue cohort coupling.
 const TOMBSTONE_KIND_PLURAL = {

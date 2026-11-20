@@ -112,7 +112,7 @@ const createScriptedChild = ({ signal } = {}) => {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = vi.fn();
-  // Frames mirror the runner's stdout contract (scripts/qwen3_tts_runner.py);
+  // Frames mirror the runner's stdout contract (scripts/ml/qwen3_tts_runner.py);
   // they describe the contract a real training adapter must emit.
   child.emitFrames = (...frames) => {
     for (const frame of frames) {

@@ -9,7 +9,7 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 // `minimax_h3_runtime_probe.py` asserts at Install / Repair. They live in one
 // module so those two cannot disagree about what the pin is; this suite covers
 // the assertions themselves, and the last case covers the "one module" part.
-const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const scriptsDir = join(dirname(fileURLToPath(import.meta.url)), 'ml');
 const script = join(scriptsDir, '_minimax_h3_mlx_pins.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name. On

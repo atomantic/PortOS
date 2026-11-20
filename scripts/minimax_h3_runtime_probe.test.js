@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 import { MINIMAX_H3_EXPECTED_REVISION } from '../server/services/videoGen/runtimes.js';
 
-const here = dirname(fileURLToPath(import.meta.url));
+const here = join(dirname(fileURLToPath(import.meta.url)), 'ml');
 const script = join(here, 'minimax_h3_runtime_probe.py');
 const readScript = (name) => readFileSync(join(here, name), 'utf8');
 

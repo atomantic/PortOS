@@ -7,7 +7,7 @@ vi.mock('./runtimes.js', async (importOriginal) => ({
   ...(await importOriginal()),
   assertByovRuntimeInstalled: vi.fn(),
   FASTVIDEO_VENV_PYTHON: '/fixture/fastvideo/.venv/bin/python3',
-  FASTVIDEO_HELPER_SCRIPT: '/fixture/scripts/generate_fastvideo.py',
+  FASTVIDEO_HELPER_SCRIPT: '/fixture/scripts/ml/generate_fastvideo.py',
   FASTVIDEO_REPO_DIR: '/fixture/fastvideo',
   FASTVIDEO_MLX_CHECKPOINT_DIR: '/fixture/fastvideo/mlx-checkpoints',
   FASTVIDEO_PROMPT_CACHE_DIR: '/fixture/fastvideo/prompt-cache',

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_wan22_cuda.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_wan22_cuda.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name. On
 // Windows a box with no Store-installed Python still has `python` on PATH as an

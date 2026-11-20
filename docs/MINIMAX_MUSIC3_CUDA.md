@@ -8,8 +8,8 @@ applies; uv provisions a dedicated managed CPython 3.11. Repair reuses standalon
 3.11 environments and rebuilds other Python minors or Conda-based environments,
 which can fail to load torch DLLs on Windows. No manual Python path is needed.
 
-The installer selects `scripts/requirements-minimax-music3-cuda-windows.lock.txt`
-or `scripts/requirements-minimax-music3-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-minimax-music3-cuda-windows.lock.txt`
+or `scripts/ml/requirements/requirements-minimax-music3-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:` against the explicit runtime
 interpreter. Every distribution, including torch and its transitive CUDA
 libraries, has an exact version and SHA-256 hashes. Repair removes packages
@@ -30,7 +30,7 @@ music. Renderer performance/listening requirements remain in
 
 ## Regenerating locks
 
-Edit `scripts/requirements-minimax-music3-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-minimax-music3-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=minimax-music3-cuda

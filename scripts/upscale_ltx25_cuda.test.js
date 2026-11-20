@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { resolveTestPython, PY_TEST_TIMEOUT_MS, PY_SUBPROCESS_TIMEOUT_MS } from '../server/lib/testHelper.js';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
+const scriptDir = join(dirname(fileURLToPath(import.meta.url)), 'ml');
 const script = join(scriptDir, 'upscale_ltx25_cuda.py');
 
 // Everything exercised here is import-free by design (stdlib only): #6513's

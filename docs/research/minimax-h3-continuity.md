@@ -13,7 +13,7 @@ Native image-mode canvas selection landed in commits `95b864cd1` and
 
 ## Controlled H3 runs
 
-`scripts/diagnose_minimax_h3.py` creates a synthetic colored room with a doorway,
+`scripts/ml/diagnose_minimax_h3.py` creates a synthetic colored room with a doorway,
 cube and ball, then compares three fixed-seed, stock-encoder, no-LoRA requests:
 
 | Case | Canvas | Prompt |
@@ -32,14 +32,14 @@ Use a **new directory outside the checkout** for each invocation. Planning needs
 only Python's standard library and does not import MLX or load models:
 
 ```sh
-python3 scripts/diagnose_minimax_h3.py --output-dir /tmp/h3-continuity-plan
+python3 scripts/ml/diagnose_minimax_h3.py --output-dir /tmp/h3-continuity-plan
 ```
 
 Inspect `source.ppm` and `plan.json`. To render, ensure no other GPU work is
 running, then use the already installed H3 interpreter and another new directory:
 
 ```sh
-~/.portos/minimax-h3-mlx/.venv/bin/python3 scripts/diagnose_minimax_h3.py \
+~/.portos/minimax-h3-mlx/.venv/bin/python3 scripts/ml/diagnose_minimax_h3.py \
   --output-dir /tmp/h3-continuity-render --run
 ```
 
@@ -105,7 +105,7 @@ in two ways. The twin resamples through Pillow on `uint8` and normalizes as
 bicubic and normalizes as a fused `(x - 127.5) / 127.5`. Both return float32
 arrays with an identical `[1, h/16, w/16]` grid.
 
-`scripts/diagnose_minimax_h3_processor.py` runs both backends on the CPU over
+`scripts/ml/diagnose_minimax_h3_processor.py` runs both backends on the CPU over
 deterministic synthetic images. The images are half gradient and half full-band
 noise, the worst case for a resampler. The script reads only the cached
 checkpoint's `FL2VA/processor` directory and never loads a model. Run it with
@@ -113,7 +113,7 @@ an existing interpreter that has transformers at the H3 lock's version, torch
 and torchvision. The H3 venv has no torch, so it cannot run this check.
 
 ```sh
-<python-with-torch> scripts/diagnose_minimax_h3_processor.py \
+<python-with-torch> scripts/ml/diagnose_minimax_h3_processor.py \
   --processor-dir <hf-cache>/models--MiniMaxAI--MiniMax-H3/snapshots/<revision>/FL2VA/processor
 ```
 
@@ -251,7 +251,7 @@ show that the difference causes a scene change. No precision correction is
 applied on this evidence alone.
 The [layer-level investigation for #8948](minimax-h3-vision-precision.md) isolates interpolation and kernel arithmetic without selecting a production precision correction.
 
-Reproduce vision outputs with `scripts/diagnose_minimax_h3_vision.py`, using
+Reproduce vision outputs with `scripts/ml/diagnose_minimax_h3_vision.py`, using
 an interpreter containing the versions above plus torchvision 0.27.0 and
 safetensors. Generate the synthetic PPM with the continuity harness first.
 Each invocation loads only the actual vision weights, applies the production
@@ -261,10 +261,10 @@ loading and refuses to overwrite an output. Run GPU cases sequentially while
 other GPU work is stopped:
 
 ```sh
-<python> scripts/diagnose_minimax_h3_vision.py torch --dtype float32 --device cpu \
+<python> scripts/ml/diagnose_minimax_h3_vision.py torch --dtype float32 --device cpu \
   --checkpoint-dir <cached-FL2VA> --source /tmp/h3-continuity-plan/source.ppm \
   --output /tmp/h3-vision-torch-float32.npz
-<python> scripts/diagnose_minimax_h3_vision.py mlx --dtype bfloat16 --device gpu \
+<python> scripts/ml/diagnose_minimax_h3_vision.py mlx --dtype bfloat16 --device gpu \
   --checkpoint-dir <cached-FL2VA> --source /tmp/h3-continuity-plan/source.ppm \
   --output /tmp/h3-vision-mlx-bfloat16.npz
 ```
@@ -318,7 +318,7 @@ Reproduce the LTX render with the installed runtime interpreter and the pinned
 model/encoder snapshots above, converting the harness's synthetic PPM to PNG:
 
 ```sh
-<ltx-python> scripts/generate_ltx2.py --mode image \
+<ltx-python> scripts/ml/generate_ltx2.py --mode image \
   --model <cached-LTX-snapshot> --gemma <cached-Gemma-snapshot> \
   --image <synthetic-source.png> \
   --prompt 'The camera slowly moves forward. Objects remain stationary.' \

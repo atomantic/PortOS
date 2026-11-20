@@ -822,7 +822,7 @@ or model data; cleanup waits for actual ConPTY exit before removing it.
 
 ### Python sidecar scripts
 
-`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
+`scripts/ml/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
 not reachable through Vitest's import graph, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
 paths). The planner resolves the suites naming each changed script with
@@ -1085,7 +1085,7 @@ successor run".
 - A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
   `server/lib/db.ddlParity.test.js`, which fails when the generated file is
   stale (#16092).
-- A `scripts/*.py` sidecar selects every test that names a python script
+- A `scripts/ml/*.py` sidecar selects every test that names a python script
   (`git grep`), in `files` mode, and falls back to the full suite when none do
   — see "Python sidecar scripts" above.
 - A deleted executable source cannot be handed to `vitest related`, so that

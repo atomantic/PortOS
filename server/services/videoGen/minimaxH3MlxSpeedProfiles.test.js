@@ -77,7 +77,7 @@ sys.argv = [str(script)] + json.loads(sys.argv[2])
 args = runner.parse_args()
 print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.speed_adapter,'scales':args.lora_scale}))`;
     const parsed = JSON.parse(execFileSync(resolveTestPython(), ['-c', source,
-      join(PATHS.root, 'scripts/generate_minimax_h3.py'), JSON.stringify(args.slice(1))], { encoding: 'utf8', timeout: 10000 }));
+      join(PATHS.root, 'scripts/ml/generate_minimax_h3.py'), JSON.stringify(args.slice(1))], { encoding: 'utf8', timeout: 10000 }));
     expect(parsed).toEqual({ id: profile.id, steps: profile.steps, adapter: speedProfile.adapterPath, scales: [0.7] });
     expect(modelDownloadTargets(model, { speedProfileId: profile.id })).toEqual([
       { repo: profile.adapter.repo, revision: profile.adapter.revision, only: [profile.adapter.file] },

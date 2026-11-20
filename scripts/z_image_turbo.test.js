@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const commonScript = fileURLToPath(new URL('./_runner_common.py', import.meta.url));
-const qwenRunner = fileURLToPath(new URL('./z_image_turbo.py', import.meta.url));
-const runnerContract = fileURLToPath(new URL('./z_image_turbo_test.py', import.meta.url));
+const commonScript = fileURLToPath(new URL('./ml/_runner_common.py', import.meta.url));
+const qwenRunner = fileURLToPath(new URL('./ml/z_image_turbo.py', import.meta.url));
+const runnerContract = fileURLToPath(new URL('./ml/z_image_turbo_test.py', import.meta.url));
 const hasPillow = python && spawnSync(python, ['-c', 'import PIL'], { stdio: 'ignore' }).status === 0;
 
 const exerciseGuard = `

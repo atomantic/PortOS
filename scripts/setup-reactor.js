@@ -51,7 +51,7 @@ async function setup() {
   // An interrupted installation is repaired in place; no system Python or pip changes.
   run(23, uv, ['venv', '--python', '3.12', '--managed-python', '--allow-existing', venv]);
   // The lock is the complete closure: no install-time resolution, every file hash-checked.
-  run(24, uv, ['pip', 'install', '--reinstall-package', 'reactor-sdk', '--python', python, '--only-binary', ':all:', '--require-hashes', '--no-deps', '-r', join(root, 'scripts', 'requirements-reactor.lock.txt')]);
+  run(24, uv, ['pip', 'install', '--reinstall-package', 'reactor-sdk', '--python', python, '--only-binary', ':all:', '--require-hashes', '--no-deps', '-r', join(root, 'scripts', 'ml', 'requirements', 'requirements-reactor.lock.txt')]);
   run(25, python, ['-c', 'from reactor_sdk import Reactor; Reactor("reactor/fast-h3")'], 15_000);
   console.log('✅ Reactor runtime ready');
 }

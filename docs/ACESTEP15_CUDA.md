@@ -2,15 +2,15 @@
 
 The explicit ACE-Step 1.5 Install/Repair action (`INSTALL_ACESTEP15=1`) installs
 the music runtime in `~/.portos/venv-acestep15`. Apple Silicon uses its own lock
-(`scripts/requirements-acestep15-mlx.lock.txt`). Windows (Git Bash) and Linux are
+(`scripts/ml/requirements/requirements-acestep15-mlx.lock.txt`). Windows (Git Bash) and Linux are
 supported on x86_64 and need [uv](https://docs.astral.sh/uv/), which provisions a
 dedicated managed CPython 3.11; Repair rebuilds other Python minors and
 Conda-based environments. Intel macOS and non-x86_64 Windows/Linux hosts have no
 lock and are refused. ACE-Step v1 is a separate runtime:
 [ACESTEP_CUDA.md](./ACESTEP_CUDA.md).
 
-The installer selects `scripts/requirements-acestep15-cuda-windows.lock.txt` or
-`scripts/requirements-acestep15-cuda-linux.lock.txt` and runs
+The installer selects `scripts/ml/requirements/requirements-acestep15-cuda-windows.lock.txt` or
+`scripts/ml/requirements/requirements-acestep15-cuda-linux.lock.txt` and runs
 `uv pip sync --require-hashes --only-binary :all:`. Every distribution, including
 torch and its transitive CUDA libraries, has an exact version and SHA-256 hashes;
 Repair removes packages outside the lock. The flow is shared with the other CUDA
@@ -26,7 +26,7 @@ the sync. A git SHA cannot satisfy `--require-hashes`, so the package itself is
 pinned by commit. `--no-deps` also keeps its own cu128 torch pins from displacing
 the shared cu126 lock; the optional `nano-vllm` accelerator is omitted.
 
-Direct pins are in `scripts/requirements-acestep15-cuda.txt`: the Apple Silicon
+Direct pins are in `scripts/ml/requirements/requirements-acestep15-cuda.txt`: the Apple Silicon
 dependency set with torch 2.14.1+cu126 (the build the other cu126 runtimes
 share) and without the Apple-only `mlx`/`mlx-lm`. A different
 `PORTOS_TORCH_CUDA_INDEX` is rejected; changing CUDA requires regenerating and
@@ -35,7 +35,7 @@ during install.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-acestep15-cuda.txt`, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks)
+Edit `scripts/ml/requirements/requirements-acestep15-cuda.txt`, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks)
 with these values:
 
 ```bash

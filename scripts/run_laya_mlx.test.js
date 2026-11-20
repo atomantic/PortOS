@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./run_laya_mlx.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/run_laya_mlx.py', import.meta.url));
 
 // The regression is silent upstream truncation: a long option, question or
 // premise must never reach predict as if it were the complete user input.

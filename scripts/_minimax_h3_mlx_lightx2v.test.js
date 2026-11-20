@@ -11,9 +11,9 @@ const nativePython = join(runtime, '.venv/bin/python3');
 const run = (source, executable = python) => execFileSync(executable, ['-c', [
   'import sys, json, tempfile',
   'from pathlib import Path',
-  'sys.path.insert(0, str(Path.cwd() / "scripts"))',
+  'sys.path.insert(0, sys.argv[1])',
   ...source,
-].join('\n')], { cwd: join(import.meta.dirname, '..'), encoding: 'utf8' });
+].join('\n'), join(import.meta.dirname, 'ml')], { cwd: join(import.meta.dirname, '..'), encoding: 'utf8' });
 
 describe.skipIf(!python)('MLX LightX2V helper boundary', () => {
   it('accepts the actual runner profile and user adapter CLI without changing stock defaults', () => {

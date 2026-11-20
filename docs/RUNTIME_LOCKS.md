@@ -21,7 +21,7 @@ held-back pins are in [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md).
 
 ## Regenerating locks
 
-Edit the runtime's `scripts/requirements-<slug>.txt` with exact direct pins.
+Edit the runtime's `scripts/ml/requirements/requirements-<slug>.txt` with exact direct pins.
 Use hash-verified uv **0.13.7** (the `requirements-uv-bootstrap.lock.txt`
 bootstrap), setting `UV` to that executable. The CUDA index is an explicit
 named index scoped only to the runtime's CUDA-local packages (normally Torch)
@@ -42,7 +42,7 @@ runtime doc's own "Regenerating locks" section, then run the rest unchanged:
 ```bash
 set -euo pipefail
 : "${UV:?set UV to the verified uv 0.13.7 executable}"
-SLUG=                 # scripts/requirements-$SLUG.txt, e.g. wan22-cuda
+SLUG=                 # scripts/ml/requirements/requirements-$SLUG.txt, e.g. wan22-cuda
 LABEL=                # lock header label, e.g. "Wan 2.2 CUDA"
 DOC=                  # runtime doc named in the lock header, e.g. docs/WAN22_CUDA.md
 CUDA_SCOPED=          # packages routed to the CUDA index, e.g. "torch torchvision"
@@ -62,7 +62,7 @@ import pathlib
 import sys
 
 out, slug, scoped = sys.argv[1], sys.argv[2], sys.argv[3].split()
-lines = pathlib.Path(f"scripts/requirements-{slug}.txt").read_text().splitlines()
+lines = pathlib.Path(f"scripts/ml/requirements/requirements-{slug}.txt").read_text().splitlines()
 deps = [line for line in lines if line and not line.startswith("#")]
 sources = "".join(f'{name}={{index="pytorch"}}\n' for name in scoped)
 pathlib.Path(out).write_text(
@@ -73,7 +73,7 @@ pathlib.Path(out).write_text(
     'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
 )
 PYPROJECT
-  out="scripts/requirements-${SLUG}-${target}.lock.txt"
+  out="scripts/ml/requirements/requirements-${SLUG}-${target}.lock.txt"
   cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
   "$UV" --no-config pip compile "$TMP/pyproject.toml" \
     --python-version 3.11 --python-platform "$platform" \
@@ -125,7 +125,7 @@ import urllib.request
 from pathlib import Path
 
 for target in ("windows", "linux"):
-    lock = Path(f"scripts/requirements-{sys.argv[1]}-{target}.lock.txt")
+    lock = Path(f"scripts/ml/requirements/requirements-{sys.argv[1]}-{target}.lock.txt")
     pins = re.findall(r"^([\w.-]+)==([^\s\\;]+)", lock.read_text(), re.M)
     assert pins, f"{target}: empty lock"
     queries = [{"package": {"name": name, "ecosystem": "PyPI"},

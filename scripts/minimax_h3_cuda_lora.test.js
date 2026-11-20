@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'minimax_h3_cuda_lora.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'minimax_h3_cuda_lora.py');
 const python = resolveTestPython();
 const run = (code, bin = python) => execFileSync(bin, ['-c', `import sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(sys.argv[1]).parent))\nimport minimax_h3_cuda_lora as adapter\n${code}`, script], { encoding: 'utf8', timeout: 20000 }).trim();
 

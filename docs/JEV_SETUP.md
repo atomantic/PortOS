@@ -54,7 +54,7 @@ and video environments.
 ## The sidecar
 
 Unlike Prompt Guard, which spawns a Python process per scanned item, jev runs a
-**persistent sidecar**: `scripts/run_jev.py` binds `127.0.0.1:5566`, loads the
+**persistent sidecar**: `scripts/ml/run_jev.py` binds `127.0.0.1:5566`, loads the
 checkpoint once, and answers JSON scoring requests. A 4B model is far too
 expensive to re-import per call.
 
@@ -108,7 +108,7 @@ rather than disabling TLS verification.
 
 ## Bounds
 
-Declared once in `server/lib/jev.js` and mirrored into `scripts/run_jev.py` so
+Declared once in `server/lib/jev.js` and mirrored into `scripts/ml/run_jev.py` so
 the boundary still holds if the script is invoked directly:
 
 | | |

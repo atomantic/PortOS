@@ -7,8 +7,8 @@ Video Gen's explicit Install/Repair installs this runtime in
 other Python minors and Conda-based environments are rebuilt during Repair.
 Model weights remain a separate explicit Video Gen download.
 
-Install/Repair selects `scripts/requirements-ltx25-cuda-windows.lock.txt` or
-`scripts/requirements-ltx25-cuda-linux.lock.txt`. Every distribution, including
+Install/Repair selects `scripts/ml/requirements/requirements-ltx25-cuda-windows.lock.txt` or
+`scripts/ml/requirements/requirements-ltx25-cuda-linux.lock.txt`. Every distribution, including
 transitives and the build backend, has an exact version/source revision and
 SHA-256 hashes. Repair syncs the complete set, removing extra packages. The
 runtime currency probe checks every version and the LTX archive provenance, so
@@ -47,7 +47,7 @@ version along with the source hashes.
 
 ## Regenerating locks
 
-Edit exact direct pins in `scripts/requirements-ltx25-cuda.txt`, then use uv
+Edit exact direct pins in `scripts/ml/requirements/requirements-ltx25-cuda.txt`, then use uv
 0.10.6 from the repository root (Bash):
 
 ```bash
@@ -56,22 +56,22 @@ for target in windows linux; do
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
-  uv pip compile scripts/requirements-ltx25-cuda.txt \
+  uv pip compile scripts/ml/requirements/requirements-ltx25-cuda.txt \
     --python-version 3.11 --python-platform "$platform" \
     --generate-hashes --only-binary :all: \
     --index-url https://pypi.org/simple \
     --extra-index-url https://download.pytorch.org/whl/cu132 \
     --index-strategy unsafe-best-match --emit-index-url \
     --no-header --annotation-style line \
-    -o "scripts/requirements-ltx25-cuda-${target}.lock.txt"
+    -o "scripts/ml/requirements/requirements-ltx25-cuda-${target}.lock.txt"
 done
 python3 - <<'PY'
 import re
 from pathlib import Path
-lock = Path('scripts/requirements-ltx25-cuda-windows.lock.txt').read_text()
+lock = Path('scripts/ml/requirements/requirements-ltx25-cuda-windows.lock.txt').read_text()
 backend = re.search(r'^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*', lock, re.M)
 assert backend, 'missing build backend'
-Path('scripts/requirements-ltx25-cuda-build.lock.txt').write_text(
+Path('scripts/ml/requirements/requirements-ltx25-cuda-build.lock.txt').write_text(
     '# Build backend for the two immutable LTX source archives.\n'
     '# Bootstrap with --require-hashes before the --no-build-isolation runtime sync.\n'
     + backend[0])
@@ -96,7 +96,7 @@ python3 - <<'PY'
 import json, re, urllib.request
 from pathlib import Path
 for target in ('windows', 'linux'):
-    text = Path(f'scripts/requirements-ltx25-cuda-{target}.lock.txt').read_text()
+    text = Path(f'scripts/ml/requirements/requirements-ltx25-cuda-{target}.lock.txt').read_text()
     pins = re.findall(r'^([\w.-]+)==([^\s\\;]+)', text, re.M)
     assert pins and len(re.findall(r'^ltx-(?:core|pipelines) @ ', text, re.M)) == 2
     pins += [('ltx-core', '1.2.0'), ('ltx-pipelines', '1.2.0')]
@@ -121,7 +121,7 @@ set `INSTALL_LTX25_CUDA=1 INSTALL_MFLUX=0 INSTALL_VIDEO=0 INSTALL_FLUX2=0`, and
 run `bash scripts/setup-image-video.sh`. The final probe imports `torch`,
 `ltx_core`, `ltx_pipelines` and `DistilledPipeline`, then asserts
 `torch.cuda.is_available()`. Repeat Repair and compare `uv pip freeze` results.
-Also run the installed Python with `scripts/ltx25_cuda_currency.py` and the
+Also run the installed Python with `scripts/ml/ltx25_cuda_currency.py` and the
 selected lock; exit 0 means current, 78 means Upgrade/Repair is needed.
 
 Record OS, GPU model, driver/CUDA version, Python version, selected lock and

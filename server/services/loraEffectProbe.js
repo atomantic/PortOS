@@ -1,9 +1,9 @@
 /**
  * User-triggered LoRA adapter-effect diagnostic.
  *
- * Spawns `scripts/lora_effect_probe.py` against one installed LoRA to answer whether
+ * Spawns `scripts/ml/lora_effect_probe.py` against one installed LoRA to answer whether
  * the adapter actually changes anything. See `server/lib/loraEffect.js` for the
- * verdict policy and `scripts/lora_effect_probe.py` for the measurement.
+ * verdict policy and `scripts/ml/lora_effect_probe.py` for the measurement.
  *
  * 1. **Never on a passive read.** `listLoras()` surfaces a CACHED report and never
  *    calls in here. The probe runs only from the explicit inspection route or from
@@ -42,7 +42,7 @@ import { detectPython, NUMPY_PYTHON_RESOLVERS } from '../lib/pythonSetup.js';
 import { LTX2_VENV_PYTHON, LTX25_VENV_PYTHON } from './videoGen/runtimes.js';
 import { assertSafeLoraFilename, patchLoraSidecar, readSidecar } from './loras.js';
 
-export const LORA_EFFECT_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'lora_effect_probe.py');
+export const LORA_EFFECT_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'lora_effect_probe.py');
 
 // The measurement is I/O-bound: the rank matrices are scattered through the file, so a
 // cold-cache read touches most of it (a 12 GB LoRA took ~55s cold on a local SSD). The

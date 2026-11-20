@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const script = join(here, 'minimax_h3_lora.py');
-const loraProbe = join(here, 'minimax_h3_lora_probe.py');
+const script = join(here, 'ml', 'minimax_h3_lora.py');
+const loraProbe = join(here, 'ml', 'minimax_h3_lora_probe.py');
 const runtimeDir = join(homedir(), '.portos', 'minimax-h3-mlx');
 const hasPinnedRuntime = existsSync(join(runtimeDir, 'minimax_h3_mlx', 'pipeline.py'));
 // resolveTestPython() may return a bare PATH name ("python3") it has already
