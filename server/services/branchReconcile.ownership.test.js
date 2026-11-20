@@ -212,14 +212,26 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await writeFile(join(tree, 'unmerged.txt'), 'new work');
     await execGit(['add', 'unmerged.txt'], tree);
     await execGit(['commit', '-m', 'Unmerged feature'], tree);
-    await execGit(['branch', 'feature/two', 'feature/one'], repo);
-    const tip = await head('feature/one');
+    const second = await addTree(join(external, 'second'), 'feature/two');
+    await execGit(['commit', '--allow-empty', '-m', 'Independent feature'], second);
+    await writeFile(join(tree, 'dirty.txt'), 'uncommitted work');
+    await writeFile(join(repo, 'dirty.txt'), 'default side');
+    await execGit(['add', 'dirty.txt'], repo);
+    await execGit(['commit', '-m', 'Change shared path on main'], repo);
+    const firstTip = await head('feature/one');
+    const secondTip = await head('feature/two');
+    const defaultTip = await head('main');
     injected.gitSpawns.length = 0;
     const rows = await gatherBranchState(repo, { defaultBranch: 'main', hasOrigin: false, origin: null });
-    expect(rows.map(row => [row.branch, row.tip])).toEqual([['feature/one', tip], ['feature/two', tip]]);
+    expect(rows).toMatchObject([
+      { branch: 'feature/one', tip: firstTip, ahead: 1, behind: 1, collisionPaths: ['dirty.txt'] },
+      { branch: 'feature/two', tip: secondTip, ahead: 1, behind: 1, collisionPaths: [] },
+    ]);
     const commands = injected.gitSpawns.map(spawn => spawn.args);
     expect(commands.filter(args => args[0] === 'for-each-ref')).toHaveLength(1);
     expect(commands.filter(args => args[0] === 'worktree' && args[1] === 'list')).toHaveLength(1);
+    expect(commands.filter(args => args[0] === 'rev-list' && args.includes('--left-right'))).toEqual([]);
+    expect(commands.filter(args => args[0] === 'diff' && args[1] === '--name-only' && args[3] === defaultTip)).toHaveLength(1);
     expect(commands.filter(args => args[0] === 'rev-parse' && args.some(arg => arg.endsWith('^{commit}')))).toEqual([]);
     expect(commands.filter(args => args[0] === 'show-ref')).toEqual([]);
   });

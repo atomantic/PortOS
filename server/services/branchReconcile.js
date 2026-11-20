@@ -544,28 +544,33 @@ const byCollisionSignal = (a, b) => {
  * @param {string[]} [dirtyPaths] - uncommitted paths from the branch's worktree
  * @returns {Promise<{ behind:number|null, ahead:number|null, collisionPaths:string[] }>}
  */
-export async function gatherDivergence(repoPath, branch, defaultBranch, dirtyPaths = []) {
-  const counts = await execGit(
-    ['rev-list', '--left-right', '--count', `${defaultBranch}...${branch}`], repoPath, { ignoreExitCode: true }
-  ).catch(() => null);
-  const [behindRaw, aheadRaw] = (counts?.stdout || '').trim().split(/\s+/);
-  const behind = Number.isFinite(Number(behindRaw)) && behindRaw !== '' ? Number(behindRaw) : null;
-  const ahead = Number.isFinite(Number(aheadRaw)) && aheadRaw !== '' ? Number(aheadRaw) : null;
-
+export async function gatherDivergence(repoPath, branch, defaultBranch, dirtyPaths = [], observed = {}) {
+  const { ahead, behind } = observed.counts ?? await readDivergenceCounts(repoPath, branch, defaultBranch);
   const base = await execGit(['merge-base', branch, defaultBranch], repoPath, { ignoreExitCode: true })
     .catch(() => null);
   const mergeBase = (base?.stdout || '').trim();
-  if (!mergeBase) return { behind, ahead, collisionPaths: [] };
+  if (!mergeBase || mergeBase === defaultBranch) return { behind, ahead, collisionPaths: [] };
 
-  const [defaultChanged, branchChanged] = await Promise.all([
-    execGit(['diff', '--name-only', mergeBase, defaultBranch], repoPath, { ignoreExitCode: true }).catch(() => null),
-    execGit(['diff', '--name-only', mergeBase, branch], repoPath, { ignoreExitCode: true }).catch(() => null)
-  ]);
-  const defaultSet = new Set(gitLines(defaultChanged?.stdout));
-  if (defaultSet.size === 0) return { behind, ahead, collisionPaths: [] };
+  let defaultSet = observed.defaultChanges?.get(mergeBase);
+  if (!defaultSet) {
+    const diff = await execGit(['diff', '--name-only', mergeBase, defaultBranch], repoPath, { ignoreExitCode: true }).catch(() => null);
+    if (!diff || diff.exitCode !== 0) return { behind, ahead, collisionPaths: [] };
+    defaultSet = new Set(gitLines(diff.stdout));
+    observed.defaultChanges?.set(mergeBase, defaultSet);
+  }
+  if (!defaultSet.size) return { behind, ahead, collisionPaths: [] };
 
+  const branchChanged = await execGit(['diff', '--name-only', mergeBase, branch], repoPath, { ignoreExitCode: true }).catch(() => null);
   const touched = new Set([...gitLines(branchChanged?.stdout), ...dirtyPaths]);
   return { behind, ahead, collisionPaths: [...touched].filter((p) => defaultSet.has(p)).sort(byCollisionSignal) };
+}
+
+async function readDivergenceCounts(repoPath, branch, defaultBranch) {
+  const result = await execGit(
+    ['rev-list', '--left-right', '--count', `${defaultBranch}...${branch}`], repoPath, { ignoreExitCode: true },
+  ).catch(() => null);
+  const counts = result?.exitCode === 0 && result.stdout.trim().match(/^(\d+)\s+(\d+)$/);
+  return counts ? { behind: Number(counts[1]), ahead: Number(counts[2]) } : { behind: null, ahead: null };
 }
 
 // The only remote branch-reconcile acts on. `deleteBranch(…, { remote: true })`
@@ -800,8 +805,8 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   // the read-only leftover-branch detector, and an app's repoPath can be a
   // directory that was never a clone — `null` there means "could not ask",
   // which is exactly what an origin-less repo can answer.
-  const snapshot = readRepoBranchSnapshot(repoPath, { strict: false });
-  const [branches, { worktrees, tips }, prsByHeadOrNull, remoteHeads] = await Promise.all([
+  const snapshot = readRepoBranchSnapshot(repoPath, { strict: false, comparisonBranch: defaultBranch });
+  const [branches, { worktrees, tips, counts }, prsByHeadOrNull, remoteHeads] = await Promise.all([
     getBranches(repoPath, { snapshot }),
     snapshot,
     getOpenPrsByHead(repoPath, origin, { forgeExec, forgeAccount }),
@@ -829,6 +834,8 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   const completionPolicies = candidates.length ? await readBranchCompletionPolicies({ repoPath }).catch(() => null) : [];
   const policyIndex = indexBranchCompletionPolicies(repoPath, completionPolicies);
 
+  const defaultTip = tips.get(defaultBranch);
+  const defaultChanges = new Map();
   const inputs = [];
   for (const b of candidates) {
     // Enumeration captured the commit paired with this name. Retirement reads
@@ -843,7 +850,9 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     const worktreeStatusUnavailable = observedPaths === null;
     const dirtyPaths = observedPaths || [];
     const worktreeDirty = dirtyPaths.length > 0;
-    const divergence = await gatherDivergence(repoPath, b.name, defaultBranch, dirtyPaths);
+    const divergence = tip && defaultTip
+      ? await gatherDivergence(repoPath, tip, defaultTip, dirtyPaths, { counts: counts.get(b.name), defaultChanges })
+      : await gatherDivergence(repoPath, b.name, defaultBranch, dirtyPaths);
     // getBranches' `merged` is ancestor-based (misses squash/rebase); confirm
     // the harder cases via hasBranchMergeEvidence (covers squash + rebase). Short
     // -circuit when the cheap check already proved it merged.
