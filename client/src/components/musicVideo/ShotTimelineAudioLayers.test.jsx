@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { useRef } from 'react';
 import ShotTimeline from './ShotTimeline.jsx';
-import useAudioLayerPlayback from './useAudioLayerPlayback.js';
+import useAudioLayerPlayback, { fadeEnvelope } from './useAudioLayerPlayback.js';
+import usePreviewSounds from './usePreviewSounds.js';
+import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
 
+vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getVideoHistoryItem: vi.fn() }));
 vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
 
 const voice = { id: 'layer-1', filename: 'music-example.wav', label: 'sky line', startSec: 4, durationSec: 2, volume: 1, muted: false };
@@ -68,6 +71,27 @@ describe('ShotTimeline audio layers', () => {
     expect(onEditAudioLayers).toHaveBeenLastCalledWith([]);
   });
 
+  it('draws each shot whose clip sound plays over the music on a Clip sound row, and opens the shot from it', () => {
+    const onOpenShot = vi.fn();
+    const scenes = [
+      { sceneId: 's1', order: 0, startSec: 0, endSec: 10 },
+      { sceneId: 's2', order: 1, startSec: 10, endSec: 20, videoHistoryId: 'vh-1', clipSound: { volume: 1, musicLevel: 0.5, fadeInSec: 1 } },
+      { sceneId: 's3', order: 2, startSec: 20, endSec: 20, videoHistoryId: 'vh-2' },
+    ];
+    renderTimeline({ project: { ...project, scenes }, onOpenShot });
+    const row = screen.getByRole('group', { name: 'Clip sound' });
+    const block = within(row).getByRole('button', { name: 'Open Shot s2: Clip sound 100% · music 50% · fade 1s in' });
+    expect([block.style.left, block.style.width]).toEqual(['200px', '200px']);
+    expect(within(row).getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(block);
+    expect(onOpenShot).toHaveBeenCalledWith(scenes[1]);
+  });
+
+  it('has no Clip sound row when no shot plays its clip sound', () => {
+    renderTimeline();
+    expect(screen.queryByRole('group', { name: 'Clip sound' })).toBeNull();
+  });
+
   it('adds a chosen audio file at the playhead and selects the new layer', async () => {
     const added = { ...voice, id: 'layer-2', label: 'giggle' };
     const onAddAudioLayer = vi.fn(async () => added);
@@ -82,9 +106,10 @@ describe('ShotTimeline audio layers', () => {
 });
 
 // A stand-in for the preview's song player: a media element marked as the song's clock.
-function Dock({ layers, enabled = true, songRef }) {
+// It plays what the preview plays: the project's layers and its clip-sound shots.
+function Dock({ layers = [], scenes = [], enabled = true, songRef }) {
   const rootRef = useRef(null);
-  useAudioLayerPlayback(rootRef, layers, enabled);
+  useAudioLayerPlayback(rootRef, usePreviewSounds({ audioLayers: layers, scenes }), enabled);
   return <div ref={rootRef}><audio ref={songRef} data-song-clock="0" /></div>;
 }
 
@@ -115,7 +140,6 @@ describe('useAudioLayerPlayback', () => {
     expect(made).toHaveLength(1);
     const [layer] = made;
     expect(layer.src).toBe('/data/music/music-example.wav');
-    expect(layer.volume).toBe(0.5);
 
     songAt(songRef.current, 3, true);
     expect(layer.play).not.toHaveBeenCalled();
@@ -123,6 +147,7 @@ describe('useAudioLayerPlayback', () => {
     Object.defineProperty(songRef.current, 'currentTime', { configurable: true, value: 4 });
     act(() => { vi.advanceTimersByTime(1000); });
     expect(layer.play).toHaveBeenCalled();
+    expect(layer.volume).toBe(0.5);
 
     songAt(songRef.current, 5, true);
     expect(layer.currentTime).toBe(1);
@@ -136,4 +161,44 @@ describe('useAudioLayerPlayback', () => {
     songAt(songRef.current, 4.5, true);
     expect(made).toHaveLength(0);
   });
+  it('plays a shot\'s clip sound from its clip, fading in and dipping the song, and restores the song after', async () => {
+    getVideoHistoryItem.mockResolvedValue({ filename: 'take-1.mp4' });
+    const songRef = { current: null };
+    const shot = { sceneId: 's2', startSec: 10, endSec: 14, videoHistoryId: 'vh-1', clipSound: { volume: 0.8, musicLevel: 0.5, fadeInSec: 2 } };
+    const reversed = { ...shot, sceneId: 's3', videoHistoryId: 'vh-2', reverse: true };
+    render(<Dock songRef={songRef} scenes={[shot, reversed]} />);
+    await act(async () => {});
+    expect(getVideoHistoryItem).toHaveBeenCalledWith('vh-1', { silent: true });
+    expect(made.map((el) => el.src)).toEqual(['/data/videos/take-1.mp4']);
+    const [clip] = made;
+    Object.defineProperty(clip, 'duration', { configurable: true, value: 8 });
+
+    songRef.current.volume = 1;
+    songAt(songRef.current, 11, true);
+    // One second into the shot: one second into its clip, half way up its fade, the song half way down its dip.
+    expect(clip.play).toHaveBeenCalled();
+    expect(clip.currentTime).toBe(1);
+    expect(clip.volume).toBeCloseTo(0.4);
+    expect(songRef.current.volume).toBeCloseTo(0.75);
+
+    songAt(songRef.current, 12.5, true);
+    expect(clip.volume).toBeCloseTo(0.8);
+    expect(songRef.current.volume).toBeCloseTo(0.5);
+
+    songAt(songRef.current, 15, true);
+    expect(clip.paused).toBe(true);
+    expect(songRef.current.volume).toBe(1);
+  });
 });
+
+describe('fadeEnvelope', () => {
+  it('rises over the fade in, holds, falls over the fade out, and is silent outside the sound', () => {
+    expect(fadeEnvelope(0.5, 4, 1, 2)).toBe(0.5);
+    expect(fadeEnvelope(1.5, 4, 1, 2)).toBe(1);
+    expect(fadeEnvelope(3, 4, 1, 2)).toBe(0.5);
+    expect(fadeEnvelope(2, 4)).toBe(1);
+    expect(fadeEnvelope(-0.1, 4)).toBe(0);
+    expect(fadeEnvelope(4.1, 4)).toBe(0);
+  });
+});
+

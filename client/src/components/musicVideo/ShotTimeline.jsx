@@ -13,7 +13,7 @@ import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffe
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
 import FilePickerButton from '../ui/FilePickerButton.jsx';
-import { AUDIO_LAYER_ACCEPT, AUDIO_LAYER_ROW_H, TimelineAudioLayerPanel, TimelineAudioLayerRow } from './ShotTimelineAudioLayers.jsx';
+import { AUDIO_LAYER_ACCEPT, AUDIO_LAYER_ROW_H, TimelineAudioLayerPanel, TimelineAudioLayerRow, TimelineClipSoundRow, clipSoundShots } from './ShotTimelineAudioLayers.jsx';
 import { TimelineEffectLibrary, TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
 
 // About the width of a ruler label ("12:30") at its 10px size.
@@ -150,6 +150,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const loopRef = useRef(null);
   const loopJump = useRef(-Infinity); // never jumped; 0 would read as a jump at clock zero and mute the first loop-back for LOOP_SETTLE_MS
   const timeRef = useRef(0);
+  const clipSoundRow = useMemo(() => clipSoundShots(project.scenes), [project.scenes]);
   const editLayer = (id, patch) => onEditAudioLayers(audioLayers.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)));
   const removeLayer = (id) => {
     setAudioLayerId(null);
@@ -628,6 +629,11 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
                 onMove={onEditAudioLayers ? (id, startSec) => editLayer(id, { startSec }) : null} />
             </div>
           ))}
+          {clipSoundRow.length > 0 && (
+            <div role="group" aria-label="Clip sound" className={`${ROW_CLS} ${AUDIO_LAYER_ROW_H}`}>
+              <TimelineClipSoundRow shots={clipSoundRow} pxPerSec={pxPerSec} shotName={shotName} activeSceneId={activeSceneId} onOpen={onOpenShot} />
+            </div>
+          )}
           <div ref={playheadRef} data-testid="shot-timeline-playhead" aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-port-error" />
         </div>
       </div>

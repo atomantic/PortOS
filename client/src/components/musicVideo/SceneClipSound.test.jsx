@@ -28,4 +28,21 @@ describe('SceneClipSound', () => {
     rerender(<SceneClipSound fieldId={fieldId} scene={scene} onChange={onChange} documentComposition hasSelectedTake />);
     expect(screen.getByText(/Document finals and excerpts need audio in the selected take/)).toBeTruthy();
   });
+
+  // Uniquely catches a fade saved on every keystroke, saved without the shot's other settings, or a cleared fade kept.
+  it('saves a fade in and a fade out when their fields are left, keeping the levels', () => {
+    const onChange = vi.fn();
+    const scene = { sceneId: 's', clipSound: { volume: 1.2, musicLevel: 0.3, fadeOutSec: 2 } };
+    render(<SceneClipSound fieldId={fieldId} scene={scene} onChange={onChange} />);
+    const fadeIn = screen.getByLabelText('fade in');
+    fireEvent.change(fadeIn, { target: { value: '0.75' } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(fadeIn);
+    expect(onChange).toHaveBeenLastCalledWith({ clipSound: { volume: 1.2, musicLevel: 0.3, fadeOutSec: 2, fadeInSec: 0.75 } });
+    const fadeOut = screen.getByLabelText('fade out');
+    expect(fadeOut.value).toBe('2');
+    fireEvent.change(fadeOut, { target: { value: '' } });
+    fireEvent.blur(fadeOut);
+    expect(onChange).toHaveBeenLastCalledWith({ clipSound: { volume: 1.2, musicLevel: 0.3, fadeOutSec: 0 } });
+  });
 });

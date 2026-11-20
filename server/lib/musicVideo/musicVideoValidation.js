@@ -9,7 +9,7 @@
  * which imports from here, never the reverse (#16826).
  */
 
-import { CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_VOLUME_RANGE } from './musicVideoClipSound.js';
+import { CLIP_SOUND_FADE_RANGE, CLIP_SOUND_MUSIC_RANGE, CLIP_SOUND_VOLUME_RANGE } from './musicVideoClipSound.js';
 import { SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from '../filmLookValidation.js';
@@ -637,10 +637,12 @@ const sceneLayerFields = {
   // its own length and sound: the clip's audio and/or sound layers. null returns it to the song.
   preMusic: musicVideoPreMusicSchema.nullable().optional(),
   // A song shot's own clip sound over the music (lib/musicVideo/musicVideoClipSound.js): its level and
-  // the song's level under it. null returns the shot to silent under the song.
+  // the song's level under it, and its fades. null returns the shot to silent under the song.
   clipSound: z.object({
     volume: z.number().min(CLIP_SOUND_VOLUME_RANGE.min).max(CLIP_SOUND_VOLUME_RANGE.max).optional(),
     musicLevel: z.number().min(CLIP_SOUND_MUSIC_RANGE.min).max(CLIP_SOUND_MUSIC_RANGE.max).optional(),
+    fadeInSec: z.number().min(CLIP_SOUND_FADE_RANGE.min).max(CLIP_SOUND_FADE_RANGE.max).optional(),
+    fadeOutSec: z.number().min(CLIP_SOUND_FADE_RANGE.min).max(CLIP_SOUND_FADE_RANGE.max).optional(),
   }).strict().nullable().optional(),
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
