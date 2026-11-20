@@ -203,6 +203,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] },
   });
 
+  it('returns an empty inventory for a managed directory that is not a Git checkout', async () => {
+    expect(await gatherBranchState(external, { defaultBranch: 'main', hasOrigin: false, origin: null })).toEqual([]);
+  });
+
   it('enumerates tips and registered checkouts once for multiple feature branches', async () => {
     const tree = await addTree(join(external, 'scan'), 'feature/one');
     await writeFile(join(tree, 'unmerged.txt'), 'new work');

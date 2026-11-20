@@ -800,7 +800,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   // the read-only leftover-branch detector, and an app's repoPath can be a
   // directory that was never a clone — `null` there means "could not ask",
   // which is exactly what an origin-less repo can answer.
-  const snapshot = readRepoBranchSnapshot(repoPath);
+  const snapshot = readRepoBranchSnapshot(repoPath, { strict: false });
   const [branches, { worktrees, tips }, prsByHeadOrNull, remoteHeads] = await Promise.all([
     getBranches(repoPath, { snapshot }),
     snapshot,
