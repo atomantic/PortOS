@@ -1,3 +1,4 @@
+import CollectionPrimaryControl from '../components/media/CollectionPrimaryControl';
 import MediaBatchImport from '../components/media/MediaBatchImport';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
@@ -161,8 +162,17 @@ function MediaCollectionDetailContent() {
         page.refresh();
       }, 500);
     };
+    const onPrimaryChanged = (event) => { if (event.id === id) onArrived(); };
     socket.on('peerSync:asset-arrived', onArrived);
-    return () => { active = false; clearTimeout(timer); socket.off('peerSync:asset-arrived', onArrived); };
+    socket.on('media:collection-primary:changed', onPrimaryChanged);
+    socket.on('media:holders:changed', onArrived);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      socket.off('peerSync:asset-arrived', onArrived);
+      socket.off('media:collection-primary:changed', onPrimaryChanged);
+      socket.off('media:holders:changed', onArrived);
+    };
   }, [id, isUnsorted, page.refresh]);
   const resolvePreview = useGalleryPreviewResolver({ collectionId: id });
   const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
@@ -554,6 +564,8 @@ function MediaCollectionDetailContent() {
           </div>
         )}
       </div>
+
+      {!isUnsorted && <CollectionPrimaryControl collectionId={id} />}
 
       <MediaBatchImport key={id} collectionId={isUnsorted ? undefined : id} onImported={(item, updated) => {
         // Mutation responses omit GET-only peer locations. Keep those for

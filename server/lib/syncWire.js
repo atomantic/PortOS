@@ -348,7 +348,7 @@ export function sanitizeRecordForWire(kind, record) {
       // `client/src/lib/mediaCollectionList.js`, exactly as it did before #3311.
       // If provenance ever needs to federate, it needs a schemaVersions bump —
       // do NOT simply stop stripping it here.
-      const { deleted: _d, deletedAt: _da, source: _source, ...rest } = record;
+      const { deleted: _d, deletedAt: _da, source: _source, primaryInstanceId: _primary, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'author':

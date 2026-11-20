@@ -746,6 +746,13 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A media examination was saved; reconcile history without exposing prompt content.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'media:collection-primary:changed': {
+    direction: 'server-to-client',
+    summary: 'A collection consolidation started or finished; refresh its status.',
+    payloadSchema: {
+      type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false,
+    },
+  },
   'media:holders:changed': {
     direction: 'server-to-client',
     summary: 'Which machines hold a media file changed (holdings, Make primary, queued releases); refetch the holders map.',

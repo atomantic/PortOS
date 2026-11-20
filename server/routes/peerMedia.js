@@ -1,6 +1,7 @@
 /**
  * Peer-only media commands.
  *
+ *   POST /api/peer-media/copy { kind, filename, sha256? } → inspect local bytes or fetch a verified copy from the caller
  *   POST /api/peer-media/delete  { kind, key }  → delete a row this machine holds
  *   POST /api/peer-media/release { kind, filename, primaryInstanceId, primaryAt }
  *        → drop this machine's copy of the bytes; the item streams from the primary
@@ -14,8 +15,8 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { executePeerMediaDelete } from '../services/mediaRemoteDelete.js';
-import { executePeerMediaRelease } from '../services/mediaHolders.js';
-import { peerMediaDeleteSchema, peerMediaReleaseSchema } from '../lib/federatedMediaValidation.js';
+import { executePeerMediaCopy, executePeerMediaRelease } from '../services/mediaHolders.js';
+import { peerMediaCopySchema, peerMediaDeleteSchema, peerMediaReleaseSchema } from '../lib/federatedMediaValidation.js';
 
 const router = Router();
 
@@ -31,6 +32,12 @@ router.post('/delete', asyncHandler(async (req, res) => {
   const peerId = requirePeer(req);
   const body = validateRequest(peerMediaDeleteSchema, req.body ?? {});
   res.json(await executePeerMediaDelete(peerId, body));
+}));
+
+router.post('/copy', asyncHandler(async (req, res) => {
+  const peerId = requirePeer(req);
+  const body = validateRequest(peerMediaCopySchema, req.body ?? {});
+  res.json(await executePeerMediaCopy(peerId, body));
 }));
 
 router.post('/release', asyncHandler(async (req, res) => {

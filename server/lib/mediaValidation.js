@@ -498,3 +498,8 @@ export const mediaSketchSaveSchema = z.object({
   // can persist just the vector layer; the service decodes + stores the bytes.
   png: z.string().startsWith('data:image/png;base64,').optional()
 });
+
+// POST /api/media/collections/:id/primary
+export const mediaCollectionPrimarySchema = z.object({
+  instanceId: z.string().trim().min(1).max(128),
+}).strict();

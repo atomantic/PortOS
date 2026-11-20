@@ -225,6 +225,14 @@ export const peerMediaDeleteSchema = z.object({
   key: z.string().min(1).max(512),
 }).strict();
 
+export const mediaSha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export const peerMediaCopySchema = z.object({
+  kind: z.enum(['video', 'image']),
+  filename: mediaFilenameSchema,
+  sha256: mediaSha256Schema.optional(),
+}).strict();
+
 const isoTimestampSchema = z.string().max(64).refine((v) => Number.isFinite(Date.parse(v)), 'Must be a timestamp');
 
 // POST /api/peer-media/release — a paired peer asks this machine to drop its
@@ -234,4 +242,5 @@ export const peerMediaReleaseSchema = z.object({
   filename: mediaFilenameSchema,
   primaryInstanceId: z.string().min(1).max(128),
   primaryAt: isoTimestampSchema,
+  sha256: mediaSha256Schema.optional(),
 }).strict();

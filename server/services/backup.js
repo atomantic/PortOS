@@ -259,6 +259,8 @@ const queueStateWrite = createFileWriteQueue();
 // matches any `loras/` directory anywhere under data/ (e.g. a user's
 // brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
+  { path: '/images/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
+  { path: '/videos/.media-copy-*.tmp', reason: 'Unpublished collection media transfer bytes', overridable: false },
   { path: '/videos/.topaz-staging/', reason: 'Ephemeral Topaz upload and result staging', overridable: false },
   { path: '/backup-admission/', reason: 'Machine-local publication ownership and snapshot fences', overridable: false },
   { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },

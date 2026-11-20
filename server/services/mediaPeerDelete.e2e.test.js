@@ -10,7 +10,7 @@
  * invalidation or frame delivery); the cadence cases shift one machine's
  * Date.now instead of sleeping.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -318,6 +318,63 @@ const holdersOf = async (machine, id) => (await machine.call('holders')).items[`
 describe('media held by both machines', () => {
   beforeAll(async () => {
     await Promise.all([a, b].map((machine) => machine.call('shiftClock', { ms: 0 })));
+  });
+
+  it('moves a collection to a peer, preserving distinct bytes and collection membership', async () => {
+    const ids = ['v-collection-copy', 'v-collection-duplicate', 'v-collection-conflict'];
+    for (const id of ids) await b.call('seedVideo', { id });
+    await a.call('copyBytes', { id: ids[1] });
+    await a.call('copyBytes', { id: ids[2], bytes: 'different peer render' });
+    const created = await b.call('collectionRequest', { body: { name: 'Collection primary test' } });
+    expect(created.status).toBe(201);
+    const path = `/${created.body.id}`;
+    const added = await b.call('collectionRequest', { path: `${path}/items/bulk`, body: {
+      add: ids.map((ref) => ({ kind: 'video', ref })),
+    } });
+    expect(added.status).toBe(200);
+    const requested = await b.call('collectionRequest', { path: `${path}/primary`, body: { instanceId: 'inst-a' } });
+    expect(requested.status).toBe(202);
+
+    await vi.waitFor(async () => {
+      const status = await b.call('collectionRequest', { path: `${path}/primary` });
+      expect(status.body).toMatchObject({
+        instanceId: 'inst-a',
+        run: { running: false, completed: 3, released: 2, kept: 1, pending: 0, failed: 0 },
+      });
+    }, { timeout: 10_000 });
+    for (const id of ids.slice(0, 2)) {
+      expect((await b.call('files', { id })).video).toBe(false);
+      expect(await b.call('fetchOwnVideo', { id })).toEqual({ status: 200, location: 'remote', body: `synthetic-video-${id}` });
+    }
+    expect((await b.call('files', { id: ids[2] })).video).toBe(true);
+    expect((await a.call('fetchOwnVideo', { id: ids[2] })).body).toBe('different peer render');
+    expect(await b.call('tombstones')).not.toContain(ids[0]);
+    const collection = await b.call('collectionRequest', { path });
+    expect(collection.body.items.map(({ ref }) => ref)).toEqual(ids);
+  });
+
+  it('keeps an offline duplicate that changes before its verified release drains', async () => {
+    const ref = 'v-collection-offline';
+    await heldOnBoth(ref);
+    const created = await b.call('collectionRequest', { body: { name: 'Collection pending release' } });
+    const path = `/${created.body.id}`;
+    await b.call('collectionRequest', { path: `${path}/items`, body: { kind: 'video', ref } });
+    await b.call('setPeerFields', { peerId: 'rec-a', fields: { status: 'offline' } });
+    try {
+      const requested = await b.call('collectionRequest', { path: `${path}/primary`, body: { instanceId: 'inst-b' } });
+      expect(requested.status).toBe(202);
+      await vi.waitFor(async () => {
+        const status = await b.call('collectionRequest', { path: `${path}/primary` });
+        expect(status.body.run).toMatchObject({ running: false, completed: 1, pending: 1 });
+      });
+      await a.call('copyBytes', { id: ref, bytes: 'updated while offline' });
+    } finally {
+      await b.call('setPeerFields', { peerId: 'rec-a', fields: { status: 'online' } });
+    }
+
+    expect(await b.call('drainReleases', { peerId: 'rec-a' })).toBe(0);
+    expect((await a.call('fetchOwnVideo', { id: ref })).body).toBe('updated while offline');
+    expect((await b.call('fetchOwnVideo', { id: ref })).body).toBe(`synthetic-video-${ref}`);
   });
 
   it('lists both holders, and Make primary releases the other copy, which then streams from the primary', async () => {

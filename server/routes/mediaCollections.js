@@ -20,7 +20,7 @@ import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { mediaCollectionBulkItemsSchema } from '../lib/mediaValidation.js';
+import { mediaCollectionBulkItemsSchema, mediaCollectionPrimarySchema } from '../lib/mediaValidation.js';
 import * as svc from '../services/mediaCollections.js';
 import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
 import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';
@@ -112,6 +112,18 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
     await Promise.all(list.map((entry) => unmarkHosted(entry.kind, entry.filename)));
   })).catch((err) => console.error(`❌ localize collection media failed: ${err.message}`));
   res.status(202).json({ requested: items.length, started });
+}));
+
+router.get('/:id/primary', asyncHandler(async (req, res) => {
+  const { getCollectionPrimaryStatus } = await import('../services/mediaCollectionPrimary.js');
+  res.json(await getCollectionPrimaryStatus(req.params.id).catch((err) => { throw mapServiceError(err); }));
+}));
+
+router.post('/:id/primary', asyncHandler(async (req, res) => {
+  const { instanceId } = validateRequest(mediaCollectionPrimarySchema, req.body ?? {});
+  const { startCollectionPrimary } = await import('../services/mediaCollectionPrimary.js');
+  res.status(202).json(await startCollectionPrimary(req.params.id, instanceId)
+    .catch((err) => { throw mapServiceError(err); }));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
