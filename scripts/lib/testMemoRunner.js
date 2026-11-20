@@ -433,15 +433,18 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
     }
     const meta = { test, workspace: scope, source, commit };
     const modules = dependencies?.get(test) ?? null;
-    const after = plan.freshAnalyze(test, modules);
+    // Re-read inputs only if the floor or recorded key could be written.
+    // Still compute the recorded candidate from Vitest's actual modules.
+    let after;
+    const fresh = () => (after ??= plan.freshAnalyze(test, modules));
     const refused = [];
     if (!info.floor.memoizable) refused.push(`floor key: ${info.floor.reason}`);
-    else if (after.floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
+    else if (fresh().floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
     else { writeEntry(memoDir, info.floor.key, meta); written += 1; }
     const recorded = modules ? plan.analyze(test, modules).recorded : null;
     if (!modules) refused.push(`recorded key: ${dependencies ? 'Vitest recorded no modules for this file' : 'no readable Vitest dependency file'}`);
     else if (!recorded?.memoizable) refused.push(`recorded key: ${recorded?.reason ?? 'not computed'}`);
-    else if (after.recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
+    else if (fresh().recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
     else {
       // A case-filtered run loaded only what its cases reached: the list keys this
       // filter's entry, but digests would let it narrow selection for any other run.
