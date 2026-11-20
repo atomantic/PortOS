@@ -35,7 +35,6 @@ import {
   uncoveredSuites,
   workflowLintSelected,
   UNCOVERED_SUITES,
-  unmergedIndexPaths,
 } from './pregate.js';
 import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash } from './lib/pregateReport.js';
 import { probeTestDatabase, TEST_DATABASE, uncreatableExtensions, testDatabaseStageEnv } from './lib/pregateResources.js';
@@ -64,7 +63,7 @@ const planWith = (overrides = {}) => ({
 });
 
 const DEFAULT_OPTIONS = {
-  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
+  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
 
@@ -135,7 +134,6 @@ describe('resolvePlanStages', () => {
       CI_TEST_MODE: 'related',
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
-      PORTOS_PREGATE_GUARDS: '',
       PORTOS_PREGATE_BASE_REF: '',
     });
   });
@@ -327,10 +325,9 @@ describe('pregate hidden-content invocation', () => {
       if (process.env.PORTOS_PREGATE_DURATIONS_PATH && existsSync('.cache/guard-ms')) {
         writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify({ 'server/lib/moduleSummaries.test.js': Number(readFileSync('.cache/guard-ms', 'utf8')) }));
       }
-      const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
-      appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
-      if (files.includes('server/lib/moduleSummaries.test.js') && !excluded.includes('server/lib/moduleSummaries.test.js')) {
+      appendFileSync('.cache/events', JSON.stringify({ broad }) + '\\n');
+      if (files.includes('server/lib/moduleSummaries.test.js')) {
         await import(pathToFileURL(resolve('server/lib/moduleSummaries.test.js')));
       }
     `);
@@ -432,309 +429,76 @@ describe('pregate hidden-content invocation', () => {
       ]));
   });
 
-  // Unlike the persistent module memo, this reuse includes tree scanners. A
-  // modification between stages invalidates it even when the test file is stable.
-  it.each([false, true])('rechecks guard inputs before broad dispatch (changed: %s)', (changed) => {
+  it.each([false, true])('verifies tree stability after all full-plan stages (changed: %s)', (changed) => {
     prepareGuardFixture();
     write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
     if (changed) write('.cache/mutate', 'mutate during lint');
     const result = run('--full');
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(changed ? 1 : 0);
+    if (changed) expect(result.stderr).toContain('The working tree changed while pregate ran');
     const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
-    expect(events.filter(event => event === 'catalog')).toHaveLength(changed ? 2 : 1);
     expect(events.indexOf('catalog')).toBeLessThan(events.indexOf('lint'));
     expect(events.at(-1)).toBe('smoke');
-    const broad = events.filter(event => event.startsWith('{')).map(event => JSON.parse(event)).find(event => event.broad);
-    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/moduleSummaries.test.js']);
+    expect(events).toContain('{"broad":true}');
     const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
     expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
     expect(report.treeStable).toBe(!changed);
-    expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
-      .toEqual(changed ? undefined : ['server/lib/moduleSummaries.test.js']);
-    // A stage that rewrote its own inputs leaves no cross-run pass behind.
-    expect(typeof report.stages.find(stage => stage.suite === 'lint').reuseKey).toBe(changed ? 'undefined' : 'string');
+    expect(report.passed).toBe(!changed);
   });
 
-  describe('cross-run guard reuse', () => {
-    const events = () => readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n').filter(Boolean);
-    const receipt = () => JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
-    // Children start without the runner's PORTOS_TEST_MEMO, which would otherwise disable reuse in every case.
-    const runWith = ({ nodeArgs = [], env = {} }, ...args) => {
-      const childEnv = { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` };
-      delete childEnv.PORTOS_TEST_MEMO;
-      return spawnSync(process.execPath, [...nodeArgs, 'scripts/pregate.js', '--base', base, ...args], { cwd: root, encoding: 'utf8', env: { ...childEnv, ...env } });
-    };
-    const runReuse = (...args) => runWith({}, ...args);
-    const prepare = () => {
-      prepareGuardFixture();
-      write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
-    };
-    const firstRun = () => {
-      const result = runReuse();
+  it('runs focused guard and lint stages each time and reports slow guard passes', () => {
+    prepareGuardFixture();
+    write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    write('.cache/guard-ms', '9000');
+    for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
+      const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
-      write('.cache/events', '');
-    };
-
-    it('reuses guard and lint passes on an unchanged tree, also after committing it', () => {
-      prepare();
-      // Tracked before the run: committing a new path is `git add` of a new file, which must rerun.
-      git('add', 'server/lib/helper.js');
-      git('commit', '-qm', 'helper');
-      write('server/lib/helper.js', '// Helper.\nexport const helper = 2;\n');
-      firstRun();
-      const first = receipt().stages.filter(stage => stage.guard || stage.suite === 'lint');
-      expect(first.map(stage => stage.name)).toEqual(['server structural guards', 'client/server lint']);
-      expect(first.every(stage => typeof stage.reuseKey === 'string' && typeof stage.passedAt === 'string')).toBe(true);
-
-      git('add', '--all');
-      git('commit', '-qm', 'commit the validated tree');
-      const second = runReuse();
-      expect(second.status, second.stderr).toBe(0);
-      expect(second.stdout).toContain('⏭️ server structural guards reused from');
-      expect(events()).toEqual([]);
-      const reused = receipt();
-      expect(reused.passed).toBe(true);
-      expect(reused.stages.filter(stage => stage.reusedFrom).map(stage => [stage.name, stage.reusedFrom]))
-        .toEqual(first.map(stage => [stage.name, stage.passedAt]));
-
-      // The original pass time carries forward through a reuse of a reuse.
-      expect(runReuse().status).toBe(0);
-      expect(receipt().stages.filter(stage => stage.reusedFrom).map(stage => stage.reusedFrom))
-        .toEqual(first.map(stage => stage.passedAt));
-    });
-
-    it('passes a guard over the time budget, reports it, and still reuses that pass (#16551)', () => {
-      prepare();
-      write('.cache/guard-ms', '9000');
-      const slow = runReuse();
-      expect(slow.status, slow.stderr).toBe(0);
-      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (the scheduled hosted run fails a guard over 6.0s; PR and push runs only warn).');
-      expect(slow.stdout).toContain('✔️ server structural guards passed');
-      expect(receipt().stages.find(stage => stage.guard)).toMatchObject({
-        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 }, reuseKey: expect.any(String), passedAt: expect.any(String),
+      expect(result.stdout).toContain('server structural guards over the 3.0s per-guard target');
+      const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+      expect(report.stages.find(stage => stage.guard)).toMatchObject({
+        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
       });
-
-      const reused = runReuse();
-      expect(reused.status, reused.stderr).toBe(0);
-      expect(reused.stdout).toContain('⏭️ server structural guards reused from');
-    });
-
-    it.each([
-      ['an edited tracked file', () => { write('docs/tracked note.md', '# Edited\n'); }],
-      ['git add of a new file', () => { git('add', 'docs/new.md'); }],
-      ['a changed ignored file outside caches', () => { write('local.secret', 'two\n'); }],
-      // Git normalizes CRLF away, so only the raw bytes a guard reads change.
-      ['a line-ending-only edit', () => { write('docs/tracked note.md', '# Example\r\n'); }],
-    ])('reruns every guard and lint stage after %s', (_label, mutate) => {
-      prepare();
-      write('docs/new.md', 'new\n');
-      writeFileSync(join(root, '.git', 'info', 'exclude'), 'local.secret\n');
-      write('local.secret', 'one\n');
-      writeFileSync(join(root, '.git', 'info', 'attributes'), '* text=auto eol=lf\n');
-      firstRun();
-      mutate();
-      const result = runReuse();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-      expect(receipt().stages.some(stage => stage.reusedFrom)).toBe(false);
-    });
-
-    it('reruns them against a moved base', () => {
-      prepare();
-      write('docs/extra.md', 'extra\n');
-      git('add', 'docs/extra.md');
-      git('commit', '-qm', 'docs-only commit');
-      firstRun();
-      base = git('rev-parse', 'HEAD');
-      const result = runReuse();
-      expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
-
-    it('reruns them under a different Node version', () => {
-      prepare();
-      firstRun();
-      const preload = "Object.defineProperty(process, 'version', { value: 'v99.0.0' });";
-      const result = runWith({ nodeArgs: ['--import', `data:text/javascript,${encodeURIComponent(preload)}`] });
-      expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
-
-    it('never reuses under --full, while recording its passes for a later focused run', () => {
-      prepare();
-      firstRun();
-      const full = runReuse('--full');
-      expect(full.status, full.stderr).toBe(0);
-      expect(full.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
-      expect(receipt().stages.find(stage => stage.guard).reuseKey).toEqual(expect.any(String));
-    });
-
-    it('never reuses under PORTOS_TEST_MEMO=off, even from a pass recorded with the same setting', () => {
-      prepare();
-      const off = () => runWith({ env: { PORTOS_TEST_MEMO: 'off' } });
-      expect(off().status).toBe(0);
-      write('.cache/events', '');
-      const result = off();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
+      const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
+      expect(events.filter(event => event === 'catalog')).toHaveLength(runNumber);
+      expect(events.filter(event => event === 'lint')).toHaveLength(runNumber);
+    }
   });
 
-  // A branch and base can each be green while their combined route inventory fails.
-  it('runs guards against the checked base on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
-    git('config', 'core.autocrlf', 'true');
-    mkdirSync(join(root, 'server/routes'), { recursive: true });
-    write('server/routes/universe-builder.js', 'export const mutation = false;\n');
-    write('server/lib/strict.js', 'export const strict = false;\n');
-    write('server/lib/hostControlRoutes.test.js', `
-      import { readFileSync } from 'fs';
-      import { strict } from './strict.js';
-      if (strict && readFileSync('server/routes/universe-builder.js', 'utf8').includes('mutation = true')) {
-        throw new Error('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+  it.each([false, true])('keeps focused Git work bounded and reserves the planner subprocess for full mode (dirty: %s)', (dirty) => {
+    git('update-ref', 'refs/remotes/origin/development', base);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/development');
+    mkdirSync(join(root, 'client/src'), { recursive: true });
+    write('client/src/example.js', 'export const example = true;\n');
+    git('add', 'client/src/example.js');
+    git('commit', '-qm', 'focused source change');
+    if (dirty) write(trackedPath, `${clean}worktree change\n`);
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      for (const name of ['execFileSync', 'spawnSync']) {
+        const original = childProcess[name];
+        childProcess[name] = (command, args, options) => {
+          if (command === 'git') console.log('fixture-git ' + args[0]);
+          if (command === process.execPath && args[0]?.endsWith('ci-test-plan.js')) console.log('fixture-planner');
+          return original(command, args, options);
+        };
       }
-    `);
-    write('scripts/run-ci-tests.js', `
-      import { resolve } from 'path';
-      import { pathToFileURL } from 'url';
-      if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
-      if (process.env.CI_BASE_SHA !== process.env.PREGATE_FIXTURE_BASE) {
-        throw new Error('guard stages received a different base from the checked merge target');
-      }
-      for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
-        if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
-      }
-    `);
-    git('add', '--all');
-    git('commit', '-qm', 'green common guard');
-    const common = git('rev-parse', 'HEAD');
-    git('checkout', '-qb', 'new-base');
-    write('docs/tracked note.md', '# Unrelated base move\n');
-    git('add', '--all'); git('commit', '-qm', 'base move');
-    const movedBase = git('rev-parse', 'HEAD');
-    git('checkout', '-qb', 'feature', common);
-    const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on', PREGATE_FIXTURE_BASE: flags.at(-1) },
-    });
-    mkdirSync(join(root, '.cache/pregate'), { recursive: true });
-    write(PREGATE_REPORT_PATH, 'original attestation receipt');
-    const original = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
-    const green = invoke('--guards-only', '--merged-with', movedBase);
-    expect(green.status, green.stderr).toBe(0);
-    expect(green.stdout).toContain('Merged-tree guards: HEAD');
-    expect(green.stdout).not.toContain('hidden-content scan');
-    expect(green.stdout).not.toContain('client/server lint');
-    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(original);
-    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
-
-    // The base tightens its guard independently; feature remains green in its own tree.
-    write('server/routes/universe-builder.js', 'export const mutation = true;\n');
-    git('add', '--all'); git('commit', '-qm', 'feature mutation before stricter guard');
-    const branchOnly = invoke('--guards-only', '--base', common);
-    expect(branchOnly.status, branchOnly.stderr).toBe(0);
-    // The stricter base policy and feature route change do not conflict textually.
-    git('checkout', 'new-base');
-    write('server/lib/strict.js', 'export const strict = true;\n');
-    git('add', '--all'); git('commit', '-qm', 'strict inventory');
-    const strictBase = git('rev-parse', 'HEAD');
-    git('checkout', 'feature');
-    const before = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
-    const failed = invoke('--guards-only', '--merged-with', strictBase);
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain('hostControlRoutes.test.js: unclassified Universe Builder mutation');
-    expect(failed.stdout).not.toContain('Pregate passed');
-    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(before);
-    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
-
-    const originalDocBytes = readFileSync(join(root, 'docs/tracked note.md'));
-    write('docs/tracked note.md', '# Pending local work\n');
-    const dirty = snapshot();
-    const refused = invoke('--guards-only', '--merged-with', strictBase);
-    expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain('requires a clean committed checkout');
-    expect(snapshot()).toEqual(dirty);
-    writeFileSync(join(root, 'docs/tracked note.md'), originalDocBytes);
-
-    git('checkout', 'new-base');
-    write('server/routes/universe-builder.js', 'export const mutation = "conflicting";\n');
-    git('add', '--all'); git('commit', '-qm', 'conflicting mutation');
-    const conflictBase = git('rev-parse', 'HEAD');
-    git('checkout', 'feature');
-    const preConflict = snapshot();
-    const conflict = invoke('--guards-only', '--merged-with', conflictBase);
-    expect(conflict.status).not.toBe(0);
-    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
-    expect(conflict.stdout).not.toContain('Pregate passed');
-    expect(snapshot()).toEqual(preConflict);
-  });
-
-  it.each(['shallow', 'partial'])('merges a remote-only base from a %s source and still reports real conflicts', (kind) => {
-    write('scripts/run-ci-tests.js', `
-      import { readFileSync } from 'fs';
-      if (readFileSync('docs/tracked note.md', 'utf8').trim() !== '# Base update'
-        || readFileSync('docs/feature.md', 'utf8').trim() !== '# Independent feature') {
-        throw new Error('guard did not receive both merge inputs');
-      }
-    `);
-    git('add', '--all'); git('commit', '-qm', 'merged guard fixture');
-    const upstream = root;
-    const shallow = join(scratch, 'shallow');
-    git('config', 'uploadpack.allowFilter', 'true');
-    git('clone', '--quiet', '--no-local', ...(kind === 'shallow' ? ['--depth', '1'] : ['--filter=blob:none']), '--', upstream, shallow);
-    write(trackedPath, '# Base update\n');
-    git('add', '--all'); git('commit', '-qm', 'base update');
-    const movedBase = git('rev-parse', 'HEAD');
-
-    root = shallow;
-    for (const workspace of ['', 'client', 'server', 'autofixer']) {
-      mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
-    }
-    git('config', 'user.name', 'Example Agent');
-    git('config', 'user.email', 'agent@example.com');
-    git('config', 'commit.gpgsign', 'false');
-    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
-    git('checkout', '-qb', 'feature');
-    write('docs/feature.md', '# Independent feature\n');
-    git('add', '--all'); git('commit', '-qm', 'feature update');
-    git('fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main');
-    expect(git('rev-parse', '--is-shallow-repository')).toBe(String(kind === 'shallow'));
-    expect(git('rev-parse', 'origin/main')).toBe(movedBase);
-    expect(git('for-each-ref', '--format=%(refname)', '--points-at', movedBase, 'refs/heads')).toBe('');
-    if (kind === 'partial') {
-      expect(git('config', '--get', 'remote.origin.promisor')).toBe('true');
-      expect(git('rev-list', '--objects', '--no-object-names', '--missing=print', movedBase)).toMatch(/^\?/m);
-    }
-    const tree = git('merge-tree', '--write-tree', 'HEAD', 'origin/main').split('\n')[0];
-    const invoke = () => spawnSync(process.execPath, ['scripts/pregate.js', '--guards-only', '--merged-with', 'origin/main'], {
-      cwd: root, encoding: 'utf8',
-    });
-    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), ...(kind === 'shallow' ? { shallow: readFileSync(join(root, '.git/shallow')) } : {}) });
-    const before = sourceState();
-    if (kind === 'partial') {
-      git('remote', 'set-url', 'origin', join(scratch, 'unavailable-promisor'));
-      const unavailable = invoke();
-      expect(unavailable.status).not.toBe(0);
-      expect(unavailable.stdout).not.toContain('▶️ server tests');
-      expect(sourceState()).toEqual(before);
-      git('remote', 'set-url', 'origin', upstream);
-    }
-    const merged = invoke();
-    expect(merged.status, merged.stderr).toBe(0);
-    expect(merged.stdout).toContain(`= tree ${tree.slice(0, 12)}.`);
-    expect(sourceState()).toEqual(before);
-
-    write(trackedPath, '# Conflicting feature update\n');
-    git('add', '--all'); git('commit', '-qm', 'conflicting feature update');
-    const preConflict = sourceState();
-    const conflict = invoke();
-    expect(conflict.status).not.toBe(0);
-    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
-    expect(conflict.stderr).toContain('CONFLICT (content)');
-    expect(conflict.stdout).not.toContain('Pregate passed');
-    expect(sourceState()).toEqual(preConflict);
+      syncBuiltinESMExports();
+    `;
+    const invoke = (...args) => spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--skip-lint', ...args,
+    ], { cwd: root, encoding: 'utf8' });
+    const focused = invoke();
+    expect(focused.status, focused.stderr).toBe(0);
+    expect(focused.stdout).toContain('Planning against origin/development');
+    expect(focused.stdout).not.toContain('fixture-planner');
+    const gitCommands = focused.stdout.split('\n').filter(line => line.startsWith('fixture-git '));
+    expect(gitCommands).toHaveLength(dirty ? 9 : 6);
+    expect(gitCommands).not.toContain('fixture-git check-attr');
+    expect(gitCommands.filter(cmd => cmd === 'fixture-git write-tree')).toHaveLength(dirty ? 2 : 0);
+    const full = invoke('--full', '--plan-only');
+    expect(full.status, full.stderr).toBe(0);
+    expect(full.stdout).toContain('fixture-planner');
   });
 
   // This regression catches stale inherited packages before any lint/test child
@@ -1137,7 +901,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     write('server/routes/decks.db.test.js', "import { it } from 'vitest';\nit('db contract', () => {});\n");
     const focused = run('--plan-only');
     expect(focused.status, focused.stderr).toBe(0);
-    expect(focused.stdout).toContain('CI will also run: db');
+    expect(focused.stdout).toContain('Hosted CI may also run: db');
     expect(focused.stdout).not.toContain('• DB suite');
     const result = run('--plan-only', '--full');
     expect(result.status, result.stderr).toBe(0);
@@ -1148,7 +912,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
 
     const skipped = run('--plan-only', '--skip-db');
     expect(skipped.status, skipped.stderr).toBe(0);
-    expect(skipped.stdout).toContain('CI will also run: db — not run here (skipped by --skip-db)');
+    expect(skipped.stdout).toContain('Hosted CI may also run: db — not run here (skipped by --skip-db)');
     expect(skipped.stdout).not.toContain('DB suite (portos_test)');
   });
 
@@ -1228,10 +992,10 @@ describe('downgradeFullPlan', () => {
       'client/src/components/ui/fooPanel.guard.test.jsx',
       'client/src/hooks/mountedRefConventions.guard.test.js',
     ];
-    // Neither a convention-sounding name without the suffix nor a server guard is a client guard.
+    // A convention-sounding name without the suffix is not a tree guard.
     const tracked = [...serverGuards, ...clientGuards,
       'client/src/App.test.jsx', 'client/src/fooConventions.js', 'client/src/fooConventions.test.js',
-      'server/fooConventions.guard.test.js',
+      'server/fooConventions.test.js',
     ];
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked);
     expect(downgraded.full).toBe(false);
@@ -1267,13 +1031,11 @@ describe('parseArgs', () => {
     });
   });
 
-  it('accepts guard-only merged validation and rejects combinations that can skip it', () => {
-    expect(parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toMatchObject({ guardsOnly: true, mergedWith: 'origin/main' });
-    expect(() => parseArgs(['--merged-with', 'origin/main'])).toThrow('requires --guards-only');
-    expect(() => parseArgs(['--guards-only', '--merged-with'])).toThrow('requires a value');
+  it('accepts guard-only validation and refuses conflicting or retired flags', () => {
+    expect(parseArgs(['--guards-only', '--base', 'origin/main'])).toMatchObject({ guardsOnly: true, base: 'origin/main' });
     expect(() => parseArgs(['--guards-only', '--full'])).toThrow('cannot be combined');
     expect(() => parseArgs(['--guards-only', '--skip-lint'])).toThrow('cannot be combined');
-    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main', '--base', 'HEAD'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toThrow('Unknown option: --merged-with');
   });
 
   it('accepts one skip flag per resource suite', () => {
@@ -1296,18 +1058,6 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--unexpected'])).toThrow('Unknown option: --unexpected.');
     expect(() => parseArgs(['--base'])).toThrow('--base requires a value.');
     expect(() => parseArgs(['--base', '--full'])).toThrow('--base requires a value.');
-  });
-});
-
-describe('unmergedIndexPaths', () => {
-  it('returns each repo-relative path from NUL-delimited index stages', () => {
-    expect(unmergedIndexPaths([
-      '100644 abc 1\tconflict name.md',
-      '100644 def 2\tconflict name.md',
-      '100644 ghi 3\tother.md',
-      '',
-    ].join('\0')))
-      .toEqual(['conflict name.md', 'other.md']);
   });
 });
 
@@ -1390,32 +1140,6 @@ describe('the gate end to end', () => {
     expect(result.stderr).toContain('see .nvmrc');
     expect(result.stderr).not.toContain('Subprocess started');
     expect(result.stdout).toBe('');
-  });
-
-  it('refuses unsupported Git before planning or writing a receipt', () => {
-    const receipt = join(REPO_ROOT, PREGATE_REPORT_PATH);
-    const before = existsSync(receipt) ? readFileSync(receipt) : null;
-    const preload = `
-      import childProcess from 'node:child_process';
-      import { syncBuiltinESMExports } from 'node:module';
-      childProcess.spawnSync = (command, args) => {
-        if (command === 'git' && args.join(' ') === 'merge-tree -h') {
-          return { status: 129, stdout: '--write-tree', stderr: 'private subprocess output' };
-        }
-        throw new Error('Unexpected subprocess after capability refusal');
-      };
-      syncBuiltinESMExports();
-    `;
-    const result = spawnSync(process.execPath, [
-      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
-      join(REPO_ROOT, 'scripts', 'pregate.js'),
-    ], { cwd: REPO_ROOT, encoding: 'utf8' });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Install Git 2.43 or newer');
-    expect(result.stderr).not.toContain('private subprocess output');
-    expect(result.stderr).not.toContain('Unexpected subprocess');
-    expect(result.stdout).not.toContain('Planning against');
-    expect(existsSync(receipt) ? readFileSync(receipt) : null).toEqual(before);
   });
 
   it('passes an uncommitted new test through the planner override', () => {
@@ -1659,8 +1383,8 @@ describe('uncoveredSuites', () => {
     const flagged = uncoveredSuites(selected, { options: { skipDb: true, skipBuild: true }, downgraded: true });
     expect(flagged.map(({ suite, reason }) => [suite, reason])).toEqual([
       ['build', 'skipped by --skip-build'],
-      ['smoke', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
-      ['browser', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
+      ['smoke', 'local focused mode; hosted CI determines coverage (opt in locally with --full)'],
+      ['browser', 'local focused mode; hosted CI determines coverage (opt in locally with --full)'],
       ['db', 'skipped by --skip-db'],
       ['windows', 'a Windows runner has no local equivalent'],
     ]);
@@ -1840,7 +1564,7 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(4);
+    expect(report.version).toBe(5);
     expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);

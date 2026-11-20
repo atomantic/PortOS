@@ -24,7 +24,6 @@ import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
-import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
@@ -284,34 +283,6 @@ async function createRunnerSandbox(files) {
   }
 }
 
-it.each(['files', 'full'])('validates the guard proof before the actual %s Vitest selection with the persistent memo off', async (mode) => {
-  const guard = 'server/lib/moduleSummaries.test.js';
-  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, 'scripts/example.test.js']);
-  try {
-    installFakeNpm(fixture, 'if (process.env.PORTOS_PREGATE_GUARDS) throw new Error("Guard proof leaked to test process");\n' + REPORTING_NPM);
-    const result = spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
-      cwd: root, encoding: 'utf8', timeout: 120000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
-        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify([guard, 'scripts/example.test.js']),
-        CI_TEST_SOURCES: '["scripts/lib/directInvocation.js"]',
-        PORTOS_PREGATE_GUARDS: JSON.stringify({ files: [guard], snapshot: mode === 'files' ? guardInputSnapshot(root) : 'stale' }),
-        PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    if (mode === 'files') expect(result.stdout).toContain('Reused 1 structural guards');
-    else expect(result.stdout).not.toContain('Reused');
-    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-    if (mode === 'files') expect(selection.include).not.toContain('lib/moduleSummaries.test.js');
-    else expect(selection.include).toContain('lib/moduleSummaries.test.js');
-    expect(selection.include).toContain('../scripts/example.test.js');
-  } finally {
-    await destroyGitSandbox(fixture);
-  }
-  // Include the child's existing 120s budget plus real Git setup/teardown.
-  // Windows can otherwise expire the outer 30s test while that child is valid.
-}, 150_000);
-
-
 it('keeps a green shard\'s memo entries when a later sequential shard fails and skips only that shard on the rerun', async () => {
   const files = ['server/lib/shardA.test.js', 'server/lib/shardB.test.js', 'server/lib/shardC.test.js', 'server/lib/shardD.test.js'];
   const sandbox = await createRunnerSandbox(files);
@@ -505,31 +476,24 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
   }
 }, 150_000);
 
-it('keeps explicit browser selectors with their owner after structural guard reuse', async () => {
-  const guard = 'server/lib/moduleSummaries.test.js';
+it('keeps explicit browser selectors with their owner', async () => {
   const browser = 'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js';
   const ordinary = 'scripts/example.test.js';
-  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, browser, ordinary]);
-  const run = ({ owner, files, proof }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([browser, ordinary]);
+  const run = ({ owner, files }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
     cwd: root, encoding: 'utf8', timeout: 10000,
     env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
       CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
       CI: 'true', PORTOS_CI_BROWSER_OWNER: owner, PORTOS_BROWSER_TEST_PROFILE: undefined,
-      PORTOS_PREGATE_GUARDS: proof ? JSON.stringify({ files: [guard], snapshot: proof }) : '',
       PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
   });
   try {
     expect(BROWSER_SUITES).toContain(browser);
     installFakeNpm(fixture, REPORTING_NPM);
-    const proof = guardInputSnapshot(root);
-    expect(proof).toEqual(expect.any(String));
-    // The failing pregate boundary: the guard is already proven and the only
-    // remaining explicit selector belongs to the separate browser stage.
-    const unitOnly = run({ owner: 'unit', files: [guard, browser], proof });
+    const unitOnly = run({ owner: 'unit', files: [browser] });
     expect(unitOnly.error).toBeUndefined();
     expect(unitOnly.status, unitOnly.stderr).toBe(0);
-    expect(unitOnly.stdout).toContain('Reused 1 structural guards');
-    expect(unitOnly.stdout).toContain('No server tests left to run');
+    expect(unitOnly.stdout).toContain('No server tests selected');
     expect(unitOnly.stdout).not.toContain('{"args"');
 
     // A mixed selection still runs its ordinary contract, and dedicated
@@ -544,44 +508,24 @@ it('keeps explicit browser selectors with their owner after structural guard reu
     const local = run({ owner: '', files: [browser] });
     expect(local.status, local.stderr).toBe(0);
     expect(selectionOf(local)).toEqual([toWorkspacePath('server', browser)]);
-
-    // Control: a real on-disk change invalidates the same proof and runs the
-    // guard, preserving production's exact-input admission under CI=true.
-    writeFileSync(join(root, 'initial.txt'), 'changed after proof');
-    const changed = run({ owner: 'unit', files: [guard, browser], proof });
-    expect(changed.status, changed.stderr).toBe(0);
-    expect(changed.stdout).not.toContain('Reused');
-    expect(selectionOf(changed)).toEqual([toWorkspacePath('server', guard)]);
   } finally {
     await destroyGitSandbox(fixture);
   }
 });
 
-it('keeps explicit DB selectors with the DB runner after structural guard reuse and test memo subtraction (#13455)', async () => {
-  const guard = 'server/lib/moduleSummaries.test.js';
+it('keeps explicit DB selectors with the DB runner (#13455)', async () => {
   const dbTest = 'server/services/githubNotifications.db.test.js';
   const ordinary = 'scripts/example.test.js';
-  const { scratch: fixture, repo: root } = await createRunnerSandbox([guard, dbTest, ordinary]);
-  const run = ({ files, proof }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+  const { scratch: fixture, repo: root } = await createRunnerSandbox([dbTest, ordinary]);
+  const run = ({ files }) => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
     cwd: root, encoding: 'utf8', timeout: 10000,
     env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, CI_SHARD: '',
       CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]',
-      CI: 'true', PORTOS_PREGATE_GUARDS: proof ? JSON.stringify({ files: [guard], snapshot: proof }) : '',
+      CI: 'true',
       PORTOS_TEST_MEMO: 'off', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
   });
   try {
     installFakeNpm(fixture, REPORTING_NPM);
-    const proof = guardInputSnapshot(root);
-    expect(proof).toEqual(expect.any(String));
-
-    // When the structural guard is reused, the DB test must not be handed to the server runner as its sole selector.
-    const result = run({ files: [guard, dbTest], proof });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('Reused 1 structural guards');
-    expect(result.stdout).toContain('No server tests left to run');
-    expect(result.stdout).not.toContain('{"args"');
-
     // A mixed selection runs only the ordinary non-DB server contract.
     const mixed = run({ files: [ordinary, dbTest] });
     expect(mixed.status, mixed.stderr).toBe(0);
