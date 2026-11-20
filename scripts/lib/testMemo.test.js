@@ -582,6 +582,7 @@ describe('a read whose variable segment can leave the directory the source names
       'a suffix after a helper parameter': "const read = (stem) => readFileSync(HERE + '/fixtures/' + stem + '.json');\nread('f0'); read('f1');",
       'a helper called by another helper': "const read = (name) => readFileSync(join(FIXTURES, name));\nconst both = (stem) => read(`${stem}.json`);\nboth('f0'); both('f1');",
       'a binding inside the helper': "const read = (name) => { const file = join(FIXTURES, name); return readFileSync(file); };\nread('f0.json'); read('f1.json');",
+      'dynamic scope identifiers only outside the helper': "eval('');\nfunction read(name) { /* eval */ const text = 'arguments'; return readFileSync(join(FIXTURES, name)); }\nread('f0.json'); read('f1.json');\nother.arguments;",
     };
     for (const [label, body] of Object.entries(cases)) {
       expect(keyedOn(body, 'server/lib/fixtures/f0.json'), label).toBe(true);
@@ -689,6 +690,7 @@ describe('a read whose variable segment can leave the directory the source names
       'a call through an escaped identifier': ["const read = (n) => readFileSync(join(FIXTURES, n));\nread('f0.json');\nr\\u0065ad(process.argv[2]);", through('read', 'server/lib/fixtures')],
       'a segment bound by let and assigned again': ["let name = 'f0.json';\nname = process.argv[2];\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'a parameter of a function that touches arguments': ["function read(p) { arguments[0] = pick(); return readFileSync(join(FIXTURES, p)); }\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a parameter of a function with eval in a nested template': ["function read(p) { const value = `outer ${`inner ${eval(code)}`}`; return readFileSync(join(FIXTURES, p)); }\nread('f0.json');\nother.eval;", through('read', 'server/lib/fixtures')],
       'a literal with a method call on it': ["readFileSync(join(FIXTURES, 'F0.JSON'.toLowerCase()));", leaves('server/lib/fixtures')],
       'the same name bound twice, one inside the other': ["const read = (f) => ['f1.json'].map((f) => readFileSync(join(FIXTURES, f)));\nread('f0.json');", leaves('server/lib/fixtures')],
       'a parameter redeclared by an inner pattern': ["const read = (p) => { if (flag) { const { p } = pick(); return readFileSync(join(FIXTURES, p)); } };\nread('f0.json');", through('read', 'server/lib/fixtures')],
