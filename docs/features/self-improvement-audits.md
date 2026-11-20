@@ -150,10 +150,10 @@ problem:
   lie. `module-hygiene` owns responsibility boundaries and treats a complexity
   score only as a candidate signal, never as a finding.
   For PortOS, `npm run quality:complexity` prints ranked JavaScript/JSX source and
-  test shortlists without writing a report file. It uses ESLint's classic
-  cyclomatic complexity: one base path plus decision points, including each
-  non-default switch case, default arguments, logical operators and optional
-  chains. Class field initializers and static blocks are counted separately,
+  test shortlists without writing a report file. It computes classic
+  cyclomatic complexity from a Babel AST. Each function starts with one base
+  path and adds decision points such as non-default switch cases, default
+  arguments, short-circuit operators and assignments, and optional chains. Class field initializers and static blocks are counted separately,
   as are nested functions. The report excludes generated, vendored, build and
   migration files; it identifies parsing failures and exits nonzero if its scan
   is incomplete, but never fails for a high score. Analyze other languages

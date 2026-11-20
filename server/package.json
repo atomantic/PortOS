@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "node --watch start.js",
     "start": "node start.js",
-    "lint": "biome lint --error-on-warnings --max-diagnostics=20 .",
+    "lint": "node ../client/node_modules/@biomejs/biome/bin/biome lint --error-on-warnings --max-diagnostics=20 .",
     "test": "vitest run --configLoader runner",
     "test:fast": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
@@ -42,9 +42,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.8",
     "@vitest/coverage-v8": "5.1.1",
-    "eslint": "10.15.0",
     "vitest": "5.1.1"
   },
   "overrides": {
@@ -59,7 +57,6 @@
     "socket.io-parser": "4.2.7",
     "ws": "8.23.0",
     "postcss": "8.5.33",
-    "nanoid": "3.3.20",
-    "minimatch": "11.0.9"
+    "nanoid": "3.3.20"
   }
 }

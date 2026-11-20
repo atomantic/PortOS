@@ -337,18 +337,14 @@ describe('direct dependency pinning (#5699)', () => {
   });
 });
 
-// Biome is installed twice: client/ owns the CI lint job (`scripts/run-ci-lint.js`
-// lints BOTH trees with the client binary) and server/ owns `npm run lint --prefix
-// server` (#12051). A Dependabot bump that lands in one workspace and not the other
-// would lint the server with two rule sets — green locally, red in CI, or the
-// reverse. Shared tooling is pinned identically or not at all.
-describe('shared lint tooling (#12051)', () => {
-  it('pins @biomejs/biome to one version across client/ and server/', () => {
-    const pins = ['client/package.json', 'server/package.json'].map((rel) => {
-      const version = readDirectDeps(rel).find(({ name }) => name === '@biomejs/biome')?.range;
-      return `${rel}=${version}`;
-    });
-    expect(pins.map((pin) => pin.split('=')[1])).not.toContain('undefined');
-    expect(new Set(pins.map((pin) => pin.split('=')[1])).size, pins.join(', ')).toBe(1);
-  });
+// The same installation lints both trees locally and in CI, so tool upgrades
+// cannot put server lint on different versions or invalidate its install cache.
+it('installs Biome only in the client workspace', () => {
+  const biome = '@biomejs/biome';
+  const declaringManifests = MANIFESTS.filter(rel => readDirectDeps(rel).some(({ name }) => name === biome));
+  expect(declaringManifests).toEqual(['client/package.json']);
+
+  const installingLockfiles = [...trackedLockfiles()].filter(rel =>
+    Object.keys(readLockPackages(rel)).some(path => packageNameFromLockPath(path) === biome));
+  expect(installingLockfiles).toEqual(['client/package-lock.json']);
 });

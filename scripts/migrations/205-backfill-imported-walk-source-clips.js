@@ -92,11 +92,8 @@ async function backfillRun(recDir, recordId, runDirRel) {
   const candidates = [...new Set([conventionalRel, altRunLayoutRel(destRel), altRunLayoutRel(conventionalRel)])]
     .filter((rel) => rel && rel !== destRel);
   for (const rel of candidates) {
-    // eslint-disable-next-line no-await-in-loop -- ordered probe, stops at the first hit
     if (!await exists(join(recDir, rel))) continue;
-    // eslint-disable-next-line no-await-in-loop
     await mkdir(dirname(join(recDir, destRel)), { recursive: true });
-    // eslint-disable-next-line no-await-in-loop
     await copyFile(join(recDir, rel), join(recDir, destRel));
     return 'copied';
   }
@@ -109,7 +106,6 @@ async function migrateRecord(recDir, recordId) {
     const entries = await readdir(join(recDir, base), { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      // eslint-disable-next-line no-await-in-loop -- per-run sequential is fine (≤8 runs/record)
       const outcome = await backfillRun(recDir, recordId, `${base}/${entry.name}`);
       if (outcome) tally[outcome] += 1;
     }
@@ -131,7 +127,6 @@ export default {
     let missing = 0;
     for (const rec of records) {
       if (!rec.isDirectory()) continue;
-      // eslint-disable-next-line no-await-in-loop -- sequential per record, small N
       const tally = await migrateRecord(join(spritesDir, rec.name), rec.name);
       if (tally.copied > 0) console.log(`🧭 migration 205: backfilled ${tally.copied} source clip(s) for sprite ${rec.name}`);
       copied += tally.copied;
