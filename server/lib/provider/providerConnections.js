@@ -269,7 +269,7 @@ export function withoutConnectionOwnedFields(provider, owned) {
 export function withConnectionOwnedFields(routeRecord, owned) {
   const merged = { ...routeRecord, ...owned.fields };
   // `Object.assign` rather than an object spread here: the spawn-site guard in
-  // `cliChildEnv.guard.test.js` reads a spread of a record's env map beside an
+  // `server/test/guards/runtime/cliChildEnv.test.js` reads a spread of a record's env map beside an
   // `envVars:` key as a hand-rolled CLI child environment, and this module can
   // never spawn anything. Same result, no false positive to exempt.
   if (owned.hasEnvVars) merged.envVars = Object.assign({}, routeRecord.envVars, owned.envVars);

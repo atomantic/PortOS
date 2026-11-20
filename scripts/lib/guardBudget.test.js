@@ -8,7 +8,7 @@ import { GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDur
 describe('guard budget', () => {
   it('names each guard over budget, slowest first', () => {
     const over = overBudgetGuards({
-      'docs/api-doc.test.js': GUARD_BUDGET_MS,
+      'server/test/guards/repo.guard.test.js': GUARD_BUDGET_MS,
       'scripts/new-scanner.test.js': GUARD_BUDGET_MS + 1,
       'server/slow-scanner.test.js': GUARD_BUDGET_MS + 500,
     });

@@ -6,7 +6,7 @@
  * An explicit `windowsHide: false` is always respected — the default only fills the gap.
  *
  * Server runtime code must import from here rather than `child_process`;
- * `childProcess.guard.test.js` enforces that. Why a wrapper instead of another
+ * `server/test/guards/runtime/childProcess.test.js` enforces that. Why a wrapper instead of another
  * per-call-site sweep, what the console handoff actually is, and what is out of
  * scope: docs/WINDOWS_CONSOLE.md.
  *

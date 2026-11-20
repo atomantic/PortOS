@@ -12,6 +12,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary } from './lib/importReach.js';
+import { guardRunnerFor, isGuardCheck } from './lib/guardScanners.js';
 import {
   DB_RISK_RULES, DOCKER_CONTAINMENT_LIVE_PATH_RE, LINUX_CONTAINMENT_PATH_RE, MACOS_NATIVE_PATH_RE,
   MAX_CHANGED_CODE_FILES, NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_SOURCE_FILES, SLASHDO_CONTRACT_TEST_FILES,
@@ -336,8 +337,12 @@ function buildSuitePlan(changedFiles, {
     }
   }
 
-  const serverFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'server'));
-  const clientFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'client'));
+  // A structural guard check runs only inside its runner (#16996): the Vitest
+  // configs exclude its directory, so a selector that names one means the runner.
+  const runnable = selectedTests.map((path) => (isGuardCheck(path) ? guardRunnerFor(path) : path))
+    .filter((path) => trackedSet.has(path));
+  const serverFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'server'));
+  const clientFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'client'));
 
   const hasServerSource = jsSources.some(isServerRunnerFile);
   const hasClientSource = jsSources.some(isClientSource);

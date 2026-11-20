@@ -11,7 +11,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // Every write here is gated by the default-deny policy (#16018); the refusal and
-// principal matrix live in services/authGate.test.js and hostControlCoverage.test.js.
+// principal matrix live in services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js.
 // This suite proves each mounted media router still runs behind the real gates
 // for a local operator and a delegated agent session. Host-process services are doubled.
 const auth = vi.hoisted(() => ({ enabled: false }));

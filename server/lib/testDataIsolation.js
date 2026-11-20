@@ -1,7 +1,7 @@
 /**
  * Runtime backstop: no test may WRITE into the checkout's real `data/` tree.
  *
- * `testDataIsolation.guard.test.js` is the static half (text-scans tests for a spelling naming `data/`), but a suite that imports the real `PATHS` and reads a data-rooted member with no redirect is invisible
+ * `server/test/guards/repo/testDataIsolation.test.js` is the static half (text-scans tests for a spelling naming `data/`), but a suite that imports the real `PATHS` and reads a data-rooted member with no redirect is invisible
  * to a text scan (~50 of ~1300 suites do, so a static allowlist would rot). The two-run read probe (#3687) catches READ leaks as failing assertions; a WRITE leak changes no assertion (#6171:
  * `providerUsage.test.js` persisted fixture quota cards over the real `data/provider-quotas.json` and federated them to peers). So writes are closed at RUNTIME in the shared write primitives, the
  * filesystem analogue of `lib/db.js`'s `isTestRunner()` + `query()` backstop. It fires only on a write that reaches the real root.

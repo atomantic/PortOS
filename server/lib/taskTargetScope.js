@@ -4,7 +4,7 @@
  * (`INSTALL_WIDE_TASK_TYPES`, `MANAGED_APP_TARGET_TASK_TYPES`, `PROGRAMMATIC_SCHEDULED_TASK_TYPES`, `isProgrammaticScheduledTaskType`, `requiresManagedAppTarget`, `requiresInstallWideTarget`.)
  *
  * Pure data + two predicates in `lib/` because three tiers need one answer and only one is a service: `services/taskScheduleRegistry.js` re-exports it (the on-demand request gate and global generator keep one contract), `lib/quotaBurnTaskRef.js` resolves a burn step's reference against it, and `lib/quotaBurnValidation.js` rejects a wrong-scope reference BEFORE it reaches disk;
- * `server/lib` can't import upward into `server/services` (`lib/layering.guard.test.js`).
+ * `server/lib` can't import upward into `server/services` (`server/test/guards/modules/libLayering.test.js`).
  */
 
 /** Task types whose "Run Now" with NO app is the REAL run (they sweep every managed app in one dispatch). Surfaced per task on `getScheduleStatus()` so the schedule UI can offer an "All apps" entry instead of forcing the app picker (which would make the install-wide lane unreachable on any install with apps). */

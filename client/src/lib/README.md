@@ -16,7 +16,7 @@ imports must reach no Node built-in and nothing outside `server/lib`; when the n
 home does (`storyBible.js` pulls `crypto`), split the pure part into its own leaf — or,
 when the only impurity is an id the browser never mints, take it from `uuid.js`, which reads
 the global WebCrypto and so keeps the leaf importable (browser code mints through `client/src/lib/uuid.js`).
-`scripts/client-server-import-purity.guard.test.js` and `scripts/server-imports-no-client.guard.test.js`
+`server/test/guards/modules/client-server-import-purity.test.js` and `server/test/guards/modules/server-imports-no-client.test.js`
 enforce both halves.
 
 ## Discovery rule

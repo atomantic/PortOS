@@ -80,7 +80,7 @@ const readDirOrEmpty = async (path) => readdir(path, { withFileTypes: true }).ca
 // Pre-rename shipped hashes. Auto-update only matches; customized templates
 // are left for the user to merge manually (setup-data.js will flag the drift).
 //
-// Exported under the standard names so `shippedPromptHashes.guard.test.js` can
+// Exported under the standard names so `server/test/guards/repo/shippedPromptHashes.test.js` can
 // check that the shipped-hash table records them. `DRIFT_SUBDIRS` tells it
 // that `bible-deference.md` lives under `prompts/_partials/` rather than the
 // default `prompts/stages/`.

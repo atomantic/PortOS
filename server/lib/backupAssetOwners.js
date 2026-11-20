@@ -16,7 +16,7 @@
  *
  * - `admitted`: holds `withBackupAssetPublication` from its first byte change
  *   through the row that names (or stops naming) those bytes. Every listed
- *   module calls it; `backupAssetOwners.guard.test.js` keeps this list and the code
+ *   module calls it; `server/test/guards/modules/backupAssetOwners.test.js` keeps this list and the code
  *   in step in both directions. Where a long producer (a sidecar or child
  *   process) writes the bytes in place, only the row commit takes the lease:
  *   a cut copies files before it dumps rows, so a row that waits out the cut

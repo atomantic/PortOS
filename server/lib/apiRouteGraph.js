@@ -19,7 +19,7 @@
  * a committed manifest is in `server/AGENTS.md` ("Generated manifests").
  *
  * `scanRouteGraph()` also returns every declaration's content key
- * (`routeDeclarationKey`) so `apiRouteGraph.guard.test.js` can prove the walk reaches
+ * (`routeDeclarationKey`) so `server/test/guards/modules/apiRouteGraph.test.js` can prove the walk reaches
  * every declaration under `server/routes/` by comparing two in-memory scans,
  * and each operation's `declarations` (module, router id, local path) so the
  * host-control guard can find the handler a mounted route runs. The catalog

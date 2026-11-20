@@ -27,7 +27,7 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * barrel, and re-exporting a leaf from the orchestrator above it is what made
  * "where does finalizeAgent live" a three-answer question. Import a leaf from
  * the leaf. Do NOT move a function back in here if a spawner or agentManagement
- * calls it — that re-creates the cycle, and `serviceImportCycles.guard.test.js` will fail.
+ * calls it — that re-creates the cycle, and `server/test/guards/modules/serviceImportCycles.test.js` will fail.
  */
 
 import { join } from 'path';

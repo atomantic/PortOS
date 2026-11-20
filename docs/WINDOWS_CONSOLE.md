@@ -101,7 +101,7 @@ replacement that defaults `windowsHide: true` (i.e. `CREATE_NO_WINDOW`) on every
 so `promisify(execFile)` still resolves to `{ stdout, stderr }`. An explicit
 `windowsHide: false` is honored.
 
-`server/lib/childProcess.guard.test.js` fails the build if a server runtime file
+`server/test/guards/runtime/childProcess.test.js` fails the build if a server runtime file
 imports `child_process` directly. This bug was fixed twice before by sweeping
 `windowsHide: true` across call sites (v1.5.x, v1.6.7) and regressed both times,
 because nothing prevented the next new file from omitting it. Owning the import

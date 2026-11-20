@@ -4,7 +4,7 @@
  *
  * **This module must stay import-free.** It is what lets modules that cannot
  * import each other share state, so one import of a cluster module here closes
- * a cycle for every one of them at once. `serviceImportCycles.guard.test.js` enforces it.
+ * a cycle for every one of them at once. `server/test/guards/modules/serviceImportCycles.test.js` enforces it.
  */
 
 export const activeAgents = new Map();

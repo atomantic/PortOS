@@ -2706,7 +2706,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // fails closed. A library member (`server/lib/testHelper.js` and its
       // source walkers) reads such a tree only when a test calls it, and every
       // test that does is a tree scanner, which carries the guard suffix and is
-      // never memoized (`scripts/repo-scan-guards.guard.test.js` enforces the name).
+      // never memoized (`server/test/guards/repo/repo-scan-guards.test.js` enforces the name).
       // A data-read tree the repository listing can enumerate is keyed instead
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);

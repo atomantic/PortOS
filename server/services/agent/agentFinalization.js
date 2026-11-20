@@ -23,7 +23,7 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * `agentLifecycle.js` imports BOTH spawners. This module is a leaf with
  * respect to that cluster — it must NOT import `agentLifecycle.js`,
  * `agentCliSpawning.js`, `agentTuiSpawning.js`, or `agentManagement.js`, or the
- * cycle comes straight back. `server/services/serviceImportCycles.guard.test.js`
+ * cycle comes straight back. `server/test/guards/modules/serviceImportCycles.test.js`
  * enforces that.
  */
 

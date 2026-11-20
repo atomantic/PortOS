@@ -63,7 +63,7 @@ because it is not the password. A disabled peer's token is refused.
 ### Peer API surface
 
 `PEER_API_SURFACE` in `server/lib/apiAccessPolicy.js` is the contract; this
-table mirrors it. `server/lib/apiAccessPolicy.guard.test.js` scans `peerFetch` and
+table mirrors it. `server/test/guards/modules/apiAccessPolicy.test.js` scans `peerFetch` and
 `peerStreamRequest` call sites and fails when this version calls a peer path
 the list does not admit.
 

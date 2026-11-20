@@ -156,7 +156,7 @@ beforeEach(async () => {
 afterEach(() => { cancelAll(); });
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal and the authorized
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal and the authorized
 // workflows through the real scheduler -> action-executor consumer.
 describe('Moltbook publication behind the default-deny gate (#16114)', () => {
   it('refuses a remote caller before credentials or persisted steering', async () => {

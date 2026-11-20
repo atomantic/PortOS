@@ -734,7 +734,9 @@ it('keeps PostgreSQL tests out of ordinary server runner selection and routes th
 
 it('runs the whole-tree import-cycle guard on a PR that touches one server/services file (#14327)', () => {
   const plan = buildCiTestPlan(['server/services/auth.js'], realTree());
-  expect(plan.server.files).toContain('server/services/serviceImportCycles.guard.test.js');
+  // The cycle check is a module the structural guard runner loads (#16996).
+  expect(existsSync(join(REPO_ROOT, 'server/test/guards/modules/serviceImportCycles.test.js'))).toBe(true);
+  expect(plan.server.files).toContain('server/test/guards/modules.guard.test.js');
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
@@ -802,7 +804,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
 
 describe('CI test impact planner', () => {
   it('selects executable documentation tests, including contracts outside the always-run list', () => {
-    const paths = ['docs/features/product-surfaces.test.js', 'docs/example.test.js'];
+    const paths = ['docs/features/example-contract.test.js', 'docs/example.test.js'];
     const plan = buildCiTestPlan(paths, { trackedFiles: [...TRACKED, ...paths] });
 
     expect(plan.full).toBe(false);
@@ -812,7 +814,8 @@ describe('CI test impact planner', () => {
   });
 
   it('covers the product-surfaces Markdown input without widening ordinary documentation changes', () => {
-    const contract = 'docs/features/product-surfaces.test.js';
+    // The product-surfaces doc-parity check runs inside the structural guard runner (#16996).
+    const contract = 'server/test/guards/repo.guard.test.js';
     const plan = buildCiTestPlan(['docs/features/product-surfaces.md'], {
       trackedFiles: [...TRACKED, contract],
     });
@@ -901,10 +904,10 @@ describe('CI test impact planner', () => {
   it('routes always-run selectors to the runner that globs them', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
-      'scripts/agent-instructions-files.guard.test.js',
+      'scripts/node-version-drift.guard.test.js',
       'client/src/a11y/overlays.conventions.test.js',
     ])).toEqual({
-      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.guard.test.js'],
+      server: ['server/services/taskPromptDefaults.test.js', 'scripts/node-version-drift.guard.test.js'],
       client: ['client/src/a11y/overlays.conventions.test.js'],
     });
   });
@@ -943,7 +946,8 @@ describe('CI test impact planner', () => {
   });
 
   it('runs the shipped prompt-hash guard on every plan', () => {
-    expect(getAlwaysRunTests()).toContain('scripts/migrations/shippedPromptHashes.guard.test.js');
+    expect(existsSync(join(REPO_ROOT, 'server/test/guards/repo/shippedPromptHashes.test.js'))).toBe(true);
+    expect(getAlwaysRunTests()).toContain('server/test/guards/repo.guard.test.js');
   });
 
   it('omits an untracked always-run guard rather than handing Vitest a missing selector', () => {
@@ -1040,7 +1044,7 @@ describe('CI test impact planner', () => {
     { changed: 'server/lib/catalog/catalogValidation.js', runner: 'server', guards: ['server/lib/catalog/moduleSummaries.test.js'] },
     { changed: 'server/lib/persistent/persistentMindCapabilities.js', runner: 'server', guards: ['server/lib/persistent/moduleSummaries.test.js'] },
     { changed: 'server/lib/provider/providerModels.js', runner: 'server', guards: ['server/lib/provider/moduleSummaries.test.js'] },
-    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/test/guards/modules.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
@@ -1529,7 +1533,7 @@ describe('CI test impact planner', () => {
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
-      'server/lib/apiRouteGraph.guard.test.js',
+      'server/test/guards/modules.guard.test.js',
       'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];

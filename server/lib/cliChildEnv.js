@@ -233,7 +233,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  * @param {string|null} [options.model] - see `composeProviderEnv`.
  * @param {string|undefined|null} options.cwd - the directory being handed to
  *   `spawn`/`pty.spawn`; `PWD` is pinned to it (see `withSpawnCwdEnv`). Pass it
- *   whenever the spawn names a cwd; `spawnCwd.guard.test.js` only counts such a call.
+ *   whenever the spawn names a cwd; `server/test/guards/runtime/spawnCwd.test.js` only counts such a call.
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the

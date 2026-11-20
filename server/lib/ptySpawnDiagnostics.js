@@ -35,7 +35,7 @@ export function probePtyRuntime(pty, probeCwd) {
       cols: 80,
       rows: 24,
       cwd: probeCwd,
-      // The child is a bare `echo` that never reads PWD, but the tree-wide guard in spawnCwd.guard.test.js refuses special-casing (it stops being true if the probe command changes); pin it like every other cwd-passing spawn (#3193).
+      // The child is a bare `echo` that never reads PWD, but the tree-wide guard in server/test/guards/runtime/spawnCwd.test.js refuses special-casing (it stops being true if the probe command changes); pin it like every other cwd-passing spawn (#3193).
       env: withSpawnCwdEnv(process.env, probeCwd),
     });
     try {

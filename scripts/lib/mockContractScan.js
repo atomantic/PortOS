@@ -17,10 +17,21 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve, relative, sep } from 'node:path';
 
-/** A `/` after an operator, opener or `return` begins a regex literal, not a division. */
+const REGEX_PRECEDERS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '>']);
+const WHITESPACE = /\s/;
+const WORD_CHAR = /\w/;
+
+/**
+ * A `/` after an operator, opener or `return` begins a regex literal, not a division.
+ * Reads back from `at` past whitespace (what `trimEnd` drops) instead of slicing the
+ * whole prefix, which made masking quadratic in a file's `/` count.
+ */
 function startsRegex(source, at) {
-  const before = source.slice(0, at).trimEnd();
-  return before === '' || /[(,=:[!&|?{};>]$/.test(before) || /\breturn$/.test(before);
+  let end = at - 1;
+  while (end >= 0 && WHITESPACE.test(source[end])) end -= 1;
+  if (end < 0 || REGEX_PRECEDERS.has(source[end])) return true;
+  const start = end - 5;
+  return start >= 0 && source.startsWith('return', start) && (start === 0 || !WORD_CHAR.test(source[start - 1]));
 }
 
 /**
@@ -196,12 +207,15 @@ const exportCache = new Map();
  * fail on entries the scan no longer needs (see `unusedAllowed`).
  */
 export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set() }) {
+  // Most test files define no literal factory; masking one is the scan's whole cost.
+  const factories = [...rawSource.matchAll(FACTORY_RE)];
+  if (factories.length === 0) return [];
   const masked = mask(rawSource);
   const rel = relative(root, testFile).split(sep).join('/');
   const violations = [];
   // The specifier is a string, so it is blanked in `masked`; match on raw and
   // require the call itself to be live code (not inside a comment).
-  for (const m of rawSource.matchAll(FACTORY_RE)) {
+  for (const m of factories) {
     if (masked[m.index] !== 'v') continue;
     const target = resolveModule(testFile, m[2]);
     if (!target) continue;

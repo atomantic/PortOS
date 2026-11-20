@@ -3,7 +3,7 @@ import { posix } from 'node:path';
 /**
  * The DB-backed test files, relative to the Vitest root (server/). Exported
  * as the single source of truth: the DB config's `include` uses it, and the drift
- * guard in lib/db.inventory.guard.test.js imports it to assert no checkHealth()-gated
+ * guard in server/test/guards/repo/db.inventory.test.js imports it to assert no checkHealth()-gated
  * suite is left out. `**\/db.test.js` only matches a file named exactly
  * `db.test.js` — a `<name>.db.test.js` suite is NOT auto-included and must be
  * listed explicitly below (the drift guard fails the build if you forget).
