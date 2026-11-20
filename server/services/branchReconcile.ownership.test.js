@@ -107,7 +107,7 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
   readVerdictLedger: async () => [],
 }));
 
-const { reconcile, cleanupMerged, reapSupersededBranches } = await import('./branchReconcile.js');
+const { reconcile, cleanupMerged, reapSupersededBranches, gatherBranchState } = await import('./branchReconcile.js');
 const { reapMergedWorktrees } = await import('./worktreeManager.js');
 
 // A reconcile pass is dozens of sequential real-Git spawns plus fixture setup, all
@@ -201,6 +201,27 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   }
   const reconcileWithoutOwners = () => reconcile(repo, {
     activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] },
+  });
+
+  it('returns an empty inventory for a managed directory that is not a Git checkout', async () => {
+    expect(await gatherBranchState(external, { defaultBranch: 'main', hasOrigin: false, origin: null })).toEqual([]);
+  });
+
+  it('enumerates tips and registered checkouts once for multiple feature branches', async () => {
+    const tree = await addTree(join(external, 'scan'), 'feature/one');
+    await writeFile(join(tree, 'unmerged.txt'), 'new work');
+    await execGit(['add', 'unmerged.txt'], tree);
+    await execGit(['commit', '-m', 'Unmerged feature'], tree);
+    await execGit(['branch', 'feature/two', 'feature/one'], repo);
+    const tip = await head('feature/one');
+    injected.gitSpawns.length = 0;
+    const rows = await gatherBranchState(repo, { defaultBranch: 'main', hasOrigin: false, origin: null });
+    expect(rows.map(row => [row.branch, row.tip])).toEqual([['feature/one', tip], ['feature/two', tip]]);
+    const commands = injected.gitSpawns.map(spawn => spawn.args);
+    expect(commands.filter(args => args[0] === 'for-each-ref')).toHaveLength(1);
+    expect(commands.filter(args => args[0] === 'worktree' && args[1] === 'list')).toHaveLength(1);
+    expect(commands.filter(args => args[0] === 'rev-parse' && args.some(arg => arg.endsWith('^{commit}')))).toEqual([]);
+    expect(commands.filter(args => args[0] === 'show-ref')).toEqual([]);
   });
 
   it('retires a fresh claim with exact completion evidence while preserving a locked sibling', async () => {

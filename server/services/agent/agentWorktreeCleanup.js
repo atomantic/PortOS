@@ -234,6 +234,7 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
   const held = (branch, reason) => `Claim cleanup ${branch} incomplete — ${reason}`;
   const repository = await realpath(sourceWorkspace).catch(() => null);
   if (!repository) return claimBranches.map(branch => held(branch, 'repository unavailable'));
+  let uncapturedInventory;
   for (const branch of claimBranches) {
     const captures = (agentState?.metadata?.completedCheckouts || []).filter(row => row.branch === branch
       && completedCheckoutReceiptValid(agentState, row) && typeof row.repoPath === 'string'
@@ -241,9 +242,18 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       && resolve(row.repoPath) === resolve(repository));
     const capture = captures.length === 1 ? captures[0] : null;
     if (!capture) {
-      const [trees, refPresent] = await Promise.all([
+      // An observed holder or ref is enough to retain work without further
+      // probes. Only a fresh targeted read can establish clean absence, including
+      // malformed loose refs that Git omits from enumeration.
+      uncapturedInventory ??= import('../repoBranchSnapshot.js')
+        .then(({ readRepoBranchSnapshot }) => readRepoBranchSnapshot(sourceWorkspace))
+        .catch(() => null);
+      const snapshot = await uncapturedInventory;
+      const couldBeAbsent = snapshot && !snapshot.tips.has(branch)
+        && !snapshot.worktrees.some(tree => tree.branch === `refs/heads/${branch}`);
+      const [trees, refPresent] = couldBeAbsent ? await Promise.all([
         listWorktrees(sourceWorkspace).catch(() => null), readLocalBranchPresence(sourceWorkspace, branch),
-      ]);
+      ]) : [null, null];
       if (!trees || refPresent !== false || trees.some(tree => tree.branch === `refs/heads/${branch}`)) warnings.push(held(branch, 'checkout identity unavailable'));
       else {
         const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);

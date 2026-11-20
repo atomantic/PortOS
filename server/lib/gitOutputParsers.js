@@ -49,18 +49,17 @@ export function parseDiffStat(statOutput) {
 }
 
 /**
- * Parse one line of the pipe-delimited
- * `git branch -vv --format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)`
- * output into a structured branch record.
- * @param {string} line
- * @returns {{ name: string, current: boolean, tracking: string|null, ahead: number, behind: number }}
+ * Parse the NUL-delimited local-ref format used by getBranches. Git allows
+ * pipe characters in ref names. The object type keeps a malformed head that
+ * points to a non-commit from becoming retirement evidence.
  */
 export function parseBranchVerboseLine(line) {
-  const [head, name, upstream, track] = line.split('|');
+  const [head, name, upstream, track, type, oid] = line.split('\0');
   const aheadMatch = track?.match(/ahead (\d+)/);
   const behindMatch = track?.match(/behind (\d+)/);
   return {
     name,
+    tip: type === 'commit' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(oid || '') ? oid : null,
     current: head === '*',
     tracking: upstream || null,
     ahead: aheadMatch ? parseInt(aheadMatch[1], 10) : 0,

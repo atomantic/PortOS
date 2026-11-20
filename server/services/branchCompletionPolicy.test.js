@@ -43,7 +43,7 @@ vi.mock('./cos/cosAgentIndex.js', () => ({
   removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length),
   archivedRecordCacheEpoch: () => 0, getCachedArchivedRecord: () => null, cacheArchivedRecord: () => {}, pruneArchivedRecordCache: () => {},
 }));
-vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
+vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tip: runtime.tip, tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
 import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';

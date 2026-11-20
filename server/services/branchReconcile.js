@@ -27,6 +27,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches, readBranchLineage, readBranchPublished } from './git.js';
+import { readRepoBranchSnapshot } from './repoBranchSnapshot.js';
 import { readClaimIssueReservation, readRepoClaimIssueReservation } from './claimIssueReservation.js';
 import { probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
@@ -799,9 +800,10 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   // the read-only leftover-branch detector, and an app's repoPath can be a
   // directory that was never a clone — `null` there means "could not ask",
   // which is exactly what an origin-less repo can answer.
-  const [branches, worktrees, prsByHeadOrNull, remoteHeads] = await Promise.all([
-    getBranches(repoPath),
-    listWorktrees(repoPath).catch(() => []),
+  const snapshot = readRepoBranchSnapshot(repoPath, { strict: false });
+  const [branches, { worktrees, tips }, prsByHeadOrNull, remoteHeads] = await Promise.all([
+    getBranches(repoPath, { snapshot }),
+    snapshot,
     getOpenPrsByHead(repoPath, origin, { forgeExec, forgeAccount }),
     providedRemoteHeads !== undefined ? providedRemoteHeads
       : hasOrigin ? listRemoteHeads(repoPath)
@@ -823,22 +825,15 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     (b) => !b.isDefault && !b.current && !protectedSet.has(b.name)
   );
 
-  const { readBranchCompletionPolicies, readBranchCompletionHoldDetail } = await import('./branchCompletionPolicy.js');
-  const completionPolicies = candidates.length ? await readBranchCompletionPolicies().catch(() => null) : [];
+  const { readBranchCompletionPolicies, readBranchCompletionHoldDetail, indexBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+  const completionPolicies = candidates.length ? await readBranchCompletionPolicies({ repoPath }).catch(() => null) : [];
+  const policyIndex = indexBranchCompletionPolicies(repoPath, completionPolicies);
 
   const inputs = [];
   for (const b of candidates) {
-    const tipOut = await execGit(['rev-parse', '--verify', `refs/heads/${b.name}^{commit}`], repoPath,
-      { ignoreExitCode: true }).catch(() => null);
-    const tipText = tipOut?.stdout?.trim();
-    const tip = tipOut?.exitCode === 0 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tipText || '') ? tipText : null;
-    if (!tip) {
-      // Retirement can remove a ref after enumeration. Git echoes an unknown
-      // name on failed rev-parse; that text is never a captured commit head.
-      const present = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${b.name}`], repoPath,
-        { ignoreExitCode: true }).catch(() => null);
-      if (present?.exitCode === 1) continue;
-    }
+    // Enumeration captured the commit paired with this name. Retirement reads
+    // the local ref and holder again under its mutation guards.
+    const tip = b.tip ?? null;
     const upstreamName = upstreamBranchName(b.tracking);
     const wt = worktreeByBranch.get(b.name) || null;
     const worktreePath = wt?.path || null;
@@ -852,9 +847,9 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     // getBranches' `merged` is ancestor-based (misses squash/rebase); confirm
     // the harder cases via hasBranchMergeEvidence (covers squash + rebase). Short
     // -circuit when the cheap check already proved it merged.
-    const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch);
+    const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch, tips);
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
-    const completionHold = await readBranchCompletionHoldDetail({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
+    const completionHold = await readBranchCompletionHoldDetail({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, policyIndex, retirement: hasMergeEvidence });
     const completionPolicyReason = completionHold.reason;
     // The scan and the coordinator's recheck (cosClaimOwnership) must agree on
     // which review branches are unshipped, so both ask the same forge question.
@@ -1292,12 +1287,11 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   const completionPolicy = await import('./branchCompletionPolicy.js');
   const completionEvidence = () => import('./completedCheckoutEvidence.js');
   const readPolicyHold = async (tip) => {
-    const hold = await completionPolicy.readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
-    const step = supersededPolicyHold({ hold, superseded, openPr: b.openPr });
-    if (!step.need) return step.hold;
-    const agents = await completionPolicy.readBranchCompletionPolicies().catch(() => null);
-    const detail = agents && await completionPolicy.readBranchCompletionHoldDetail({ repoPath, branch: b.branch, tip, agents }).catch(() => null);
-    return supersededPolicyHold({ hold, superseded, openPr: b.openPr, detail: detail || null }).hold;
+    const input = { repoPath, branch: b.branch, tip, retirement: mergedRetirement };
+    if (!superseded || b.openPr) return completionPolicy.readBranchCompletionHold(input);
+    const agents = await completionPolicy.readBranchCompletionPolicies({ repoPath }).catch(() => null);
+    const detail = await completionPolicy.readBranchCompletionHoldDetail({ ...input, agents });
+    return supersededPolicyHold({ hold: detail.reason, superseded, openPr: b.openPr, detail }).hold;
   };
   const readers = {
     agents: () => claimOwners.readAgents().catch(() => null),

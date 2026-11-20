@@ -31,20 +31,53 @@ const unreadableRecord = (id, error) => {
  * rejection into the same per-branch reason. Any other failure is wrapped as
  * the unavailable reason with that failure as its cause.
  */
-export async function readBranchCompletionPolicies({ repairIndex = true } = {}) {
-  return readPolicies(repairIndex).catch(error => {
+export async function readBranchCompletionPolicies({ repairIndex = true, repoPath } = {}) {
+  return readPolicies(repairIndex, repoPath).catch(error => {
     const cause = error.cause ?? error;
     console.warn(`⚠️ Branch completion policy unavailable: ${cause.code ? `${cause.code} ` : ''}${cause.message}`);
     throw error.message === unavailable ? error : unavailableBecause(error);
   });
 }
 
-async function readPolicies(repairIndex) {
+function registeredCompletion(meta) {
+  return meta.prCompletionPolicy || (isTruthyMeta(meta.configReviewLoop) ? PR_COMPLETIONS.REVIEW_THEN_MERGE : null) || explicitPrCompletion({ metadata: {
+    prCompletion: meta.prCompletion, jiraTicketId: meta.jiraTicketId,
+    analysisType: meta.taskAnalysisType, reviewLoopLeaveOpen: meta.reviewLoopLeaveOpen,
+  } });
+}
+
+// Only the fields read by the policy evaluator belong in the scoped cache.
+// Other history consumers (including checkout receipts) still receive full records.
+function projectPolicyAgent(agent) {
+  const meta = agent.metadata || {};
+  const target = meta.reviewLoopMergeTarget;
+  const receipt = meta.branchCompletionPolicy;
+  const followUp = meta.mergedReviewFollowUp;
+  return {
+    status: agent.status, startedAt: agent.startedAt, result: { success: agent.result?.success },
+    metadata: {
+      sourceWorkspace: meta.sourceWorkspace || meta.workspacePath,
+      worktreeBranch: meta.worktreeBranch, jiraBranch: meta.jiraBranch, claimBranch: meta.claimBranch,
+      claimBranches: meta.claimBranches, claimReleasedBranches: meta.claimReleasedBranches,
+      prCompletionPolicy: registeredCompletion(meta),
+      branchCompletionPolicy: receipt && { branch: receipt.branch, completion: receipt.completion, prUrl: receipt.prUrl, tip: receipt.tip },
+      reviewLoopMergeTarget: target && { branch: target.branch, url: target.url, fork: target.fork && { forkHead: target.fork.forkHead } },
+      mergedReviewFollowUp: followUp && { prUrl: followUp.prUrl, status: followUp.status },
+    },
+  };
+}
+
+async function readPolicies(repairIndex, repoPath) {
   const { readAgentsStateForSafetyCheck } = await import('./cos/cosState.js');
   const snapshot = await readAgentsStateForSafetyCheck();
   if (!snapshot.trusted || !isPlainObject(snapshot.agents)) throw unavailableBecause(new Error('live agent state is untrusted'));
   const agents = new Map(Object.entries(snapshot.agents));
   if ([...agents].some(([id, agent]) => !isPlainObject(agent) || agent.id !== id)) throw unavailableBecause(new Error('live agent state has a mismatched record'));
+  const records = [];
+  const collect = agent => {
+    if (!repoPath || samePath(agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath, repoPath)) records.push(agent);
+  };
+  for (const agent of agents.values()) collect(agent);
   const dir = join(PATHS.cos, 'agents');
   const raw = await readFile(join(dir, 'index.json'), 'utf8').catch(async error => {
     if (error.code === 'ENOENT') {
@@ -58,18 +91,22 @@ async function readPolicies(repairIndex) {
   if (!isPlainObject(index)) throw unavailableBecause(new Error('agent index is not an object'));
   const { archivedRecordCacheEpoch, cacheArchivedRecord, getCachedArchivedRecord, pruneArchivedRecordCache } = await import('./cos/cosAgentIndex.js');
   pruneArchivedRecordCache(new Set(Object.keys(index)));
-  const entries = Object.entries(index).filter(([id]) => !agents.has(id));
+  const entries = [];
   const dangling = [];
+  // Consume hits before misses start inserting: an archive larger than the LRU
+  // would otherwise evict every hit just before a sequential reader reached it.
+  for (const [id, date] of Object.entries(index)) {
+    if (agents.has(id)) continue;
+    if (!/^[A-Za-z0-9_-]+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw unavailableBecause(new Error('agent index has a malformed row'));
+    const cached = getCachedArchivedRecord(id, date, Boolean(repoPath));
+    if (!cached) entries.push([id, date]);
+    else if (cached.agent) collect(cached.agent);
+    else dangling.push(id);
+  }
   // Bounded parallelism; never read transcripts or archive records here.
   // Parsed records are memoized across reads (cosAgentIndex.js); archive writers invalidate them.
   for (let offset = 0; offset < entries.length; offset += 50) {
     await Promise.all(entries.slice(offset, offset + 50).map(async ([id, date]) => {
-      if (!/^[A-Za-z0-9_-]+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw unavailableBecause(new Error('agent index has a malformed row'));
-      const cached = getCachedArchivedRecord(id, date);
-      if (cached) {
-        if (cached.agent) agents.set(id, cached.agent); else dangling.push(id);
-        return;
-      }
       const epoch = archivedRecordCacheEpoch();
       const recordDir = join(dir, date, id);
       const content = await readFile(join(recordDir, 'metadata.json'), 'utf8').catch(async error => {
@@ -78,15 +115,16 @@ async function readPolicies(repairIndex) {
         if (error.code === 'ENOENT' && await stat(recordDir).then(() => false, missing => missing.code === 'ENOENT')) return null;
         throw unreadableRecord(id, error);
       });
-      if (content === null) { dangling.push(id); cacheArchivedRecord(id, date, null, epoch); return; }
+      if (content === null) { dangling.push(id); cacheArchivedRecord(id, date, null, epoch, null); return; }
       const agent = (() => { try { return JSON.parse(content); } catch (error) { throw unreadableRecord(id, error); } })();
       if (!isPlainObject(agent) || (agent.id || agent.agentId) !== id) throw unavailableBecause(new Error(`archived agent record ${id} id mismatch`));
-      cacheArchivedRecord(id, date, agent, epoch);
-      agents.set(id, agent);
+      const policy = projectPolicyAgent(agent);
+      cacheArchivedRecord(id, date, agent, epoch, policy);
+      collect(repoPath ? policy : agent);
     }));
   }
   if (repairIndex && dangling.length) dropDanglingIndexRows(dangling);
-  return [...agents.values()];
+  return records;
 }
 
 // Fire-and-forget repair of the source; the read above already ignores these rows.
@@ -106,22 +144,19 @@ const reviewTargetBranches = target => [target?.branch, target?.fork && forkLoca
  * Only a later, completed, explicit policy for this exact PR and current tip
  * can release a handoff; an absent/default policy or PR prose cannot do so.
  */
-function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
-  if (!Array.isArray(agents)) return { reason: unavailable };
-  const policies = [];
+export function indexBranchCompletionPolicies(repoPath, agents) {
+  if (!Array.isArray(agents)) return null;
+  const byBranch = new Map();
   for (const agent of agents) {
     const meta = agent?.metadata || {};
     if (!samePath(meta.sourceWorkspace || meta.workspacePath, repoPath)) continue;
     const receipt = meta.branchCompletionPolicy;
-    const completion = meta.prCompletionPolicy || (isTruthyMeta(meta.configReviewLoop) ? PR_COMPLETIONS.REVIEW_THEN_MERGE : null) || explicitPrCompletion({ metadata: {
-      prCompletion: meta.prCompletion, jiraTicketId: meta.jiraTicketId,
-      analysisType: meta.taskAnalysisType, reviewLoopLeaveOpen: meta.reviewLoopLeaveOpen,
-    } });
+    const completion = registeredCompletion(meta);
     const bindings = [meta.claimBranches, meta.claimReleasedBranches];
     // A known policy with unreadable scope cannot become permission. Missing
     // legacy fields are valid; malformed present bindings retain an unknown hold.
     if ((receipt?.completion || completion) && bindings.some(value => value !== undefined
-      && (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !name.trim())))) return { reason: unavailable };
+      && (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !name.trim())))) return null;
     // Claim flows cut their own worktrees, so registration has no worktreeBranch.
     // Exact bound/released branches retain the task's hold even when a run exits
     // before finalization can capture a PR. Ownership release is not merge consent.
@@ -130,20 +165,25 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
     // A review run is bound to the one PR it was assigned. Without that scope a
     // reused branch (the quality-snapshot publisher) inherits every past run's
     // obligation on every later PR, and none of them can ever be released.
-    const target = reviewTargetBranches(meta.reviewLoopMergeTarget).includes(branch) ? meta.reviewLoopMergeTarget.url : undefined;
-    const policy = receipt?.branch === branch ? receipt : {
-      branch: scopes.includes(branch) ? branch : null,
-      completion,
-      ...(target && { prUrl: target }),
-    };
-    if (policy.branch !== branch || (prUrl && policy.prUrl && policy.prUrl !== prUrl)) continue;
-    // A review-then-merge run whose assigned PR the forge verified MERGED has
-    // nothing left to review or merge. A human handoff is never discharged.
-    if (policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE && agent.status === 'completed'
-      && meta.mergedReviewFollowUp?.status === 'verified' && target
-      && meta.mergedReviewFollowUp.prUrl === target && (policy.prUrl ?? target) === target) continue;
-    policies.push({ ...policy, agent, time: Date.parse(agent.startedAt) || 0 });
+    const reviewBranches = reviewTargetBranches(meta.reviewLoopMergeTarget);
+    for (const branch of new Set([...scopes, receipt?.branch])) {
+      if (typeof branch !== 'string' || !branch) continue;
+      const target = reviewBranches.includes(branch) ? meta.reviewLoopMergeTarget.url : undefined;
+      const policy = receipt?.branch === branch ? receipt : { branch, completion, ...(target && { prUrl: target }) };
+      // A verified merge discharges the review of that exact assigned PR only.
+      if (policy.completion === PR_COMPLETIONS.REVIEW_THEN_MERGE && agent.status === 'completed'
+        && meta.mergedReviewFollowUp?.status === 'verified' && target
+        && meta.mergedReviewFollowUp.prUrl === target && (policy.prUrl ?? target) === target) continue;
+      if (!byBranch.has(branch)) byBranch.set(branch, []);
+      byBranch.get(branch).push({ ...policy, agent, time: Date.parse(agent.startedAt) || 0 });
+    }
   }
+  return byBranch;
+}
+
+function completionDecision({ branch, prUrl, tip, policyIndex }) {
+  if (!policyIndex) return { reason: unavailable };
+  const policies = (policyIndex.get(branch) || []).filter(policy => !prUrl || !policy.prUrl || prUrl === policy.prUrl);
   policies.sort((a, b) => b.time - a.time);
   const handoff = policies.find(policy => policy.completion === PR_COMPLETIONS.LEAVE_OPEN);
   const obligation = policies.find(policy => [PR_COMPLETIONS.LEAVE_OPEN, PR_COMPLETIONS.REVIEW_THEN_MERGE].includes(policy.completion));
@@ -170,15 +210,18 @@ export async function readBranchCompletionHold(input, deps = {}) {
  * such a branch to a coordinator to open its PR through the review workflow. */
 export async function readBranchCompletionHoldDetail(input, deps = {}) {
   const readPolicies = deps.readPolicies || readBranchCompletionPolicies;
-  const agents = input.agents ?? await readPolicies().catch(() => null);
+  const policyIndex = input.policyIndex === undefined
+    ? indexBranchCompletionPolicies(input.repoPath, input.agents === undefined
+      ? await readPolicies({ repoPath: input.repoPath }).catch(() => null) : input.agents)
+    : input.policyIndex;
   const { execGit } = await import('../lib/execGit.js');
-  const tip = input.tip ?? (await execGit(['rev-parse', '--verify', `refs/heads/${input.branch}`], input.repoPath)
+  const tip = input.tip !== undefined ? input.tip : (await execGit(['rev-parse', '--verify', `refs/heads/${input.branch}`], input.repoPath)
     .catch(() => null))?.stdout?.trim();
-  const decision = completionDecision({ ...input, tip, agents });
+  const decision = completionDecision({ ...input, tip, policyIndex });
   // A saved receipt cannot authorize a later remote push this checkout has not
   // fetched. Only a potential explicit release needs a fresh forge read; offline
   // cleanup preserves the handoff when that read cannot establish the same head.
-  if (input.retirement === true && decision.obligation?.prUrl
+  if (tip && input.retirement === true && decision.obligation?.prUrl
     && await verifiedPolicyTip(input.repoPath, input.branch, decision.obligation.prUrl, { requireMerged: true, expectedTip: input.tip }).catch(() => null) === tip) return { reason: null };
   if (decision.release && await verifiedPolicyTip(input.repoPath, input.branch, decision.release.prUrl).catch(() => null) === tip) return { reason: null };
   if (input.retirement === true && await isVacuousReviewObligation(input, decision, tip)) return { reason: null };
