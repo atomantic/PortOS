@@ -1455,6 +1455,38 @@ it('retries a clipped summary after the expanded detail request fails', async ()
   expect(getCosAgent).toHaveBeenCalledTimes(2);
 });
 
+it('preserves the transcript disclosure and fetched output when the card is reopened', async () => {
+  getCosAgent.mockResolvedValueOnce({
+    ...agent,
+    output: [{ type: 'stdout', line: 'Cached transcript line' }],
+  });
+  render(<MemoryRouter><AgentCard agent={agent} completed /></MemoryRouter>);
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
+  expect(await screen.findByText('Cached transcript line')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Hide', exact: true }));
+  expect(screen.queryByText('Cached transcript line')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(screen.getByRole('button', { name: 'Hide full transcript' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByText('Cached transcript line')).toBeInTheDocument();
+  expect(getCosAgent).toHaveBeenCalledTimes(1);
+});
+
+it('lazily loads the prompt and keeps it available when the drawer reopens', async () => {
+  getCosAgentPrompt.mockResolvedValueOnce({ prompt: 'Original spawn prompt' });
+  render(<MemoryRouter><AgentCard agent={agent} completed /></MemoryRouter>);
+  expect(getCosAgentPrompt).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Prompt', exact: true }));
+  expect(await screen.findByText('Original spawn prompt')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Close prompt viewer' }));
+  expect(screen.queryByRole('dialog', { name: 'Agent prompt' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Prompt', exact: true }));
+  expect(await screen.findByText('Original spawn prompt')).toBeInTheDocument();
+  expect(getCosAgentPrompt).toHaveBeenCalledExactlyOnceWith(agent.id);
+});
+
 
 it('keeps a dangerous scan report visible while the summary is collapsed', () => {
   render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: {
