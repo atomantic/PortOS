@@ -111,9 +111,9 @@ export async function getScheduleStatus() {
     dataInputCatalog: getTaskDataInputCatalog()
   };
 
-  // Fetch active apps once for per-app override aggregation
   const activeApps = await getActiveApps();
   const totalAppCount = activeApps.length;
+  const allOverrides = await mapWithConcurrency(activeApps, 8, (app) => getAppTaskTypeOverrides(app.id));
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!(await featureEnabled(interval))) continue;
@@ -128,7 +128,6 @@ export async function getScheduleStatus() {
     const isEnabledForApp = (override) => override?.enabled === true;
     const appOverrides = {};
     let enabledAppCount = 0;
-    const allOverrides = await mapWithConcurrency(activeApps, 8, (app) => getAppTaskTypeOverrides(app.id));
     for (let i = 0; i < activeApps.length; i++) {
       const override = allOverrides[i][taskType];
       if (override) {

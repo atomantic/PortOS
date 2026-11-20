@@ -228,7 +228,15 @@ async function readSchedule() {
     return { schedule: structuredClone(DEFAULT_SCHEDULE), needsSave: false };
   }
 
-  const retirementNormalized = normalizeRetirementRecords(loaded);
+  let executionStateNormalized = normalizeRetirementRecords(loaded);
+  // Older global execution records can predate per-app history. Normalize before
+  // the v1/v2 split so status, readiness and the first app write share the shape.
+  for (const record of Object.values(loaded.executions || {})) {
+    if (isPlainObject(record) && record.perApp == null) {
+      record.perApp = {};
+      executionStateNormalized = true;
+    }
+  }
 
   // Auto-migrate v1 → v2
   if (!loaded.version || loaded.version === 1) {
@@ -282,7 +290,7 @@ async function readSchedule() {
   };
 
   // Populate prompts from defaults if missing, and auto-upgrade stale defaults
-  let needsSave = retirementNormalized;
+  let needsSave = executionStateNormalized;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (config.__prReviewerPipelineMigrated) {
       delete config.__prReviewerPipelineMigrated;
