@@ -9,6 +9,7 @@ import {
   productionReadiness,
   productionReviewBasis,
 } from '../productionReview.js';
+import { hasPlayableLyricWordTimings } from '../timedText.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from '../treatment.js';
 import {
   codeFirstProductionAssets,
@@ -174,10 +175,8 @@ const MIN_HEARD_WORD_SHARE = 0.5;
  */
 function repairLyricWordTimings(cues, durationSec) {
   const wordsOf = cues.map((cue) => cueText(cue).split(/\s+/).filter(Boolean));
-  const usable = (cue) => Array.isArray(cue.words) && cue.words.length > 0 && cue.words.every((w) => validSpan(w.startSec, w.endSec))
-    && validSpan(cue.startSec, cue.endSec) && cue.words.every((w) => w.startSec >= cue.startSec && w.endSec <= cue.endSec);
   const ownSpan = (cue) => validSpan(cue.startSec, cue.endSec) && cue.endSec <= durationSec;
-  const needs = cues.map((cue, i) => wordsOf[i].length > 0 && !usable(cue));
+  const needs = cues.map((cue, i) => wordsOf[i].length > 0 && !hasPlayableLyricWordTimings(cue, durationSec));
   const spans = cues.map(() => null);
   for (let i = 0; i < cues.length; i += 1) {
     if (!needs[i]) continue;
@@ -301,14 +300,6 @@ export async function settleLyricTiming(projectId, run) {
   const status = productionReadiness(project).alignment.status;
   if (status === 'verified' || status === 'instrumental') return;
   const reviewer = runReviewer(run);
-  // A reused song's timing a director already verified on its source project, untouched since.
-  const reusedBasis = run.brief.songFrom?.verifiedAlignmentBasis;
-  if (alignmentBasisMatches(project, reusedBasis)) {
-    const notes = 'Lyric timing carried over unchanged from the source project, where it was verified.';
-    await deps.verifyAlignment(projectId, { basis: reusedBasis, notes, reviewer });
-    await record('approve', notes);
-    return;
-  }
   const cues = (project.lyricCues || []).filter((c) => cueText(c));
   if (!cues.length) {
     if (!run.brief.instrumental) return;
@@ -317,16 +308,28 @@ export async function settleLyricTiming(projectId, run) {
     await record('approve', 'Instrumental song: no lyric timing to verify.');
     return;
   }
+  const timed = cues.filter((c) => hasPlayableLyricWordTimings(c, project.audioAnalysis?.durationSec)).length;
+  if (timed < cues.length) {
+    const notes = `Only ${timed} of ${cues.length} lyric lines have playable word timings. A director needs to repair the remaining lines.`;
+    await record('revise', notes);
+    return notes;
+  }
+  // A reused song's timing a director already verified on its source project, untouched since.
+  const reusedBasis = run.brief.songFrom?.verifiedAlignmentBasis;
+  if (alignmentBasisMatches(project, reusedBasis)) {
+    const notes = 'Lyric timing carried over unchanged from the source project, where it was verified.';
+    await deps.verifyAlignment(projectId, { basis: reusedBasis, notes, reviewer });
+    await record('approve', notes);
+    return;
+  }
   const words = cues.flatMap((c) => c.words || []);
-  const timed = cues.filter((c) => c.words?.length && validSpan(c.startSec, c.endSec)).length;
   const matched = words.filter((w) => w.conf === 'matched').length;
   const notes = `Checked by the ${orchestrated ? 'orchestrator' : 'autopilot'}: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
   const failedAlignment = projectAutonomousRun(project)?.output?.alignmentError;
   const alignmentError = alignmentBasisMatches(project, failedAlignment?.basis) ? failedAlignment.message : null;
-  const held = timed < cues.length ? 'Lines without timings need a director.'
-    : alignmentError ? `Lyric alignment failed (${alignmentError}), so these timings are guesses; a director needs to listen and verify them.`
-      : matched / words.length < MIN_HEARD_WORD_SHARE ? 'Too little of the vocal was heard to trust these timings; a director needs to listen and verify them.'
-        : null;
+  const held = alignmentError ? `Lyric alignment failed (${alignmentError}), so these timings are guesses; a director needs to listen and verify them.`
+    : matched / words.length < MIN_HEARD_WORD_SHARE ? 'Too little of the vocal was heard to trust these timings; a director needs to listen and verify them.'
+      : null;
   if (held) {
     await record('revise', `${notes} ${held}`);
     return `${notes} ${held}`;

@@ -10,7 +10,7 @@ import { cameraMovementFromText, getCameraMovement, shotCameraLabel } from '../.
 import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
 import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
-import { lyricCueSpan } from './timedText.js';
+import { hasPlayableLyricWordTimings } from './timedText.js';
 import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { coldOpenScenes, songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
@@ -645,10 +645,7 @@ function lyricTimingProblems(review, draft, cues, duration, alignmentVerified) {
   const problems = [];
   if (!cues.length) problems.push(problem('lyrics-missing', 'Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.'));
   if (draft.timingStatus !== 'verified' || !alignmentVerified) problems.push(problem('alignment-unverified', ALIGNMENT_UNVERIFIED_PROBLEM));
-  // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
-  // forced-aligned words may run a little past a line window taken from the song's line timestamps.
-  if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
-    || !(lyricCueSpan(c)?.startSec >= 0 && lyricCueSpan(c).endSec <= duration))) {
+  if (cues.some(c => !hasPlayableLyricWordTimings(c, duration))) {
     problems.push(problem('word-timings', 'Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.'));
   }
   return problems;
