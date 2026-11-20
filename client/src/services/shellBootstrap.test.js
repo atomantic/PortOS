@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getShellBootstrap } from './apiSystem.js';
 
-vi.mock('./apiSystem.js', () => ({ getShellBootstrap: vi.fn() }));
+const getShellBootstrap = vi.fn();
 
 beforeEach(() => {
   vi.resetModules();
@@ -13,8 +12,8 @@ it('shares settings for simultaneous readers and uses live reads after startup',
   const { startShellBootstrap, readShellBootstrap } = await import('./shellBootstrap.js');
   const live = vi.fn(() => Promise.resolve({ timezone: 'Europe/Oslo' }));
 
-  startShellBootstrap();
-  startShellBootstrap();
+  startShellBootstrap(getShellBootstrap);
+  startShellBootstrap(getShellBootstrap);
   const [theme, timezone] = await Promise.all([readShellBootstrap('settings', live), readShellBootstrap('settings', live)]);
   expect(theme.theme).toBe('classic-midnight');
   expect(timezone.timezone).toBe('UTC');
@@ -28,7 +27,7 @@ it('uses the individual read only for a missing slice', async () => {
   const { startShellBootstrap, readShellBootstrap } = await import('./shellBootstrap.js');
   const live = vi.fn(() => Promise.resolve({ enabled: false, revision: 'unprotected' }));
 
-  startShellBootstrap();
+  startShellBootstrap(getShellBootstrap);
   await expect(readShellBootstrap('passwordRisk', live)).resolves.toEqual({ enabled: false, revision: 'unprotected' });
   await expect(readShellBootstrap('maintenance', live)).resolves.toEqual({ state: 'normal' });
   expect(live).toHaveBeenCalledTimes(1);
@@ -40,7 +39,7 @@ it('defers to the login redirect when bootstrap authentication is required', asy
   const { startShellBootstrap, readShellBootstrap } = await import('./shellBootstrap.js');
   const live = vi.fn();
 
-  startShellBootstrap();
+  startShellBootstrap(getShellBootstrap);
   await expect(readShellBootstrap('passwordRisk', live)).rejects.toBe(error);
   expect(live).not.toHaveBeenCalled();
 });

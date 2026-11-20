@@ -1,12 +1,10 @@
 /** Shares the initial shell response and hands each field off to its live owner. */
 
-import { getShellBootstrap } from './apiSystem.js';
-
 let startup;
 const consumed = new Set();
 
-export function startShellBootstrap() {
-  startup ??= getShellBootstrap({ silent: true })
+export function startShellBootstrap(read) {
+  startup ??= read()
     .then(data => ({ data }), error => ({ error }));
 }
 

@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider, useLocation } from 'react-router';
 import App from './App.jsx';
 import { ThemeProvider } from './components/ThemeContext.jsx';
 import { useSidebarContext } from './components/SidebarContext.jsx';
+import { getShellBootstrap } from './services/apiSystem.js';
 import { startShellBootstrap } from './services/shellBootstrap.js';
 
 const mock = vi.hoisted(() => {
@@ -69,7 +70,7 @@ it('keeps cold shell requests bounded and isolates bell and rail updates from th
     return new Response(JSON.stringify(responses[path] ?? {}), { status: responses[path] ? 200 : 404 });
   });
 
-  startShellBootstrap();
+  startShellBootstrap(() => getShellBootstrap({ silent: true }));
   const router = createMemoryRouter([{ path: '*', element: <App /> }], { initialEntries: ['/apps'] });
   render(<StrictMode><ThemeProvider><RouterProvider router={router} /></ThemeProvider></StrictMode>);
   await act(async () => {});

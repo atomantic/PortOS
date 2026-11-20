@@ -13,6 +13,7 @@ import { registerServiceWorker } from './lib/registerServiceWorker';
 import { suppressIosFocusZoom } from './lib/iosFocusZoom';
 import { installActionFeedback } from './services/actionFeedback';
 import DownloadManager from './components/DownloadManager';
+import { getShellBootstrap } from './services/apiSystem.js';
 import { startShellBootstrap } from './services/shellBootstrap.js';
 import App from './App';
 import './index.css';
@@ -116,7 +117,7 @@ const router = createBrowserRouter([
 const { pathname } = window.location;
 const isHostedAudienceRoute = isPublicGuestRoute(pathname);
 const isChromeless = /^\/(login|ambient|eidoverse\/solo)\/?$/i.test(pathname);
-if (!isHostedAudienceRoute && !isChromeless) startShellBootstrap();
+if (!isHostedAudienceRoute && !isChromeless) startShellBootstrap(() => getShellBootstrap({ silent: true }));
 const app = isHostedAudienceRoute
   ? <RouterProvider router={router} />
   : (
