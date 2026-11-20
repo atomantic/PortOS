@@ -191,7 +191,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // track row that first names it commits under the lease.
     id: 'music-video-autonomous-song',
     status: 'admitted',
-    modules: ['services/musicVideo/autonomousService.js'],
+    modules: ['services/musicVideo/autonomous/autonomousStages.js'],
   },
   {
     // A draft body replaces its .md in place and the manifest row records its new
