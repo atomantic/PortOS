@@ -8,7 +8,7 @@
  * taskScheduleStore.js (the auto-upgrade machinery) can all import it
  * statically without forming a circular import.
  *
- * The content lives in ./taskPromptDefaults/ — prompts.js (current defaults),
+ * The content lives in ./taskPromptDefaults/ — prompts.js (loads current defaults by domain from catalog/),
  * versions.js (PROMPT_VERSIONS + audit anchor), shippedPrompts.js (the shared
  * "is this a shipped default?" check, which recognizes a retired default by its
  * hash in integrity.snapshot.json) — and this barrel re-exports it so existing
@@ -27,7 +27,7 @@
  * not kept in the tree — git history has them.
  */
 
-export { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults/prompts.js';
+export { DEFAULT_TASK_PROMPTS, getDefaultTaskPrompt } from './taskPromptDefaults/prompts.js';
 export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults/versions.js';
 export { promptMatchesShippedDefault } from './taskPromptDefaults/shippedPrompts.js';
 export { reconcileStoredPrompt, stampPromptWrite } from './taskPromptDefaults/storedPrompt.js';
