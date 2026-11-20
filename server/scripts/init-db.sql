@@ -592,6 +592,25 @@ CREATE TABLE IF NOT EXISTS catalog_commit_receipts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Indexed branch-completion policies derived from the CoS agent archives.
+CREATE TABLE IF NOT EXISTS cos_branch_completion_policies (
+    agent_id TEXT COLLATE "C" NOT NULL,
+    repo_path TEXT COLLATE "C" NOT NULL,
+    branch TEXT COLLATE "C" NOT NULL,
+    pr_url TEXT,
+    policy_json JSON NOT NULL,
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY (agent_id, repo_path, branch)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cos_branch_completion_scope ON cos_branch_completion_policies (repo_path, branch);
+
+CREATE TABLE IF NOT EXISTS cos_branch_policy_archive (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    source_stamp TEXT NOT NULL
+);
+
+
 CREATE TABLE IF NOT EXISTS catalog_pending_applies (
       kind TEXT NOT NULL CHECK (kind IN ('tags', 'scraps')),
       id TEXT NOT NULL,

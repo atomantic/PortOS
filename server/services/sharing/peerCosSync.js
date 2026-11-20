@@ -302,7 +302,6 @@ export async function syncCosHistoryFromPeer(peer) {
     try {
       const staged = await pullMissingCosArchives(peer.instanceId, missing, stagingRoot);
       return await withBackupAssetPublication(async () => {
-        const replacedRecords = [];
         for (const entry of staged) {
           const { date, agentId, file, stagedPath } = entry;
           const safeLabel = `${date}/${agentId}/${file}`;
@@ -310,19 +309,17 @@ export async function syncCosHistoryFromPeer(peer) {
           try {
             const buffer = await readFile(stagedPath);
             await ensureDir(destDir);
-            await atomicWrite(join(destDir, file), buffer);
-            if (file === 'metadata.json') replacedRecords.push(agentId);
+            if (file === 'metadata.json') {
+              const { writeArchivedAgentMetadata } = await import('../cos/cosAgentIndex.js');
+              await writeArchivedAgentMetadata(destDir, buffer);
+            } else {
+              await atomicWrite(join(destDir, file), buffer);
+            }
             peerSyncEvents.emit('asset-arrived', { filename: safeLabel, kind: 'cos-archive', peerId: peer.instanceId });
             console.log(`📥 peerSync: pulled cos archive ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
           } catch (err) {
             logFailureWithStack(`⚠️ peerSync: cos-archive publication ${safeLabel} failed`, err);
           }
-        }
-        // A peer can add or edit a rating on a run already indexed here, so drop the
-        // in-memory archive record caches for every metadata.json that landed.
-        if (replacedRecords.length) {
-          const { invalidateArchivedRecord } = await import('../cos/cosAgentIndex.js');
-          for (const agentId of replacedRecords) invalidateArchivedRecord(agentId);
         }
         // A resolved download does not prove publication. Re-diff before the
         // index commit, while the same lease still protects landed bytes.
