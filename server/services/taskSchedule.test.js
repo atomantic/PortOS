@@ -2480,6 +2480,14 @@ describe('taskSchedule', () => {
       expect(status.tasks.security).not.toHaveProperty('adjustedIntervalMs')
     })
 
+    it('shows a legacy global execution with no per-app history and accepts its first app run', async () => {
+      mockSchedule({ executions: { 'task:security': { lastRun: null, count: 3 } } })
+      const status = await getScheduleStatus()
+      expect(status.tasks.security).toMatchObject({ globalRunCount: 3, perAppCount: 0 })
+      const execution = await recordExecution('security', 'app-1')
+      expect(execution).toMatchObject({ count: 4, perApp: { 'app-1': { count: 1 } } })
+    })
+
     it('refreshes missing inventory in the schedule response and persists current rows', async () => {
       const row = { branch: 'fix/example', path: '/example/gone', head: 'a'.repeat(40), reason: 'checkout-retained' };
       mockSchedule({ executions: { 'task:branch-reconcile': { perApp: { 'app-1': { branchReconcileOutcome: { status: 'incomplete', remaining: [row] } } } } } });
@@ -3006,6 +3014,7 @@ describe('taskSchedule', () => {
         mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
         const status = await getScheduleStatus()
+        expect(getAppTaskTypeOverrides).toHaveBeenCalledTimes(1)
         expect(status.tasks['do-release'].appSchedules).toEqual([{
           appId: 'app-1',
           appName: 'Acme',
