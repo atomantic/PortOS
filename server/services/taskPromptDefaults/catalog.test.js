@@ -36,5 +36,16 @@ describe('scheduled task prompt catalog', () => {
     expect(jira).toBe(getDefaultTaskPrompt('claim-issue-jira'));
     expect(jira).toContain('move the ticket to **In Review**');
     expect(jira).toContain('Leave the MR/PR open for a human to land');
+    // A published but review-blocked change still needs its Jira status and link.
+    const publish = jira.indexOf('gh pr create');
+    const hold = jira.indexOf('REVIEW_STATUS=review-blocked', publish);
+    const transition = jira.indexOf('POST JIRA/tickets/<KEY>/transition', hold);
+    const link = jira.indexOf('POST JIRA/tickets/<KEY>/comments', transition);
+    const handoff = jira.indexOf('Leave the MR/PR open for a human to land', link);
+    expect(publish).toBeGreaterThan(jira.indexOf('Run each LOCAL reviewer'));
+    expect(hold).toBeGreaterThan(publish);
+    expect(transition).toBeGreaterThan(hold);
+    expect(link).toBeGreaterThan(transition);
+    expect(handoff).toBeGreaterThan(link);
   });
 });

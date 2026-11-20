@@ -9,6 +9,7 @@
  * it fails; a shrink always passes. After a prompt shrinks, lower its entry so
  * the saving cannot be spent again (a ceiling higher than needed is allowed).
  */
+import { readdirSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PATHS } from '../../lib/paths.js';
 import { composeClaimIssuePrompt } from './prompts.js';
@@ -32,7 +33,7 @@ const onDemand = async (text) => (await deferClaimSections({ description: text }
   async (name) => `/install/data/cos/slashdo-resolved/${name}-${'a'.repeat(64)}.md`)).description;
 
 const claimIssueVariants = async () => {
-  const variants = {};
+  const variants = { 'claim-issue jira': composeClaimIssuePrompt({ forge: 'jira' }) };
   for (const forge of ['github', 'gitlab']) {
     for (const [shape, options] of Object.entries(SHAPES)) {
       for (const prCompletion of ['review-then-merge', 'merge-on-green', 'leave-open']) {
@@ -54,54 +55,55 @@ const completionVariants = () => ({
 });
 
 const SIZE_CEILINGS = {
-  'claim-issue github unpinned review-then-merge': 55520,
-  'claim-issue github unpinned review-then-merge on-demand': 39670,
-  'claim-issue github unpinned merge-on-green': 48312,
-  'claim-issue github unpinned merge-on-green on-demand': 32462,
-  'claim-issue github unpinned leave-open': 50621,
-  'claim-issue github unpinned leave-open on-demand': 34841,
-  'claim-issue github pinned-epic review-then-merge': 50718,
-  'claim-issue github pinned-epic review-then-merge on-demand': 34895,
-  'claim-issue github pinned-epic merge-on-green': 43510,
-  'claim-issue github pinned-epic merge-on-green on-demand': 27687,
-  'claim-issue github pinned-epic leave-open': 45819,
-  'claim-issue github pinned-epic leave-open on-demand': 30066,
-  'claim-issue github pinned-non-epic review-then-merge': 41220,
-  'claim-issue github pinned-non-epic review-then-merge on-demand': 34440,
-  'claim-issue github pinned-non-epic merge-on-green': 34012,
-  'claim-issue github pinned-non-epic merge-on-green on-demand': 27232,
-  'claim-issue github pinned-non-epic leave-open': 36388,
-  'claim-issue github pinned-non-epic leave-open on-demand': 29611,
-  'claim-issue github pinned-provisioned review-then-merge': 40887,
-  'claim-issue github pinned-provisioned review-then-merge on-demand': 34107,
-  'claim-issue github pinned-provisioned merge-on-green': 33679,
-  'claim-issue github pinned-provisioned merge-on-green on-demand': 26899,
-  'claim-issue github pinned-provisioned leave-open': 36055,
-  'claim-issue github pinned-provisioned leave-open on-demand': 29278,
-  'claim-issue gitlab unpinned review-then-merge': 43528,
-  'claim-issue gitlab unpinned review-then-merge on-demand': 33755,
-  'claim-issue gitlab unpinned merge-on-green': 36261,
-  'claim-issue gitlab unpinned merge-on-green on-demand': 26488,
-  'claim-issue gitlab unpinned leave-open': 40751,
-  'claim-issue gitlab unpinned leave-open on-demand': 31044,
-  'claim-issue gitlab pinned-epic review-then-merge': 40108,
-  'claim-issue gitlab pinned-epic review-then-merge on-demand': 30335,
-  'claim-issue gitlab pinned-epic merge-on-green': 32841,
-  'claim-issue gitlab pinned-epic merge-on-green on-demand': 23068,
-  'claim-issue gitlab pinned-epic leave-open': 37331,
-  'claim-issue gitlab pinned-epic leave-open on-demand': 27624,
-  'claim-issue gitlab pinned-non-epic review-then-merge': 35332,
-  'claim-issue gitlab pinned-non-epic review-then-merge on-demand': 29956,
-  'claim-issue gitlab pinned-non-epic merge-on-green': 28065,
-  'claim-issue gitlab pinned-non-epic merge-on-green on-demand': 22689,
-  'claim-issue gitlab pinned-non-epic leave-open': 32618,
-  'claim-issue gitlab pinned-non-epic leave-open on-demand': 27245,
-  'claim-issue gitlab pinned-provisioned review-then-merge': 35136,
-  'claim-issue gitlab pinned-provisioned review-then-merge on-demand': 29760,
-  'claim-issue gitlab pinned-provisioned merge-on-green': 27869,
-  'claim-issue gitlab pinned-provisioned merge-on-green on-demand': 22493,
-  'claim-issue gitlab pinned-provisioned leave-open': 32422,
-  'claim-issue gitlab pinned-provisioned leave-open on-demand': 27049,
+  'claim-issue jira': 18408,
+  'claim-issue github unpinned review-then-merge': 50877,
+  'claim-issue github unpinned review-then-merge on-demand': 35027,
+  'claim-issue github unpinned merge-on-green': 45238,
+  'claim-issue github unpinned merge-on-green on-demand': 29388,
+  'claim-issue github unpinned leave-open': 45978,
+  'claim-issue github unpinned leave-open on-demand': 30198,
+  'claim-issue github pinned-epic review-then-merge': 47246,
+  'claim-issue github pinned-epic review-then-merge on-demand': 31423,
+  'claim-issue github pinned-epic merge-on-green': 41607,
+  'claim-issue github pinned-epic merge-on-green on-demand': 25784,
+  'claim-issue github pinned-epic leave-open': 42347,
+  'claim-issue github pinned-epic leave-open on-demand': 26594,
+  'claim-issue github pinned-non-epic review-then-merge': 37748,
+  'claim-issue github pinned-non-epic review-then-merge on-demand': 30968,
+  'claim-issue github pinned-non-epic merge-on-green': 32109,
+  'claim-issue github pinned-non-epic merge-on-green on-demand': 25329,
+  'claim-issue github pinned-non-epic leave-open': 32916,
+  'claim-issue github pinned-non-epic leave-open on-demand': 26139,
+  'claim-issue github pinned-provisioned review-then-merge': 38600,
+  'claim-issue github pinned-provisioned review-then-merge on-demand': 31820,
+  'claim-issue github pinned-provisioned merge-on-green': 32961,
+  'claim-issue github pinned-provisioned merge-on-green on-demand': 26181,
+  'claim-issue github pinned-provisioned leave-open': 33768,
+  'claim-issue github pinned-provisioned leave-open on-demand': 26991,
+  'claim-issue gitlab unpinned review-then-merge': 39575,
+  'claim-issue gitlab unpinned review-then-merge on-demand': 29802,
+  'claim-issue gitlab unpinned merge-on-green': 33886,
+  'claim-issue gitlab unpinned merge-on-green on-demand': 24113,
+  'claim-issue gitlab unpinned leave-open': 36798,
+  'claim-issue gitlab unpinned leave-open on-demand': 27091,
+  'claim-issue gitlab pinned-epic review-then-merge': 36990,
+  'claim-issue gitlab pinned-epic review-then-merge on-demand': 27217,
+  'claim-issue gitlab pinned-epic merge-on-green': 31301,
+  'claim-issue gitlab pinned-epic merge-on-green on-demand': 21528,
+  'claim-issue gitlab pinned-epic leave-open': 34213,
+  'claim-issue gitlab pinned-epic leave-open on-demand': 24506,
+  'claim-issue gitlab pinned-non-epic review-then-merge': 32214,
+  'claim-issue gitlab pinned-non-epic review-then-merge on-demand': 26838,
+  'claim-issue gitlab pinned-non-epic merge-on-green': 26525,
+  'claim-issue gitlab pinned-non-epic merge-on-green on-demand': 21149,
+  'claim-issue gitlab pinned-non-epic leave-open': 29500,
+  'claim-issue gitlab pinned-non-epic leave-open on-demand': 24127,
+  'claim-issue gitlab pinned-provisioned review-then-merge': 32925,
+  'claim-issue gitlab pinned-provisioned review-then-merge on-demand': 27549,
+  'claim-issue gitlab pinned-provisioned merge-on-green': 27236,
+  'claim-issue gitlab pinned-provisioned merge-on-green on-demand': 21860,
+  'claim-issue gitlab pinned-provisioned leave-open': 30211,
+  'claim-issue gitlab pinned-provisioned leave-open on-demand': 24838,
   'claim-flow completion default': 2749,
   'claim-flow completion agent review': 8480,
   'claim-flow completion agent merge-on-green': 6954,
@@ -114,6 +116,14 @@ const SIZES = Object.fromEntries(
 );
 
 describe('claim prompt size ratchet', () => {
+  it('retains the 30% reduction in combined claim catalog source', () => {
+    const catalog = new URL('./catalog/', import.meta.url);
+    const files = readdirSync(catalog).filter(file => /^claim.*\.js$/.test(file));
+    const total = files.reduce((sum, file) => sum + statSync(new URL(file, catalog)).size, 0);
+    // Before extraction the three claim definitions occupied 84,123 UTF-8 bytes.
+    expect(total).toBeLessThanOrEqual(Math.floor(84_123 * 0.70));
+  });
+
   it('records a ceiling for exactly the variants it renders', () => {
     expect(Object.keys(SIZE_CEILINGS).sort()).toEqual(Object.keys(SIZES).sort());
   });
