@@ -12,7 +12,7 @@ import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput, writeStepSummary } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { guardTestFiles } from './lib/guardScanners.js';
+import { guardTestFiles, isGuardTest } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
@@ -407,10 +407,14 @@ export const getGuardTests = () => (guardTests ??= guardTestFiles(REPO_ROOT));
 const isClientGuard = (path) => path.startsWith('client/src/');
 
 let alwaysRun;
-export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
+const alwaysRunFrom = (guards) => [...new Set([
   ...EXPLICIT_ALWAYS_RUN_TESTS,
-  ...getGuardTests().filter((path) => !isClientGuard(path)),
-])].sort());
+  ...guards.filter((path) => !isClientGuard(path)),
+])].sort();
+
+export const getAlwaysRunTests = (trackedFiles) => trackedFiles
+  ? alwaysRunFrom(trackedFiles.filter(isGuardTest))
+  : (alwaysRun ??= alwaysRunFrom(getGuardTests()));
 
 // The gate-tooling suites: tests of the CI/pregate machinery itself. Each spawns git
 // or carries `test-memo: never`, so none can earn a narrowing record, and `related`
@@ -855,9 +859,8 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    // Client tree guards are selected by suffix (getGuardTests);
-    // timeouts.guard.test.js scans the TEST files, which this pattern also matches.
-    for (const path of getGuardTests()) if (isClientGuard(path)) add(path);
+    // timeouts.guard.test.js scans test files, which this pattern also matches.
+    for (const path of trackedSet) if (isClientGuard(path) && isGuardTest(path)) add(path);
   }
 
   return selected;
@@ -867,7 +870,7 @@ const uniqueSorted = (values) => [...new Set(values)].sort();
 
 // Guarded by trackedSet like every other selector: an untracked path handed to
 // Vitest as an exact selector makes the run exit non-zero.
-const alwaysRunTests = (trackedSet) => getAlwaysRunTests().filter((path) => trackedSet.has(path));
+const alwaysRunTests = (trackedSet) => getAlwaysRunTests([...trackedSet]).filter((path) => trackedSet.has(path));
 
 /**
  * Split a set of always-run selectors across the two Vitest runners.

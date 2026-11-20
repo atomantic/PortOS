@@ -43,7 +43,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
       env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
         CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
         CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
-        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
