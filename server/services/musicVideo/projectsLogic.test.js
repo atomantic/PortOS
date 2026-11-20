@@ -455,6 +455,16 @@ describe('applyProjectPatch', () => {
       audioReactiveScale: 1.2,
     });
   });
+
+  it('backfills renderer defaults when patching legacy settings and preserves stored selections', () => {
+    const videoSettings = { backend: 'runway', finalResolution: '1080p' };
+    const legacy = { ...baseProject(), videoSettings };
+    const patch = { modelId: 'ltx23_distilled_q4' };
+    const created = buildProjectRecord({ name: 'A', videoSettings: { ...videoSettings, ...patch } }, { id: 'mv-2', now: 'n' });
+    const patched = applyProjectPatch(legacy, { videoSettings: patch });
+
+    expect(patched.videoSettings).toEqual(created.videoSettings);
+  });
 });
 
 describe('setAudioAnalysis', () => {

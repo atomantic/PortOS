@@ -122,6 +122,42 @@ function normalizeVisualSpec(patch, base = null) {
   };
 }
 
+const DEFAULT_VIDEO_SETTINGS = Object.freeze({
+  backend: 'local',
+  modelId: null,
+  grokDuration: 10,
+  falDuration: null,
+  falModelId: null,
+  falResolution: null,
+  falEndFrameModelId: null,
+  falLipSyncResolution: null,
+  falMusicModelId: null,
+  falMusicResolution: null,
+  falLipSyncTranscription: null,
+  runwayModelId: null,
+  runwayDuration: null,
+  runwayResolution: null,
+  generationMode: 'image',
+  audioReactiveLora: null,
+  audioReactiveScale: 1.2,
+});
+
+const OPTIONAL_VIDEO_SETTINGS = [
+  'renderPool',
+  'higgsfieldModelId', 'higgsfieldDuration', 'higgsfieldResolution',
+  'googleModelId', 'googleDuration', 'googleResolution',
+  'draftResolution', 'finalResolution',
+];
+
+function normalizeVideoSettings(input, base) {
+  // Patches preserve explicit clears and stored fields from newer peers.
+  if (base !== undefined) return { ...DEFAULT_VIDEO_SETTINGS, ...base, ...input };
+  return Object.fromEntries([
+    ...Object.entries(DEFAULT_VIDEO_SETTINGS).map(([key, value]) => [key, input[key] ?? value]),
+    ...OPTIONAL_VIDEO_SETTINGS.filter((key) => input[key]).map((key) => [key, input[key]]),
+  ]);
+}
+
 /** Build a fresh project record from validated create input. */
 export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
   const productionPolicy = normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null));
@@ -153,34 +189,7 @@ export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
     // palette, typography, camera rules). Null until the director sets one.
     visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
     ...(input.styleReferences ? { styleReferences: input.styleReferences } : {}),
-    videoSettings: {
-      ...(videoSettings.renderPool ? { renderPool: videoSettings.renderPool } : {}),
-      backend: videoSettings.backend ?? 'local',
-      modelId: videoSettings.modelId ?? null,
-      grokDuration: videoSettings.grokDuration ?? 10,
-      falDuration: videoSettings.falDuration ?? null,
-      falModelId: videoSettings.falModelId ?? null,
-      falResolution: videoSettings.falResolution ?? null,
-      falEndFrameModelId: videoSettings.falEndFrameModelId ?? null,
-      falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
-      falMusicModelId: videoSettings.falMusicModelId ?? null,
-      falMusicResolution: videoSettings.falMusicResolution ?? null,
-      falLipSyncTranscription: videoSettings.falLipSyncTranscription ?? null,
-      ...(videoSettings.higgsfieldModelId ? { higgsfieldModelId: videoSettings.higgsfieldModelId } : {}),
-      ...(videoSettings.higgsfieldDuration ? { higgsfieldDuration: videoSettings.higgsfieldDuration } : {}),
-      ...(videoSettings.higgsfieldResolution ? { higgsfieldResolution: videoSettings.higgsfieldResolution } : {}),
-      ...(videoSettings.googleModelId ? { googleModelId: videoSettings.googleModelId } : {}),
-      ...(videoSettings.googleDuration ? { googleDuration: videoSettings.googleDuration } : {}),
-      ...(videoSettings.googleResolution ? { googleResolution: videoSettings.googleResolution } : {}),
-      runwayModelId: videoSettings.runwayModelId ?? null,
-      runwayDuration: videoSettings.runwayDuration ?? null,
-      runwayResolution: videoSettings.runwayResolution ?? null,
-      ...(videoSettings.draftResolution ? { draftResolution: videoSettings.draftResolution } : {}),
-      ...(videoSettings.finalResolution ? { finalResolution: videoSettings.finalResolution } : {}),
-      generationMode: videoSettings.generationMode ?? 'image',
-      audioReactiveLora: videoSettings.audioReactiveLora ?? null,
-      audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
-    },
+    videoSettings: normalizeVideoSettings(videoSettings),
     // #3231 Phase 4 — per-record image render pin for scene reference-frame
     // renders (the shared universe/series/sprite field pair). Present only
     // when set, so existing records keep their on-disk shape byte-stable.
@@ -481,23 +490,7 @@ export function applyProjectPatch(project, patch) {
   const mergedPatch = ('videoSettings' in conceptMergedPatch && conceptMergedPatch.videoSettings)
     ? {
       ...conceptMergedPatch,
-      videoSettings: {
-        backend: 'local',
-        modelId: null,
-        grokDuration: 10,
-        falDuration: null,
-        falModelId: null,
-        falResolution: null,
-        falEndFrameModelId: null,
-        falLipSyncResolution: null,
-        falMusicModelId: null,
-        falMusicResolution: null,
-        generationMode: 'image',
-        audioReactiveLora: null,
-        audioReactiveScale: 1.2,
-        ...project.videoSettings,
-        ...conceptMergedPatch.videoSettings,
-      },
+      videoSettings: normalizeVideoSettings(conceptMergedPatch.videoSettings, project.videoSettings ?? {}),
     }
     : conceptMergedPatch;
   // Changing the audio source invalidates the cached beat/tempo analysis —
