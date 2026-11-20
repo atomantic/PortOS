@@ -6,7 +6,7 @@
  */
 
 /** Known change-token domains — callers must pass one of these (no arbitrary strings). */
-export const CHANGE_TOKEN_DOMAINS = Object.freeze(['universe', 'pipeline', 'storyBuilder']);
+export const CHANGE_TOKEN_DOMAINS = Object.freeze(['universe', 'pipeline', 'storyBuilder', 'usage']);
 
 const DOMAIN_SET = new Set(CHANGE_TOKEN_DOMAINS);
 

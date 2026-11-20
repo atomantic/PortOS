@@ -486,6 +486,23 @@ CREATE TABLE IF NOT EXISTS cos_agent_store (
     version BIGINT NOT NULL DEFAULT 0
   );
 
+CREATE TABLE IF NOT EXISTS cos_branch_completion_policies (
+    agent_id TEXT COLLATE "C" NOT NULL,
+    repo_path TEXT COLLATE "C" NOT NULL,
+    branch TEXT COLLATE "C" NOT NULL,
+    pr_url TEXT,
+    policy_json JSON NOT NULL,
+    completed_at TIMESTAMPTZ,
+    PRIMARY KEY (agent_id, repo_path, branch)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_cos_branch_completion_scope ON cos_branch_completion_policies (repo_path, branch);
+
+CREATE TABLE IF NOT EXISTS cos_branch_policy_archive (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    source_stamp TEXT NOT NULL
+  );
+
 CREATE TABLE IF NOT EXISTS ai_connections (
       id UUID PRIMARY KEY,
       revision INTEGER NOT NULL DEFAULT 1,
@@ -555,6 +572,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_route_bindings_binding_mode
 
 CREATE INDEX IF NOT EXISTS idx_ai_route_bindings_binding
       ON ai_route_bindings (binding_id);
+
+CREATE TABLE IF NOT EXISTS usage_ledger_buckets (
+    bucket text NOT NULL,
+    key_hash text NOT NULL,
+    key text NOT NULL,
+    value jsonb NOT NULL,
+    PRIMARY KEY (bucket, key_hash)
+  );
+
+CREATE TABLE IF NOT EXISTS usage_ledger_markers (
+    kind text NOT NULL,
+    id text NOT NULL,
+    value jsonb NOT NULL,
+    claim_at bigint,
+    PRIMARY KEY (kind, id)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_usage_ledger_claim_at ON usage_ledger_markers (kind, claim_at)
+    WHERE claim_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS peer_execution_operations (
     operation_id UUID PRIMARY KEY,

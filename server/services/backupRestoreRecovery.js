@@ -169,6 +169,8 @@ export async function repairCommittedRestore(record) {
     await ensureSchema({ force: true });
     const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
     await runDbMigrations();
+    const { reloadRestoredUsageLedger } = await import('./usage.js');
+    await reloadRestoredUsageLedger();
   })().then(() => null, (err) => err);
   if (reconciliationError) {
     console.error(`❌ DB restore ${record.id}: schema reconciliation failed: ${reconciliationError.message}`);

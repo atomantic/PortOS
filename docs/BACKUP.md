@@ -37,6 +37,7 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
 - Snapshot lists include every machine namespace in the destination, plus snapshots written directly under `snapshots/` by PortOS versions from before hostname namespaces. Each row identifies its source, so equal timestamp IDs from different machines remain separate choices. Download, file restore, and database restore keep that source attached through preview and execution. API requests that omit `source` retain the existing behavior and select the current machine; `source: "@legacy"` selects the pre-namespace root.
 - The `manifest.json` hashes the SQL dump too (keyed as `../portos-db.sql`, since the dump lives one level above the `data/` tree), so a truncated or corrupt dump is detectable rather than silently trusted.
+- Restoring current AI usage counters and reconciliation history requires the PostgreSQL dump. For snapshots from before the usage ledger moved to PostgreSQL, restore the files before the database so the upgrade can import the snapshot's legacy `data/usage.json`.
 
 ### What is excluded by default
 

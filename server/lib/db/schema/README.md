@@ -38,6 +38,7 @@ identical catalogs.
 | `cosAgents.js` | `cosAgentsDdl` | The CoS agent working set (running + not-yet-archived), one row per agent (exact JSON text, query projections, insertion order) plus a write version |
 | `cosAgentFeedback.js` | `cosAgentFeedbackDdl` | Durable machine-local references to completed manual CoS runs awaiting a rating (agent id + archive locator only) |
 | `aiGraph.js` | `aiGraphDdl` | AI provider connection graph — connections, harness bindings, executable route bindings (machine-local) |
+| `usageLedger.js` | `usageLedgerDdl` | AI usage buckets and replay markers (machine-local, aggregate digest only on the wire) |
 | `peerExecution.js` | `peerExecutionDdl` | Receiver-local permanent execution consumption and generation floors; no grants or federation |
 | `catalog.js` | `catalogDdl`, `catalogUserTypesDdl`, `catalogPendingAppliesDdl` | Catalog scraps/ingredients/tags/media + user-defined types + receiver-local dependency inbox |
 | `catalogIdentity.js` | `catalogIdentityDdl` | Owner-coordinated identity receipts, durable mutation fences and canonical lookup functions |
@@ -58,7 +59,7 @@ identical catalogs.
 
 ### Composer (`index.js`)
 
-- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `peerExecution`).
+- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `usageLedger` → `peerExecution`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `beeper` → `githubNotifications` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).

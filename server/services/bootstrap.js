@@ -274,9 +274,8 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       await initializeMessageDrafts();
     },
 
-    // usage.js and migration 304 both update usage.json. Initialize the service
-    // only after migrations finish so their whole-file writes cannot race and
-    // replace a freshly normalized or rolled-up snapshot with stale bytes.
+    // Normalize existing usage.json with the file migrations before the
+    // usage store imports it.
     loadUsage,
 
     // Verify every registered collection's on-disk type-level schemaVersion
@@ -1311,6 +1310,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
 
     await scheduledEventsDrained;
     await catalogFilingFlushed;
+    await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
     timing.mark('dbPool');
     // Kept dynamic: bootstrap.shutdown.test.js runs this handler in a vm with module loading injected.
     const { close } = await import('../lib/db.js');
@@ -1328,7 +1328,6 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await markerWritten;
     await mediaQueueFlushed;
     await ideaLoomFlushed;
-    await flushPendingUsageWrites().catch(err => logBootstrapFailure('❌ Usage ledger flush failed', err));
     clearTimeout(forceExitTimer);
     reportIfSlow();
     process.exit(0);

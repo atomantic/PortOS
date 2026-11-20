@@ -10,6 +10,7 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeSync } from 'fs';
 import { readFile } from 'node:fs/promises';
 import { constants, homedir, tmpdir } from 'os';
@@ -31,7 +32,7 @@ import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js'
 import { cosWorkerBudget, readMaxConcurrentAgents } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
-import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { buildPregateReport, createWorkingTreeHasher, PREGATE_REPORT_PATH, writePregateReport } from './lib/pregateReport.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -559,10 +560,10 @@ async function readRepoText(path) {
   }
 }
 
-const git = (args, cwd = REPO_ROOT) => execFileSync('git', args, {
-  cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+const git = (args, cwd = REPO_ROOT, input) => execFileSync('git', args, {
+  cwd, input, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
 });
-const gitPaths = (args, cwd = REPO_ROOT) => git(args, cwd).split('\0').filter(Boolean);
+const gitPaths = (args, cwd, input) => git(args, cwd, input).split('\0').filter(Boolean);
 
 /** Read HEAD, unmerged entries and all uncommitted paths from one porcelain walk. */
 function worktreeStatus(cwd = REPO_ROOT) {
@@ -570,21 +571,52 @@ function worktreeStatus(cwd = REPO_ROOT) {
     '--untracked-files=all', '--ignore-submodules=none', '-z'], cwd);
   const files = new Set();
   const conflicts = [];
+  const indexAdds = new Set();
+  const indexDeletes = new Set();
   let head;
   for (const entry of entries) {
     if (entry.startsWith('# branch.oid ')) head = entry.slice('# branch.oid '.length);
     else if (entry.startsWith('? ')) files.add(entry.slice(2));
-    else if (entry.startsWith('1 ')) files.add(entry.replace(/^1 (?:\S+ ){7}/, ''));
+    else if (entry.startsWith('1 ')) {
+      const [, indexStatus, headMode, path] = /^1 (\S)\S \S+ (\S+) (?:\S+ ){4}([\s\S]+)$/.exec(entry);
+      files.add(path);
+      if (indexStatus === 'D') indexDeletes.add(path);
+      // A zero HEAD mode also covers intent-to-add, which has index status '.'.
+      else if (headMode === '000000') indexAdds.add(path);
+    }
     else if (entry.startsWith('u ')) conflicts.push(entry.replace(/^u (?:\S+ ){9}/, ''));
   }
-  return { head, files: [...files].sort(), conflicts: conflicts.sort() };
+  return { head, files: [...files].sort(), conflicts: conflicts.sort(), indexAdds, indexDeletes };
 }
 
-/** The committed diff plus every staged, unstaged, deleted, or untracked path. */
-export function collectPregateChangedFiles(baseSha, { cwd = REPO_ROOT, status = worktreeStatus(cwd) } = {}) {
-  const committed = gitPaths(['diff', '-z', '--name-only', '--no-renames', baseSha, status.head, '--'], cwd);
+/** Read the committed path inventory and the branch diff in one Git process. */
+export function collectPregateInputs(baseSha, headTree, { cwd = REPO_ROOT, status = worktreeStatus(cwd) } = {}) {
+  const emptyTree = createHash(headTree.length === 40 ? 'sha1' : 'sha256').update('tree 0\0').digest('hex');
+  // In stdin mode Git echoes the tree pair, then prefixes the commit diff
+  // with its SHA, even when that diff is empty (--always).
+  const inventoryHeader = `${emptyTree} ${headTree}\n`;
+  const output = git(['diff-tree', '--stdin', '--name-status', '-r', '-z', '--always',
+    '--no-renames', '--ignore-submodules=none'], cwd, `${inventoryHeader}${status.head} ${baseSha}\n`);
+  if (!output.startsWith(inventoryHeader)) throw new Error('Missing path inventory from git diff-tree.');
+  const entries = output.slice(inventoryHeader.length).split('\0').filter(Boolean);
+  const tracked = new Set(status.indexAdds);
+  const changed = new Set(status.files);
+  let branchDiff = false;
+  for (let i = 0; i < entries.length;) {
+    const marker = entries[i++];
+    if (marker === status.head && !branchDiff) {
+      branchDiff = true;
+      continue;
+    }
+    const path = entries[i++];
+    if (!path || !/^[ADMT]$/.test(marker)) throw new Error('Unexpected path inventory from git diff-tree.');
+    if (branchDiff) changed.add(path);
+    else if (!status.indexDeletes.has(path)) tracked.add(path);
+  }
+  if (!branchDiff) throw new Error('Missing branch diff from git diff-tree.');
   return {
-    changedFiles: [...new Set([...committed, ...status.files])].sort(),
+    changedFiles: [...changed].sort(),
+    trackedFiles: [...tracked].sort(),
     workingTreeFiles: status.files,
   };
 }
@@ -592,18 +624,34 @@ export function collectPregateChangedFiles(baseSha, { cwd = REPO_ROOT, status = 
 /** Resolve repository and ref metadata together. origin/HEAD may be unset in a worktree or fork. */
 function repoState(base) {
   const args = ['rev-parse', '--path-format=absolute', '--git-path', 'index', '--git-common-dir', '--git-dir', 'HEAD', 'HEAD^{tree}'];
-  if (!base) args.push('--symbolic-full-name', '--revs-only', 'refs/remotes/origin/HEAD');
+  const defaultRef = 'refs/remotes/origin/HEAD';
+  args.push('--revs-only', `${base || defaultRef}...HEAD`);
+  if (!base) args.push('--symbolic-full-name', defaultRef);
   const result = spawnSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
-  const [indexPath, commonDir, gitDir, head, tree, remoteDefault] = (result.stdout ?? '').trimEnd().split('\n');
+  const [indexPath, commonDir, gitDir, head, tree, ...refs] = (result.stdout ?? '').trimEnd().split('\n');
+  const remoteDefault = refs.find(ref => ref.startsWith('refs/remotes/'));
   // Some Git versions return a nonzero status for the optional trailing ref.
   // Trust the mandatory fields only if the command actually resolved them.
   const validObjects = [head, tree].every(id => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id ?? ''));
   if (!indexPath || !commonDir || !gitDir || !validObjects || result.error || result.signal
-    || (result.status !== 0 && (base || result.status !== 128 || remoteDefault))) {
+    || (result.status !== 0 && result.status !== 128)) {
     throw new Error('Cannot resolve the Git worktree, index and HEAD tree for pregate.');
   }
   const baseRef = base || remoteDefault?.replace(/^refs\/remotes\//, '') || 'origin/main';
-  return { indexPath, commonDir, gitDir, head, tree, baseRef };
+  const mergeBases = refs.filter(ref => ref.startsWith('^')).map(ref => ref.slice(1));
+  // The three-dot range reports all merge bases. Keep Git's usual choice on
+  // criss-cross histories and the origin/main fallback when origin/HEAD is unset.
+  const baseSha = mergeBases.length === 1 ? mergeBases[0] : resolveMergeBase(baseRef, head);
+  return { indexPath, commonDir, gitDir, head, tree, baseRef, baseSha };
+}
+
+function resolveMergeBase(baseRef, headSha) {
+  const result = spawnSync('git', ['merge-base', baseRef, headSha], { cwd: REPO_ROOT, encoding: 'utf8' });
+  if (result.status !== 0) {
+    console.error(`❌ Cannot resolve a merge base with ${baseRef} — fetch it first (git fetch origin).`);
+    process.exit(2);
+  }
+  return result.stdout.trim();
 }
 
 export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
@@ -1011,28 +1059,23 @@ async function main() {
   }
 
   const repo = repoState(options.base);
-  const { baseRef, head: headSha, indexPath } = repo;
+  const { baseRef, baseSha, head: headSha, indexPath } = repo;
   if (headSha !== status.head) throw new Error('HEAD moved while pregate was planning; rerun on the resulting tree.');
-  const mergeBase = spawnSync('git', ['merge-base', baseRef, headSha], { cwd: REPO_ROOT, encoding: 'utf8' });
-  if (mergeBase.status !== 0) {
-    console.error(`❌ Cannot resolve a merge base with ${baseRef} — fetch it first (git fetch origin).`);
-    process.exit(2);
-  }
-  const baseSha = mergeBase.stdout.trim();
   console.log(`🔎 Planning against ${baseRef} (${baseSha.slice(0, 9)}).`);
 
-  const { changedFiles, workingTreeFiles } = collectPregateChangedFiles(baseSha, { status });
+  const { changedFiles, trackedFiles: indexFiles, workingTreeFiles } = collectPregateInputs(baseSha, repo.tree, { status });
   if (workingTreeFiles.length > 0) {
     console.log(`📝 Included ${workingTreeFiles.length} uncommitted changed file(s) in this plan.`);
   }
   // A clean status already proves the committed tree. Snapshot dirty input
   // before selection reads so a mid-plan edit also invalidates the receipt.
   const initiallyClean = workingTreeFiles.length === 0;
+  const hashWorkingTree = createWorkingTreeHasher(REPO_ROOT, { indexPath });
   let tree = initiallyClean ? repo.tree : null;
   let initialHashError;
   if (!initiallyClean && !options.planOnly) {
     try {
-      tree = validatedTreeHash(REPO_ROOT, { indexPath });
+      tree = hashWorkingTree();
     } catch (error) {
       // Let the hidden-content scan give the more specific diagnostic for
       // unreadable input, such as a nested repo with no checked-out HEAD.
@@ -1041,8 +1084,7 @@ async function main() {
   }
 
   const changedOnDisk = new Set(workingTreeFiles);
-  const trackedFiles = gitPaths(['ls-files', '-z'])
-    .filter(path => !changedOnDisk.has(path) || existsSync(join(REPO_ROOT, path)));
+  const trackedFiles = indexFiles.filter(path => !changedOnDisk.has(path) || existsSync(join(REPO_ROOT, path)));
   const presentFiles = [...new Set([...trackedFiles, ...workingTreeFiles.filter(path => existsSync(join(REPO_ROOT, path)))])].sort();
   const downgraded = !options.full && !options.guardsOnly;
   // The pure planner supplies direct resource risk and suite ownership for the
@@ -1166,7 +1208,7 @@ async function main() {
     const after = initiallyClean ? worktreeStatus() : null;
     treeAfterRun = after?.head === headSha && after.files.length === 0 && after.conflicts.length === 0
       ? repo.tree
-      : validatedTreeHash(REPO_ROOT, { indexPath });
+      : hashWorkingTree();
   } catch (error) {
     failure ??= `❌ Cannot hash the working tree for the receipt: ${error.message}`;
     if (exitCode === 0) exitCode = 2;

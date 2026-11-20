@@ -3,11 +3,9 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { canonicalStringify } from '../../lib/objects.js';
-import { promisify } from 'util';
 import { extname, join } from 'path';
-import { execFile } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { findFfmpeg, findFfprobe, safeUnder } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/paths.js';
 import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { measureWavAudio } from '../../lib/wavAudioFile.js';
@@ -16,21 +14,37 @@ import { muxVoLines } from '../pipeline/audioMux.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { readRunArtifact, writeRunArtifact } from './projectFiles.js';
 
-const exec = promisify(execFile);
 const fail = (message, code = 'CODE_ANIMATION_SOUND_UNVERIFIED') => new ServerError(message, { status: 409, code });
 const DEMUXERS = { '.wav': 'wav', '.mp3': 'mp3', '.m4a': 'mov', '.ogg': 'ogg', '.flac': 'flac', '.aac': 'aac' };
 
-async function decode(path, timeline, signal, { demuxer, pad = false, channels = 1 } = {}) {
+// execFile's abort callback can reject while the owned child is still open.
+// Keep the output cap and wait for the process helper to observe close.
+async function readMediaOutput(bin, args, { signal, timeoutMs, maxBytes, onLifecycle }) {
+  const overflow = new AbortController();
+  const chunks = [];
+  let bytes = 0;
+  const result = await runFfmpegProcess({ bin, args, signal: AbortSignal.any([signal, overflow.signal]), timeoutMs, onLifecycle,
+    onStdout: chunk => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) overflow.abort();
+      else chunks.push(chunk);
+    },
+  });
+  signal.throwIfAborted();
+  if (overflow.signal.aborted) throw fail('Soundtrack inspection exceeded its output limit');
+  if (!result.ok) throw fail(`Soundtrack inspection failed: ${result.reason}`);
+  return Buffer.concat(chunks, bytes);
+}
+
+async function decode(path, timeline, signal, { demuxer, pad = false, channels = 1, onLifecycle } = {}) {
   const bin = await findFfmpeg();
   if (!bin) throw fail('ffmpeg is required to measure and produce a soundtrack');
   signal.throwIfAborted();
-  const { stdout } = await exec(bin, ['-v', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe',
+  return readMediaOutput(bin, ['-v', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe',
     ...(demuxer ? ['-f', demuxer] : []), '-i', path, '-map', '0:a:0',
     ...(pad ? ['-af', 'apad'] : []), '-t', String(timeline.samples / timeline.sampleRate + (pad ? 0 : 0.1)),
     '-ar', String(timeline.sampleRate), '-ac', String(channels), '-f', 's16le', 'pipe:1'],
-  { encoding: 'buffer', maxBuffer: (timeline.samples + timeline.sampleRate) * 2 * channels, timeout: 30000, signal });
-  signal.throwIfAborted();
-  return stdout;
+  { maxBytes: (timeline.samples + timeline.sampleRate) * 2 * channels, timeoutMs: 30000, signal, onLifecycle });
 }
 
 /** No provider adapter is implied by a declaration; fail before any possible call. */
@@ -42,7 +56,7 @@ export function checkSoundConsent(audio, request) {
   throw fail('Provider-generated sound has no offline adapter yet. Stage provider output as a portable audio file.', 'CODE_ANIMATION_AUDIO_PROVIDER_UNSUPPORTED');
 }
 
-export async function produceSoundtrack({ projectId, runId, revision, signal, reserve }) {
+export async function produceSoundtrack({ projectId, runId, revision, signal, reserve, report }) {
   const { audio } = revision.manifest;
   const timeline = soundTimeline(revision.manifest);
   const binding = { revisionId: revision.id, sourceHash: revision.sourceHash, packageHash: revision.packageHash, timelineHash: timeline.hash };
@@ -61,7 +75,10 @@ export async function produceSoundtrack({ projectId, runId, revision, signal, re
     if (!demuxer) throw fail('Unsupported staged audio format', 'CODE_ANIMATION_SOUND_UNSUPPORTED');
     // Revision bytes have just been integrity checked and snapshotted; only a
     // portable asset inside that copy is decoded, never a host path from a request.
-    const pcm = await decode(join(PATHS.data, revision.staged, audio.path), timeline, signal, { demuxer, pad: true, channels });
+    report?.('audio-source-decode');
+    const pcm = await decode(join(PATHS.data, revision.staged, audio.path), timeline, signal, {
+      demuxer, pad: true, channels, onLifecycle: detail => report?.('audio-source-decode', detail),
+    });
     if (pcm.length !== timeline.samples * 2 * channels) throw fail('Staged audio could not fill the film sample grid');
     const samples = Array.from({ length: channels }, () => new Float32Array(timeline.samples));
     for (let i = 0; i < timeline.samples; i += 1) {
@@ -84,34 +101,38 @@ export async function produceSoundtrack({ projectId, runId, revision, signal, re
     unverified: [{ dimension: 'hearing', reason: 'Decoded samples measure placement and duration; listening quality has no reviewer.' }] };
 }
 
-export async function muxSoundtrack({ projectId, revision, soundtrack, result, signal, reserve }) {
+export async function muxSoundtrack({ projectId, revision, soundtrack, result, signal, reserve, report }) {
   if (soundtrack.packageHash !== revision.packageHash || soundtrack.revisionId !== revision.id
     || soundtrack.timelineHash !== soundTimeline(revision.manifest).hash) throw fail('Sound evidence belongs to another revision', 'CODE_ANIMATION_SOUND_STALE');
   if (soundtrack.kind === 'silence') return { intentional: true, verified: ['intentional-silence'] };
   const { artifact, timeline } = soundtrack;
+  report?.('audio-mux-read');
   const bytes = await readRunArtifact(projectId, artifact.runId, artifact.name, artifact.sha256);
   const audioPath = join(PATHS.data, artifact.relativePath);
   const videoPath = safeUnder(PATHS.videos, result.filename);
   if (!videoPath) throw fail('The render did not return a managed video');
   signal.throwIfAborted();
   // Account for the newly rendered candidate and the second-pass mux scratch.
+  report?.('audio-mux-reserve');
   if (reserve) await reserve((await stat(videoPath)).size * 2 + soundtrack.artifact.bytes);
   // A browser render's MP4 is already named by its history entry, so the
   // in-place install of the muxed file takes the backup lease (#9982).
-  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], signal,
+  const mux = await muxVoLines(videoPath, { voLines: [{ path: audioPath, offsetSec: 0 }], signal, report,
     withInstall: install => withBackupAssetPublication(install) });
   if (!mux.ok) throw fail(`Soundtrack mux failed: ${mux.reason}`);
   signal.throwIfAborted();
+  report?.('audio-verify-probe');
   const probe = await findFfprobe();
   if (!probe) throw fail('ffprobe is required to verify the muxed soundtrack');
-  const { stdout } = await exec(probe, ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,sample_rate,channels,duration', '-of', 'json', videoPath],
-    { timeout: 10000, maxBuffer: 65536, signal });
+  const stdout = await readMediaOutput(probe, ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,sample_rate,channels,duration', '-of', 'json', videoPath],
+    { timeoutMs: 10000, maxBytes: 65536, signal, onLifecycle: detail => report?.('audio-verify-probe', detail) });
   const stream = JSON.parse(stdout).streams?.[0];
   const duration = Number(stream?.duration);
   const expected = timeline.samples / timeline.sampleRate;
   if (!stream || !Number.isFinite(duration) || Math.abs(duration - expected) > 0.06) throw fail('Muxed audio stream duration did not match the film');
   const channels = soundtrack.measured.channels;
-  const decoded = await decode(videoPath, timeline, signal, { channels });
+  report?.('audio-verify-decode');
+  const decoded = await decode(videoPath, timeline, signal, { channels, onLifecycle: detail => report?.('audio-verify-decode', detail) });
   if (Math.abs(decoded.length / 2 / channels / timeline.sampleRate - expected) > 0.06) throw fail('Decoded mux duration did not match the film');
   const events = measureSoundEvents(decoded, timeline);
   const reference = measureSoundEvents(bytes.subarray(44), timeline);
@@ -122,6 +143,7 @@ export async function muxSoundtrack({ projectId, revision, soundtrack, result, s
   let peak = 0;
   for (let i = 0; i < decoded.length; i += 2) peak = Math.max(peak, Math.abs(decoded.readInt16LE(i)) / 32768);
   if (!peak) throw fail('Muxed audio decoded to silence');
+  report?.('audio-verify-hash');
   const videoDigest = createHash('sha256');
   for await (const chunk of createReadStream(videoPath, { signal })) videoDigest.update(chunk);
   signal.throwIfAborted();

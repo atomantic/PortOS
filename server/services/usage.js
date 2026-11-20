@@ -1,11 +1,12 @@
 /**
  * AI usage ledger: per-provider/model counters, cost estimates and native-usage overlays.
  * 
- * Storage: `file-primary` (`data/usage.json`) — machine-local; federates only as an aggregate digest via
+ * Storage: `db-primary` — machine-local; federates only as an aggregate digest via
  * the `usage` snapshot category, never merged back. A legacy `interactiveScan` object from the retired
- * scanner may remain and is no longer written.
+ * scanner may remain. The legacy JSON is imported, or used directly in file-only tests.
  */
-import { join } from 'path';
+import { copyFile, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'path';
 import { clearTimeout as cancelBatchTimer, setTimeout as scheduleBatchTimer } from 'node:timers';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
@@ -16,12 +17,14 @@ import { POLLUTING_KEYS } from '../lib/objects.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
 import { getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
+import { bumpChangeToken } from './changeToken.js';
 
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
 
 // Day buckets older than this are rolled up into monthly buckets at load time so
-// dailyActivity (and therefore the whole-file rewrite on every AI run) stops growing
+// dailyActivity (and therefore the in-memory report) stops growing
 // linearly forever. 400 days keeps a full year-plus of per-day granularity — beyond
 // any useful streak/report window — while collapsing everything older to per-month.
 const ROLLUP_RETENTION_DAYS = 400;
@@ -35,9 +38,14 @@ let committedUsage = null;
 let grokRepairIndex = new Set();
 let addedRepairIds;
 let ownedRunDraftObjects;
+let draftMarkerBase;
 let pendingRunBatch = null;
 const activeRunBatches = new Set();
 const queueUsageWrite = createFileWriteQueue();
+const usesUsageDatabase = () => isTestRunner()
+  ? process.env.MEMORY_BACKEND === 'postgres'
+  : process.env.MEMORY_BACKEND !== 'file';
+const usageDatabase = () => import('./usageLedgerDb.js');
 
 // Readers continue seeing committed state while a private draft is being
 // persisted, including when a historical correction yields to the event loop.
@@ -46,7 +54,9 @@ async function transactUsage(fn, { copyOnWrite = false } = {}) {
   const previousCommitted = committedUsage;
   const previousRepairIndex = grokRepairIndex;
   addedRepairIds = [];
+  draftMarkerBase = {};
   ownedRunDraftObjects = copyOnWrite ? new WeakSet() : null;
+  if (usesUsageDatabase()) grokRepairIndex = new Set(previous?.grokRepairIds);
   try {
     usageData = previous && (copyOnWrite ? { ...previous } : structuredClone(previous));
     return await fn();
@@ -64,8 +74,14 @@ async function transactUsage(fn, { copyOnWrite = false } = {}) {
     }
     throw error;
   } finally {
+    if (usesUsageDatabase() && usageData) {
+      delete usageData.reconciledRuns;
+      delete usageData.siblingReconciledRuns;
+      grokRepairIndex = new Set();
+    }
     addedRepairIds = undefined;
     ownedRunDraftObjects = undefined;
+    draftMarkerBase = undefined;
   }
 }
 
@@ -96,7 +112,7 @@ function queueRunWrite(apply, args) {
     // or historical edit can't overtake these writes.
     const saved = queueUsageWrite(async () => {
       await gate.promise;
-      if (!usageData) await transactUsage(loadUsageDraft);
+      if (!usageData) await transactUsage(() => loadUsageDraft({ mutableDraft: false }));
       await refreshDayKeyTimezone();
       return transactUsage(async () => {
         const results = [];
@@ -124,7 +140,11 @@ function queueRunWrite(apply, args) {
 // An awaited run write always settles only after the shared durable save.
 export async function flushPendingUsageWrites() {
   closeRunBatch();
-  await Promise.all(activeRunBatches);
+  // Queue a barrier as well as checking the live batches' outcomes. A backup
+  // or shutdown must also wait for a maintenance edit already in the queue.
+  const outcomes = await Promise.allSettled([...activeRunBatches, queueUsageWrite(() => undefined)]);
+  const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+  if (failure) throw failure.reason;
 }
 
 // All ledger writers share one queue and roll back the in-memory copy on failure.
@@ -317,7 +337,7 @@ function compactCodexHighWater(reconciledRuns) {
 /**
  * Load usage data from disk
  */
-async function loadUsageDraft() {
+async function loadUsageDraft({ mutableDraft = true } = {}) {
   await ensureDir(DATA_DIR);
   summaryCache.clear();
 
@@ -327,7 +347,19 @@ async function loadUsageDraft() {
   // and rollup bucket permanently. Only a genuinely ABSENT file is a real fresh
   // install; a present-but-unreadable one now throws before reaching the write
   // (the module-load bootstrap at the bottom of this file already logs it).
-  usageData = await readJSONFile(USAGE_FILE, null, { strict: true });
+  const database = usesUsageDatabase() ? await usageDatabase() : null;
+  if (database) {
+    const { ensureSchema, withTransaction } = await import('../lib/db.js');
+    await ensureSchema();
+    usageData = await database.readUsageLedger();
+    if (!usageData) {
+      await withTransaction((client) => database.importLegacyUsageLedger(client, USAGE_FILE));
+      usageData = await database.readUsageLedger();
+    }
+  } else {
+    usageData = await readJSONFile(USAGE_FILE, null, { strict: true });
+  }
+  const stored = database && usageData ? structuredClone(usageData) : null;
   const missing = !usageData;
   if (missing) usageData = getEmptyUsage();
 
@@ -361,32 +393,43 @@ async function loadUsageDraft() {
   // rewrite every install's usage.json just to add an empty id list.
   if (!Array.isArray(usageData.grokRepairIds)) usageData.grokRepairIds = [];
   grokRepairIndex = new Set(usageData.grokRepairIds);
-  const compacted = compactCodexHighWater(usageData.reconciledRuns);
+  const compacted = !database && compactCodexHighWater(usageData.reconciledRuns);
   const activityChanged = missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks;
   if (activityChanged || compacted) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
-    await saveUsage({ advanceRevision: activityChanged });
+    await saveUsage({ advanceRevision: activityChanged, previous: stored });
   }
 
   console.log(`📊 Loaded usage: ${usageData.totalSessions} sessions, ${usageData.totalMessages} messages`);
+  if (database) delete usageData.grokRepairIds;
   committedUsage = usageData;
-  usageData = structuredClone(committedUsage);
+  if (mutableDraft) usageData = structuredClone(committedUsage);
   return committedUsage;
 }
 
 /**
  * Save usage data to disk
  */
-async function saveUsage({ advanceRevision = true } = {}) {
+async function saveUsage({ advanceRevision = true, previous = committedUsage, reset = false } = {}) {
   if (advanceRevision) {
     const previous = Date.parse(usageData.lastUpdated);
     usageData.lastUpdated = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
   }
-  await atomicWrite(USAGE_FILE, JSON.stringify(usageData));
+  if (usesUsageDatabase()) {
+    const database = await usageDatabase();
+    await database.writeUsageLedger(previous, usageData, { markers: draftMarkerBase, reset, copyOnWrite: Boolean(ownedRunDraftObjects) });
+    delete usageData.reconciledRuns;
+    delete usageData.siblingReconciledRuns;
+    delete usageData.grokRepairIds;
+    grokRepairIndex.clear();
+  } else {
+    await atomicWrite(USAGE_FILE, JSON.stringify(usageData));
+  }
   committedUsage = usageData;
   if (addedRepairIds) addedRepairIds.length = 0;
   summaryCache.clear();
+  if (advanceRevision) bumpChangeToken('usage');
 }
 
 /**
@@ -394,6 +437,47 @@ async function saveUsage({ advanceRevision = true } = {}) {
  */
 export function getUsage() {
   return committedUsage || getEmptyUsage();
+}
+
+/** Read repair evidence for the active install or a portable file-only backup. */
+export async function readUsageRepairLedger(dataDir) {
+  if (usesUsageDatabase() && resolve(dataDir) === resolve(DATA_DIR)) {
+    const ledger = await (await usageDatabase()).readUsageLedgerExport();
+    if (ledger) return ledger;
+  }
+  return readJSONFile(join(dataDir, 'usage.json'), {}, { strict: true });
+}
+
+/** Save a portable pre-repair copy of counters and their matching markers. */
+export async function backupUsageRepairLedger(dataDir, label, { includeWatermark = false } = {}) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dest = join(dataDir, 'backups', `${label}-${stamp}`);
+  await mkdir(dest, { recursive: true });
+  const ledger = await readUsageRepairLedger(dataDir);
+  await atomicWrite(join(dest, 'usage.json'), JSON.stringify(ledger));
+  if (includeWatermark) {
+    await copyFile(join(dataDir, 'usage-interactive-scan.json'), join(dest, 'usage-interactive-scan.json')).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  }
+  return dest;
+}
+
+async function loadDraftRunMarkers(ids) {
+  if (!usesUsageDatabase() || ids.length === 0) return;
+  const database = await usageDatabase();
+  for (const kind of ['reconciledRuns', 'siblingReconciledRuns']) {
+    const rows = await database.readUsageMarkers(kind, { ids });
+    const markers = Object.fromEntries(rows.map(({ id, value }) => [id, value]));
+    draftMarkerBase[kind] = markers;
+    usageData[kind] = { ...markers };
+  }
+}
+
+async function loadDraftRepairIds(ids) {
+  if (!usesUsageDatabase() || ids.length === 0) return;
+  const rows = await (await usageDatabase()).readUsageMarkers('grokRepairIds', { ids });
+  grokRepairIndex = new Set([...(usageData.grokRepairIds ?? []), ...rows.map(({ id }) => id)]);
 }
 
 /**
@@ -523,13 +607,19 @@ const rebuildDayTotals = (day) => {
  * so a historical pass remains idempotent even when a run's metadata marker
  * could not be written.
  */
-export function getReconciledUsageRunIds() {
+export function getReconciledUsageRunIds(ids) {
+  if (usesUsageDatabase()) return usageDatabase().then((db) => db.readUsageMarkers('reconciledRuns', { ids })).then((rows) => rows.map(({ id }) => id));
   return Object.keys(committedUsage?.reconciledRuns || {});
 }
 
 /** Exact observed Codex boundaries from nearby durable completions; legacy markers carry none. */
 export async function getRecentCodexUsageClaims(since) {
   if (!committedUsage) await loadUsage();
+  if (usesUsageDatabase()) {
+    if (!Number.isFinite(since)) return [];
+    const rows = await (await usageDatabase()).readUsageMarkers('reconciledRuns', { since: Math.ceil(since), claimsOnly: true });
+    return rows.flatMap(({ value }) => value.codexHighWater);
+  }
   return Object.values(committedUsage.reconciledRuns || {})
     .filter((marker) => Array.isArray(marker?.codexHighWater) && Date.parse(marker.at) >= since)
     .flatMap((marker) => structuredClone(marker.codexHighWater));
@@ -541,6 +631,7 @@ export async function getRecentCodexUsageClaims(since) {
  * Left in place they would grow `usage.json` by a key per family per day per scan.
  */
 async function forgetSiblingReconciledUsageRunsDraft(runIds = []) {
+  if (usageData) await loadDraftRunMarkers(runIds);
   if (!usageData?.siblingReconciledRuns) return;
   let dropped = 0;
   for (const runId of runIds) {
@@ -554,7 +645,8 @@ async function forgetSiblingReconciledUsageRunsDraft(runIds = []) {
  * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
  * able to run on a run whose own transcript was reconciled long ago (#5831).
  */
-export function getSiblingReconciledUsageRunIds() {
+export function getSiblingReconciledUsageRunIds(ids) {
+  if (usesUsageDatabase()) return usageDatabase().then((db) => db.readUsageMarkers('siblingReconciledRuns', { ids })).then((rows) => rows.map(({ id }) => id));
   return Object.keys(committedUsage?.siblingReconciledRuns || {});
 }
 
@@ -566,6 +658,7 @@ export function getSiblingReconciledUsageRunIds() {
 async function markUsageRunReconciledDraft(runId, { siblings = false } = {}) {
   if (!runId) return;
   if (!usageData) await loadUsageDraft();
+  await loadDraftRunMarkers([runId]);
   if (setReconciledMarkers(runId, siblings)) await saveUsage();
 }
 
@@ -781,6 +874,7 @@ async function applyHistoricalUsageCorrectionsDraft(corrections = [], { interact
       code: 'USAGE_REVISION_CONFLICT', status: 409
     });
   }
+  await loadDraftRunMarkers(corrections.map((correction) => correction?.runId).filter((id) => typeof id === 'string' && id));
   usageData.reconciledRuns ??= {};
   // Additive: absent on every install that predates the sibling scan, which
   // reads as "no run has had its nested sessions attributed yet".
@@ -1094,6 +1188,8 @@ async function addDatedUsageDraft(dayKey, record, { repairId = null, flush = tru
 
 /** Apply a repair batch in one draft and one commit, without cloning per row. */
 async function addDatedUsageBatchDraft(additions = []) {
+  if (!usageData) await loadUsageDraft();
+  await loadDraftRepairIds(additions.map(({ repairId }) => repairId).filter(Boolean));
   const written = [];
   for (const item of additions) {
     if (await addDatedUsageDraft(item.day, item.record, { repairId: item.repairId, flush: false })) {
@@ -1663,9 +1759,11 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
  * Reset usage data
  */
 async function resetUsageDraft() {
+  if (usesUsageDatabase() && !usageData) await loadUsageDraft();
   usageData = getEmptyUsage();
   grokRepairIndex = new Set();
-  await saveUsage();
+  if (committedUsage) usageData.lastUpdated = committedUsage.lastUpdated;
+  await saveUsage({ previous: null, reset: true });
   return true;
 }
 
@@ -1726,17 +1824,19 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
   };
 }
 
-export async function loadUsage() {
+export async function loadUsage({ includeRepairEvidence = false } = {}) {
   closeRunBatch();
   return queueUsageWrite(async () => {
     return transactUsage(async () => {
       await loadUsageDraft();
       // Only the server loads this ledger. Import bridge-written request
       // records locally; no transcript scan or provider call runs at boot.
-      const { scanHistoricalUsage } = await import('./usageBackfillWorker.js');
+      const { listUsageRunIds, scanHistoricalUsage } = await import('./usageBackfillWorker.js');
+      const runsDir = PATHS.runs ?? join(DATA_DIR, 'runs');
+      const runIds = await listUsageRunIds(runsDir);
       const { corrections } = await scanHistoricalUsage({
-        runsDir: PATHS.runs ?? join(DATA_DIR, 'runs'), reportedOnly: true,
-        reconciledRunIds: getReconciledUsageRunIds(),
+        runsDir, runIds, reportedOnly: true,
+        reconciledRunIds: await getReconciledUsageRunIds(runIds),
       });
       const { correctedRunIds } = await applyHistoricalUsageCorrectionsDraft(corrections);
       const corrected = new Set(correctedRunIds);
@@ -1754,9 +1854,22 @@ export async function loadUsage() {
           console.error(`❌ Failed to mark usage for run ${correction.runId}: ${err.message}`);
         }
       }
+      if (usesUsageDatabase()) {
+        usageData = committedUsage;
+        if (includeRepairEvidence) return (await usageDatabase()).readUsageLedgerExport();
+      }
       return committedUsage;
     });
   });
+}
+
+/** Refresh just the committed ledger while restore still fences DB writers. */
+export async function reloadRestoredUsageLedger() {
+  if (!usesUsageDatabase()) return;
+  await mutateUsage(async () => {
+    await loadUsageDraft({ mutableDraft: false });
+    bumpChangeToken('usage');
+  }, []);
 }
 
 export async function forgetSiblingReconciledUsageRuns(...args) {
@@ -1784,7 +1897,11 @@ export async function recordRunUsage(record, options) {
 }
 
 export async function addDatedUsage(...args) {
-  return mutateUsage(addDatedUsageDraft, args);
+  return mutateUsage(async (day, record, options) => {
+    if (!usageData) await loadUsageDraft();
+    if (options?.repairId) await loadDraftRepairIds([options.repairId]);
+    return addDatedUsageDraft(day, record, options);
+  }, args);
 }
 
 export async function flushUsageLedger(...args) {
