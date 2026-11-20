@@ -1,277 +1,39 @@
-import MaintenanceBanner from './MaintenanceBanner.jsx';
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import useFocusTrap from '../hooks/useFocusTrap.js';
-import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
-import {
-  Package,
-  Terminal,
-  ChevronLeft,
-  ChevronDown,
-  ChevronRight,
-  Menu,
-  Cpu,
-  Wrench,
-  ExternalLink,
-  Crown,
-  Brain,
-  Heart,
-  Fingerprint,
-  Sparkles,
-  CalendarDays,
-  Settings,
-  LayoutDashboard,
-  Zap,
-  MessagesSquare,
-  Sun,
-  Moon,
-  Pin,
-  PinOff,
-  Navigation,
-  Search,
-} from 'lucide-react';
-// `__APP_VERSION__` is a Vite build-time define (see vite.config.js). Biome does
-// not honour ESLint-style "global" block comments, so it is declared in
-// biome.jsonc's `javascript.globals` instead.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Outlet, useLocation } from 'react-router';
+import { Menu, Search } from 'lucide-react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
-import { TRUSTED_BUNDLE_STAMP, describeBuild } from '../lib/buildStamp.js';
-import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
-import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import { useOnDemandTaskToast } from '../hooks/useOnDemandTaskToast';
-import { useEngagementReminderToast } from '../hooks/useEngagementReminderToast';
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
-import UpdateBanners from './UpdateBanners';
-import SetupBanner from './SetupBanner';
-import PasswordRiskWarning from './PasswordRiskWarning.jsx';
-import SocketReconnectingPill from './SocketReconnectingPill.jsx';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
-import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
-import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
-import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
-import { filterNavByFeatures } from '../lib/navFeatures.js';
-import {
-  NAV_PRESENTATION,
-  NAV_DESTINATION_PRESENTATION,
-  SECTIONS_BEFORE_GOALS,
-  SECTIONS_AFTER_GOALS,
-  SECTIONS_BELOW_MORE,
-} from '../lib/navPresentation.js';
-import { PORTS } from '../lib/ports.js';
-import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS, SECTION_FEATURE } from '../../../server/lib/navManifest.js';
-import { useSidebarApps } from '../hooks/useSidebarApps.js';
-import { useSidebarMusicVideos } from '../hooks/useSidebarMusicVideos.js';
-import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
-import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
-import { useThemeContext } from './ThemeContext';
-import NotificationDropdown from './NotificationDropdown';
-import ThemeSwitcher from './ThemeSwitcher';
-import VoiceToggleButton from './voice/VoiceToggleButton';
+import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
+import ActionActivityBar from './ui/ActionActivityBar';
 import CmdKSearchGate from './CmdKSearchGate';
 import KeyboardHelpGate from './KeyboardHelpGate';
-import VoiceWidgetGate from './voice/VoiceWidgetGate';
-import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
+import Logo from './Logo';
+import MaintenanceBanner from './MaintenanceBanner.jsx';
+import { NotificationBell, NotificationBellProvider } from './NotificationBell.jsx';
+import PasswordRiskWarning from './PasswordRiskWarning.jsx';
+import SetupBanner from './SetupBanner';
 import SidebarContext from './SidebarContext.jsx';
-import ActionActivityBar from './ui/ActionActivityBar';
-
-function ThemeModeToggle({ className = '' }) {
-  const { theme, toggleMode } = useThemeContext();
-  const isDay = theme?.mode === 'day';
-  const Icon = isDay ? Sun : Moon;
-  const pairLabel = theme?.pair ? ` (${isDay ? 'switch to night' : 'switch to day'})` : '';
-  return (
-    <button
-      type="button"
-      onClick={toggleMode}
-      title={`${theme?.label ?? 'Theme'}${pairLabel}`}
-      aria-label={`Toggle day/night mode${pairLabel}`}
-      className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
-    >
-      <Icon size={18} aria-hidden="true" />
-    </button>
-  );
-}
-
-const SECTION_PRESENTATION = {
-  Brain: { icon: Brain, defaultTo: '/brain/inbox' },
-  Calendar: { icon: CalendarDays, defaultTo: '/calendar/agenda' },
-  'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks' },
-  Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
-  Create: { icon: Sparkles, defaultTo: '/create/media' },
-  'Dev Tools': { icon: Terminal },
-  Health: { icon: Heart, defaultTo: '/meatspace/overview' },
-  Models: { icon: Cpu, defaultTo: '/models/llms' },
-  Settings: { icon: Settings, defaultTo: '/settings/general' },
-  Identity: { icon: Fingerprint, defaultTo: '/digital-twin/overview' },
-  POST: { icon: Zap, defaultTo: '/post/launcher' },
-};
-
-
-const SECTION_ORDER = [...SECTIONS_BEFORE_GOALS, ...SECTIONS_AFTER_GOALS, ...SECTIONS_BELOW_MORE];
-
-// These rows have no PortOS route, so a NAV_COMMANDS entry would be dishonest.
-// Keep them visibly marked as local-only instead of smuggling structural route
-// data back into the presentation map.
-const LOCAL_SECTION_ROWS = {
-  'Dev Tools': [
-    { href: `//:${PORTS.AUTOFIXER_UI}`, label: 'Autofixer', icon: Wrench, external: true, dynamicHost: true, localOnly: true },
-  ],
-};
-
-const commandByPath = new Map();
-for (const command of NAV_COMMANDS) {
-  if (!commandByPath.has(command.path)) commandByPath.set(command.path, command);
-}
-
-const navRowForPath = (path) => {
-  const command = commandByPath.get(path);
-  if (!command) throw new Error(`Layout: NAV_PRESENTATION path has no NAV_COMMANDS entry: ${path}`);
-  return {
-    to: command.path,
-    label: command.label,
-    section: command.section,
-    feature: command.feature,
-    ...(command.navGroup ? { navGroup: command.navGroup } : {}),
-    ...NAV_PRESENTATION[path],
-  };
-};
-
-const presentedNavRows = Object.keys(NAV_PRESENTATION).map(navRowForPath);
-
-// A hub can own several route prefixes when its records have legacy URLs.
-const activePrefixesByPath = new Map(presentedNavRows.map((row) =>
-  [row.to, row.activePathPrefixes || [row.activePathPrefix || row.to]]));
-const pathWithinRow = (pathname, rowPath) => (
-  (activePrefixesByPath.get(rowPath) || [rowPath]).some((prefix) =>
-    pathname === prefix || pathname.startsWith(prefix + '/'))
-);
-
-const sectionNavItem = (section) => {
-  const children = presentedNavRows
-    .filter((row) => row.section === section && !row.single)
-    .concat(LOCAL_SECTION_ROWS[section] || [])
-    .sort((a, b) => a.label.localeCompare(b.label));
-  const childByPath = new Map(children.filter((child) => child.to).map((child) => [child.to, child]));
-  const groups = getSectionNavGroups(section)
-    .map((group) => ({ ...group, children: group.tabs.map((tab) => childByPath.get(tab.to)).filter(Boolean) }))
-    .filter((group) => group.children.length > 0);
-  return { label: section, feature: SECTION_FEATURE.get(section), children, groups, ...SECTION_PRESENTATION[section] };
-};
-
-const mainRows = ['/', '/review', '/eidoverse'].map(navRowForPath);
-const appsCommand = navRowForPath('/apps');
-const goalsRow = navRowForPath('/goals/list');
-const sectionRows = Object.fromEntries(SECTION_ORDER.map((section) => [section, sectionNavItem(section)]));
-
-const navItems = [
-  ...mainRows,
-  { separator: true, localOnly: true },
-  { ...appsCommand, dynamic: 'apps', defaultTo: appsCommand.to, children: [] },
-  ...SECTIONS_BEFORE_GOALS.map((section) => sectionRows[section]),
-  goalsRow,
-  ...SECTIONS_AFTER_GOALS.map((section) => sectionRows[section]),
-  { moreLabel: true, localOnly: true },
-  ...SECTIONS_BELOW_MORE.map((section) => sectionRows[section]),
-];
+import SidebarNav from './SidebarNav.jsx';
+import SocketReconnectingPill from './SocketReconnectingPill.jsx';
+import ThemeModeToggle from './ThemeModeToggle.jsx';
+import ThemeSwitcher from './ThemeSwitcher';
+import UpdateBanners from './UpdateBanners';
+import VoiceToggleButton from './voice/VoiceToggleButton';
+import VoiceWidgetGate from './voice/VoiceWidgetGate';
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';
 
-// The pin/unpin toggle shared by every pinnable sidebar row (Pinned/Recent rows
-// and the top-level single rows). It must not navigate, so it swallows the click
-// (preventDefault + stopPropagation). A pinned row shows a filled pin in the
-// accent color; an unpinned row reveals the affordance only on hover/focus of
-// the enclosing `group`.
-function PinButton({ label, pinned, onTogglePin }) {
-  return (
-    <button
-      type="button"
-      aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-      className={`inline-flex min-w-[44px] min-h-[44px] items-center justify-center rounded-lg hover:bg-port-border/50 pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:px-2 lg:py-1.5 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-40 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:group-hover:opacity-100 group-focus-within:opacity-100'}`}
-    >
-      {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-    </button>
-  );
-}
-
-// One row in the sidebar's Pinned/Recent sections: a nav link plus a pin/unpin
-// toggle that does not navigate (stops propagation). Pinned rows show a filled
-// pin; recent rows reveal the pin affordance on hover/focus.
-// Labels wrap (no truncate) so long app/series names stay readable in the
-// narrow rail; the pin is absolutely positioned so it doesn't steal label width.
-function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
-  const Icon = entry.icon;
-  return (
-    <div className="group relative mx-2 min-w-0 min-h-[44px] pointer-fine:lg:min-h-0">
-      <NavLink
-        to={entry.path}
-        end={entry.end}
-        onClick={onNavigate}
-        title={entry.label}
-        className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
-          isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-        }`}
-      >
-        {Icon && <Icon size={16} className="shrink-0 mt-0.5" />}
-        <span className="min-w-0 break-words leading-snug">{entry.label}</span>
-      </NavLink>
-      <div className="absolute right-0 top-0 bottom-0 flex items-center">
-        <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
-      </div>
-    </div>
-  );
-}
-
-// A top-level *single* nav row (Dashboard / Review Hub / Eidoverse / Goals). Unlike a
-// section, it links straight to one destination — and unlike WorkingSetRow it
-// carries the heavier top-level row weight and the collapsed-rail layout
-// (icon-only, centered). When expanded it also exposes the same hover/focus
-// pin/unpin affordance as WorkingSetRow so these destinations can be pinned too;
-// the pin button is omitted in the collapsed rail, mirroring the Pinned/Recent
-// sections which only render when the sidebar is expanded.
-export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onNavigate }) {
-  const Icon = item.icon;
-  return (
-    <div className={`group relative min-w-0 mx-2 min-h-[44px] pointer-fine:lg:min-h-0 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
-      <NavLink
-        to={item.to}
-        end={item.to === '/'}
-        onClick={onNavigate}
-        className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
-          collapsed ? 'lg:justify-center lg:px-2' : 'pr-9'
-        } ${
-          active
-            ? 'bg-port-accent/10 text-port-accent'
-            : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-        }`}
-        title={item.label}
-      >
-        <div className="flex items-start gap-3 min-w-0 flex-1">
-          <Icon size={20} className="shrink-0" />
-          <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
-            {item.label}
-          </span>
-        </div>
-      </NavLink>
-      {!collapsed && (
-        <div className="absolute right-0 top-0 bottom-0 flex items-center">
-          <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function Layout() {
   const location = useLocation();
-  const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => safeReadStorage(SIDEBAR_KEY) === 'true');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopNav, setDesktopNav] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
-  const sidebarRef = useRef(null);
   const menuButtonRef = useRef(null);
   const mobileNavActive = mobileOpen && !desktopNav;
-  useFocusTrap(mobileNavActive, sidebarRef);
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1024px)');
     const syncViewport = () => {
@@ -282,52 +44,11 @@ export default function Layout() {
     media.addEventListener('change', syncViewport);
     return () => media.removeEventListener('change', syncViewport);
   }, []);
-  const [expandedSections, setExpandedSections] = useState({});
-  const [expandedSubSections, setExpandedSubSections] = useState({});
-  // Collapsed-sidebar flyout: hovering or focusing a section icon opens a
-  // fixed-position popover to the right listing the section's children, so the
-  // user can reach siblings (e.g. Writers Room from Create) without expanding
-  // the whole sidebar. Tracks which section is open and the icon's screen rect.
-  const [flyoutSection, setFlyoutSection] = useState(null);
-  const [flyoutPos, setFlyoutPos] = useState({ top: 0, left: 0 });
-  const flyoutRef = useRef(null);
-  const flyoutCloseTimer = useRef(null);
-  const openFlyout = useCallback((event, label) => {
-    clearTimeout(flyoutCloseTimer.current);
-    const rect = event.currentTarget.getBoundingClientRect();
-    setFlyoutPos({ top: rect.top, left: rect.right + 4 });
-    setFlyoutSection(label);
-  }, []);
-  // Shift the flyout up if it would overflow the bottom of the viewport so the
-  // full menu of options stays visible (sections near the bottom of a collapsed
-  // sidebar otherwise clip off-screen). Measures the actual rendered height and
-  // adjusts before paint (no flicker, hence useLayoutEffect on open).
-  const clampFlyout = useCallback(() => {
-    if (!flyoutRef.current) return;
-    const MARGIN = 8;
-    const height = flyoutRef.current.offsetHeight;
-    const maxTop = window.innerHeight - height - MARGIN;
-    setFlyoutPos((prev) => {
-      const clampedTop = Math.max(MARGIN, Math.min(prev.top, maxTop));
-      return clampedTop === prev.top ? prev : { ...prev, top: clampedTop };
-    });
-  }, []);
-  useLayoutEffect(() => {
-    if (!flyoutSection) return;
-    clampFlyout();
-    // Re-clamp on resize so a shorter viewport doesn't strand the open flyout.
-    window.addEventListener('resize', clampFlyout);
-    return () => window.removeEventListener('resize', clampFlyout);
-  }, [flyoutSection, clampFlyout]);
-  const scheduleCloseFlyout = useCallback(() => {
-    clearTimeout(flyoutCloseTimer.current);
-    flyoutCloseTimer.current = setTimeout(() => setFlyoutSection(null), 180);
-  }, []);
-  const cancelCloseFlyout = useCallback(() => clearTimeout(flyoutCloseTimer.current), []);
-  useEffect(() => () => clearTimeout(flyoutCloseTimer.current), []);
-  // Close any open flyout immediately on navigation so a stale popover doesn't
-  // hang over the next page.
-  useEffect(() => { setFlyoutSection(null); }, [location.pathname]);
+  const closeMobileNav = useCallback(() => setMobileOpen(false), []);
+  useEffect(closeMobileNav, [location.pathname, closeMobileNav]);
+  useEffect(() => { safeWriteStorage(SIDEBAR_KEY, String(collapsed)); }, [collapsed]);
+  const sidebarCollapsed = collapsed && !mobileOpen;
+  const sidebarContext = useMemo(() => ({ collapsed: sidebarCollapsed, desktop: desktopNav }), [sidebarCollapsed, desktopNav]);
 
   // Subscribe to server error notifications
   useErrorNotifications();
@@ -340,817 +61,103 @@ export default function Layout() {
   // Toast when a user-triggered on-demand task run found no actionable work
   useOnDemandTaskToast();
 
-  // Toast once per tab/day when deterministic product metrics identify a POST
-  // exercise or creative commission feedback action needing attention.
-  useEngagementReminderToast();
-
   // Live AI operation status (model loads, "calling LM Studio…", etc.)
   useAIStatusNotifications();
 
-  // Notifications for user task alerts
-  const {
-    notifications,
-    unreadCount,
-    markAsRead,
-    markAllAsRead,
-    removeNotification,
-    clearAll
-  } = useNotifications();
-
-  // Sidebar data-fetch loops (apps / pipeline series / universes / music
-  // videos) live in
-  // dedicated hooks so the shared focus-debounce + signature-guard pattern is
-  // testable in isolation. See client/src/hooks/useSidebar*.js.
-  // Optional features the user turned off in Settings > Features drop out of the
-  // sidebar entirely (their routes keep working for a direct link/bookmark).
-  const { isFeatureEnabled } = useInstanceFeatures();
-  const sidebarApps = useSidebarApps();
-  const pipelineSeries = useSidebarSeries();
-  const universes = useSidebarUniverses();
-  const musicVideos = useSidebarMusicVideos();
-
-  // Manifest-only paths (e.g. /wiki/log, /goals/tree) have no sidebar leaf, so
-  // they resolve out of the statically imported manifest that already backs
-  // `commandByPath`. Reading the bundle instead of re-fetching `/palette/manifest`
-  // is what lets a Pinned/Recent row for one of those paths render on the FIRST
-  // paint rather than popping in once a request lands (and keeps it rendering on
-  // an install where that request fails). They still honour the feature gate, so
-  // a row pinned before the user disabled its feature stops resolving too.
-  const manifestEntryByPath = useMemo(() => {
-    const map = new Map();
-    filterNavByFeatures([...commandByPath.values()], isFeatureEnabled).forEach((c) => {
-      map.set(c.path, { path: c.path, label: c.label, icon: NAV_DESTINATION_PRESENTATION[c.path]?.icon || Navigation });
-    });
-    return map;
-  }, [isFeatureEnabled]);
-
-  useEffect(() => {
-    safeWriteStorage(SIDEBAR_KEY, String(collapsed));
-  }, [collapsed]);
-
-  // Build dynamic nav items with app children + record-list grandchildren
-  // (Series, Universes, Music Video projects): each dynamic row lists its
-  // records under `${basePath}/${id}`, highlighted while on that record or any
-  // of its sub-pages. Decorators live inside the memo so their closures over the
-  // lists need no lint suppression and aren't reallocated on every render.
-  const resolvedNavItems = useMemo(() => {
-    const dynamicLists = {
-      pipelineSeries: { items: pipelineSeries, basePath: '/pipeline/series', untitled: '(untitled series)' },
-      universes: { items: universes, basePath: '/universes', untitled: '(untitled universe)' },
-      musicVideos: { items: musicVideos, basePath: '/music-video', untitled: '(untitled music video)' },
-    };
-    const decorateDynamicChild = (child) => {
-      const list = dynamicLists[child.dynamic];
-      if (!list) return child;
-      return {
-        ...child,
-        grandChildren: list.items.map((record) => {
-          const label = record.name || list.untitled;
-          return {
-            to: `${list.basePath}/${record.id}`,
-            label,
-            title: label,
-            icon: child.icon,
-            activePathPrefix: `${list.basePath}/${record.id}`,
-          };
-        }),
-      };
-    };
-    // Feature gate, applied before any decoration: a disabled feature drops its
-    // whole section (POST) or just its tagged rows (DataDog, JIRA), and a
-    // section left with no navigable child disappears with them. Sections that
-    // lose nothing keep their identity so the memo below doesn't reallocate.
-    const gatedItems = navItems.flatMap((item) => {
-      if (!isFeatureEnabled(item.feature)) return [];
-      if (!Array.isArray(item.children)) return [item];
-      const children = item.children.filter((child) => isFeatureEnabled(child.feature));
-      if (children.length === item.children.length) return [item];
-      const navigable = item.dynamic || item.defaultTo || children.some((child) => child.to || child.href);
-      const groups = item.groups
-        ?.map((group) => ({ ...group, children: group.children.filter((child) => isFeatureEnabled(child.feature)) }))
-        .filter((group) => group.children.length > 0);
-      return navigable ? [{ ...item, children, ...(groups ? { groups } : {}) }] : [];
-    });
-
-    return gatedItems.map((item) => {
-      if (item.dynamic === 'apps') {
-        return {
-          ...item,
-          children: [
-            { to: '/apps', label: 'Dashboard', icon: LayoutDashboard, end: true },
-            { separator: true },
-            ...sidebarApps.map((app) => ({
-              to: `/apps/${app.id}`,
-              label: app.name,
-              icon: Package,
-            })),
-          ],
-        };
-      }
-      if (Array.isArray(item.children)) {
-        return { ...item, children: item.children.map(decorateDynamicChild) };
-      }
-      return item;
-    });
-  }, [sidebarApps, pipelineSeries, universes, musicVideos, isFeatureEnabled]);
-
-  // Flat path -> { path, label, icon } lookup over every leaf nav row, so the
-  // Pinned/Recent sections render a stored path with its real label + icon.
-  const navEntryByPath = useMemo(() => {
-    const map = new Map();
-    const addLeaf = (leaf) => {
-      if (leaf?.to && !map.has(leaf.to)) {
-        map.set(leaf.to, { path: leaf.to, label: leaf.label, icon: leaf.icon, end: leaf.end });
-      }
-    };
-    resolvedNavItems.forEach((item) => {
-      if (item.single) addLeaf(item);
-      (item.children || []).forEach((child) => {
-        addLeaf(child);
-        (child.grandChildren || []).forEach(addLeaf);
-      });
-    });
-    return map;
-  }, [resolvedNavItems]);
-
-  // Stored Pinned/Recent paths outlive the routes they were saved from. When a
-  // page MOVES, its old path stops matching anything here and the row silently
-  // renders nothing — so a miss falls back through the manifest's `previousPaths`
-  // to where the page lives now, and the entry carries that CURRENT path so the
-  // row navigates (and unpins) by it. Resolution is where this belongs rather
-  // than a rewrite-on-read: a path that resolves to nothing is left untouched,
-  // which matters because the dynamic app/series/universe rows load async and
-  // "unresolvable" is a normal transient state during boot.
-  const resolveNavEntry = useCallback(
-    (path) => {
-      const direct = navEntryByPath.get(path) || manifestEntryByPath.get(path);
-      if (direct) return direct;
-      const current = migrateLegacyNavPath(path, NAV_COMMANDS);
-      if (current === path) return null;
-      return navEntryByPath.get(current) || manifestEntryByPath.get(current) || null;
-    },
-    [navEntryByPath, manifestEntryByPath],
-  );
-
-  const { pinned, recent, pin, unpin, isPinned } = useNavWorkingSet(resolveNavEntry);
-
-  // Auto-expand sections when the current route belongs to them.
-  useEffect(() => {
-    const owningSection = getNavCommandForPath(location.pathname)?.section;
-    resolvedNavItems.forEach(item => {
-      if (item.children?.length) {
-        const isChildActive = owningSection === item.label || item.children.some(child =>
-          (child.to && pathWithinRow(location.pathname, child.to)) ||
-          (Array.isArray(child.grandChildren) && child.grandChildren.some(gc => {
-            const prefix = gc.activePathPrefix || gc.to;
-            return location.pathname === prefix || location.pathname.startsWith(prefix + '/');
-          }))
-        );
-        if (isChildActive) {
-          setExpandedSections(prev => ({ ...prev, [item.label]: true }));
-        }
-        item.children.forEach(child => {
-          const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
-          if (grandChildren.some(grandChild => {
-            const prefix = grandChild.activePathPrefix || grandChild.to;
-            return location.pathname === prefix || location.pathname.startsWith(prefix + '/');
-          })) {
-            setExpandedSubSections(prev => ({ ...prev, [child.to]: true }));
-          }
-        });
-      }
-    });
-  }, [location.pathname, resolvedNavItems]);
-
-  // Close mobile menu on route change
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [location.pathname]);
-
-  const toggleSection = (label) => {
-    setExpandedSections(prev => ({
-      ...prev,
-      [label]: !prev[label]
-    }));
-  };
-
-  const toggleSubSection = (path) => {
-    setExpandedSubSections(prev => ({
-      ...prev,
-      [path]: prev[path] === false,
-    }));
-  };
-
-  const isActive = (path) => {
-    if (path === '/') return location.pathname === '/';
-    const declaredPath = commandByPath.has(path);
-    const matchedCommand = declaredPath ? getNavCommandForPath(location.pathname) : null;
-    if (matchedCommand?.section === 'Models') {
-      const owningTab = getSectionNavTabForPath('Models', location.pathname);
-      return owningTab?.to === path || matchedCommand.path === path;
-    }
-    return pathWithinRow(location.pathname, path);
-  };
-
-  const isSectionActive = (item) => {
-    if (item.single && item.to) {
-      return isActive(item.to);
-    }
-    const owningSection = getNavCommandForPath(location.pathname)?.section;
-    if (owningSection === item.label) return true;
-    if (item.children) {
-      return item.children.some(child =>
-        (child.to && isActive(child.to)) ||
-        (Array.isArray(child.grandChildren) && child.grandChildren.some(gc => {
-          const prefix = gc.activePathPrefix || gc.to;
-          return location.pathname === prefix || location.pathname.startsWith(prefix + '/');
-        }))
-      );
-    }
-    return false;
-  };
-
-  // The persisted collapsed preference only applies to the desktop rail. On
-  // mobile, opening the sidebar always gives the user the expanded navigation
-  // so section children remain directly reachable.
-  const sidebarCollapsed = collapsed && !mobileOpen;
-
-  const renderNavItem = (item, index) => {
-    // Separator
-    if (item.separator) {
-      return (
-        <div key={`separator-${index}`} className="mx-4 my-2 border-t border-port-border" />
-      );
-    }
-
-    // "More" section divider — visually groups the long-tail sections below it.
-    if (item.moreLabel) {
-      return <div key="more-label" className="mx-4 mt-3 mb-1 pt-2 border-t border-port-border text-[10px] font-semibold uppercase tracking-wide text-gray-500">More</div>;
-    }
-
-    const Icon = item.icon;
-
-    // External link
-    if (item.external) {
-      // Build href - use current hostname for dynamic host links
-      const href = item.dynamicHost
-        ? `${window.location.protocol}//${window.location.hostname}${item.href.replace('//', '')}`
-        : item.href;
-
-      return (
-        <a
-          key={item.href}
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
-            sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
-          } text-gray-400 hover:text-white hover:bg-port-border/50`}
-          title={item.label}
-        >
-          <div className="flex items-start gap-3 min-w-0">
-            <Icon size={20} className="shrink-0" />
-            <span className={`min-w-0 break-words leading-snug ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
-              {item.label}
-            </span>
-          </div>
-          {!sidebarCollapsed && <ExternalLink size={14} className="text-gray-500 shrink-0 mt-0.5" />}
-        </a>
-      );
-    }
-
-    if (item.single) {
-      const singlePinned = isPinned(item.to);
-      return (
-        <SingleNavRow
-          key={item.to}
-          item={item}
-          collapsed={sidebarCollapsed}
-          active={isActive(item.to)}
-          pinned={singlePinned}
-          onTogglePin={() => (singlePinned ? unpin(item.to) : pin(item.to))}
-          onNavigate={() => setMobileOpen(false)}
-        />
-      );
-    }
-
-    // Collapsible section
-    const defaultChildPath = item.defaultTo
-      || (item.children && item.children.find(c => c.to)?.to)
-      || null;
-
-    const navigateToSection = () => {
-      if (defaultChildPath) {
-        navigate(defaultChildPath);
-        // Ensure the section is expanded so the user can see siblings
-        if (item.children?.length && !expandedSections[item.label] && !sidebarCollapsed) {
-          toggleSection(item.label);
-        }
-      } else {
-        toggleSection(item.label);
-      }
-      setMobileOpen(false);
-    };
-
-    const sectionRowClasses = `flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-      isSectionActive(item)
-        ? 'bg-port-accent/10 text-port-accent'
-        : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-    }`;
-
-    const hasChildrenForFlyout = sidebarCollapsed && Array.isArray(item.children) && item.children.length > 0;
-
-    return (
-      <div key={item.label} className="mx-2 min-w-0">
-        <div
-          className={`flex items-stretch min-w-0 ${sidebarCollapsed ? 'lg:justify-center' : ''}`}
-          onMouseEnter={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
-          onMouseLeave={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
-          onFocus={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
-          onBlur={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
-        >
-          <button
-            type="button"
-            onClick={navigateToSection}
-            className={`flex-1 min-w-0 ${sectionRowClasses} ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
-            title={sidebarCollapsed ? item.label : undefined}
-            aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
-            aria-current={isSectionActive(item) ? 'true' : undefined}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <Icon size={20} className="shrink-0" />
-              <span className={`min-w-0 break-words leading-snug ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
-                {item.label}
-              </span>
-            </div>
-          </button>
-          {!sidebarCollapsed && item.children?.length > 0 && (
-            <button
-              type="button"
-              aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}
-              onClick={() => toggleSection(item.label)}
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
-            >
-              {expandedSections[item.label]
-                ? <ChevronDown size={16} />
-                : <ChevronRight size={16} />
-              }
-            </button>
-          )}
-        </div>
-
-        {/* Children items */}
-        {expandedSections[item.label] && !sidebarCollapsed && (
-          <div className="ml-4 mt-1 min-w-0">
-            {(item.groups?.length
-              ? item.groups.flatMap((group) => [{ groupLabel: group.label }, ...group.children])
-              : item.children
-            ).map((child, childIndex) => {
-              if (child.groupLabel) {
-                return (
-                  <div key={`child-group-${child.groupLabel}`} className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500" role="heading" aria-level="3">
-                    {child.groupLabel}
-                  </div>
-                );
-              }
-              if (child.separator) {
-                return <div key={`child-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
-              }
-              const ChildIcon = child.icon;
-              if (child.external) {
-                const childHref = child.dynamicHost
-                  ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
-                  : child.href;
-                return (
-                  <a
-                    key={child.href}
-                    href={childHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={child.label}
-                    className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
-                  >
-                    <div className="flex items-start gap-3 min-w-0">
-                      <ChildIcon size={16} className="shrink-0 mt-0.5" />
-                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                    </div>
-                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
-                  </a>
-                );
-              }
-              const childActive = child.end
-                ? location.pathname === child.to
-                : isActive(child.to);
-              const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
-              const grandChildrenExpanded = expandedSubSections[child.to] !== false;
-              const childIsPinned = isPinned(child.to);
-              return (
-                <div key={child.to} className="min-w-0">
-                  <div className="flex items-center min-w-0">
-                    <div className="min-w-0 flex-1">
-                      <WorkingSetRow
-                        entry={{ path: child.to, label: child.label, icon: ChildIcon, end: child.end }}
-                        pinned={childIsPinned}
-                        onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
-                        onNavigate={() => setMobileOpen(false)}
-                        isActive={childActive}
-                      />
-                    </div>
-                    {grandChildren.length > 0 && (
-                      <button
-                        type="button"
-                        aria-label={grandChildrenExpanded ? `Collapse ${child.label}` : `Expand ${child.label}`}
-                        aria-expanded={grandChildrenExpanded}
-                        onClick={() => toggleSubSection(child.to)}
-                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
-                      >
-                        {grandChildrenExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </button>
-                    )}
-                  </div>
-                  {grandChildren.length > 0 && grandChildrenExpanded && (
-                    <div className="ml-6 mt-0.5 mb-1 border-l border-port-border/50 pl-2 min-w-0">
-                      {grandChildren.map((gc) => {
-                        // Prefer the explicit prefix (e.g. `/pipeline/issues/<id>`)
-                        // so the row stays highlighted across stage tabs — the
-                        // `to` link points at a specific default stage but the
-                        // user may navigate to siblings.
-                        const prefix = gc.activePathPrefix || gc.to;
-                        const gcActive = location.pathname === prefix
-                          || location.pathname.startsWith(prefix + '/');
-                        return (
-                          <NavLink
-                            key={gc.to}
-                            to={gc.to}
-                            onClick={() => setMobileOpen(false)}
-                            title={gc.title || gc.label}
-                            className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
-                              gcActive
-                                ? 'text-port-accent'
-                                : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
-                            }`}
-                          >
-                            {gc.label}
-                          </NavLink>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
-    <SidebarContext.Provider value={{ collapsed: sidebarCollapsed, desktop: desktopNav }}>
+    <SidebarContext.Provider value={sidebarContext}>
       <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
-      {/* Owns the voice config for the toggle buttons below and appends the
-          push-to-talk widget after its children, loading that chunk only once
-          voice is enabled. */}
-      <VoiceWidgetGate>
-      {/* Skip to main content link for keyboard users */}
-      <a
-        href="#main-content"
-        onClick={() => document.getElementById('main-content')?.focus()}
-        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-port-accent focus:text-white focus:rounded-lg focus:outline-hidden"
-      >
-        Skip to main content
-      </a>
-      {/* Mobile overlay */}
-      {mobileNavActive && (
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-label="Close sidebar"
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={() => setMobileOpen(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setMobileOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside
-        ref={sidebarRef}
-        id="app-sidebar"
-        inert={!desktopNav && !mobileNavActive}
-        aria-hidden={!desktopNav && !mobileNavActive ? true : undefined}
-        onKeyDown={(event) => {
-          // Portaled child popovers own their Escape dismissal.
-          if (mobileNavActive && event.key === 'Escape' && !event.defaultPrevented && event.currentTarget.contains(event.target)) {
-            event.stopPropagation();
-            setMobileOpen(false);
-          }
-        }}
-        className={`
-          port-app-sidebar
-          fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
-          flex flex-col bg-port-card border-r border-port-border
-          transition-all duration-300 ease-in-out
-          ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-          ${collapsed ? 'lg:w-16' : 'lg:w-64'}
-          w-64
-        `}
-      >
-        {/* Header with logo and collapse toggle */}
-        <div className={`flex items-center p-4 border-b border-port-border ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
-          {/* Expanded: logo + text */}
-          <div className={`flex items-center gap-2 ${collapsed ? 'lg:hidden' : ''}`}>
-            <Logo size={28} className="shrink-0" />
-            <span className="text-port-accent font-semibold whitespace-nowrap">PortOS</span>
-          </div>
-          {/* Collapsed: just logo, clickable to expand */}
-          {collapsed && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(false)}
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hidden lg:block opacity-95 transition-opacity hover:opacity-80"
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
+        {/* Owns the voice config for the toggle buttons below and appends the
+            push-to-talk widget after its children, loading that chunk only once
+            voice is enabled. */}
+        <VoiceWidgetGate>
+          <NotificationBellProvider>
+            {/* Skip to main content link for keyboard users */}
+            <a
+              href="#main-content"
+              onClick={() => document.getElementById('main-content')?.focus()}
+              className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-port-accent focus:text-white focus:rounded-lg focus:outline-hidden"
             >
-              <Logo size={28} ariaLabel="PortOS logo - click to expand sidebar" />
-            </button>
-          )}
-          {/* Expanded: collapse button */}
-          {!collapsed && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(true)}
-              className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
-              title="Collapse sidebar"
-              aria-label="Collapse sidebar"
-            >
-              <ChevronLeft size={20} aria-hidden="true" />
-            </button>
-          )}
-          {/* Mobile close button */}
-          <button
-            type="button"
-            onClick={() => setMobileOpen(false)}
-            className="lg:hidden inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg text-gray-500 hover:text-white"
-            aria-label="Close sidebar"
-          >
-            <span aria-hidden="true">✕</span>
-          </button>
-        </div>
-
-        {/* Nav items */}
-        <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden min-w-0">
-          {!collapsed && (pinned.length > 0 || recent.length > 0) && (
-            <div className="mb-2">
-              {pinned.length > 0 && (
-                <div className="mb-2" data-testid="pinned-section">
-                  <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Pinned</div>
-                  {pinned.map((entry) => (
-                    <WorkingSetRow key={`pin-${entry.path}`} entry={entry} pinned onTogglePin={() => unpin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
-                  ))}
-                </div>
-              )}
-              {recent.length > 0 && (
-                <div className="mb-2" data-testid="recent-section">
-                  <div className="px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Recent</div>
-                  {recent.map((entry) => (
-                    <WorkingSetRow key={`recent-${entry.path}`} entry={entry} pinned={false} onTogglePin={() => pin(entry.path)} onNavigate={() => setMobileOpen(false)} isActive={entry.end ? location.pathname === entry.path : isActive(entry.path)} />
-                  ))}
-                </div>
-              )}
-              <div className="mx-4 my-2 border-t border-port-border" />
-            </div>
-          )}
-          {resolvedNavItems.map(renderNavItem)}
-        </nav>
-
-        {/* Footer with version and notifications */}
-        <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 px-3 py-2.5' : 'px-3 py-2.5'}`}>
-          <div className={`flex flex-col items-center gap-2 ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'lg:flex-row lg:items-center lg:justify-between lg:gap-0'}`}>
-            <span
-              className={`text-xs text-gray-500 shrink-0 font-medium select-none ${collapsed ? 'lg:hidden' : ''}`}
-              // The version is identical across every development commit (it
-              // reflects the last RELEASE), so hovering it gives the one fact it
-              // cannot carry: which commit is actually running (#4694). This is
-              // the zero-navigation surface — the full read-out, including
-              // bundle/server drift, is on /system-resources/overview.
-              // TRUSTED_, not BUNDLE_: under `npm run dev` the Vite define is
-              // frozen at dev-server start while HMR serves every commit since,
-              // so a tooltip there would confidently report the wrong commit.
-              title={TRUSTED_BUNDLE_STAMP ? `v${__APP_VERSION__} · ${describeBuild(TRUSTED_BUNDLE_STAMP) ?? 'commit unknown'}` : undefined}
-            >
-              v{__APP_VERSION__}
-            </span>
-            <div className={`flex items-center gap-0.5 ${collapsed ? 'lg:flex-col lg:gap-1' : ''}`}>
+              Skip to main content
+            </a>
+            {/* Mobile overlay */}
+            {mobileNavActive && (
               <button
                 type="button"
-                onClick={openCmdKSearch}
-                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} text-gray-500 hover:text-white`}
-                title="Search"
-                aria-label="Open command palette"
-              >
-                <Search size={18} />
-              </button>
-              <ThemeModeToggle />
-              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
-              <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
-              <NotificationDropdown
-                notifications={notifications}
-                unreadCount={unreadCount}
-                onMarkAsRead={markAsRead}
-                onMarkAllAsRead={markAllAsRead}
-                onRemove={removeNotification}
-                onClearAll={clearAll}
+                tabIndex={-1}
+                aria-label="Close sidebar"
+                className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                onClick={closeMobileNav}
+                onKeyDown={(e) => e.key === 'Escape' && closeMobileNav()}
               />
-            </div>
-          </div>
-        </div>
-      </aside>
+            )}
 
-      {/* Collapsed-sidebar section flyout — fixed-position so it escapes the
-          nav scroller's overflow clipping. Opens on hover/focus of a section
-          icon when the sidebar is collapsed; lists the section's children so
-          siblings (e.g. Writers Room under Create) stay reachable without
-          fully expanding the sidebar. */}
-      {collapsed && flyoutSection && (() => {
-        const item = resolvedNavItems.find((i) => i.label === flyoutSection);
-        if (!item || !item.children || item.children.length === 0) return null;
-        const flyoutChildren = item.groups?.length
-          ? item.groups.flatMap((group) => [{ groupLabel: group.label }, ...group.children])
-          : item.children;
-        // A list of navigation links, not a command menu — so <nav> + <ul>/<li>,
-        // NOT role="menu"/"menuitem": those roles promise arrow-key roving
-        // focus between items that this flyout doesn't implement (#7265).
-        // Native Tab order reaches every link.
-        return (
-          <nav
-            ref={flyoutRef}
-            aria-label={`${item.label} pages`}
-            onMouseEnter={cancelCloseFlyout}
-            onMouseLeave={scheduleCloseFlyout}
-            onFocus={cancelCloseFlyout}
-            onBlur={scheduleCloseFlyout}
-            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', '--dvh-inset': '16px' }}
-            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] max-h-dvh-cap overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
-          >
-            <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
-              {item.label}
-            </div>
-            <ul>
-              {flyoutChildren.map((child, childIndex) => {
-                if (child.groupLabel) {
-                  return (
-                    <li key={`flyout-group-${child.groupLabel}`} role="presentation">
-                      <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500" role="heading" aria-level="3">
-                        {child.groupLabel}
-                      </div>
-                    </li>
-                  );
-                }
-                if (child.separator) {
-                  // Decorative rule, not an item — hidden so it doesn't pad the
-                  // list's "N items" count for screen readers.
-                  return <li key={`flyout-sep-${childIndex}`} aria-hidden="true" className="mx-3 my-1 border-t border-port-border" />;
-                }
-                const ChildIcon = child.icon;
-                if (child.external) {
-                  const childHref = child.dynamicHost
-                    ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
-                    : child.href;
-                  return (
-                    <li key={`flyout-${child.href}`}>
-                      <a
-                        href={childHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setFlyoutSection(null)}
-                        title={child.label}
-                        className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
-                      >
-                        <div className="flex items-start gap-3 min-w-0">
-                          <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
-                          <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                        </div>
-                        <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
-                      </a>
-                    </li>
-                  );
-                }
-                const childActive = child.end
-                  ? location.pathname === child.to
-                  : isActive(child.to);
-                return (
-                  <li key={`flyout-${child.to}`}>
-                    <NavLink
-                      to={child.to}
-                      end={child.end}
-                      onClick={() => setFlyoutSection(null)}
-                      title={child.label}
-                      className={`flex items-start gap-3 px-3 py-2 text-sm min-w-0 ${
-                        childActive
-                          ? 'bg-port-accent/10 text-port-accent'
-                          : 'text-gray-300 hover:text-white hover:bg-port-border/50'
-                      }`}
-                    >
-                      <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
-                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                    </NavLink>
-                    {child.grandChildren && child.grandChildren.length > 0 && (
-                      <ul className="ml-7 my-0.5 border-l border-port-border/50 pl-2">
-                        {child.grandChildren.map((gc) => {
-                          const prefix = gc.activePathPrefix || gc.to;
-                          const gcActive = location.pathname === prefix || location.pathname.startsWith(prefix + '/');
-                          return (
-                            <li key={`flyout-gc-${gc.to}`}>
-                              <NavLink
-                                to={gc.to}
-                                onClick={() => setFlyoutSection(null)}
-                                title={gc.title || gc.label}
-                                className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
-                                  gcActive
-                                    ? 'text-port-accent font-medium'
-                                    : 'text-gray-400 hover:text-white hover:bg-port-border/30'
-                                }`}
-                              >
-                                {gc.label}
-                              </NavLink>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-        );
-      })()}
-
-      {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
-      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
-        {/* Mobile header */}
-        <header className="port-app-topbar lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
-          <button
-            ref={menuButtonRef}
-            onClick={() => {
-              menuButtonRef.current?.focus();
-              setMobileOpen(true);
-            }}
-            className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"
-            aria-label="Open navigation menu"
-            aria-expanded={mobileNavActive}
-            aria-controls="app-sidebar"
-          >
-            <Menu size={20} aria-hidden="true" />
-          </button>
-          <div className="flex items-center gap-1.5">
-            <Logo size={22} className="shrink-0" />
-            <span className="font-bold text-sm text-port-accent">PortOS</span>
-          </div>
-          <div className="flex items-center gap-0.5">
-            <button
-              type="button"
-              onClick={openCmdKSearch}
-              className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors text-gray-500 hover:text-white"
-              title="Search"
-              aria-label="Open command palette"
-            >
-              <Search size={18} />
-            </button>
-            <ThemeModeToggle />
-            <ThemeSwitcher position="below" />
-            <VoiceToggleButton />
-            <NotificationDropdown
-              position="below"
-              notifications={notifications}
-              unreadCount={unreadCount}
-              onMarkAsRead={markAsRead}
-              onMarkAllAsRead={markAllAsRead}
-              onRemove={removeNotification}
-              onClearAll={clearAll}
+            <SidebarNav
+              collapsed={collapsed}
+              setCollapsed={setCollapsed}
+              mobileOpen={mobileOpen}
+              closeMobileNav={closeMobileNav}
+              desktopNav={desktopNav}
             />
-          </div>
-        </header>
 
-        {/* Update, out-of-sync, and essential-setup advisories — inline (document flow) so they
-            push the page instead of covering a bottom-anchored composer (#3786) */}
-        <UpdateBanners />
-        <SetupBanner />
-        <PasswordRiskWarning />
-        <MaintenanceBanner />
+            {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
+            <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
+              {/* Mobile header */}
+              <header className="port-app-topbar lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
+                <button
+                  ref={menuButtonRef}
+                  onClick={() => {
+                    menuButtonRef.current?.focus();
+                    setMobileOpen(true);
+                  }}
+                  className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"
+                  aria-label="Open navigation menu"
+                  aria-expanded={mobileNavActive}
+                  aria-controls="app-sidebar"
+                >
+                  <Menu size={20} aria-hidden="true" />
+                </button>
+                <div className="flex items-center gap-1.5">
+                  <Logo size={22} className="shrink-0" />
+                  <span className="font-bold text-sm text-port-accent">PortOS</span>
+                </div>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={openCmdKSearch}
+                    className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors text-gray-500 hover:text-white"
+                    title="Search"
+                    aria-label="Open command palette"
+                  >
+                    <Search size={18} />
+                  </button>
+                  <ThemeModeToggle />
+                  <ThemeSwitcher position="below" />
+                  <VoiceToggleButton />
+                  <NotificationBell position="below" />
+                </div>
+              </header>
 
-        {/* Main content — the matched route's shell (components/PageShell.jsx)
-            renders <main>, so the shell is declared where the route is. */}
-        <Outlet />
-      </div>
-      {/* Cmd+K search overlay — thin hotkey gate loads CmdKSearch on first trigger */}
-      <ActionActivityBar />
-      <CmdKSearchGate />
-      {/* Keyboard shortcuts help — thin hotkey gate loads KeyboardHelp on first `?` */}
-      <KeyboardHelpGate />
-      {/* The one shared "your live views are frozen" signal — see #12027 */}
-      <SocketReconnectingPill />
-      </VoiceWidgetGate>
+              {/* Update, out-of-sync, and essential-setup advisories — inline (document flow) so they
+                  push the page instead of covering a bottom-anchored composer (#3786) */}
+              <UpdateBanners />
+              <SetupBanner />
+              <PasswordRiskWarning />
+              <MaintenanceBanner />
+
+              {/* Main content — the matched route's shell (components/PageShell.jsx)
+                  renders <main>, so the shell is declared where the route is. */}
+              <Outlet />
+            </div>
+            {/* Cmd+K search overlay — thin hotkey gate loads CmdKSearch on first trigger */}
+            <ActionActivityBar />
+            <CmdKSearchGate />
+            {/* Keyboard shortcuts help — thin hotkey gate loads KeyboardHelp on first `?` */}
+            <KeyboardHelpGate />
+            {/* The one shared "your live views are frozen" signal — see #12027 */}
+            <SocketReconnectingPill />
+          </NotificationBellProvider>
+        </VoiceWidgetGate>
       </div>
     </SidebarContext.Provider>
   );

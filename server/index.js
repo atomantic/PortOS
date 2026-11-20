@@ -22,6 +22,7 @@ import { installUpgradeFallback } from './lib/upgradeFallback.js';
 
 import alertsRoutes from './routes/alerts.js';
 import systemHealthRoutes from './routes/systemHealth.js';
+import shellBootstrapRoutes from './routes/shellBootstrap.js';
 import systemActivityRoutes from './routes/systemActivity.js';
 import systemCapabilitiesRoutes from './routes/systemCapabilities.js';
 import systemResourcesRoutes from './routes/systemResources.js';
@@ -338,6 +339,7 @@ app.use('/api/alerts', alertsRoutes);
 app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemActivityRoutes);
 app.use('/api/system', systemHealthRoutes);
+app.use('/api/shell', shellBootstrapRoutes);
 app.use('/api/system', maintenanceRoutes);
 app.use('/api/system/capabilities', systemCapabilitiesRoutes);
 app.use('/api/system-resources', systemResourcesRoutes);

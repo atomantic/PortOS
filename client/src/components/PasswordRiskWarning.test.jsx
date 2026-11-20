@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter } from 'react-router';
 import PasswordRiskWarning from './PasswordRiskWarning.jsx';
 import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';
@@ -9,8 +9,8 @@ vi.mock('../services/apiAuth.js', () => ({ getAuthStatus: vi.fn(), getPasswordRi
 vi.mock('../services/socket.js', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), connected: true },
 }));
-const fireSocketEvent = (event) => {
-  for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({});
+const fireSocketEvent = (event, payload = {}) => {
+  for (const [name, handler] of socket.on.mock.calls) if (name === event) handler(payload);
 };
 
 const renderWarning = () => render(<MemoryRouter><PasswordRiskWarning /><Link to="/">Home</Link><Link to="/apps">Apps</Link></MemoryRouter>);
@@ -85,6 +85,20 @@ describe('password risk warning', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('rechecks a password removal broadcast and applies the protected posture without a racing read', async () => {
+    getPasswordRiskStatus.mockResolvedValue({ enabled: true, revision: 'password-set' });
+    renderWarning();
+    await act(async () => {});
+    getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'rotated-on-removal' });
+    act(() => fireSocketEvent('auth:password-risk:changed', { enabled: false }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(getPasswordRiskStatus).toHaveBeenCalledTimes(2);
+
+    act(() => fireSocketEvent('auth:password-risk:changed', { enabled: true }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(getPasswordRiskStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('uses public auth status when the risk endpoint is unavailable on a protected instance', async () => {
     getPasswordRiskStatus.mockRejectedValue(new Error('unavailable'));
     getAuthStatus.mockResolvedValue({ enabled: true });
@@ -101,12 +115,12 @@ describe('password risk warning', () => {
     expect(sessionStorage.getItem('portos-password-check-dismissed-v1')).toBe('true');
     fireEvent(window, new Event('focus'));
     await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole('link', { name: 'Apps' }));
-    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(3));
+    await act(async () => fireEvent.click(screen.getByRole('link', { name: 'Apps' })));
+    expect(getAuthStatus).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     cleanup();
     renderWarning();
-    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(3));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'initial' });
     fireEvent(window, new Event('portos:auth-changed'));
@@ -150,15 +164,15 @@ describe('password risk warning', () => {
     getPasswordRiskStatus.mockRejectedValue(unreachableErr);
     getAuthStatus.mockRejectedValue(unreachableErr);
 
-    fireEvent(window, new Event('focus'));
-    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalledTimes(2));
+    await act(async () => fireEvent(window, new Event('focus')));
+    expect(getPasswordRiskStatus).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     // Reconnects after restart still protected
     getPasswordRiskStatus.mockResolvedValue({ enabled: true, revision: 'pw-1' });
     fireSocketEvent('connect');
-    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 

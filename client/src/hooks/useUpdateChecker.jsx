@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import useMounted from './useMounted';
 import socket from '../services/socket';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getUpdateStatus, ignoreUpdateVersion } from '../services/apiSystem.js';
 
 // Out-of-sync dismissals are keyed by the on-disk commit the advisory was
@@ -49,14 +50,17 @@ export function useUpdateChecker() {
   const ignoredRef = useRef(new Set());
 
   useEffect(() => {
+    let active = true;
+    let receivedUpdate = false;
     const onUpdateAvailable = (data) => {
+      receivedUpdate = true;
       if (!mountedRef.current || ignoredRef.current.has(data.latestVersion)) return;
       setUpdate({ currentVersion: data.currentVersion, latestVersion: data.latestVersion });
     };
 
-    getUpdateStatus().then(status => {
-      if (!mountedRef.current) return;
-      if (status.updateAvailable && status.latestRelease) {
+    readShellBootstrap('updateStatus', () => getUpdateStatus()).then(status => {
+      if (!active || !mountedRef.current) return;
+      if (!receivedUpdate && status.updateAvailable && status.latestRelease) {
         onUpdateAvailable({
           currentVersion: status.currentVersion,
           latestVersion: status.latestRelease.version
@@ -72,6 +76,7 @@ export function useUpdateChecker() {
 
     socket.on('portos:update:available', onUpdateAvailable);
     return () => {
+      active = false;
       socket.off('portos:update:available', onUpdateAvailable);
     };
   }, []);

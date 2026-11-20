@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleAlert } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
+import socket from '../services/socket.js';
 import { getCapabilities } from '../services/apiSystem.js';
 import { safeReadJsonSession, safeWriteJsonSession } from '../lib/safeStorage.js';
 import Banner from './ui/Banner';
@@ -13,18 +15,43 @@ export default function SetupBanner() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  useEffect(() => {
-    let cancelled = false;
-    getCapabilities({ silent: true })
-      .then((data) => {
-        if (!cancelled) setSetupState(data);
+  const onSetupPage = /^\/capabilities\/?$/.test(location.pathname);
+  const wasOnSetupPage = useRef(onSetupPage);
+  const generation = useRef(0);
+  const load = useCallback((initial = false) => {
+    const current = ++generation.current;
+    const read = () => getCapabilities({ silent: true });
+    (initial ? readShellBootstrap('setup', read) : read())
+      .then(data => {
+        if (current === generation.current) setSetupState(data);
       })
       .catch(() => {});
-    return () => { cancelled = true; };
-  }, [location.pathname]);
+  }, []);
+
+  useEffect(() => {
+    load(true);
+    let connected = socket.connected;
+    const refresh = () => load();
+    const reconnect = () => {
+      if (connected) refresh();
+      connected = true;
+    };
+    socket.on('capabilities:changed', refresh);
+    socket.on('connect', reconnect);
+    return () => {
+      generation.current += 1;
+      socket.off('capabilities:changed', refresh);
+      socket.off('connect', reconnect);
+    };
+  }, [load]);
+
+  useEffect(() => {
+    if (wasOnSetupPage.current && !onSetupPage) load();
+    wasOnSetupPage.current = onSetupPage;
+  }, [load, onSetupPage]);
 
   const setup = setupState?.setup;
-  if (!setup || setup.complete || location.pathname === '/capabilities') return null;
+  if (!setup || setup.complete || onSetupPage) return null;
 
   const caps = Array.isArray(setupState.capabilities) ? setupState.capabilities : [];
   const network = caps.find((entry) => entry.id === 'network');

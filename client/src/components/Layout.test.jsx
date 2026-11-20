@@ -179,9 +179,12 @@ describe('Layout — manifest-derived sidebar structure', () => {
   });
 
 
-  it('loads sidebar apps through the lean navigation projection', async () => {
-    await renderLayout();
+  it('loads the lean apps list after the Apps section expands', async () => {
+    api.getApps.mockClear();
+    await renderLayout('/apps');
 
+    expect(api.getApps).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Apps' })));
     expect(api.getApps).toHaveBeenCalledWith({ silent: true, view: 'nav' });
   });
 
@@ -541,7 +544,7 @@ describe('Layout — persistent mobile touch targets', () => {
     await renderLayout('/');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Create' })));
 
     expect(screen.getByRole('link', { name: 'Authors' })).toHaveAttribute('href', '/authors');
   });
@@ -553,7 +556,7 @@ describe('Layout — persistent mobile touch targets', () => {
     await renderLayout('/');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Create' })));
 
     const seriesLink = screen.getByRole('link', { name: 'Example Series' });
     const universeLink = screen.getByRole('link', { name: 'Example Universe' });
@@ -593,7 +596,7 @@ describe('Layout — persistent mobile touch targets', () => {
     await renderLayout('/');
 
     const createButton = screen.getByRole('button', { name: 'Create' });
-    fireEvent.mouseEnter(createButton.parentElement);
+    await act(async () => fireEvent.mouseEnter(createButton.parentElement));
 
     const flyoutNav = screen.getByRole('navigation', { name: 'Create pages' });
     const seriesFlyoutLink = within(flyoutNav).getByRole('link', { name: 'Example Series' });
@@ -699,6 +702,7 @@ describe('Layout — dynamic third-level navigation', () => {
     });
     api.getApps.mockResolvedValueOnce([]);
     await renderLayout('/apps');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Apps' })));
 
     expect(screen.queryByRole('link', { name: 'Super New App' })).not.toBeInTheDocument();
 

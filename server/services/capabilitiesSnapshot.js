@@ -1,5 +1,7 @@
 import {
   buildCapabilityRows,
+  networkRow,
+  providersRow,
   summarizeCapabilities,
   summarizeSetupCapabilities,
 } from '../lib/capabilityMap.js';
@@ -50,30 +52,50 @@ async function resolveTelegram() {
   };
 }
 
+const readinessFailed = (unavailable, id, fallback) => () => {
+  unavailable.add(id);
+  return fallback;
+};
+
+const markUnavailable = (row, unavailable) => unavailable.has(row.id)
+  ? { ...row, status: 'warn', summary: 'Readiness unavailable — probe failed', setupComplete: false }
+  : row;
+
+async function getProviderSetupInputs(unavailable) {
+  const data = await getAllProviders().catch(readinessFailed(unavailable, 'providers', { providers: [] }));
+  const providers = Array.isArray(data?.providers) ? data.providers : [];
+  const enabled = providers.filter((provider) => provider?.enabled !== false);
+  const [providerPrerequisiteReadiness, providerLocalReadiness, providerStatuses] = await Promise.all([
+    getProviderPrerequisiteReadinessMap(providers, { candidates: enabled })
+      .catch(readinessFailed(unavailable, 'providers', null)),
+    getProviderReadinessMap(enabled).catch(() => null),
+    Promise.resolve().then(() => getAllProviderStatuses()).catch(readinessFailed(unavailable, 'providers', {})),
+  ]);
+  return { providers, providerPrerequisiteReadiness, providerLocalReadiness, providerStatuses };
+}
+
+/** Setup banner's inputs, without the optional integration probes or full setup guide. */
+export async function getShellSetupStatus() {
+  const unavailable = new Set();
+  const [network, providers] = await Promise.all([
+    getNetworkExposureSetupStatus().catch(readinessFailed(unavailable, 'network', {})),
+    getProviderSetupInputs(unavailable),
+  ]);
+  const capabilities = [
+    networkRow(network),
+    providersRow(providers.providers, providers.providerStatuses, providers.providerPrerequisiteReadiness, providers.providerLocalReadiness),
+  ].map(row => markUnavailable(row, unavailable))
+    .map(({ id, summary, setupRequired, setupComplete }) => ({ id, summary, setupRequired, setupComplete }));
+  const { id, title } = network.setup?.nextStep ?? {};
+  return { setup: summarizeSetupCapabilities(capabilities), capabilities, network: { setup: { nextStep: id ? { id, title } : null } } };
+}
+
 // GET /api/capabilities — capability map of every connected system.
 export async function getCapabilitiesSnapshot() {
   const unavailable = new Set();
-  const failed = (id, fallback) => () => {
-    unavailable.add(id);
-    return fallback;
-  };
-  const providersPromise = getAllProviders().catch(failed('providers', { providers: [] }));
-  const providerPrerequisiteReadinessPromise = providersPromise.then((data) => {
-    const providers = Array.isArray(data?.providers) ? data.providers : [];
-    const enabled = providers.filter((provider) => provider?.enabled !== false);
-    return getProviderPrerequisiteReadinessMap(providers, { candidates: enabled });
-  }).catch(failed('providers', null));
-  const providerLocalReadinessPromise = providersPromise.then((data) => {
-    const providers = Array.isArray(data?.providers) ? data.providers : [];
-    const enabled = providers.filter((provider) => provider?.enabled !== false);
-    return getProviderReadinessMap(enabled);
-  }).catch(() => null);
-
+  const failed = (id, fallback) => readinessFailed(unavailable, id, fallback);
   const [
-    providersData,
-    providerPrerequisiteReadiness,
-    providerLocalReadiness,
-    providerStatuses,
+    providerInputs,
     calendarAccounts,
     messageAccounts,
     memoryCount,
@@ -85,10 +107,7 @@ export async function getCapabilitiesSnapshot() {
     network,
     settings,
   ] = await Promise.all([
-    providersPromise,
-    providerPrerequisiteReadinessPromise,
-    providerLocalReadinessPromise,
-    Promise.resolve().then(() => getAllProviderStatuses()).catch(failed('providers', {})),
+    getProviderSetupInputs(unavailable),
     listCalendarAccounts().catch(failed('calendar', [])),
     listMessageAccounts().catch(failed('messages', [])),
     countMemories({ status: 'active' }).catch(failed('brain', 0)),
@@ -102,10 +121,7 @@ export async function getCapabilitiesSnapshot() {
   ]);
 
   const rows = buildCapabilityRows({
-    providers: providersData?.providers ?? [],
-    providerPrerequisiteReadiness,
-    providerLocalReadiness,
-    providerStatuses,
+    ...providerInputs,
     calendarAccounts,
     messageAccounts,
     memoryCount: Number(memoryCount) || 0,
@@ -115,9 +131,7 @@ export async function getCapabilitiesSnapshot() {
     genome,
     telegram: telegramStatus,
     appSummary,
-  }).map(row => unavailable.has(row.id)
-    ? { ...row, status: 'warn', summary: 'Readiness unavailable — probe failed', setupComplete: false }
-    : row);
+  }).map(row => markUnavailable(row, unavailable));
 
   return {
     timestamp: new Date().toISOString(),

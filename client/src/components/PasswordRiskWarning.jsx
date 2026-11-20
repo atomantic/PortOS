@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';
 import { isServerUnreachable } from '../services/apiCore.js';
 import { CircleAlert } from 'lucide-react';
@@ -27,17 +28,28 @@ export default function PasswordRiskWarning() {
   const [accepted, setAccepted] = useState(false);
   const [acknowledgedRevision, setAcknowledgedRevision] = useState(null);
   const generation = useRef(0);
-  const load = useCallback(() => {
+  const needsRetry = useRef(false);
+  const onSecurityPage = /^\/settings\/security\/?$/.test(pathname);
+  const wasOnSecurityPage = useRef(onSecurityPage);
+  const applyStatus = useCallback((value) => {
+    needsRetry.current = false;
+    if (value.enabled) safeRemoveStorage(ACKNOWLEDGEMENT_KEY);
+    setAcknowledgedRevision(value.enabled ? null : safeReadStorage(ACKNOWLEDGEMENT_KEY));
+    setAccepted(false);
+    setStatus(value);
+    setError('');
+  }, []);
+  const load = useCallback((initial = false) => {
     const current = ++generation.current;
     const showCheckError = async (initialErr) => {
       // Older servers and transient failures may make the risk endpoint unavailable.
       // The login gate's public endpoint can still confirm password protection.
+      needsRetry.current = true;
       try {
         const auth = await getAuthStatus({ silent: true });
         if (current !== generation.current) return;
         if (auth?.enabled === true) {
-          setStatus({ enabled: true });
-          setError('');
+          applyStatus({ enabled: true });
           return;
         }
         setStatus(null);
@@ -54,40 +66,60 @@ export default function PasswordRiskWarning() {
         setError('PortOS could not confirm whether this host is password protected. Do not assume it is protected: retry or check Security settings.');
       }
     };
-    getPasswordRiskStatus({ silent: true }).then((value) => {
+    const read = () => getPasswordRiskStatus({ silent: true });
+    (initial === true ? readShellBootstrap('passwordRisk', read) : read()).then((value) => {
       if (current !== generation.current) return;
       if (typeof value?.enabled !== 'boolean' || (value.enabled === false && (typeof value?.revision !== 'string' || !value.revision))) {
         return showCheckError();
       }
-      if (value.enabled) safeRemoveStorage(ACKNOWLEDGEMENT_KEY);
-      setAcknowledgedRevision(value.enabled ? null : safeReadStorage(ACKNOWLEDGEMENT_KEY));
-      setAccepted(false);
-      setStatus(value);
-      setError('');
+      applyStatus(value);
     }).catch((err) => {
       if (current !== generation.current) return;
       if (isServerUnreachable(err)) {
+        needsRetry.current = true;
         setError('');
         return;
       }
       return showCheckError(err);
     });
-  }, []);
+  }, [applyStatus]);
 
   useEffect(() => {
-    load();
-    window.addEventListener('focus', load);
-    window.addEventListener('online', load);
+    load(true);
+    let connected = socket.connected;
+    const retry = () => { if (needsRetry.current) load(); };
+    const reconnect = () => {
+      if (connected || needsRetry.current) load();
+      connected = true;
+    };
+    const onPasswordChanged = ({ enabled } = {}) => {
+      if (enabled === true) {
+        // The writer's new session cookie can still be in transit.
+        generation.current += 1;
+        applyStatus({ enabled });
+      } else if (enabled === false) {
+        load();
+      }
+    };
+    window.addEventListener('focus', retry);
+    window.addEventListener('online', retry);
     window.addEventListener('portos:auth-changed', load);
-    socket.on('connect', load);
+    socket.on('connect', reconnect);
+    socket.on('auth:password-risk:changed', onPasswordChanged);
     return () => {
       generation.current += 1;
-      window.removeEventListener('focus', load);
-      window.removeEventListener('online', load);
+      window.removeEventListener('focus', retry);
+      window.removeEventListener('online', retry);
       window.removeEventListener('portos:auth-changed', load);
-      socket.off('connect', load);
+      socket.off('connect', reconnect);
+      socket.off('auth:password-risk:changed', onPasswordChanged);
     };
-  }, [load, pathname]);
+  }, [applyStatus, load]);
+
+  useEffect(() => {
+    if (wasOnSecurityPage.current && !onSecurityPage) load();
+    wasOnSecurityPage.current = onSecurityPage;
+  }, [load, onSecurityPage]);
 
   const dismissCheck = () => {
     safeWriteSession(CHECK_DISMISSED_KEY, 'true');
@@ -108,7 +140,7 @@ export default function PasswordRiskWarning() {
 
   // Leave the password form usable without silently acknowledging the risk.
   // Leaving this route rechecks server state; a failed/cancelled setup warns again.
-  if (pathname === '/settings/security') return null;
+  if (onSecurityPage) return null;
   const required = status?.enabled === false && acknowledgedRevision !== status.revision;
   if (!required && (!error || checkDismissed)) return null;
   // A failed status check is a diagnostic the user cannot resolve here, so it

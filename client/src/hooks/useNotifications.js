@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';
 import useMounted from './useMounted';
-import { getNotificationCount, getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, clearNotifications } from '../services/apiSystem.js';
+import { getNotificationCount, getNotificationSnapshot, markNotificationRead, markAllNotificationsRead, deleteNotification, clearNotifications } from '../services/apiSystem.js';
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState([]);
@@ -18,6 +18,11 @@ export function useNotifications() {
   const mountedRef = useMounted();
   const countGeneration = useRef(0);
   const listGeneration = useRef(0);
+  const pendingPatches = useRef(null);
+  const updateNotifications = useCallback((apply) => {
+    pendingPatches.current?.push(apply);
+    setNotifications(apply);
+  }, []);
 
   // The total covers the full store, not just the loaded page. A socket total
   // or newer request supersedes any count request already in flight.
@@ -35,30 +40,36 @@ export function useNotifications() {
   // and a failure logs instead of surfacing as an unhandled rejection (#12042).
   const loadNotifications = useCallback(async (initial = false) => {
     const generation = ++listGeneration.current;
+    const countRequest = ++countGeneration.current;
+    const patches = [];
+    pendingPatches.current = patches;
     const fresh = () => mountedRef.current && generation === listGeneration.current;
     if (initial) setLoading(true);
     try {
-      const [notifs] = await Promise.all([
-        getNotifications({ limit: 50 }),
-        refreshCount()
-      ]);
-      if (fresh()) setNotifications(notifs);
+      const { notifications: rows, count } = await getNotificationSnapshot({ limit: 50, coalesce: initial });
+      if (fresh()) {
+        setNotifications(patches.reduce((result, apply) => apply(result), rows));
+        if (countRequest === countGeneration.current) setUnreadCount(count);
+      }
     } catch (err) {
       if (fresh()) console.error(`❌ Failed to load notifications: ${err.message}`);
     } finally {
-      if (initial && fresh()) setLoading(false);
+      if (fresh()) {
+        pendingPatches.current = null;
+        setLoading(false);
+      }
     }
-  }, [refreshCount, mountedRef]);
+  }, [mountedRef]);
 
   const refresh = useCallback(() => loadNotifications(), [loadNotifications]);
 
   useEffect(() => {
     loadNotifications(true);
-    return () => { listGeneration.current++; countGeneration.current++; };
+    return () => { listGeneration.current++; countGeneration.current++; pendingPatches.current = null; };
   }, [loadNotifications]);
 
   // Namespace subscription: this is the sole `notifications:*` consumer
-  // (mounted once, high in the tree, from Layout.jsx) now that OpenWorld's
+  // (mounted once by the notification bell provider) now that OpenWorld's
   // retired useOpenWorldData no longer shares it, so it's safe to unsubscribe
   // on unmount. Re-emits `notifications:subscribe` on every socket reconnect
   // and refetches the list + count so a bell that went silent during a server
@@ -68,15 +79,15 @@ export function useNotifications() {
   // Subscribe to socket data events
   useEffect(() => {
     const handleAdded = (notification) => {
-      setNotifications(prev => [notification, ...prev.filter(n => n.id !== notification.id)]);
+      updateNotifications(prev => [notification, ...prev.filter(n => n.id !== notification.id)]);
     };
 
     const handleRemoved = ({ id }) => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
+      updateNotifications(prev => prev.filter(n => n.id !== id));
     };
 
     const handleUpdated = (notification) => {
-      setNotifications(prev =>
+      updateNotifications(prev =>
         prev.map(n => n.id === notification.id ? notification : n)
       );
     };
@@ -87,7 +98,7 @@ export function useNotifications() {
     };
 
     const handleCleared = () => {
-      setNotifications([]);
+      updateNotifications(() => []);
     };
 
     socket.on('notifications:added', handleAdded);
@@ -103,33 +114,33 @@ export function useNotifications() {
       socket.off('notifications:count', handleCount);
       socket.off('notifications:cleared', handleCleared);
     };
-  }, []);
+  }, [updateNotifications]);
 
   const markAsRead = useCallback(async (id) => {
     await markNotificationRead(id);
-    setNotifications(prev =>
+    updateNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
     await refreshCount();
-  }, [refreshCount]);
+  }, [refreshCount, updateNotifications]);
 
   const markAllAsRead = useCallback(async () => {
     await markAllNotificationsRead();
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    updateNotifications(prev => prev.map(n => ({ ...n, read: true })));
     await refreshCount();
-  }, [refreshCount]);
+  }, [refreshCount, updateNotifications]);
 
   const removeNotification = useCallback(async (id) => {
     await deleteNotification(id);
-    setNotifications(prev => prev.filter(n => n.id !== id));
+    updateNotifications(prev => prev.filter(n => n.id !== id));
     await refreshCount();
-  }, [refreshCount]);
+  }, [refreshCount, updateNotifications]);
 
   const clearAll = useCallback(async () => {
     await clearNotifications();
-    setNotifications([]);
+    updateNotifications(() => []);
     await refreshCount();
-  }, [refreshCount]);
+  }, [refreshCount, updateNotifications]);
 
   return {
     notifications,

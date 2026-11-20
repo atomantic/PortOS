@@ -19,7 +19,7 @@ export default function UpdateBanners() {
   // (still loading, or the last read failed) stays busy so a restart prompt
   // cannot appear over work we failed to see. Hiding must not dismiss the
   // advisory: it becomes actionable again when the verdict is idle.
-  const { snapshot, status } = useSystemActivity();
+  const { snapshot, status } = useSystemActivity({ enabled: hasAdvisory });
   const idle = status === 'ready' && snapshot?.activity?.idle === true;
   if (!hasAdvisory || !idle) return null;
 

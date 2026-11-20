@@ -176,6 +176,7 @@ router.post('/password', asyncHandler(async (req, res) => {
     sessionCookieFor(req, token),
     ...stale.map((name) => buildClearCookie({ secure, name })),
   ]);
+  req.app.get('io')?.emit('auth:password-risk:changed', { enabled: true });
   res.json({ enabled: true });
 }));
 
@@ -188,6 +189,7 @@ router.delete('/password', asyncHandler(async (req, res) => {
   await clearPassword({ currentPassword });
   logSecurityEvent('password.cleared', { ip: sourceOf(req), note: 'auth disabled, all sessions revoked' });
   res.setHeader('Set-Cookie', clearCookiesFor(req, stale));
+  req.app.get('io')?.emit('auth:password-risk:changed', { enabled: false });
   res.json({ enabled: false });
 }));
 

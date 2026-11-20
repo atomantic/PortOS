@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getNotifications: vi.fn(),
+  getNotificationSnapshot: vi.fn(),
   getNotificationCount: vi.fn(),
   getReviewQueue: vi.fn(),
   markNotificationRead: vi.fn(),
@@ -57,6 +58,10 @@ function NotificationSurface() {
 beforeEach(() => {
   vi.resetAllMocks();
   api.getNotifications.mockResolvedValue([NOTIFICATION]);
+  api.getNotificationSnapshot.mockImplementation(async ({ limit }) => {
+    const [notifications, { count }] = await Promise.all([api.getNotifications({ limit }), api.getNotificationCount()]);
+    return { notifications, count };
+  });
   api.getNotificationCount.mockResolvedValue({ count: 1 });
   api.getReviewQueue.mockResolvedValue({ items: [], partial: false });
 });
@@ -215,6 +220,16 @@ describe('authoritative unread totals', () => {
     await act(async () => { await result.current[method](...args); });
     expect(result.current.unreadCount).toBe(count);
     expect(api.getNotificationCount).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains a pushed record when the earlier bell snapshot resolves', async () => {
+    const initial = deferred();
+    api.getNotificationSnapshot.mockReturnValueOnce(initial.promise);
+    const { result } = renderHook(() => useNotifications());
+    const pushed = { ...NOTIFICATION, id: 'pushed' };
+    act(() => deliver('notifications:added', pushed));
+    await act(async () => initial.resolve({ notifications: [NOTIFICATION], count: 1 }));
+    expect(result.current.notifications.map(({ id }) => id)).toEqual(['pushed', NOTIFICATION.id]);
   });
 
   it('discards delayed initial and refresh counts after a socket total', async () => {

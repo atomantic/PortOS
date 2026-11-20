@@ -73,7 +73,6 @@ function queueStore(view) {
     return () => {
       listeners.delete(notify);
       if (!listeners.size) {
-        generation++;
         for (const event of EVENTS) socket.off(event, invalidate);
         window.removeEventListener(ACTION_QUEUE_CHANGED, invalidate);
         window.removeEventListener(INSTANCE_FEATURES_CHANGED, invalidate);

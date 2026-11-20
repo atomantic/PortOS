@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import socket from '../../services/socket';
+import { readShellBootstrap } from '../../services/shellBootstrap.js';
 import { getVoiceConfig } from '../../services/apiVoice';
 import { ENGAGE_EVENT, DISENGAGE_EVENT, readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 import { isPushToTalkKey } from '../../lib/a11yKeyboard';
@@ -90,7 +91,7 @@ export default function VoiceWidgetGate({ children }) {
     const read = () => {
       if (reading || hydrated) return;
       reading = true;
-      getVoiceConfig()
+      readShellBootstrap('voiceConfig', () => getVoiceConfig())
         .then((cfg) => {
           if (!active) return;
           hydrated = true;

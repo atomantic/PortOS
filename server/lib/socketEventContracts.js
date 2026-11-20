@@ -346,6 +346,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate health after a service change or changed shared readiness sample.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'auth:password-risk:changed': {
+    direction: 'server-to-client',
+    summary: 'Public password posture after a password change. The risk revision stays in the gated API.',
+    payloadSchema: { type: 'object', required: ['enabled'], properties: { enabled: { type: 'boolean' } }, additionalProperties: false },
+  },
   'capabilities:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate capabilities after a persisted change or changed readiness sample.',

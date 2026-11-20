@@ -93,11 +93,14 @@ describe('auth routes', () => {
 
   it('POST /api/auth/password sets first-time password and returns a cookie', async () => {
     const app = await buildApp();
+    const emit = vi.fn();
+    app.set('io', { emit });
     const res = await request(app)
       .post('/api/auth/password')
       .send({ newPassword: 'correct-horse' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ enabled: true });
+    expect(emit).toHaveBeenCalledExactlyOnceWith('auth:password-risk:changed', { enabled: true });
     const setCookie = res.headers['set-cookie'];
     // Port-scoped from Host (the harness listens on a random loopback port).
     expect(setCookie).toMatch(/portos_auth_\d+=/);
@@ -280,16 +283,23 @@ describe('auth routes', () => {
     await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
 
     app = await buildApp();
+    const emit = vi.fn();
+    const { errorEvents } = await import('../lib/errorHandler.js');
+    errorEvents.once('error', () => {});
+    app.set('io', { emit });
     const bad = await request(app)
       .delete('/api/auth/password')
       .send({ currentPassword: 'nope' });
     expect(bad.status).toBe(401);
+    expect(emit).not.toHaveBeenCalledWith('auth:password-risk:changed', expect.anything());
+    emit.mockClear();
 
     const good = await request(app)
       .delete('/api/auth/password')
       .send({ currentPassword: 'correct-horse' });
     expect(good.status).toBe(200);
     expect(good.body).toEqual({ enabled: false });
+    expect(emit).toHaveBeenCalledExactlyOnceWith('auth:password-risk:changed', { enabled: false });
   });
 });
 

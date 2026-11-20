@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { MemoryRouter, useNavigate } from 'react-router';
-import { useNavWorkingSet } from './useNavWorkingSet.js';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
+import { useNavWorkingSet as useRawWorkingSet, useResolvedNavWorkingSet } from './useNavWorkingSet.js';
 import { RECENT_KEY, PINNED_KEY } from '../utils/navWorkingSet.js';
+
+const useNavWorkingSet = resolve => {
+  const workingSet = useRawWorkingSet();
+  const { pathname } = useLocation();
+  return { ...workingSet, ...useResolvedNavWorkingSet(workingSet, resolve, pathname) };
+};
 
 // Minimal resolver: label is the last path segment, icon is a sentinel.
 const ICON = () => null;

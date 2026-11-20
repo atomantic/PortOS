@@ -115,6 +115,11 @@ function onConnect() {
   reconcile();
 }
 
+function onDisconnect() {
+  generation += 1;
+  publish({ ...state, status: 'unknown', error: null });
+}
+
 function onVisibility(next) {
   if (next === 'visible' && hiddenDeferred && listeners.size) reconcile();
 }
@@ -124,6 +129,7 @@ function subscribe(notify) {
   if (listeners.size === 1) {
     socket.on('system:activity', onActivity);
     socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
     unsubscribeVisibility = subscribeVisibility(onVisibility);
     reconcile();
   }
@@ -139,13 +145,19 @@ function subscribe(notify) {
     }
     socket.off('system:activity', onActivity);
     socket.off('connect', onConnect);
+    socket.off('disconnect', onDisconnect);
+    // A later subscriber must not display an idle verdict from this session
+    // before its new read returns. No one was listening while it was away.
+    state = { ...state, status: 'unknown', error: null };
     unsubscribeVisibility?.();
     unsubscribeVisibility = null;
   };
 }
 
-export function useSystemActivity() {
-  const snapshot = useSyncExternalStore(subscribe, () => state, () => state);
+const skipSubscription = () => () => {};
+
+export function useSystemActivity({ enabled = true } = {}) {
+  const snapshot = useSyncExternalStore(enabled ? subscribe : skipSubscription, () => state, () => state);
   const refetch = useCallback(() => {
     generation += 1;
     return reconcile();
@@ -167,6 +179,7 @@ export function __resetSystemActivityForTests() {
   state = EMPTY;
   socket.off('system:activity', onActivity);
   socket.off('connect', onConnect);
+  socket.off('disconnect', onDisconnect);
   unsubscribeVisibility?.();
   unsubscribeVisibility = null;
 }

@@ -52,6 +52,17 @@ describe('notifications routes', () => {
       expect(ids(res)).toEqual(['n5', 'n4', 'n3', 'n2', 'n1']);
     });
 
+    it('returns the full visible unread count alongside the limited bell list', async () => {
+      await seed([
+        note('visible', MEMORY_APPROVAL, '2025-01-01T00:00:00.000Z'),
+        note('newest', MEMORY_APPROVAL, '2025-01-02T00:00:00.000Z'),
+        { ...note('hidden', TASK_APPROVAL, '2025-01-03T00:00:00.000Z'), historyHidden: true },
+      ]);
+      const res = await get('?limit=1&includeCount=true');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ notifications: [{ id: 'newest' }], count: 2 });
+    });
+
     it('applies type and unreadOnly filters, then limit', async () => {
       expect(ids(await get(`?type=${MEMORY_APPROVAL}&unreadOnly=true`))).toEqual(['n4', 'n1']);
       expect(ids(await get(`?type=${MEMORY_APPROVAL}&unreadOnly=true&limit=1`))).toEqual(['n4']);

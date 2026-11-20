@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import useMounted from './useMounted.js';
 import { useSocket } from './useSocket.js';
+import { readShellBootstrap } from '../services/shellBootstrap.js';
 import { getMaintenanceStatus } from '../services/apiSystem.js';
 
 // mode 'banner' follows only the coarse `maintenance:readiness` projection
@@ -23,34 +24,52 @@ export function useMaintenance({ mode = 'detailed' } = {}) {
   const [status, setStatus] = useState(null);
   const mounted = useMounted();
   const generation = useRef(0);
+  const needsRetry = useRef(false);
   const socket = useSocket();
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (initial = false) => {
     const requested = ++generation.current;
     try {
-      const next = await getMaintenanceStatus({ silent: true });
-      if (mounted.current && requested === generation.current) setStatus(banner ? toBanner(next) : next);
+      const read = () => getMaintenanceStatus({ silent: true });
+      const next = await (banner && initial === true ? readShellBootstrap('maintenance', read) : read());
+      if (mounted.current && requested === generation.current) {
+        needsRetry.current = false;
+        setStatus(banner ? toBanner(next) : next);
+      }
     } catch {
-      if (mounted.current && requested === generation.current) setStatus({ state: 'unknown', error: 'Could not read maintenance status.' });
+      if (mounted.current && requested === generation.current) {
+        needsRetry.current = true;
+        setStatus({ state: 'unknown', error: 'Could not read maintenance status.' });
+      }
     }
   }, [mounted, banner]);
   useEffect(() => {
-    refresh();
-    const disconnected = () => { ++generation.current; setStatus({ state: 'unknown', error: 'Connection lost. Readiness is unknown.' }); };
+    refresh(true);
+    let connected = socket.connected;
+    const reconnect = () => {
+      if (!banner || connected || needsRetry.current) refresh();
+      connected = true;
+    };
+    const disconnected = () => {
+      connected = true;
+      ++generation.current;
+      setStatus({ state: 'unknown', error: 'Connection lost. Readiness is unknown.' });
+    };
     // A pushed projection is newer than any in-flight read: invalidate it.
     const readiness = projection => {
       if (!mounted.current || !projection?.state) return;
       ++generation.current;
+      needsRetry.current = false;
       setStatus(toBanner(projection));
     };
     if (banner) socket.on('maintenance:readiness', readiness);
     else socket.on('maintenance:changed', refresh);
-    socket.on('connect', refresh);
+    socket.on('connect', reconnect);
     socket.on('disconnect', disconnected);
     return () => {
       ++generation.current;
       socket.off('maintenance:readiness', readiness);
       socket.off('maintenance:changed', refresh);
-      socket.off('connect', refresh);
+      socket.off('connect', reconnect);
       socket.off('disconnect', disconnected);
     };
   }, [socket, refresh, banner, mounted]);

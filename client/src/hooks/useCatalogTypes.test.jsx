@@ -5,7 +5,7 @@ vi.mock('../services/apiCatalogTypes', () => ({
   listCatalogTypes: vi.fn(),
 }));
 
-import { CatalogTypesProvider, useCatalogTypes } from './useCatalogTypes.jsx';
+import { __resetCatalogTypes, useCatalogTypes } from './useCatalogTypes.jsx';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 
 // Tiny consumer that renders the hook output for assertions.
@@ -25,13 +25,14 @@ function Probe() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetCatalogTypes();
 });
 
 describe('useCatalogTypes', () => {
   it('returns the static system fallback synchronously on first render', () => {
     // Never resolves — first render must still show the built-in six.
     listCatalogTypes.mockReturnValue(new Promise(() => {}));
-    render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
+    render(<Probe />);
     expect(screen.getByTestId('ids').textContent).toBe('character,place,object,idea,scene,concept');
     expect(screen.getByTestId('loading').textContent).toBe('true');
   });
@@ -43,7 +44,7 @@ describe('useCatalogTypes', () => {
         { id: 'faction', label: 'Faction', system: false, primaryContentKey: 'creed', fields: [{ key: 'creed', label: 'Creed', kind: 'longtext' }] },
       ],
     });
-    render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
+    render(<Probe />);
     await waitFor(() => expect(screen.getByTestId('faction-label').textContent).toBe('Faction'));
     // System types come first; the user type is appended (7 total).
     expect(screen.getByTestId('count').textContent).toBe('7');
@@ -51,9 +52,19 @@ describe('useCatalogTypes', () => {
     expect(screen.getByTestId('loading').textContent).toBe('false');
   });
 
+  it('shares a single fetch across consumers and keeps the registry on remount', async () => {
+    listCatalogTypes.mockResolvedValue({ types: [] });
+    const first = render(<><Probe /><Probe /></>);
+    await waitFor(() => expect(screen.getAllByText('false')).toHaveLength(2));
+    first.unmount();
+    render(<Probe />);
+    expect(screen.getByTestId('loading')).toHaveTextContent('false');
+    expect(listCatalogTypes).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the static fallback when the fetch fails', async () => {
     listCatalogTypes.mockRejectedValue(new Error('offline'));
-    render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
+    render(<Probe />);
     await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'));
     expect(screen.getByTestId('count').textContent).toBe('6');
     expect(screen.getByTestId('error').textContent).toBe('yes');
@@ -62,7 +73,7 @@ describe('useCatalogTypes', () => {
   it('clears the error when a later refresh succeeds', async () => {
     listCatalogTypes.mockRejectedValueOnce(new Error('offline'));
     listCatalogTypes.mockResolvedValueOnce({ types: [] });
-    render(<CatalogTypesProvider><Probe /></CatalogTypesProvider>);
+    render(<Probe />);
     await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('yes'));
     fireEvent.click(screen.getByRole('button', { name: 'refresh' }));
     await waitFor(() => expect(screen.getByTestId('error').textContent).toBe('no'));
