@@ -1,8 +1,8 @@
 import { join } from 'path';
-import { statSync } from 'fs';
+import { stat } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
-import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, pathExists, PATHS } from '../lib/fileUtils.js';
 import {
   containsPortosRootToken,
   expandPortosRootInApp,
@@ -15,15 +15,27 @@ import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTS } from '../lib/ports.js';
-import { hasTailscaleCert } from '../../lib/tailscale-https.js';
+import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { certPaths } from '../../lib/certPaths.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
 
-function isExistingDirectory(p) {
+async function isExistingDirectory(p) {
   if (typeof p !== 'string' || !p) return false;
-  try { return statSync(p).isDirectory(); } catch { return false; }
+  return stat(p).then((st) => st.isDirectory(), () => false);
+}
+
+// Once the server has booted, HTTPS-active-at-boot is the authoritative answer
+// (a cert provisioned after boot is not being served until restart) and costs no
+// fs call on loadApps' 2-second cache-miss path. Before boot has recorded it
+// (scripts, early callers) fall back to checking the cert pair on disk.
+async function isTlsActive() {
+  const boot = getHttpsEnabledAtBoot();
+  if (boot.initialized) return boot.value;
+  const { cert, key } = certPaths(PATHS.data);
+  const [hasCert, hasKey] = await Promise.all([pathExists(cert), pathExists(key)]);
+  return hasCert && hasKey;
 }
 
 // Stable ID for the PortOS app — always present, never deletable. Defined in
@@ -35,10 +47,10 @@ export { PORTOS_APP_ID };
 /**
  * Build the baseline PortOS app entry with repoPath resolved to the actual project root.
  */
-function buildPortosApp() {
-  // tlsPort reflects whether the Tailscale cert is actually on disk; if not,
+async function buildPortosApp() {
+  // tlsPort reflects whether HTTPS is actually active; if not,
   // don't advertise HTTPS so the Launch button doesn't target a broken scheme.
-  const certPresent = hasTailscaleCert(certPaths(PATHS.data).dir);
+  const certPresent = await isTlsActive();
   return {
     name: 'PortOS',
     description: 'Local App OS portal for dev machines',
@@ -135,7 +147,7 @@ async function loadApps() {
   }
 
   // Ensure PortOS baseline app is always present and up-to-date
-  const baseline = buildPortosApp();
+  const baseline = await buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
     data.apps[PORTOS_APP_ID] = baseline;
     await atomicWrite(APPS_FILE, data);
@@ -167,7 +179,7 @@ async function loadApps() {
     // path. A repoPath that is not an existing directory cannot be a working
     // override, so rebind to the running checkout (#12483).
     const storedRepoPath = data.apps[PORTOS_APP_ID].repoPath;
-    if (storedRepoPath !== baseline.repoPath && !isExistingDirectory(storedRepoPath)) {
+    if (storedRepoPath !== baseline.repoPath && !(await isExistingDirectory(storedRepoPath))) {
       console.warn(`⚠️ PortOS app repoPath ${storedRepoPath} is not a directory; resetting to ${baseline.repoPath}`);
       data.apps[PORTOS_APP_ID].repoPath = baseline.repoPath;
       dirty = true;

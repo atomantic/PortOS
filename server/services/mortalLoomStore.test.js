@@ -1125,6 +1125,38 @@ describe('overview invalidation from MortalLoom', () => {
     } finally { meatspaceEvents.off('changed', changed); }
   });
 
+  it('skips read/parse on 10s ticks while the file stamp is unchanged and reloads when it changes', async () => {
+    vi.useFakeTimers();
+    store._resetMortalLoomInitForTest();
+    settingsEvents.removeAllListeners();
+    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const changed = vi.fn();
+    meatspaceEvents.on('changed', changed);
+    const stamp = (ino) => ({ ino, size: 40, blocks: 8, mtimeMs: 1000, mtime: new Date(1000) });
+    try {
+      statMock.mockResolvedValue(stamp(1));
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [] }));
+      await store.initMortalLoomStore();
+      await vi.advanceTimersByTimeAsync(0);
+      const baseline = readFileMock.mock.calls.length;
+      changed.mockClear();
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 170 }] }));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(readFileMock).toHaveBeenCalledTimes(baseline);
+      expect(changed).not.toHaveBeenCalled();
+      // Atomic replacement by iCloud gives the file a new inode.
+      statMock.mockResolvedValue(stamp(2));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(readFileMock.mock.calls.length).toBeGreaterThan(baseline);
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['body'] });
+    } finally {
+      store._resetMortalLoomInitForTest();
+      settingsEvents.removeAllListeners();
+      meatspaceEvents.off('changed', changed);
+      vi.useRealTimers();
+    }
+  });
+
   it('uses one watcher, detects external edits, retries failed reads and stops when disabled', async () => {
     vi.useFakeTimers();
     store._resetMortalLoomInitForTest();

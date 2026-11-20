@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('fs/promises', () => ({
+vi.mock('fs/promises', async (importActual) => ({
+  ...(await importActual()),
   writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -10,12 +11,9 @@ vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  pathExists: vi.fn().mockResolvedValue(false),
   readJSONFile: vi.fn(),
   PATHS: { data: '/mock/data', root: '/mock/root' },
-}));
-
-vi.mock('../../lib/tailscale-https.js', () => ({
-  hasTailscaleCert: () => false,
 }));
 
 vi.mock('../lib/ports.js', () => ({
