@@ -71,7 +71,7 @@ export const PROBE_TIMEOUT_MS = 12_000;
 const FAST_TIMEOUT_MS = 6_000;
 
 /** The workspaces `scripts/ensure-deps.js` installs — each needs node_modules. */
-const WORKSPACES = ['', 'client', 'server', 'autofixer'];
+const WORKSPACES = ['', 'client', 'server'];
 
 /**
  * The PortOS-owned port block: the core range (`docs/PORTS.md`) plus its

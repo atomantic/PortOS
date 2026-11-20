@@ -17,7 +17,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../lib/ports.js', () => ({
-  PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554 },
+  PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, AUTOFIXER_UI: 5560 },
 }));
 
 vi.mock('./taskSchedule.js', () => ({
@@ -511,8 +511,13 @@ describe('PortOS production process manifest', () => {
       [PORTOS_APP_ID]: {
         ...seed,
         description: 'Custom description',
-        pm2ProcessNames: [...expectedNames, 'portos-ui'],
-        processes: [...seed.processes, { name: 'portos-ui', port: 5554 }],
+        pm2ProcessNames: [...expectedNames, 'portos-ui', 'portos-autofixer-ui'],
+        processes: [
+          ...seed.processes.filter(({ name }) => name !== 'portos-autofixer'),
+          { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
+          { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
+          { name: 'portos-ui', port: 5554 },
+        ],
       },
     } : {} });
 
@@ -521,6 +526,9 @@ describe('PortOS production process manifest', () => {
     expect(app.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: null, startCommands: ['npm start'] });
     expect(app.processes[0]).toMatchObject({ name: 'portos-server', port: 5555, ports: { api: 5555 } });
+    const autofixer = { name: 'portos-autofixer', port: 5560, ports: { ui: 5560 } };
+    expect(app.processes.find(({ name }) => name === autofixer.name)).toEqual(autofixer);
+    expect(seed.processes.find(({ name }) => name === autofixer.name)).toEqual(autofixer);
     expect(seed.pm2ProcessNames).toEqual(expectedNames);
     expect(seed.processes.map(({ name }) => name)).toEqual(expectedNames);
     expect(seed).toMatchObject({ uiPort: app.uiPort, apiPort: app.apiPort, devUiPort: app.devUiPort, startCommands: app.startCommands, buildCommand: app.buildCommand });

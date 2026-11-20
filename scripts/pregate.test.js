@@ -259,7 +259,7 @@ describe('pregate hidden-content invocation', () => {
     copyFileSync(join(REPO_ROOT, 'exec.cmd'), join(root, 'exec.cmd'));
     // The receipt lands under /.cache/, which the real repository ignores too.
     write('.gitignore', 'node_modules\n/.cache/\n');
-    for (const workspace of ['', 'client', 'server', 'autofixer']) {
+    for (const workspace of ['', 'client', 'server']) {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
@@ -541,7 +541,7 @@ describe('pregate hidden-content invocation', () => {
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
-      for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
+      for (const workspace of ['', 'client', 'server']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       const shared = join(scratch, 'primary', 'server', 'node_modules');
       const autoLinks = ['missing-link', 'unlinked'].includes(state);
       // The linker only visits workspaces that have a manifest.
@@ -661,12 +661,12 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
 
   it('refuses missing and unreadable lock evidence rather than calling it a match', () => {
     rmSync(join(root, 'client', 'package-lock.json'));
-    write('autofixer/package-lock.json', '{invalid');
+    write('server/package-lock.json', '{invalid');
     const result = run();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('client (owned node_modules)');
     expect(result.stderr).toContain('package-lock.json missing (ENOENT)');
-    expect(result.stderr).toContain('autofixer (owned node_modules)');
+    expect(result.stderr).toContain('server (owned node_modules)');
     expect(result.stderr).toContain('package-lock.json unreadable (invalid JSON)');
   });
 

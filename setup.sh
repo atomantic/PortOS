@@ -26,7 +26,7 @@ if ! node scripts/checkNodeVersion.js --security; then
 fi
 
 # scripts/setup.js is the one install pipeline shared with `npm run setup` and
-# setup.ps1: version checks, submodules, root/client/server/autofixer deps + the
+# setup.ps1: version checks, submodules, root/client/server deps + the
 # trusted native rebuilds, data dir, db, llm, browser, cert, then ffmpeg,
 # slash-do and the setup walkthrough. install:all is kept as a backward-compat
 # alias of `npm run setup`. PORTOS_DEFER_SETUP_GUIDE=1 holds the walkthrough

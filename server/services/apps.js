@@ -69,7 +69,6 @@ async function buildPortosApp() {
       'portos-server',
       'portos-cos',
       'portos-autofixer',
-      'portos-autofixer-ui',
       'portos-browser'
     ],
     processes: [
@@ -78,8 +77,7 @@ async function buildPortosApp() {
       // there and Overview would otherwise show a dead port.
       { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
       { name: 'portos-cos', port: PORTS.COS, ports: { api: PORTS.COS } },
-      { name: 'portos-autofixer', port: PORTS.AUTOFIXER, ports: { api: PORTS.AUTOFIXER } },
-      { name: 'portos-autofixer-ui', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
+      { name: 'portos-autofixer', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
       { name: 'portos-browser', port: PORTS.CDP, ports: { cdp: PORTS.CDP, health: PORTS.CDP_HEALTH } }
     ],
     envFile: '.env',

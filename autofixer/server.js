@@ -23,6 +23,8 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
+import { createStagedFixStore } from './stagedFixes.js';
+import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
@@ -32,7 +34,9 @@ import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, load
 // preserves this guarded PATH into the agent's env.
 Object.assign(process.env, agentGuardEnv());
 
-// Paths not shared with ui.js
+const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm2 });
+
+// Monitor paths
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
@@ -47,6 +51,8 @@ const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
 let checkTimer = null;
 let shuttingDown = false;
+let stopUi;
+let historyTail = Promise.resolve();
 // The repair in flight, so a shutdown can record it as interrupted.
 let activeRepair = null;
 
@@ -157,19 +163,29 @@ async function saveIndex(index) {
   await rename(tmp, INDEX_FILE);
 }
 
-async function saveSession(sessionId, prompt, output, metadata, patch) {
+function saveSession(sessionId, prompt, output, metadata, patch) {
+  const write = historyTail.then(() => writeSession(sessionId, prompt, output, metadata, patch));
+  historyTail = write.catch(() => {});
+  return write;
+}
+
+async function writeSession(sessionId, prompt, output, metadata, patch) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
   await mkdir(sessionDir, { recursive: true });
 
   await writeFile(join(sessionDir, 'prompt.txt'), prompt);
   await writeFile(join(sessionDir, 'output.txt'), output);
-  await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
   // The staged/applied patch is the human-reviewable artifact of the fix — keep
   // it beside the session so a user can inspect (and, when auto-promote is off,
   // manually apply) exactly what the agent proposed.
   if (typeof patch === 'string' && patch.trim().length > 0) {
     await writeFile(join(sessionDir, 'fix.patch'), patch);
   }
+
+  // Publish metadata only once the patch is readable.
+  const metadataPath = join(sessionDir, 'metadata.json');
+  await writeFile(`${metadataPath}.tmp`, JSON.stringify(metadata, null, 2));
+  await rename(`${metadataPath}.tmp`, metadataPath);
 
   const index = await loadIndex();
   const indexEntry = {
@@ -288,6 +304,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     // agent already addressed doesn't re-trigger the LLM every 15-min cycle.
     // Set before persisting: a failed history write must not disable the cooldown.
     if (cooldown ?? success) markAsFixed(processName);
+    if (shuttingDown) return { success: false, sessionId };
     activeRepair = null;
     await saveSession(sessionId, prompt, output, metadata, patch);
     console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
@@ -316,6 +333,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const worktreePath = wt.path;
   activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
   const workspaceHold = await repairWorkspaceHold(picked.mode, app.repoPath, worktreePath);
+  if (shuttingDown) return;
   if (workspaceHold) {
     console.warn(`🛑 [Autofixer] ${workspaceHold}`);
     await removeWorktree(app.repoPath, worktreePath);
@@ -348,6 +366,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // Collect the agent's edits as a diff BEFORE tearing down the worktree. A
   // spawn failure / timeout can leave a partial edit — don't promote or stage
   // work from an agent that didn't finish cleanly.
+  if (shuttingDown) return;
   const diff = await collectWorktreeDiff(worktreePath);
   const agentOk = !result.error && result.partial === false && result.exitCode === 0;
   // The live env's provider-auth values (incl. runner-injected provider.envVars
@@ -381,24 +400,27 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   let promotionError = null;
   if (validation.ok && verifyOk) {
     if (autoPromote) {
-      const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
-      if (applied.ok) {
-        const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
-        promoted = !restart.error;
-        promotionError = restart.error || null;
-        if (promoted) {
-          console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+      await stagedFixes.serialize(async () => {
+        if (shuttingDown) return;
+        const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
+        if (applied.ok) {
+          const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
+          promoted = !restart.error;
+          promotionError = restart.error || null;
+          if (promoted) {
+            console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+          } else {
+            // Applied cleanly but the restart failed — roll the patch back so the
+            // live tree isn't left mutated (which would make the next cycle
+            // double-apply or fail `git apply --check` forever).
+            const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
+            console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
+          }
         } else {
-          // Applied cleanly but the restart failed — roll the patch back so the
-          // live tree isn't left mutated (which would make the next cycle
-          // double-apply or fail `git apply --check` forever).
-          const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
-          console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
+          promotionError = applied.error;
+          console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
         }
-      } else {
-        promotionError = applied.error;
-        console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
-      }
+      });
     } else {
       staged = true;
       console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
@@ -471,6 +493,7 @@ async function checkAndFixProcesses() {
   console.log(`🚨 [Autofixer] Found ${crashedProcesses.length} crashed process(es)`);
 
   for (const proc of crashedProcesses) {
+    if (shuttingDown) break;
     const processName = proc.name;
 
     if (isOnCooldown(processName)) {
@@ -487,7 +510,7 @@ async function checkAndFixProcesses() {
     console.log(`🔧 [Autofixer] Attempting to fix ${processName} (${app.name})...`);
 
     const { errLogs, outLogs } = await getProcessLogs(processName);
-    await fixProcess(processName, app, errLogs, outLogs);
+    if (!shuttingDown) await fixProcess(processName, app, errLogs, outLogs);
   }
 }
 
@@ -520,10 +543,17 @@ async function main() {
   console.log(`⏳ [Autofixer] Fix cooldown: ${FIX_COOLDOWN / 60000} minutes per process`);
 
   await ensureHistoryDir();
+  if (shuttingDown) return;
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
   });
 
+  if (shuttingDown) return;
+  stopUi = await startAutofixerUi(stagedFixes);
+  if (shuttingDown) {
+    stopUi();
+    return;
+  }
   // Run immediately, then wait a full interval after each pass completes.
   await runCheckCycle();
 }
@@ -537,6 +567,7 @@ async function shutdown() {
     checkTimer = null;
   }
 
+  stopUi?.();
   console.log(`\n🛑 [Autofixer] Shutting down...`);
   // Stop the in-flight provider (its detached group) and record the attempt.
   // Worktree removal is left to the next startup's sweep, the guarantee.
@@ -547,6 +578,7 @@ async function shutdown() {
       console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
     });
   }
+  await historyTail;
   process.exit(0);
 }
 

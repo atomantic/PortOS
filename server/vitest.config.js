@@ -80,7 +80,7 @@ const config = defineConfig({
     disableConsoleIntercept: true,
     // The client owns its runner (`client/vitest.config.js`, jsdom); this node runner
     // covers server, scripts/migrations and lib tests and does NOT glob the client tree.
-    // The standalone autofixer package's adversarial tests run here, and
+    // The Autofixer sidecar's tests run here, and
     // docs/deps-doc.test.js lives next to the document it guards. The globs are
     // shared with the CI runner (scripts/lib/workspaceTests.js).
     include: [...SERVER_TEST_INCLUDE],

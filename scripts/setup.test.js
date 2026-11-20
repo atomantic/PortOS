@@ -24,7 +24,7 @@ const STEP_SCRIPTS = [
   'setup-data.js', 'setup-db.js', 'setup-llm.js', 'setup-browser.js', 'setup-cert.js',
   'ensure-ffmpeg.js', 'install-slashdo.js', 'setup-guide.js'
 ];
-const WORKSPACE_LABELS = ['root', 'client', 'server', 'autofixer'];
+const WORKSPACE_LABELS = ['root', 'client', 'server'];
 
 /** The full ordered call log of a successful run, shared by the in-process and CLI tests. */
 const EXPECTED_ORDER = [
@@ -123,7 +123,7 @@ describe.skipIf(process.platform === 'win32')('node scripts/setup.js', () => {
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
     mkdirSync(join(root, 'server', 'lib'), { recursive: true });
     mkdirSync(join(root, 'bin'));
-    for (const label of ['client', 'autofixer']) mkdirSync(join(root, label));
+    mkdirSync(join(root, 'client'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     for (const file of ['setup.js', 'ensure-deps.js', 'lib/directInvocation.js', 'lib/workspaceDependencies.js']) {
       copyFileSync(join(REPO_ROOT, 'scripts', file), join(root, 'scripts', file));

@@ -1,10 +1,4 @@
-// Plumbing shared by the autofixer's two PM2-managed processes — `server.js`
-// (the repair loop) and `ui.js` (the dashboard). Kept package-local and
-// dependency-light (node builtins only): PortOS's own `server/services/pm2.js`
-// has an equivalent `execPm2`, but importing it here would drag the whole
-// server dependency graph into a package whose package.json declares only
-// express. `server/lib/pm2Jlist.js` is the one exception: a pure, zero-import
-// leaf, so importing it costs nothing this package needs to stay light about.
+// Shared PM2 and data access for the monitor and dashboard.
 import { spawn } from 'child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
 import { existsSync } from 'fs';

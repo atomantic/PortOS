@@ -120,7 +120,7 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   writeFileSync(join(repo, 'scripts', 'pm2-daemon-refresh.js'), 'process.exit(1);\n');
 
   // The workspaces safe_install cd's into, and the dependency it sanity-checks.
-  for (const ws of ['client', 'server', 'autofixer']) {
+  for (const ws of ['client', 'server']) {
     mkdirSync(join(repo, ws), { recursive: true });
     writeFileSync(join(repo, ws, 'package.json'), JSON.stringify({ name: ws, version: '0.0.0', type: 'module' }));
   }

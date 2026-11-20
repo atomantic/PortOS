@@ -3,9 +3,15 @@ import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
 
 // Session metadata is the authority for patch disposition. The history index is
-// append-only from the daemon's perspective, so UI actions never overwrite it.
+// written by the monitor. Manual and automatic promotion share this queue so
+// applying, restarting and rolling back one patch cannot overlap another.
 export function createStagedFixStore({ root, loadApps, execPm2 }) {
   let tail = Promise.resolve();
+  const serialize = (operation) => {
+    const run = tail.then(operation);
+    tail = run.catch(() => {});
+    return run;
+  };
   const sessionDir = (id) => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id)
     ? join(root, 'sessions', id) : null;
   const metadata = async (id) => {
@@ -35,15 +41,21 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
       if (!validation.ok) return { status: 409, error: validation.reason };
       const applied = await applyDiffToLive(app.repoPath, patch, root);
       if (!applied.ok) return { status: 409, error: applied.error };
+      const restartsSelf = record.processName === 'portos-autofixer';
+      // Persist the applied patch before PM2 shuts down its own dashboard.
+      if (restartsSelf) await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
       const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
       if (restart.error) {
         const rollback = await revertDiffFromLive(app.repoPath, patch, root);
         // A failed rollback must not advertise this patch as safe to apply again.
         if (rollback.error) {
           await save(id, { ...record, staged: false, disposition: 'recovery-required', error: rollback.error });
+        } else if (restartsSelf) {
+          await save(id, record);
         }
         return { status: 500, error: `Restart failed: ${restart.error}${rollback.error ? '; rollback failed — inspect the checkout' : '; patch rolled back'}` };
       }
+      if (restartsSelf) return { success: true, disposition: 'applied' };
       disposition = 'applied';
     }
     const updated = { ...record, staged: false, promoted: disposition === 'applied', disposition };
@@ -57,11 +69,8 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
   };
   return {
     read,
-    mutate: (id, action) => {
-      const run = tail.then(() => perform(id, action));
-      tail = run.catch(() => {});
-      return run;
-    },
+    serialize,
+    mutate: (id, action) => serialize(() => perform(id, action)),
     decorateHistory: async (history) => Promise.all(history.map(async entry => {
       const record = await metadata(entry.sessionId);
       return record ? { ...entry, staged: record.staged, promoted: record.promoted, disposition: record.disposition } : entry;

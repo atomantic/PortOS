@@ -147,7 +147,7 @@ describe('ecosystem.config.cjs PostgreSQL env', () => {
 
   it('keeps PGPASSWORD out of the non-DB apps (portos-ui, autofixer, browser)', () => {
     const { apps } = loadConfig('PGPASSWORD=example-secret\n', clearedPgEnv);
-    for (const name of ['portos-ui', 'portos-autofixer', 'portos-autofixer-ui', 'portos-browser']) {
+    for (const name of ['portos-ui', 'portos-autofixer', 'portos-browser']) {
       const app = apps.find((a) => a.name === name);
       expect(app, `expected an app named ${name}`).toBeTruthy();
       expect(app.env.PGPASSWORD).toBeUndefined();
@@ -196,7 +196,7 @@ describe('ecosystem.config.cjs parses .env with the setup grammar (#9471)', () =
 
   it('still keeps a quoted PGPASSWORD out of the non-DB apps', () => {
     const { apps } = loadConfig('PGPASSWORD="example secret pass"\n', clearedPgEnv);
-    for (const name of ['portos-ui', 'portos-autofixer', 'portos-autofixer-ui', 'portos-browser']) {
+    for (const name of ['portos-ui', 'portos-autofixer', 'portos-browser']) {
       expect(apps.find((a) => a.name === name).env.PGPASSWORD).toBeUndefined();
     }
   });

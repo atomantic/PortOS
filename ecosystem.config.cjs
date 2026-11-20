@@ -68,7 +68,7 @@ const SERVER_MAX_MEMORY = process.env.PORTOS_SERVER_MAX_MEMORY || envServerMaxMe
 // CoS's default 2048 MiB per-process memory warning threshold.
 const UI_MAX_MEMORY = '1536M';
 
-// The support daemons (autofixer, its UI, the browser bridge) idle around 45 MB.
+// The support daemons (autofixer and the browser bridge) idle around 45 MB.
 // A ceiling an order of magnitude above that never fires in normal operation and
 // still catches a runaway.
 const HELPER_MAX_MEMORY = '512M';
@@ -144,7 +144,6 @@ const PORTS = {
   CDP: 5556,           // Chrome DevTools Protocol (browser automation)
   CDP_HEALTH: 5557,    // Browser health check endpoint
   COS: 5558,           // Chief of Staff agent runner
-  AUTOFIXER: 5559,     // Autofixer API
   AUTOFIXER_UI: 5560,  // Autofixer UI
   POSTGRES_DOCKER: 5561, // PostgreSQL Docker container (host port mapping)
   WHISPER: 5562,       // Loopback whisper.cpp speech-to-text server
@@ -355,26 +354,8 @@ module.exports = {
       windowsHide: IS_WIN,
       env: {
         ...BASE_ENV,
-        PORT: PORTS.AUTOFIXER,
+        PORT: PORTS.AUTOFIXER_UI,
         PATH: process.env.PATH // Inherit PATH for nvm/node access in child processes
-      },
-      watch: false,
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s',
-      restart_delay: 5000,
-      ...memoryLimits(HELPER_MAX_MEMORY)
-    },
-    {
-      name: 'portos-autofixer-ui',
-      script: 'autofixer/ui.js',
-      cwd: __dirname,
-      interpreter: NODE_INTERPRETER,
-      log_date_format: LOG_DATE_FORMAT,
-      windowsHide: IS_WIN,
-      env: {
-        ...BASE_ENV,
-        PORT: PORTS.AUTOFIXER_UI
       },
       watch: false,
       autorestart: true,

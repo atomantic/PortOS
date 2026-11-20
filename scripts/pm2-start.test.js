@@ -32,6 +32,13 @@ describe('appsNeedingStart', () => {
     ]);
   });
 
+  it('restarts the watchdog under the combined config when the legacy dashboard is registered', () => {
+    const expectedApps = [...apps, 'portos-autofixer'];
+    const processes = [...expectedApps, 'portos-autofixer-ui'].map(name => proc(name));
+    expect(appsNeedingStart({ processes, expectedApps, root }).missing).toEqual(['portos-autofixer']);
+    expect(appsNeedingStart({ processes: processes.slice(0, -1), expectedApps, root }).missing).toEqual([]);
+  });
+
   it('does not treat a sibling directory sharing the root prefix as inside the checkout', () => {
     const { missing } = appsNeedingStart({
       processes: [proc('portos-server', 'online', `${root}-other${join('/server', 'start.js')}`)],

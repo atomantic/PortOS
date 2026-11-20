@@ -214,7 +214,7 @@ describe('the floor is declared where npm itself reads it', () => {
   // The three scripts above cover `npm run setup|start|dev` and nothing else.
   // Direct `cd client && npm install` and `npm i <pkg>` are how lockfile churn
   // still gets introduced; only `engines.npm` reaches those authoring paths.
-  const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json', 'autofixer/package.json'];
+  const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json'];
 
   it.each(MANIFESTS)('%s declares engines.npm = the floor', (rel) => {
     expect(readJson(rel).engines?.npm).toBe(`>=${MIN_NPM}`);
@@ -228,7 +228,7 @@ describe('the floor is declared where npm itself reads it', () => {
     expect(existsSync(lockfile), `${rel} declares engines.npm but ships no lockfile`).toBe(true);
   });
 
-  it.each(['.npmrc', 'client/.npmrc', 'server/.npmrc', 'autofixer/.npmrc'])(
+  it.each(['.npmrc', 'client/.npmrc', 'server/.npmrc'])(
     '%s leaves engine-strict off so the npm floor stays a warning',
     (rel) => {
       // engine-strict would turn EBADENGINE fatal for dependencies too, which is
