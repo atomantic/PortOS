@@ -39,6 +39,8 @@ import {
   DEFAULT_REVIEWERS,
   prCompletionMerges,
   resolveUseAutoMerge,
+  resolveAutoApprovePR,
+  resolveAdminMerge,
   DEFAULT_REVIEW_STOP_MODE,
 } from './constants.js';
 import useAssignableInstances from '../../hooks/useAssignableInstances.js';
@@ -115,7 +117,9 @@ const soleSelectableModel = (provider, selectedModel = '') => {
 
 const runShapeDefaultsPatch = (selectedApp) => {
   const useAutoMerge = resolveUseAutoMerge(selectedApp || { id: PORTOS_APP_ID });
-  if (selectedApp?.isGitRepo === false) return { useWorktree: false, openPR: false, prCompletion: DEFAULT_PR_COMPLETION, useAutoMerge };
+  const autoApprovePR = resolveAutoApprovePR(selectedApp);
+  const adminMerge = resolveAdminMerge(selectedApp);
+  if (selectedApp?.isGitRepo === false) return { useWorktree: false, openPR: false, prCompletion: DEFAULT_PR_COMPLETION, useAutoMerge, autoApprovePR, adminMerge };
   const worktreeOptOut = selectedApp?.defaultUseWorktree === false;
   const defaultOpenPR = selectedApp?.defaultOpenPR ?? !worktreeOptOut;
   return {
@@ -123,6 +127,8 @@ const runShapeDefaultsPatch = (selectedApp) => {
     openPR: defaultOpenPR,
     prCompletion: selectedApp?.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     useAutoMerge,
+    autoApprovePR,
+    adminMerge,
   };
 };
 
@@ -174,6 +180,8 @@ export function createTaskAddFormState({ initialDraft, defaultApp = '', apps, qu
     worktreeChangesExpected: undefined,
     prCompletion: DEFAULT_PR_COMPLETION,
     useAutoMerge: resolveUseAutoMerge({ id: PORTOS_APP_ID }),
+    autoApprovePR: false,
+    adminMerge: false,
     reviewDefaults: createReviewDefaults(),
     reviewOverrides: {},
     reviewerCliInstalled: {},
@@ -421,7 +429,7 @@ export default function useTaskAddForm({
 
   const appDefaultsSig = useMemo(
     () => selectedApp
-      ? `${selectedApp.id}|${String(selectedApp.defaultOpenPR)}|${selectedApp.defaultPrCompletion || DEFAULT_PR_COMPLETION}|${String(selectedApp.defaultUseWorktree)}|${String(selectedApp.isGitRepo)}|${!!selectedApp.jira?.enabled}|${String(selectedApp.useAutoMerge)}`
+      ? `${selectedApp.id}|${String(selectedApp.defaultOpenPR)}|${selectedApp.defaultPrCompletion || DEFAULT_PR_COMPLETION}|${String(selectedApp.defaultUseWorktree)}|${String(selectedApp.isGitRepo)}|${!!selectedApp.jira?.enabled}|${String(selectedApp.useAutoMerge)}|${String(selectedApp.autoApprovePR)}|${String(selectedApp.adminMerge)}`
       : `none:${state.newTask.app || ''}`,
     [selectedApp, state.newTask.app],
   );
@@ -699,6 +707,8 @@ export default function useTaskAddForm({
       dispatch({ type: 'patch', patch: { isEnhancing: false } });
     }
 
+    // Merge-time options only mean something when this run opens a PR that its own policy merges.
+    const mergesPr = !state.planOnly && state.useWorktree && state.openPR && prCompletionMerges(state.prCompletion);
     const result = await addCosTask({
       description: finalDescription,
       model: selectedModelOrSole || undefined,
@@ -724,7 +734,9 @@ export default function useTaskAddForm({
         ? { worktreeChangesExpected: false }
         : state.worktreeChangesExpected !== undefined ? { worktreeChangesExpected: state.worktreeChangesExpected } : {}),
       prCompletion: !state.planOnly && state.useWorktree && state.openPR ? state.prCompletion : undefined,
-      useAutoMerge: !state.planOnly && state.useWorktree && state.openPR && prCompletionMerges(state.prCompletion) ? state.useAutoMerge : undefined,
+      useAutoMerge: mergesPr ? state.useAutoMerge : undefined,
+      autoApprovePR: mergesPr ? state.autoApprovePR : undefined,
+      adminMerge: mergesPr ? state.adminMerge : undefined,
       ...(!state.planOnly && state.openPR && state.prCompletion === 'review-then-merge' ? reviewOverridePayload(state.reviewOverrides) : {}),
       screenshots: state.screenshots.length > 0 ? state.screenshots.map((screenshot) => screenshot.path) : undefined,
       attachments: state.attachments.length > 0 ? state.attachments.map((attachment) => ({

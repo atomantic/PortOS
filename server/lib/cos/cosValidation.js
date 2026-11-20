@@ -92,6 +92,11 @@ const cosTaskDiagnosticsSchema = z.object({
 // deletes the pin (absent-vs-cleared, AGENTS.md) — emptyToUndefined would drop
 // the clear signal at the route's `!== undefined` gate and make a set effort
 // permanent through the API.
+// Form posts and legacy callers send booleans as 'true'/'false' strings.
+const optionalBoolInputSchema = z.preprocess(
+  v => v === 'true' ? true : v === 'false' ? false : v,
+  z.boolean().optional()
+);
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
 const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 // Federated instance this task is PINNED to (#4520) — only that instance's CoS
@@ -261,6 +266,9 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // Absent inherits the app's `autoApprovePR` / `adminMerge` (resolveAutoApprovePR / resolveAdminMerge).
+  autoApprovePR: optionalBoolInputSchema,
+  adminMerge: optionalBoolInputSchema,
   simplify: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()

@@ -44,6 +44,20 @@ export function resolveUseAutoMerge(app, metadata = {}) {
   return app?.id === PORTOS_APP_ID;
 }
 
+// Code-owner-blocked PRs: both choices are opt-in with NO per-app default (unlike `useAutoMerge`, PortOS itself is off too),
+// because one overrides a repository review rule and the other bypasses branch protection. Task choice wins, then the app's value.
+const resolveOptIn = (key) => (app, metadata = {}) => {
+  if (isTruthyMeta(metadata?.[key])) return true;
+  if (isFalsyMeta(metadata?.[key])) return false;
+  return app?.[key] === true;
+};
+
+/** Whether the agent should approve its own PR (`gh pr review --approve`) when a required code-owner review blocks the merge. */
+export const resolveAutoApprovePR = resolveOptIn('autoApprovePR');
+
+/** Whether the agent may merge with `gh pr merge --admin` once required CI is green on the pinned head and only a review requirement blocks it. */
+export const resolveAdminMerge = resolveOptIn('adminMerge');
+
 /**
  * WHO performs the code review an action triggers, orthogonal to `PR_COMPLETIONS` (whether a review happens at all).
  * - `delegated`: the agent is an ORCHESTRATOR that spawns the Code Review Defaults roster (or a per-run override) as separate reviewer processes and applies their findings.

@@ -221,6 +221,9 @@ export const appSchema = z.object({
   mergeHandoffMinQueuedRuns: z.number().int().min(1).max(10000).nullable().optional(),
   // Agents enable GitHub native auto-merge once reviews pass. Unset = on for PortOS itself, off elsewhere (resolveUseAutoMerge).
   useAutoMerge: z.boolean().optional(),
+  // Code-owner-blocked PRs (resolveAutoApprovePR / resolveAdminMerge). Unset = off everywhere, PortOS included.
+  autoApprovePR: z.boolean().optional(),
+  adminMerge: z.boolean().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   // Free-text deployment assumptions (who uses it, what runs beside the user)

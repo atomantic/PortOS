@@ -140,7 +140,7 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 **Before pushing, opening, merging or cleaning up a PR, or cutting a release, read [.claude/skills/portos-ship/SKILL.md](.claude/skills/portos-ship/SKILL.md)** (push prep, `implementer:`/`reviewer:` labels, review reuse, merge authority, teardown, releases per [docs/VERSIONING.md](docs/VERSIONING.md)). Always:
 
 - **Never pass `--delete-branch` to `gh pr merge`** (including fallbacks); it can remove another linked checkout.
-- **Never change repository protections or use an admin/bypass option**; the provider's rules decide merge eligibility, and only provider-confirmed `MERGED` is delivery.
+- **Never change repository protections or use an admin/bypass option unless the task or app explicitly opts in** (`adminMerge`, default off everywhere including PortOS; with `autoApprovePR` it covers only a PR blocked solely by a required review, after required CI is green on the pinned head). The provider's rules otherwise decide merge eligibility, and only provider-confirmed `MERGED` is delivery.
 - **Never discard another checkout, ref, lock or unmerged work**; teardown deletes only this task's named branch and checkout after a confirmed merge.
 - Release only within an authorized release workflow (`/do:release`); don't bump `package.json` during development.
 

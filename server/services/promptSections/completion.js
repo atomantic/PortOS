@@ -681,9 +681,26 @@ export const AUTO_MERGE_SECTION = [
   'Auto-merge enabled is pending, not delivered. Keep watching CI on that head until the PR reports MERGED, then finish cleanup and completion as usual. If a check fails, run `gh pr merge <PR_URL> --disable-auto` before pushing a fix so an unreviewed head cannot merge, fix and push as the CI steps describe, repeat any review the new head requires, then enable auto-merge again for the new head. If GitHub refuses auto-merge (disabled for the repository, or no protected checks), merge normally after CI passes. GitLab, leave-open and draft policies ignore this section.',
 ].join('\n');
 
-export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false, mergeHandoff = false, swarmClaim = false } = {}) {
+/**
+ * Opt-in escalation for a PR blocked only by a required code-owner review. It explicitly supersedes the admission body's
+ * "no admin/bypass flags" line, so it is emitted only when the task or app chose it, and each step is gated on green CI
+ * for the pinned head so a review requirement is the sole thing it can override.
+ */
+export function buildCodeOwnerBlockSection({ autoApprove = false, adminMerge = false } = {}) {
+  if (!autoApprove && !adminMerge) return '';
+  const steps = [];
+  const lines = ['## Code-owner review blocking the merge', 'This task opted in to the steps below. They apply only when `gh pr view "<PR_URL>" --json reviewDecision,mergeStateStatus` shows the merge is blocked by a required review (`REVIEW_REQUIRED`), required CI is green on the exact pinned head, the PR is not a draft and there is no conflict. Any other blocker (red or pending check, conflict, missing authorization) is not covered: stop and report it.'];
+  if (autoApprove) steps.push('**Auto-approve:** run `gh pr review "<PR_URL>" --approve` with your authenticated account, then re-read `reviewDecision`. GitHub refuses an approval from the PR author and from an account that is not a code owner; if it is refused, do not retry with another identity or credential, and continue to the next step only if it is enabled.');
+  if (adminMerge) steps.push(`**Admin merge:** when the review requirement is still the only blocker, merge with \`gh pr merge "<PR_URL>" --admin --merge --match-head-commit <verified-head>\` (same method fallbacks as a normal merge). This overrides the earlier instruction not to use admin/bypass flags for this one case only. Never use it while any required check is failing or pending, never change repository protection settings, and confirm \`MERGED\` afterwards.`);
+  lines.push(...steps.map((step, i) => `${i + 1}. ${step}`));
+  lines.push('If the enabled steps are refused or unavailable, leave the PR open and say it is blocked on a code-owner review in your completion summary.');
+  return lines.join('\n');
+}
+
+export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false, mergeHandoff = false, swarmClaim = false, autoApprove = false, adminMerge = false } = {}) {
   const section = buildMergeAdmissionBody(agentId, { review, mergeHandoff, swarmClaim });
-  return autoMerge && !swarmClaim ? `${section}\n\n${AUTO_MERGE_SECTION}` : section;
+  return [section, autoMerge && !swarmClaim ? AUTO_MERGE_SECTION : '', buildCodeOwnerBlockSection({ autoApprove, adminMerge })]
+    .filter(Boolean).join('\n\n');
 }
 
 function buildMergeAdmissionBody(agentId, { review, mergeHandoff, swarmClaim }) {
@@ -706,7 +723,7 @@ function buildMergeAdmissionBody(agentId, { review, mergeHandoff, swarmClaim }) 
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, swarmClaim = false, agentId = null, autoMerge = false, workflowScope = null, mergeHandoff = false } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, swarmClaim = false, agentId = null, autoMerge = false, autoApprove = false, adminMerge = false, workflowScope = null, mergeHandoff = false } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -723,7 +740,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ] : []),
     ...(!prStaysOpen ? [
       ...(!swarmClaim ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen, mergeHandoff }), ''] : []),
-      buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge, mergeHandoff, swarmClaim }), '',
+      buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge, autoApprove, adminMerge, mergeHandoff, swarmClaim }), '',
     ] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
