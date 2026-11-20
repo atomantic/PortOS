@@ -5,7 +5,7 @@
  * While PortOS is running, use Reconcile now on the Usage page. That path
  * writes the server's in-memory ledger, so the next save cannot drop the rows.
  * This script prints the same plan and, with --apply, calls that same repair
- * only when this process is the one that owns data/usage.json. Stop PortOS
+ * only when this process is the one that owns the local usage ledger. Stop PortOS
  * first. A running server keeps the ledger in memory and will overwrite a
  * file this process saved.
  *
@@ -49,7 +49,7 @@ async function main() {
     return;
   }
   if (resolve(dataDir) !== resolve(PATHS.data)) {
-    console.error(`❌ --apply writes ${PATHS.data}/usage.json. Re-run without --data, or pass --data ${PATHS.data}.`);
+    console.error(`❌ --apply writes the active install ledger. Re-run without --data, or pass --data ${PATHS.data}.`);
     process.exitCode = 1;
     return;
   }
@@ -60,7 +60,10 @@ async function main() {
   if (result.added === 0) console.log('Nothing to apply.');
 }
 
-main().catch((err) => {
+main().finally(async () => {
+  const { close } = await import('../../server/lib/db.js');
+  await close();
+}).catch((err) => {
   console.error(`❌ Antigravity usage backfill failed: ${err.message}`);
   process.exitCode = 1;
 });

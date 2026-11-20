@@ -41,14 +41,14 @@ afterAll(cleanupDataRoot);
 
 vi.mock('./usage.js', () => ({
   addDatedUsageBatch: vi.fn(async rows => rows),
-  getUsage: vi.fn(),
+  backupUsageRepairLedger: vi.fn(),
   loadUsage: vi.fn(),
   getRecentCodexUsageClaims: vi.fn().mockResolvedValue([]),
   markUsageRunReconciled: vi.fn().mockResolvedValue(undefined),
   recordRunUsage: vi.fn().mockResolvedValue(undefined)
 }));
 
-const { addDatedUsageBatch, getUsage, getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
+const { addDatedUsageBatch, loadUsage, getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
 const {
   transcriptFamily,
   isOpencodeRun,
@@ -1880,7 +1880,7 @@ describe('Codex source inventory accounting', () => {
     const fixture = await sameSizeArchive();
     const original = await readCodexAccountingSources({ home });
     const [session] = original.sessions;
-    getUsage.mockReturnValue({
+    loadUsage.mockResolvedValue({
       reconciledRuns: { run: { codexHighWater: [[codexSessionClaimKey(session.id), {
         tokensIn: 80, cacheReadTokens: 20, tokensOut: 60,
       }]] } },

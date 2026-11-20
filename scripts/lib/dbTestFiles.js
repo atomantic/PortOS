@@ -81,6 +81,7 @@ export const DB_TEST_INCLUDE = [
   'lib/db/schema/syncFeed.db.test.js',
   'services/cos/cosTaskRepository.db.test.js',
   'services/releaseSynchronizationStore.db.test.js',
+  'services/usageLedger.db.test.js',
   'scripts/db-migrations/018-cos-tasks-from-files.db.test.js',
   'services/cos/cosAgentRepository.db.test.js',
   'scripts/db-migrations/020-cos-agents-from-state.db.test.js',

@@ -15,15 +15,14 @@
  * cannot both add the same premium.
  */
 
-import { copyFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
 import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
 import { codexIdentityHash, codexSessionClaimKey, readCodexAccountingSources } from './codexUsageSources.js';
-import { addDatedUsageBatch, getUsage, loadUsage } from './usage.js';
+import { addDatedUsageBatch, backupUsageRepairLedger, loadUsage } from './usage.js';
 
 const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
 const INDEXING_PASSES = 20;
@@ -178,18 +177,6 @@ function summarizeCodexSpeedRepair(additions = []) {
   return { added: additions.length, sessions: sessions.size };
 }
 
-async function backupLedger(dataDir) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = join(dataDir, 'backups', `codex-speed-${stamp}`);
-  await mkdir(dest, { recursive: true });
-  try {
-    await copyFile(join(dataDir, 'usage.json'), join(dest, 'usage.json'));
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  return dest;
-}
-
 /**
  * Plan against the in-memory repair ids and add any missing speed rows.
  * Writes only PATHS.data. Does not refresh the native usage store.
@@ -203,8 +190,7 @@ export async function applyCodexSpeedRepair({
   if (resolve(dataDir) !== resolve(PATHS.data)) {
     throw new Error('Codex speed repair refuses to write outside the usage ledger');
   }
-  await loadUsage();
-  const usage = getUsage();
+  const usage = await loadUsage({ includeRepairEvidence: true });
   const plan = await planCodexSpeedRepair({
     home,
     repairIds: usage.grokRepairIds || [],
@@ -215,7 +201,7 @@ export async function applyCodexSpeedRepair({
   if (plan.additions.length === 0) {
     return { ...summarizeCodexSpeedRepair([]), backedUp: false, note, backupDir: null };
   }
-  const backupDir = await backupLedger(dataDir);
+  const backupDir = await backupUsageRepairLedger(dataDir, 'codex-speed');
   const written = await addDatedUsageBatch(plan.additions);
   return { ...summarizeCodexSpeedRepair(written), backedUp: true, note, backupDir };
 }
