@@ -258,6 +258,17 @@ dump, so `test:db` takes a session-level Postgres advisory lock for the run
 (`server/test/dbRunExclusivity.js`). A second run from another worktree prints
 `Another DB test run holds portos_test` and waits for the first to finish.
 
+Both DB commands require at least 2 GiB available on each observable PostgreSQL
+data and write-ahead log (WAL) volume before schema or fixture writes. The
+runner checks after acquiring the run lock. It verifies the connected cluster's
+local data directory and follows `pg_wal` to its actual volume, independently
+of the checkout or test temp directory. If a known volume is too full, free
+space there or target a disposable PostgreSQL cluster with adequate storage.
+Remote databases, container filesystems, and directories hidden by permissions
+may be unobservable. The commands report any unchecked storage and continue,
+including for the hosted CI service. Check capacity on the database host in
+those cases.
+
 ### Repairing a test database whose extensions were dropped
 
 The application role cannot create extensions. `backup.db.test.js` used to
