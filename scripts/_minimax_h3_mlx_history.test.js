@@ -6,7 +6,8 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 const pyBin = resolveTestPython();
 const mediaPy = resolveTestPython({ modules: ['numpy'] }) || pyBin;
 const scripts = fileURLToPath(new URL('.', import.meta.url));
-const run = (source, bin = pyBin) => execFileSync(bin, ['-c', `import sys\nsys.path.insert(0, sys.argv[1])\n${source}`, scripts], {
+const mlScripts = fileURLToPath(new URL('./ml/', import.meta.url));
+const run = (source, bin = pyBin) => execFileSync(bin, ['-c', `import sys\nsys.path[:0] = sys.argv[1:3]\n${source}`, mlScripts, scripts], {
   encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
 }).trim();
 let mediaFixture = false;

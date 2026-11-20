@@ -6,8 +6,8 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 const python = resolveTestPython();
 const run = (lines) => execFileSync(python, ['-c', [
   'import sys, json, tempfile', 'from pathlib import Path',
-  'sys.path.insert(0, str(Path.cwd() / "scripts"))', ...lines,
-].join('\n')], { cwd: join(import.meta.dirname, '..'), encoding: 'utf8' });
+  'sys.path.insert(0, sys.argv[1])', ...lines,
+].join('\n'), join(import.meta.dirname, 'ml')], { cwd: join(import.meta.dirname, '..'), encoding: 'utf8' });
 const hasMlx = (() => {
   if (!python) return false;
   try { execFileSync(python, ['-c', 'import mlx.core, numpy'], { stdio: 'ignore' }); return true; } catch { return false; }
