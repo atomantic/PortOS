@@ -1172,7 +1172,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  * other caller runs outside that window and correctly leaves it null.
  */
 export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
-  if (maintenance.held()) return;
+  if (maintenance.held() || maintenance.agentDiskPressure()) return;
   if (!isDaemonRunning()) return;
   // Same reason as the runner gate below: the tiers' side effects cannot be
   // taken back, and an agent registered after the shutdown marker snapshot is

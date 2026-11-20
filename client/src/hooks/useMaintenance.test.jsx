@@ -47,8 +47,10 @@ describe('banner mode', () => {
     expect(fetchStatus).toHaveBeenCalledTimes(1);
     act(() => listeners.get('maintenance:readiness')({ state: 'draining', blockerCount: 2 }));
     expect(result.current.status).toEqual({ state: 'draining', blockerCount: 2 });
+    act(() => listeners.get('maintenance:readiness')({ state: 'normal', blockerCount: 0, agentDiskPressure: 'low' }));
+    expect(result.current.status).toEqual({ state: 'normal', blockerCount: 0, agentDiskPressure: 'low' });
     act(() => listeners.get('maintenance:readiness')({ state: 'normal', blockerCount: 0 }));
-    expect(result.current.status.state).toBe('normal');
+    expect(result.current.status).toEqual({ state: 'normal', blockerCount: 0 });
     expect(fetchStatus).toHaveBeenCalledTimes(1);
   });
   it('lets a pushed projection beat an older in-flight read', async () => {

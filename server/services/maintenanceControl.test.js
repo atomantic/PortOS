@@ -88,6 +88,20 @@ describe('maintenance notifications', () => {
 
     // Nothing private is broadcast.
     expect(JSON.stringify(sent)).not.toMatch(/resource-that-must-not-leak|pid|owner|hold/i);
+
+    // External disk changes are observable even with no journal mutations.
+    const journalEvents = count('maintenance:changed');
+    const measureDisk = vi.spyOn(maintenance, 'agentDiskPressure').mockReturnValue('low');
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(sent.at(-1)).toEqual({ name: 'maintenance:readiness', payload: { state: 'normal', blockerCount: 0, agentDiskPressure: 'low' } });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(count('maintenance:readiness')).toBe(4);
+    measureDisk.mockReturnValue(null);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(sent.at(-1)).toEqual({ name: 'maintenance:readiness', payload: { state: 'normal', blockerCount: 0 } });
+    expect(count('maintenance:changed')).toBe(journalEvents);
+    await vi.waitFor(() => expect(resumeWork.queue).toHaveBeenCalledOnce());
+    measureDisk.mockRestore();
   });
 
   it('handles watcher error without throwing and recovers watching on next emit', async () => {

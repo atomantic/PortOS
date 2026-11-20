@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import * as fs from 'node:fs';
 import { z } from 'zod';
+import { dirname } from 'node:path';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createMaintenanceJournal, maintenanceError as error, syncMaintenanceDirectory } from './maintenanceJournal.js';
@@ -40,6 +41,8 @@ export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAI
 export const isOperatorDisposableReservation = op => ['media', 'runner', 'api-run', 'cli-run', 'tui-run', 'manual-run', 'heavy-job',
   'script-job', 'shell-job', 'provider', 'music-video', 'app-operation', 'backup'].includes(op.kind)
   || (op.kind === 'settlement' && op.resource === 'Output publication');
+
+const AGENT_DISK_HEADROOM_BYTES = 1024 ** 3;
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
   makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid,
@@ -88,6 +91,23 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const harnessActions = createHarnessActionAdmission({ transaction, read: readForStatus, makeId, error, now,
     absent: harnessAbsent, ownerPresent: harnessOwnerPresent, parentPid: harnessParentPid });
   const held = () => status().state !== 'normal';
+  const agentDiskPressure = () => {
+    // The journal directory may live on a separate mount. Before first use,
+    // measure the nearest existing parent where the journal will be created.
+    let path = directory;
+    for (;;) {
+      try {
+        const { bavail, bsize } = io.statfsSync(path);
+        const free = Number(bavail) * Number(bsize);
+        if (!Number.isFinite(free) || free < 0 || Number(bsize) <= 0) return 'unavailable';
+        return free < AGENT_DISK_HEADROOM_BYTES ? 'low' : null;
+      } catch (err) {
+        const parent = dirname(path);
+        if (err.code !== 'ENOENT' || parent === path) return 'unavailable';
+        path = parent;
+      }
+    }
+  };
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore()?.id ?? null;
   const ownerFor = op => ({ pid: op.pid, startedAt: op.startedAt, generation: op.uncertaintyStamp });
@@ -99,6 +119,12 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return ownerFor(op);
   };
   const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false, reconnectFinished = false } = {}) => {
+    if (kind === 'agent' || kind === 'runner') {
+      const pressure = agentDiskPressure();
+      if (pressure) throw error('MAINTENANCE_HELD', pressure === 'low'
+        ? 'New agents are paused until the maintenance journal volume has at least 1 GiB free.'
+        : 'New agents are paused because maintenance journal free space could not be checked.');
+    }
     const inheritedId = parentId ?? (continuation ? currentId() : null);
     const inheritedOwner = !parentId && continuation ? context.getStore()?.owner : null;
     let id = makeId();
@@ -378,7 +404,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       throw error('MAINTENANCE_HELD', 'Existing work ownership is no longer current.');
   };
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { deferredUpdate, harnessActions, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { deferredUpdate, harnessActions, directory, status, held, agentDiskPressure, assertOpen, admit, tryAdmit, recoverOwned, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileInactiveReservations, isLocallyFinished, assertCurrent };
 }
 
