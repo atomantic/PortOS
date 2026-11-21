@@ -1,5 +1,3 @@
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 /**
  * Image Gen — Codex CLI provider.
  *
@@ -28,37 +26,29 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * lacks image generation, so diagnostics distinguish observation from capability.
  */
 
-import { spawn } from '../../lib/childProcess.js';
-import { bufferedSpawn, prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js';
 import { access, readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { constants as fsConstants, existsSync } from 'fs';
-import { basename, join, isAbsolute, resolve, sep } from 'path';
+import { basename, join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { codexHomeDir } from '../../lib/codexUserConfig.js';
-import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { withoutServerSecretsEnv } from '../../lib/processEnv.js';
 
 // Codex's own ambient credentials; everything else server-held is withheld.
 const CODEX_AUTH_ENV_KEYS = ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE'];
-import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { noFabricationClause } from './fabricationGuard.js';
 import { IMAGE_GEN_ITEM_KIND, parseSessionImageRecords, selectJobImage } from './codexSessionImages.js';
 import { randomUUID } from 'crypto';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
 import { codexDriverReportedTokens, recordCodexRender } from '../imageRenderUsage.js';
-import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/provider/providerModels.js';
 import {
   IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT,
   describeFidelity, visualReferenceRole,
 } from './modes.js';
 import { buildNoImageReason } from './noImageReason.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
 import { conformImageAspect } from './aspectConform.js';
 import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
 import { resolveInputImages } from './inputImages.js';
@@ -67,6 +57,7 @@ import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
+import { checkCliVersionConnection, createCliImageJobRunner } from './cliJobRunner.js';
 
 const MAX_MISSING_REF_RETRIES = 1;
 const MISSING_REF_TARGET_RE = /\b(reference(?:\s+(?:image|file|path))?|referenced_image_paths?|attached\s+(?:image|file|reference)|input\s+(?:image|file)|image\s+path|file\s+path)\b/i;
@@ -137,84 +128,24 @@ async function resolveCodexDriverModel(model, modelIsShippedDefault) {
   throw new ServerError('The local Codex model cache lists no supported low-cost image-generation driver default. Select an available model explicitly in Settings → Image Gen.', { status: 400 });
 }
 
-// Per-job state — keyed by jobId so multiple codex renders can run in
-// parallel under the mediaJobQueue's configurable lane limit. Same client
-// shape as imageGen/local.js so attachSseClient/broadcastSse just work.
-const jobs = new Map();
-const activeProcs = new Map();
-const activeJobs = new Map();
+const referenceEventFields = ({ initImageFilename, referenceImageFilenames }) => ({
+  initImageFilename, referenceImageFilenames,
+});
 
-// Returns the most-recently-started job — used by status surfaces and the
-// settings test-render; not safe for cancel routing under parallel use.
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const getActiveJobs = () => [...activeJobs.values()];
+const runner = createCliImageJobRunner({
+  mode: IMAGE_GEN_MODE.CODEX, provider: 'Codex', defaultBin: DEFAULT_BIN, timeoutMs: CODEX_TIMEOUT_MS,
+  failedPayloadExtras: (job) => job && referenceEventFields(job),
+});
 
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
+export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
 
-const sigtermWithEscalation = (id, proc) => {
-  if (process.platform === 'win32') {
-    // The cmd.exe wrapper owns a Codex descendant: terminate the whole tree.
-    killProcessTree(proc);
-    return;
-  }
-  killWithEscalation(proc, { label: 'codex child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
-};
-
-// Cancel one specific codex render. jobId is required — with parallel codex
-// renders an "anonymous cancel" is genuinely destructive (would nuke every
-// in-flight render), so callers have to be explicit. Use `cancelAll()` for
-// the legacy "stop everything" path that the imageGen.cancel() dispatcher
-// wires up.
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) {
-    throw new Error("codex.cancel requires a jobId — use codex.cancelAll() to terminate every in-flight render");
-  }
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const proc = activeProcs.get(jobId);
-  if (!proc) return false;
-  const job = jobs.get(jobId);
-  if (job) job.canceled = true;
-  sigtermWithEscalation(jobId, proc);
-  return true;
-};
-
-// Bulk terminate every in-flight codex render. Only used by the imageGen
-// dispatcher's "cancel everything" route — the per-job mediaJobQueue path
-// always passes a specific jobId to `cancel()`.
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeProcs.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
-
+// A version probe establishes CLI availability without spending image quota.
 export async function checkConnection({ codexPath } = {}) {
-  // Cheap probe: spawn `codex --version`. Avoids actually invoking image_gen
-  // (which would consume the user's Codex quota); the settings UI just wants
-  // "yes the binary exists and is reachable".
-  const bin = codexPath || DEFAULT_BIN;
-  const prepared = prepareCliSpawn(bin, ['--version']);
-  const result = await bufferedSpawn(prepared.command, prepared.args, {
-    timeoutMs: 15_000, shell: false, env: withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS }),
+  return checkCliVersionConnection({
+    bin: codexPath || DEFAULT_BIN, mode: IMAGE_GEN_MODE.CODEX, label: 'Codex', modelPrefix: 'codex-cli',
+    versionRegex: /codex-cli\s+([\d.]+)/i,
+    env: withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS }),
   });
-  if (result.error) {
-    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `Codex CLI not found (${result.error.message})` };
-  }
-  if (result.timedOut) {
-    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: 'codex --version timed out' };
-  }
-  if (result.code !== 0) {
-    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `codex --version exited ${result.code}` };
-  }
-  const out = `${result.stdout}${result.stderr}`;
-  const versionMatch = out.match(/codex-cli\s+([\d.]+)/i) || out.match(/(\d+\.\d+\.\d+)/);
-  return { connected: true, mode: IMAGE_GEN_MODE.CODEX, model: versionMatch ? `codex-cli ${versionMatch[1]}` : 'codex-cli' };
 }
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
@@ -291,7 +222,7 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
 // Input images are attached via codex CLI's `-i <FILE>` flag (variadic, so all
 // of them ride one flag) and the prompt is reshaped so the `$imagegen` skill
 // feeds the attachments to `image_gen` as references.
-export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+export const generateImage = (params) => runner.preparations.run(params, generateImagePrepared);
 
 async function generateImagePrepared({
   promptAdditions = [],
@@ -344,13 +275,11 @@ async function generateImagePrepared({
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
 
   const { fullPrompt, record: sentRecord } = codexSentPrompt({
     prompt, negativePrompt, width, height, inputImages, initImageStrength, promptAdditions,
   });
 
-  const bin = codexPath || DEFAULT_BIN;
   // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
   // swallows every following positional — including the prompt — when no other
   // flag interrupts it. That left codex with no positional prompt; it then read
@@ -402,35 +331,16 @@ async function generateImagePrepared({
     await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
     await assertReadableInputImages(inputImages.paths);
   } catch (error) {
-    await removeScratchDirectory(scratchDir);
+    await runner.removeScratchDirectory(scratchDir);
     throw error;
   }
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  try {
-    jobs.set(jobId, job);
-
-    console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex`);
-    imageGenEvents.emit('started', {
-      generationId: jobId,
-      totalSteps: 1,
-      initImageFilename: meta.initImageFilename,
-      referenceImageFilenames: meta.referenceImageFilenames,
-    });
-    activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-    broadcastSse(job, { type: 'status', message: 'Spawning codex…' });
-  } catch (err) {
-    jobs.delete(jobId);
-    activeJobs.delete(jobId);
-    await removeScratchDirectory(scratchDir);
-    throw err;
-  }
-
-  // generateImage returns a job descriptor synchronously; the actual codex
-  // child runs out-of-band so the HTTP response can ship while the client
-  // attaches to the per-job SSE stream (mirrors local.js). runCodex settles
-  // every launch failure through the job's own failure finalizer.
-  runCodex(job, jobId, bin, args, outputPath, filename, meta, {
-    cleanC2PA, denoise, scratchDir, inputPaths: inputImages.paths,
+  const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir, referenceEventFields: referenceEventFields(meta) });
+  runner.run(job, {
+    bin: codexPath || undefined, args, scratchDir, meta, cleanC2PA, denoise,
+    prepareAttempt: () => prepareCodexAttempt(job, inputImages.paths),
+    conformAspect: conformImageAspect,
+    recordUsage: recordCodexRender,
+    referenceEventFields: referenceEventFields(meta),
   });
 
   return {
@@ -460,264 +370,64 @@ export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail,
   ),
 });
 
-function removeScratchDirectory(scratchDir) {
-  return maintenance.continueSettlement(
-    () => rmGuarded(scratchDir, { recursive: true, force: true }),
-  ).catch(err => {
-    maintenance.markCurrentUnsettled();
-    console.error(`❌ Codex scratch cleanup failed: ${err.message}`);
-  });
-}
-
-// Launch is synchronous so every failure has one owner: a refusal before a
-// child exists (Node rejects an invalid argv/bin synchronously) settles the job
-// here, and a setup failure after spawn terminates the child and leaves the
-// close handler to settle once it has physically exited.
-function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false, scratchDir, inputPaths = [], attempt = 0 } = {}) {
-  const removeScratch = () => removeScratchDirectory(scratchDir);
-  if ((attempt === 0 && preparations.take(jobId)) || job.canceled) {
-    void removeScratch();
-    return finalizeJobFailure.canceled(job, jobId);
-  }
-  let proc;
-  try {
-    const resolvedBin = !isAbsolute(bin) && (bin.includes('/') || bin.includes(sep)) ? resolve(bin) : bin;
-    const prepared = prepareCliSpawn(resolvedBin, args);
-    const baseEnv = withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS });
-    const env = process.env.CODEX_HOME ? { ...baseEnv, CODEX_HOME: resolve(process.env.CODEX_HOME) } : baseEnv;
-    proc = spawn(prepared.command, prepared.args, { cwd: scratchDir, env: withSpawnCwdEnv(env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (err) {
-    void removeScratch();
-    return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
-  }
-  activeProcs.set(jobId, proc);
-
-  let sessionId = null;
-  let stderrTail = '';
-  const STDERR_TAIL_BYTES = 32 * 1024;
-  // Codex narrates its turn (incl. "I can't create that…" content declines and
-  // any tool-failure notes) on STDOUT. Keep a rolling tail so a no-image finish
-  // can surface the model's actual words instead of a generic "no image" guess.
-  let stdoutTail = '';
-  const STDOUT_TAIL_BYTES = 8 * 1024;
-  let timeoutTimer = null;
-  let setupError = null;
-
-  // Banner is roughly 12 lines / ~500 bytes — keep a small rolling
-  // buffer so a session-id line that gets split across chunk boundaries
-  // (Node streams can land each pipe write as its own 'data' event)
-  // still matches. Trim aggressively after a match to keep this tiny.
-  //
-  // Why: match BEFORE slicing. With long pipeline prompts (multi-KB
-  // comic-script payloads), codex emits the banner + the echoed prompt
-  // in a single stderr chunk that can exceed BANNER_BUF_MAX. If we
-  // sliced first, the `session id:` line at the FRONT would get chopped
-  // off before we ever ran the regex, producing the
-  // "Codex returned no session id" false negative.
-  let bannerBuf = '';
-  const BANNER_BUF_MAX = 4 * 1024;
-  const captureSession = (text) => {
-    if (sessionId) return;
-    bannerBuf += text;
-    const m = bannerBuf.match(SESSION_ID_RE);
-    if (m) {
-      sessionId = m[1];
-      bannerBuf = '';
-      broadcastSse(job, { type: 'status', message: `Codex session ${sessionId.slice(0, 8)}…` });
-      return;
-    }
-    if (bannerBuf.length > BANNER_BUF_MAX) bannerBuf = bannerBuf.slice(-BANNER_BUF_MAX);
-  };
-
-  let processError;
-  proc.on('error', (err) => {
-    processError = err;
-    // A failed kill/send on a live child is not physical exit.
-    if (proc.pid) return;
-    clearTimeout(timeoutTimer);
-    void removeScratch();
-    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
-  });
-
-  proc.on('close', async (code, signal) => {
-    let retrying = false;
-    await withBackupAssetPublication(async () => {
-      clearTimeout(timeoutTimer);
-      // Don't clear activeProcess yet — the post-exit handler still does
-      // async work (harvest + copyFile + sidecar). Clearing the
-      // module-scoped guard up front would let a new generation start
-      // while we're still finalizing this one, then the in-flight
-      // finalizer could clobber the new job's activeJob snapshot.
-      // EventEmitter doesn't await async listeners — without this try/catch,
-      // a throw from the harvest / copyFile would surface as an
-      // unhandled rejection (process-killing on Node ≥15) and the job would
-      // be stuck in 'running' forever with no SSE error to the client.
-      try {
-        if (setupError) {
-          return finalizeJobFailure(job, jobId, proc, `Codex launch setup failed: ${setupError?.message || setupError}`);
-        }
-        if (code !== 0 || processError) {
-          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-          const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-          return finalizeJobFailure(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
-        }
-        if (!sessionId) {
-          return finalizeJobFailure(job, jobId, proc, 'Codex returned no session id — output format may have changed');
-        }
-        // Codex writes the PNG asynchronously while it's wrapping up the turn.
-        // Empirically the file is on disk by the time `codex exec` exits, but
-        // poll for a few seconds in case there's a flush lag on slow disks.
-        const harvested = await harvestGeneratedImage(sessionId, meta.prompt, harvestTimeoutMs);
-        if (!harvested) {
-          if (attempt < MAX_MISSING_REF_RETRIES && inputPaths.length > 0 && !job.canceled && isMissingReferenceReply(stdoutTail)) {
-            try {
-              await assertReadableInputImages(inputPaths);
-            } catch (readErr) {
-              return finalizeJobFailure(job, jobId, proc, readErr.message);
-            }
-            if (job.canceled) {
-              return finalizeJobFailure.canceled(job, jobId, proc);
-            }
-            console.log(`🔄 Retrying codex image generation [${jobId}] after missing-reference reply while references are readable`);
-            broadcastSse(job, { type: 'status', message: 'Retrying codex after missing-reference reply…' });
-            imageGenEvents.emit('activity', { generationId: jobId });
-            retrying = true;
-            runCodex(job, jobId, bin, args, outputPath, filename, meta, {
-              cleanC2PA, denoise, scratchDir, inputPaths, attempt: attempt + 1,
-            });
-            return;
+function prepareCodexAttempt(job, inputPaths) {
+  const baseEnv = withoutServerSecretsEnv(process.env, { keep: CODEX_AUTH_ENV_KEYS });
+  const env = process.env.CODEX_HOME ? { ...baseEnv, CODEX_HOME: resolve(process.env.CODEX_HOME) } : baseEnv;
+  let sessionId;
+  let banner = '';
+  return {
+    env,
+    onStderr: function captureSession(text) {
+      if (sessionId) return;
+      // Match before slicing. A long prompt echo in the same chunk can push
+      // the complete banner out of the rolling window.
+      banner += text;
+      const match = banner.match(SESSION_ID_RE);
+      if (match) {
+        sessionId = match[1];
+        banner = '';
+        broadcastSse(job, { type: 'status', message: `Codex session ${sessionId.slice(0, 8)}…` });
+      } else {
+        banner = banner.slice(-4096);
+      }
+    },
+    async discover({ attempt, stdoutTail, stderrTail }) {
+      if (!sessionId) return { error: 'Codex returned no session id — output format may have changed' };
+      const harvested = await harvestGeneratedImage(sessionId, job.prompt, harvestTimeoutMs);
+      if (!harvested) {
+        if (attempt < MAX_MISSING_REF_RETRIES && inputPaths.length > 0 && !job.canceled && isMissingReferenceReply(stdoutTail)) {
+          try {
+            await assertReadableInputImages(inputPaths);
+          } catch (err) {
+            return { error: err.message };
           }
-          return finalizeJobFailure(job, jobId, proc, await noImageSessionReason(sessionId, stdoutTail));
+          if (!job.canceled) {
+            console.log(`🔄 Retrying codex image generation [${job.id}] after missing-reference reply while references are readable`);
+            broadcastSse(job, { type: 'status', message: 'Retrying codex after missing-reference reply…' });
+            imageGenEvents.emit('activity', { generationId: job.id });
+          }
+          // The runner rechecks cancellation at the next spawn handoff.
+          return { retry: true };
         }
-        if (harvested.unmatchedImages) {
-          return finalizeJobFailure(job, jobId, proc, `Codex made ${harvested.unmatchedImages} images in this session and none could be matched to this job's prompt, so nothing was saved. Run the job again.`);
-        }
-        if (harvested.ignoredImages) {
-          console.log(`⏭️ Codex session made ${harvested.ignoredImages + 1} images; saved the one matching the job's prompt [${jobId.slice(0, 8)}]`);
-        }
-        if (harvested.fileName) {
-          await copyFileGuarded(join(codexImagesDir(sessionId), harvested.fileName), outputPath);
-        } else {
-          await atomicWrite(outputPath, harvested.buffer);
-        }
-        // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
-        // contentless canvas never becomes a gallery record.
-        const emptyFrame = await rejectDegenerateFrame(outputPath);
-        if (emptyFrame) {
-          return finalizeJobFailure(job, jobId, proc, emptyFrame);
-        }
-        // Codex picks its own output size; crop an off-aspect frame to the
-        // requested ratio before anything downstream inherits its shape.
-        const aspectConformed = await conformImageAspect(outputPath, meta.width, meta.height);
-        if (aspectConformed) console.log(`✂️ Conformed codex frame [${jobId.slice(0, 8)}] ${aspectConformed.from} → ${aspectConformed.to}`);
-        // Sidecar metadata so the gallery can recover prompt/seed/etc. The
-        // codex sessionId is the closest analogue to a seed for gpt-image-2
-        // (which doesn't expose one) — uniquely identifies the run and is
-        // useful for traceability even though it doesn't reproduce the output.
-        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-        // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
-        // captured, so the spread measures the render itself — not the time the
-        // job spent queued behind other renders.
-        const renderMeta = { ...meta, codexSessionId: sessionId, driverReportedTokens: codexDriverReportedTokens(stderrTail), ...(aspectConformed ? { aspectConformed } : {}), ...renderTimingFields(job.renderStartedAtMs) };
-        await atomicWrite(sidecar, renderMeta);
-        // Cleaners run BEFORE the SSE complete + completed events so subscribers
-        // see the cleaned bytes. codex output is the highest-value target for
-        // C2PA stripping because gpt-image is the one provider that embeds
-        // provenance metadata.
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.CODEX });
-        // Accounting failure must preserve the image and its recoverable sidecar.
-        await recordCodexRender(renderMeta).catch(err => {
-          console.error(`❌ Failed to record Codex image usage: ${err.message}`);
-        });
-        job.status = 'complete';
-        if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-        activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
-        const result = { filename, path: `/data/images/${filename}` };
-        dispatchTerminalEvent(
-          jobId,
-          () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', {
-            mode: IMAGE_GEN_MODE.CODEX,
-            generationId: jobId,
-            inputProcessSettled: true,
-            path: `/data/images/${filename}`,
-            filename,
-            initImageFilename: meta.initImageFilename,
-            referenceImageFilenames: meta.referenceImageFilenames,
-          }),
-        );
-        closeJobAfterDelay(jobs, jobId);
-      } catch (err) {
-        await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-        // force: true — 'complete' is already stamped above; see
-        // createJobFailureFinalizer's doc comment in sseUtils.js.
-        finalizeJobFailure(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`, { force: true });
+        return { error: await noImageSessionReason(sessionId, stdoutTail) };
       }
-    }).catch(err => {
-      // Admission can reject before the publication callback is entered.
-      // EventEmitter does not await this listener, so settle the job here too.
-      clearTimeout(timeoutTimer);
-      finalizeJobFailure(job, jobId, proc, `Codex publication admission failed: ${err?.message || err}`);
-    }).finally(() => {
-      if (!retrying) return removeScratch();
-    });
-  });
-
-  // Post-spawn setup. The error/close owners above are already installed, so a
-  // throw here must not settle the job under a live child: record it,
-  // terminate the child, and let close settle once it has physically exited.
-  try {
-    timeoutTimer = setTimeout(() => {
-      if (activeProcs.get(jobId) === proc) {
-        console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-        sigtermWithEscalation(jobId, proc);
+      if (harvested.unmatchedImages) {
+        return { error: `Codex made ${harvested.unmatchedImages} images in this session and none could be matched to this job's prompt, so nothing was saved. Run the job again.` };
       }
-    }, CODEX_TIMEOUT_MS);
-
-    proc.stdout.on('data', (chunk) => {
-      // Codex prints the `session id:` banner on stderr only — don't feed
-      // stdout into bannerBuf. A stdout chunk arriving between two stderr
-      // chunks of the banner can split the session-id line with unrelated
-      // text and break the regex match.
-      // We DO retain stdout here (the model's turn narration) so a no-image
-      // finish can report why — a content decline, or a "generated" claim with
-      // no file.
-      stdoutTail += chunk.toString();
-      if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
-      broadcastSse(job, { type: 'status', message: 'Running…' });
-    });
-
-    proc.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      captureSession(text);
-      stderrTail += text;
-      if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
-    });
-  } catch (err) {
-    setupError = err;
-    clearTimeout(timeoutTimer);
-    sigtermWithEscalation(jobId, proc);
-  }
+      if (harvested.ignoredImages) {
+        console.log(`⏭️ Codex session made ${harvested.ignoredImages + 1} images; saved the one matching the job's prompt [${job.id.slice(0, 8)}]`);
+      }
+      return {
+        path: harvested.fileName ? join(codexImagesDir(sessionId), harvested.fileName) : undefined,
+        buffer: harvested.buffer,
+        format: 'png',
+        // The Codex session identifies the image_gen run. It does not act
+        // as a seed, since the tool exposes no reproducible one.
+        sidecarFields: { codexSessionId: sessionId, driverReportedTokens: codexDriverReportedTokens(stderrTail) },
+      };
+    },
+  };
 }
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeProcs,
-  label: 'codex image generation',
-  events: imageGenEvents,
-  failedPayload: (jobId, reason, proc) => {
-    const job = jobs.get(jobId);
-    return {
-      mode: IMAGE_GEN_MODE.CODEX,
-      generationId: jobId,
-      error: reason,
-      ...(job ? { initImageFilename: job.initImageFilename, referenceImageFilenames: job.referenceImageFilenames } : {}),
-      inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string',
-    };
-  },
-});
 
 // Codex has used both `ig_*.png` and `exec-*.png`; the per-session directory is
 // already the ownership boundary, so a filename-prefix allowlist only turns valid
