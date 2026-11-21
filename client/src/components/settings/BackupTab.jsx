@@ -87,6 +87,7 @@ export function BackupTab() {
   const effectiveExcludesPanelId = useId();
   const exclusionsPanelId = useId();
   const snapshotsPanelId = useId();
+  const exclusionsRef = useRef(null);
   const [loading, setLoading] = useState(true);
   // A settings response that never resolved is NOT 'the defaults' — the schedule
   // fields stay null and the form is replaced by an error panel, so an unreachable
@@ -127,6 +128,11 @@ export function BackupTab() {
   // Disclosure open/closed flags for the collapsible panels, all collapsed by default.
   const [disclosure, setDisclosure] = useState({});
   const toggleDisclosure = (key, next) => setDisclosure(prev => ({ ...prev, [key]: typeof next === 'function' ? next(!!prev[key]) : next }));
+  const reviewExclusions = () => {
+    setDisclosure(prev => ({ ...prev, exclusions: true, defaultExcludes: true, effectiveExcludes: true }));
+    exclusionsRef.current?.querySelector('button')?.focus({ preventScroll: true });
+    exclusionsRef.current?.scrollIntoView?.({ block: 'start' });
+  };
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
   // A committed database restore awaiting recovery (#9725): the server keeps
@@ -460,7 +466,11 @@ export function BackupTab() {
       className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
       <h2 id="backup-settings-heading" className="sr-only">Backup operations and configuration</h2>
-      <p className="text-sm text-gray-400">Use Time Machine for Mac-wide recovery. You can leave scheduled PortOS backups off if you&apos;ve verified that your backups can restore both the PortOS data folder and PostgreSQL. Use PortOS snapshots if you want an app-only restore or a portable PostgreSQL dump.</p>
+      <div className="space-y-2 text-sm text-gray-400">
+        <p>Use Time Machine for Mac-wide recovery. You can leave scheduled PortOS backups off if you&apos;ve verified that your backups can restore both the PortOS data folder and PostgreSQL. Use PortOS snapshots if you want an app-only restore or a portable PostgreSQL dump.</p>
+        <p>PortOS snapshots cover app data and, when successful, a PostgreSQL dump, not your whole installation or Mac. Defaults exclude some large data, such as Blender film render frames and training checkpoints. Some exclusions are optional and others always apply, so even disabling every optional exclusion does not make a complete backup.</p>
+        <button type="button" onClick={reviewExclusions} className="min-h-[40px] px-3 py-2 border border-port-border rounded-lg hover:bg-port-border text-gray-300">Review backup exclusions</button>
+      </div>
       {restoreRecovery && (
         <Banner tone="error" icon={AlertTriangle} title="Database restore needs recovery" size="md">
           {restoreRecovery.damaged ? (
@@ -634,7 +644,7 @@ export function BackupTab() {
         </span>
       </div>
 
-      <div className="border-t border-port-border pt-5">
+      <div ref={exclusionsRef} className="scroll-mt-20 border-t border-port-border pt-5">
         <CollapsibleSection
           label="Exclusions"
           icon={ShieldOff}
@@ -650,7 +660,7 @@ export function BackupTab() {
             <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
           ) : (
             <>
-              <p className="text-sm text-gray-400">Review what stays out of snapshots. Detailed rules are one click away so the recovery actions remain easy to find.</p>
+              <p className="text-sm text-gray-400">Review default and custom rules that keep data out of snapshots. Optional defaults can be disabled; always-excluded rules cannot. Custom rules still apply independently.</p>
 
           {defaultExcludeRows.length > 0 && (
             <div className="space-y-2">
@@ -686,7 +696,7 @@ export function BackupTab() {
                         )}
                         <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
                         <span className="text-gray-500">
-                          {d.reason}
+                          <span className="text-gray-400">{d.overridable ? 'Optional' : 'Always excluded'} · </span>{d.reason}
                           {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
                         </span>
                       </li>

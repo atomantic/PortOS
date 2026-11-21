@@ -926,6 +926,46 @@ describe('BackupTab', () => {
       expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
     });
 
+    it('opens the effective rules and optional controls from the coverage note', async () => {
+      const renderPath = '/music-video/*/blender/renders/';
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [
+        { path: renderPath, reason: 'Blender film renders', overridable: true },
+        { path: '/browser-profile/', reason: 'Browser cache', overridable: false },
+      ] });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: ['/custom/'], disabledDefaultExcludes: [] } });
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByText(/not your whole installation or Mac/i)).toBeInTheDocument();
+      expect(screen.getByText(/even disabling every optional exclusion does not make a complete backup/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Review backup exclusions' }));
+
+      const exclusions = screen.getByRole('button', { name: /^Exclusions/i });
+      expect(exclusions).toHaveFocus();
+      expect(exclusions).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: /Default exclusions/i })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: /Effective exclude list/i })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('Optional ·')).toBeInTheDocument();
+      expect(screen.getByText('Always excluded ·')).toBeInTheDocument();
+      expect(screen.getByLabelText('Additional Exclude Paths')).toBeInTheDocument();
+      const effectivePanel = document.getElementById(screen.getByRole('button', { name: /Effective exclude list/i }).getAttribute('aria-controls'));
+      expect(within(effectivePanel).getByText(renderPath)).toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/custom/')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('switch', { name: `Disable default exclusion ${renderPath}` }));
+      expect(within(effectivePanel).queryByText(renderPath)).not.toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/browser-profile/')).toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/custom/')).toBeInTheDocument();
+      expect(getBackupSnapshots).not.toHaveBeenCalled();
+    });
+
+    it('opens the unavailable state when exclusions cannot load', async () => {
+      getBackupStatus.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Review backup exclusions' }));
+      expect(screen.getByRole('button', { name: /^Exclusions/i })).toHaveFocus();
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Additional Exclude Paths')).not.toBeInTheDocument();
+    });
+
     it('collapses the default-exclusions catalog behind a disclosure summarizing the count', async () => {
       getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
       await renderTab();
