@@ -77,6 +77,14 @@ vi.mock('../mediaCollections.js', async () => ({
   mergeMediaCollectionsFromSync: vi.fn(),
 }));
 
+vi.mock('../videoGen/history.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadCompactHistory: async () => {
+    const { PATHS, readJSONFile } = await import('../../lib/fileUtils.js');
+    return readJSONFile(join(PATHS.data, 'video-history.json'), []);
+  },
+}));
+
 // #1566 — the media-library sweep dynamic-imports this to rebuild the derived
 // media_assets index after bytes land. Mock it to a no-op spy so the sweep tests
 // don't touch Postgres and can assert the reconcile fired.
@@ -1809,7 +1817,7 @@ describe('peerSync', () => {
   });
 
   describe('getRecordPayloadForPeer', () => {
-    it('checks a collection video at its history filename for read-only integrity', async () => {
+    it('uses the collection history filename for both transfers and read-only integrity', async () => {
       PATHS.videos = join(tmp, 'videos');
       await mkdir(PATHS.videos, { recursive: true });
       await writeFile(join(PATHS.videos, 'imported.webm'), 'video bytes');
@@ -1824,7 +1832,7 @@ describe('peerSync', () => {
         videoFilenames: { 'video-id.mp4': 'imported.webm' },
       });
       const transfer = await getRecordPayloadForPeer('mediaCollection', 'collection-1');
-      expect(transfer.assetManifest).toEqual([]);
+      expect(transfer.assetManifest).toEqual(inventory.assetManifest);
       expect(transfer).not.toHaveProperty('videoFilenames');
     });
 
@@ -5979,6 +5987,38 @@ describe('peerSync', () => {
   });
 
   describe('applyIncomingPush — mediaCollection', () => {
+    it.each(['copy', 'host'])('admits alternate video bytes in %s mode only for a history-bound collection ID', async (mediaSyncMode) => {
+      PATHS.videos = join(tmp, 'videos');
+      vi.mocked(getPeers).mockResolvedValue([{ instanceId: 'peer-a', host: 'peer.example.com', port: 5555, mediaSyncMode }]);
+      const { resolveMediaLocations, listHostedEntries } = await import('../peerHostedMedia.js');
+      const clip = { kind: 'video', filename: 'imported.webm', sha256: 'a'.repeat(64) };
+      const record = { id: 'col-imported', name: 'Imported',
+        items: [{ kind: 'video', ref: 'imported-id' }], updatedAt: '2026-05-23T00:00:00.000Z' };
+      const envelope = { kind: 'mediaCollection', record, sourceInstanceId: 'peer-a', assetManifest: [
+        clip, { ...clip, filename: 'unrelated.webm' },
+      ] };
+
+      expect((await applyIncomingPush(envelope)).missingAssets).toEqual([]);
+      expect(peerFetch).not.toHaveBeenCalled();
+      expect(await listHostedEntries()).toEqual({});
+
+      await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([
+        { id: 'imported-id', filename: clip.filename }, { id: 'unrelated-id', filename: 'unrelated.webm' },
+      ]));
+      envelope.assetManifest.push({ ...clip, filename: 'imported-id.mp4' });
+      const receipt = await applyIncomingPush(envelope);
+      if (mediaSyncMode === 'host') {
+        expect(receipt.missingAssets).toEqual([]);
+        expect(peerFetch).not.toHaveBeenCalled();
+        expect((await resolveMediaLocations(record.items))[0]).toMatchObject({ location: 'remote', hostPeerId: 'peer-a' });
+        expect(Object.keys(await listHostedEntries())).toEqual(['video:imported.webm']);
+      } else {
+        expect(receipt.missingAssets).toEqual([clip]);
+        await vi.waitFor(() => expect(peerFetch).toHaveBeenCalledTimes(1));
+        expect(peerFetch).toHaveBeenCalledWith(expect.stringMatching(/\/data\/videos\/imported\.webm$/), expect.anything(), expect.anything());
+      }
+    });
+
     it('applies an incoming mediaCollection push into local collections', async () => {
       // Use the real mergeMediaCollectionsFromSync via importActual so the
       // write lands in the tmpdir and listCollections can confirm persistence.

@@ -7,8 +7,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { getCollection, setCollectionPrimaryMachine } from './mediaCollections.js';
 import { listMediaPrimaryMachines, prepareMediaConsolidation } from './mediaHolders.js';
 import { emitCollectionPrimaryChanged } from './peerSyncEventBus.js';
-import { collectionVideoRefToFilename } from './sharing/peerSyncAssets.js';
-import { loadHistory } from './videoGen/history.js';
+import { loadCollectionVideoFilenames, resolveCollectionVideoFilename } from './collectionVideoFiles.js';
 
 const active = new Set();
 const lastRuns = new Map();
@@ -62,15 +61,15 @@ export async function startCollectionPrimary(id, instanceId) {
   active.add(id);
   try {
     const collection = await getCollection(id);
-    const [move, history] = await Promise.all([
+    const [move, videoNames] = await Promise.all([
       prepareMediaConsolidation(instanceId),
-      collection.items.some(({ kind }) => kind === 'video') ? loadHistory() : [],
+      loadCollectionVideoFilenames(collection.items),
     ]);
-    const videoNames = new Map(history.map(({ id: videoId, filename }) => [videoId, filename]));
+    if (!videoNames) throw new ServerError('Video history is temporarily unavailable', { status: 503 });
     const entries = new Map();
     for (const { kind, ref } of collection.items) {
-      const filename = kind === 'video' ? videoNames.get(ref) || collectionVideoRefToFilename(ref) : ref;
-      entries.set(`${kind}:${filename}`, { kind, filename });
+      const filename = kind === 'video' ? resolveCollectionVideoFilename(ref, videoNames) : ref;
+      entries.set(`${kind}:${filename ?? ref}`, { kind, filename });
     }
     await setCollectionPrimaryMachine(id, instanceId);
     lastRuns.delete(id);

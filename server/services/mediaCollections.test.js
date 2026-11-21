@@ -1322,7 +1322,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // Defense in depth — a peer can push a collection containing a ref
     // like '../etc/passwd' via the linkedCollection field. sanitizeItem
     // must drop these BEFORE they hit disk so the sender-side
-    // buildAssetManifestForCollection (and any future downstream consumer)
+    // buildCollectionAssetManifest (and any future downstream consumer)
     // never sees an unsafe ref.
     const result = await svc.mergeMediaCollectionsFromSync([{
       id: 'c-evil',
