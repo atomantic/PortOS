@@ -11,7 +11,8 @@
  *   `{ available: bool, reason?, records: [...] }`.
  */
 
-import { computeRecordIntegrity } from '../../lib/syncIntegrity.js';
+import { computeRecordIntegrity, INTEGRITY_STATUS } from '../../lib/syncIntegrity.js';
+import { peerCollectionIntegrityPayloadSchema } from '../../lib/peerSyncValidation.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
@@ -31,7 +32,8 @@ import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
 import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
-import { assetIntegrityForRecord } from './peerSync.js';
+import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
+import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
@@ -107,21 +109,65 @@ export async function buildLocalManifest(kind) {
   return out;
 }
 
+const assetKey = ({ kind, filename }) => `${kind}:${filename}`;
+
+function collectionInventory(payload) {
+  const { record, assetManifest } = payload;
+  const refs = new Map(referenceCollectionAssetManifest(record).map((asset) => [assetKey(asset), asset]));
+  const copies = new Map(assetManifest.filter((asset) => asset.sha256 && refs.has(assetKey(asset)))
+    .map((asset) => [assetKey(asset), asset]));
+  const assets = [...copies.values()];
+  return {
+    ...record,
+    refs,
+    copies,
+    assetHashes: assets.map((asset) => asset.sha256),
+    metadataMissing: assets.some((asset) => asset.kind === 'image' && !asset.sidecarSha256),
+  };
+}
+
+function compareCollections(localPayload, peerPayload) {
+  const local = localPayload ? collectionInventory(localPayload) : null;
+  const peer = collectionInventory(peerPayload);
+  const records = computeRecordIntegrity(local ? [local] : [], [peer]);
+  if (!local || local.deleted === true || peer.deleted === true) return records;
+
+  const differences = [];
+  for (const [key, asset] of new Map([...local.refs, ...peer.refs])) {
+    const localSha = local.copies.get(key)?.sha256;
+    const peerSha = peer.copies.get(key)?.sha256;
+    if (localSha && localSha === peerSha) continue;
+    const availability = localSha ? (peerSha ? 'different' : 'local') : (peerSha ? 'peer' : 'neither');
+    differences.push({ ...asset, availability });
+  }
+  const comparison = records[0];
+  // Equal hash lists can hide missing files on both sides or the same bytes
+  // stored under different filenames. Keep timestamp divergence actionable.
+  if (differences.length && comparison.status !== INTEGRITY_STATUS.DIVERGED) {
+    comparison.status = INTEGRITY_STATUS.ASSETS_MISSING;
+  }
+  return [{ ...comparison, assetDifferences: differences }];
+}
+
 /**
  * Fetch the peer's manifest for `kind`, run the local-vs-remote diff, and
  * return the classified record list.
  *
- * @param {{ peerId: string, kind: string }} opts
+ * @param {{ peerId: string, kind: string, recordId?: string }} opts
  * @returns {Promise<{ available: boolean, reason?: string, records: Array }>}
  */
-export async function getPeerIntegrity({ peerId, kind }) {
+export async function getPeerIntegrity({ peerId, kind, recordId }) {
   const peers = await getPeers().catch(() => []);
   const peer = peers.find((p) => p.instanceId === peerId) || null;
 
   if (!peer) return { available: false, reason: 'peer-not-found', records: [] };
 
+  const collectionDetail = kind === 'mediaCollection' && !!recordId;
+  const query = new URLSearchParams({ kind });
+  if (collectionDetail) query.set('id', recordId);
+  const path = collectionDetail ? '/api/peer-sync/record' : '/api/peer-sync/manifest';
   const res = await peerFetch(
-    `${peerBaseUrl(peer)}/api/peer-sync/manifest?kind=${encodeURIComponent(kind)}`,
+    `${peerBaseUrl(peer)}${path}?${query}`,
     { signal: AbortSignal.timeout(PEER_INTEGRITY_TIMEOUT_MS), maxBytes: PEER_INTEGRITY_MAX_BYTES },
     peer,
   ).catch(() => null);
@@ -131,7 +177,13 @@ export async function getPeerIntegrity({ peerId, kind }) {
   // an older PortOS without the /manifest route. Lumping them together would
   // tell the user "peer too old, upgrade it" when the peer is simply down.
   if (!res) return { available: false, reason: 'peer-unreachable', records: [] };
-  if (res.status === 404) return { available: false, reason: 'peer-too-old', records: [] };
+  if (res.status === 404) {
+    if (!collectionDetail) return { available: false, reason: 'peer-too-old', records: [] };
+    // A 404 can mean either a missing collection or an older peer. The
+    // category manifest can distinguish a local-only row from an unknown one.
+    const fallback = await getPeerIntegrity({ peerId, kind });
+    return { ...fallback, records: fallback.records.filter((entry) => entry.id === recordId) };
+  }
   if (!res.ok) return { available: false, reason: 'fetch-failed', records: [] };
 
   const body = await readPeerBody(res, 'json', {
@@ -139,6 +191,15 @@ export async function getPeerIntegrity({ peerId, kind }) {
     maxBytes: PEER_INTEGRITY_MAX_BYTES,
   }).catch(() => null);
   if (!body) return { available: false, reason: 'fetch-failed', records: [] };
+  if (collectionDetail) {
+    const parsed = peerCollectionIntegrityPayloadSchema.safeParse(body);
+    if (!parsed.success || parsed.data.sourceInstanceId !== peerId || parsed.data.record.id !== recordId ||
+        (parsed.data.record.deleted !== true && !Array.isArray(parsed.data.record.items))) {
+      return { available: false, reason: 'fetch-failed', records: [] };
+    }
+    const localPayload = await getRecordPayloadForPeer(kind, recordId);
+    return { available: true, records: compareCollections(localPayload, parsed.data) };
+  }
   if (!Array.isArray(body.records)) return { available: false, reason: 'fetch-failed', records: [] };
   if (!isLegacyManifestKind(kind) &&
       (typeof body.manifestVersion !== 'number' || body.manifestVersion < PEER_MANIFEST_VERSION)) {

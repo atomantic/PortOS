@@ -384,4 +384,12 @@ export const peerSubscriptionsQuerySchema = z.object({ peerId: lenientPeerQueryS
 export const peerManifestQuerySchema = z.object({ kind: peerQueryScalar });
 export const peerCosAgentArchiveQuerySchema = z.object({ date: peerQueryScalar, agentId: peerQueryScalar, file: peerQueryScalar });
 export const peerRecordQuerySchema = z.object({ kind: peerQueryScalar, id: peerQueryScalar });
-export const peerIntegrityQuerySchema = z.object({ peerId: peerQueryScalar, kind: peerQueryScalar });
+export const peerIntegrityQuerySchema = z.object({ peerId: peerQueryScalar, kind: peerQueryScalar, recordId: peerQueryScalar });
+// A collection can hold more items than the push endpoint accepts in one
+// request. The read-only diagnostic bounds the response by bytes instead.
+export const peerCollectionIntegrityPayloadSchema = z.object({
+  kind: z.literal('mediaCollection'),
+  sourceInstanceId: z.string(),
+  record: peerWireRecordSchema,
+  assetManifest: z.array(peerAssetManifestEntrySchema),
+});

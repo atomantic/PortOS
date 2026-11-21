@@ -26,6 +26,7 @@ import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { getPipelineSeries } from '../../services/apiPipeline.js';
 import { syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/apiPeerSync.js';
 import MediaImage from '../MediaImage';
+import { formatCount } from '../../utils/formatters.js';
 
 // ── Per-kind record fetcher ──────────────────────────────────────────────────
 // Returns a promise resolving to { name, ...rest } for use in the drawer header.
@@ -53,7 +54,7 @@ const STATUS_CONFIG = {
     Icon: AlertTriangle,
   },
   'assets-missing': {
-    label: 'Assets missing',
+    label: 'Asset differences',
     className: 'text-port-warning',
     Icon: AlertTriangle,
   },
@@ -175,9 +176,41 @@ const PULL_SKIP_LABELS = {
   'invalid-payload': 'peer returned an unexpected response',
 };
 
+const ASSET_AVAILABILITY = {
+  neither: 'No verified copy on either machine',
+  different: 'Different file contents',
+  local: 'Stored only here',
+  peer: 'Stored only on this peer',
+};
+
+function AssetDifferences({ differences, peerName }) {
+  if (!differences?.length) return null;
+  return (
+    <div className="mt-2 space-y-1 text-xs text-gray-400">
+      {differences.some(({ availability }) => availability === 'local' || availability === 'peer') && (
+        <p>When media is peer-hosted, one stored copy can be enough.</p>
+      )}
+      {Object.entries(ASSET_AVAILABILITY).map(([availability, label]) => {
+        const assets = differences.filter((asset) => asset.availability === availability);
+        if (!assets.length) return null;
+        return (
+          <details key={availability} open={availability === 'neither' || undefined}>
+            <summary className="cursor-pointer">{availability === 'peer' ? `Stored only on ${peerName}` : label} ({formatCount(assets.length)})</summary>
+            <ul className="max-h-48 overflow-y-auto pl-4">
+              {assets.map(({ kind, filename }) => (
+                <li key={`${kind}:${filename}`} className="break-all py-0.5">{filename}</li>
+              ))}
+            </ul>
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Peer row with per-peer sync action ───────────────────────────────────────
 function PeerRow({ entry, kind, recordId, onRefresh }) {
-  const { peerId, peerName, status, reason } = entry;
+  const { peerId, peerName, status, reason, assetDifferences } = entry;
   // Direction-aware actions. local-only → we have it, peer doesn't → PUSH.
   // peer-only → peer has it, we don't → PULL. diverged / assets-missing /
   // metadata-missing are
@@ -215,47 +248,52 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
   }, { errorMessage: `Failed to pull from ${peerName}` });
 
   return (
-    <div className="flex items-center justify-between gap-2 py-2 border-b border-port-border/60 last:border-0">
-      <div className="min-w-0">
-        <p className="text-sm text-white truncate">{peerName}</p>
-        <StatusPill status={status} reason={reason} />
-        {timestampUnknown && (
-          <p className="text-gray-400 text-xs">Timestamps compare equal at millisecond precision. Contents may differ, and syncing may not replace either copy while the times tie.</p>
-        )}
+    <div className="py-2 border-b border-port-border/60 last:border-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm text-white truncate">{peerName}</p>
+          <StatusPill status={status} reason={reason} />
+          {timestampUnknown && (
+            <p className="text-gray-400 text-xs">Timestamps compare equal at millisecond precision. Contents may differ, and syncing may not replace either copy while the times tie.</p>
+          )}
+        </div>
+        <div className="flex-shrink-0 flex items-center gap-1.5">
+          {canPull && (
+            <button
+              type="button"
+              onClick={() => pullFromPeer()}
+              disabled={pulling || syncing}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-success/15 hover:bg-port-success/30 text-port-success disabled:opacity-40"
+              title="Fetch this record + its assets from the peer (fixes when this machine is behind)"
+            >
+              {pulling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              Pull from peer
+            </button>
+          )}
+          {canPush && (
+            <button
+              type="button"
+              onClick={() => syncToPeer()}
+              disabled={syncing || pulling}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
+              title="Push this record + its assets to the peer"
+            >
+              {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowUpCircle className="w-3 h-3" />}
+              Sync to peer
+            </button>
+          )}
+        </div>
       </div>
-      <div className="flex-shrink-0 flex items-center gap-1.5">
-        {canPull && (
-          <button
-            type="button"
-            onClick={() => pullFromPeer()}
-            disabled={pulling || syncing}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-success/15 hover:bg-port-success/30 text-port-success disabled:opacity-40"
-            title="Fetch this record + its assets from the peer (fixes when this machine is behind)"
-          >
-            {pulling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-            Pull from peer
-          </button>
-        )}
-        {canPush && (
-          <button
-            type="button"
-            onClick={() => syncToPeer()}
-            disabled={syncing || pulling}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
-            title="Push this record + its assets to the peer"
-          >
-            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowUpCircle className="w-3 h-3" />}
-            Sync to peer
-          </button>
-        )}
-      </div>
+      <AssetDifferences differences={assetDifferences} peerName={peerName} />
     </div>
   );
 }
 
 // ── Main drawer ──────────────────────────────────────────────────────────────
 export default function SyncDetailDrawer({ kind, recordId, onClose }) {
-  const { byPeer, unavailablePeers, noSyncingPeers, integrityUnavailable, loading, error, refresh } = useSyncIntegrity(kind);
+  const { byPeer, unavailablePeers, noSyncingPeers, integrityUnavailable, loading, error, refresh } = useSyncIntegrity(
+    kind, { recordId: kind === 'mediaCollection' ? recordId : undefined },
+  );
   const peerEntries = byPeer.get(recordId) ?? [];
 
   // Record state is owned here (fetched once) so the preview and the

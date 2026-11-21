@@ -64,11 +64,11 @@ export const sweepTombstonesNow = ({ graceMs } = {}, options) =>
  * Uses `silent: true` because the hook caller owns the failure UI (it just
  * marks the peer as unavailable rather than toasting on every poll tick).
  */
-export const fetchSyncIntegrity = (peerId, kind) =>
-  request(
-    `/peer-sync/integrity?peerId=${encodeURIComponent(peerId)}&kind=${encodeURIComponent(kind)}`,
-    { silent: true },
-  );
+export const fetchSyncIntegrity = (peerId, kind, recordId) => {
+  const query = `peerId=${encodeURIComponent(peerId)}&kind=${encodeURIComponent(kind)}`;
+  const scope = recordId ? `&recordId=${encodeURIComponent(recordId)}` : '';
+  return request(`/peer-sync/integrity?${query}${scope}`, { silent: true });
+};
 
 /**
  * Trigger a one-record sync push to a specific peer.

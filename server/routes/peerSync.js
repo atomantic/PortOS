@@ -324,13 +324,14 @@ router.get('/integrity', asyncHandler(async (req, res) => {
   const integrityQuery = validateRequest(peerIntegrityQuerySchema, req.query);
   const peerId = (integrityQuery.peerId ?? '').trim();
   const kind = (integrityQuery.kind ?? '').trim();
+  const recordId = integrityQuery.recordId?.trim();
   if (!peerId) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  res.json(await getPeerIntegrity({ peerId, kind }));
+  res.json(await getPeerIntegrity({ peerId, kind, ...(recordId ? { recordId } : {}) }));
 }));
 
 // --- POST /sync-record --- force a push for a specific record to a specific peer.

@@ -25,10 +25,10 @@ const STATUS_CONFIG = {
     title: 'Content differs from at least one peer',
   },
   'assets-missing': {
-    label: 'Assets missing',
+    label: 'Asset differences',
     className: 'bg-port-warning/15 text-port-warning hover:bg-port-warning/25',
     Icon: AlertTriangle,
-    title: 'Record present but associated files are missing on a peer',
+    title: 'Check file availability and differences in Sync Details',
   },
   'metadata-missing': {
     label: 'Metadata missing',

@@ -15,9 +15,9 @@ describe('SyncBadge', () => {
     expect(screen.getByRole('button').className).toMatch(/port-warning/);
   });
 
-  it('renders "Assets missing" for assets-missing status', () => {
+  it('renders "Asset differences" for assets-missing status', () => {
     render(<SyncBadge status="assets-missing" onClick={() => {}} />);
-    expect(screen.getByText('Assets missing')).toBeInTheDocument();
+    expect(screen.getByText('Asset differences')).toBeInTheDocument();
     expect(screen.getByRole('button').className).toMatch(/port-warning/);
   });
 
