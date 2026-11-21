@@ -38,13 +38,14 @@ export default function LoomHostedSessionModal({
   activeSession,
   onSessionCreated,
   onSessionEnded,
+  onAudioTargetChange,
   hasAudienceConnected = false,
 }) {
   const [loading, setLoading] = useState(false);
   const [preflight, setPreflight] = useState(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [joinData, setJoinData] = useState(null); // { session, token, joinUrl }
-  const [audioTarget, setAudioTarget] = useState('host');
+  const [pendingAudioTarget, setPendingAudioTarget] = useState('host');
 
   useEffect(() => {
     if (!isOpen || !loom?.id || !episode?.id) return;
@@ -72,12 +73,15 @@ export default function LoomHostedSessionModal({
 
   const currentJoinUrl = joinData?.joinUrl || activeSession?.joinUrl || null;
   const isSessionActive = Boolean(activeSession || joinData?.session);
-  const currentSessionId = activeSession?.id || joinData?.session?.id;
+  const currentSessionId = activeSession?.id || activeSession?.session?.id || joinData?.session?.id;
+  // A live session is the source of truth so reopening the modal reflects the chosen output.
+  const audioTarget = activeSession?.audioTarget || activeSession?.session?.audioTarget
+    || joinData?.session?.audioTarget || pendingAudioTarget;
 
   const handleStartSession = async () => {
     try {
       setLoading(true);
-      const res = await createHostedLoomSession(loom.id, episode.id, { audioTarget });
+      const res = await createHostedLoomSession(loom.id, episode.id, { audioTarget: pendingAudioTarget });
       setJoinData(res);
       if (onSessionCreated) onSessionCreated(res.session, res);
       toast.success('Hosted play session created! Scan the QR code with your mobile device.');
@@ -104,10 +108,12 @@ export default function LoomHostedSessionModal({
   };
 
   const handleAudioTargetChange = async (target) => {
-    setAudioTarget(target);
+    setPendingAudioTarget(target);
     if (currentSessionId) {
       try {
         await updateHostedLoomSession(currentSessionId, { audioTarget: target });
+        setJoinData((prev) => (prev?.session ? { ...prev, session: { ...prev.session, audioTarget: target } } : prev));
+        if (onAudioTargetChange) onAudioTargetChange(target);
       } catch (err) {
         console.warn('Failed to update audio target:', err);
       }

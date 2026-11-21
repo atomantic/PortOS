@@ -11,8 +11,8 @@ vi.mock('socket.io-client', () => ({
 }));
 vi.mock('./LoomHostedSessionModal', () => ({
   default: ({ onSessionCreated }) => (
-    <button type="button" onClick={() => onSessionCreated({ id: 'host-session' }, {
-      id: 'host-session',
+    <button type="button" onClick={() => onSessionCreated({ id: 'host-session', audioTarget: 'host' }, {
+      session: { id: 'host-session', audioTarget: 'host' },
       token: 'audience-token',
       hostToken: 'the-real-host-token',
       joinUrl: 'https://example.test/fableloom/join#session=host-session&token=audience-token',

@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
-import { preflightHostedLoomSession } from '../../services/apiFableLoom.js';
+import {
+  endHostedLoomSession,
+  preflightHostedLoomSession,
+  updateHostedLoomSession,
+} from '../../services/apiFableLoom.js';
 
 vi.mock('../../services/apiFableLoom.js', () => ({
   preflightHostedLoomSession: vi.fn(),
@@ -72,5 +77,42 @@ describe('LoomHostedSessionModal', () => {
     expect(screen.getByText('Computer Speakers')).toBeInTheDocument();
     expect(screen.getByText('Audience Phone')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /End Hosted Session/i })).toBeInTheDocument();
+  });
+
+  it('ends the session and switches audio target after reopening with a nested create response', async () => {
+    const user = userEvent.setup();
+    const created = {
+      session: { id: 'sess-9', audioTarget: 'audience' },
+      token: 'aud-tok',
+      hostToken: 'host-tok',
+      joinUrl: 'https://example.test/fableloom/join#session=sess-9&token=aud-tok',
+    };
+    const onSessionEnded = vi.fn();
+    const onAudioTargetChange = vi.fn();
+    updateHostedLoomSession.mockResolvedValue({});
+    endHostedLoomSession.mockResolvedValue({});
+
+    // Reopened modal: fresh state, activeSession holds the raw nested response.
+    render(
+      <LoomHostedSessionModal
+        loom={mockLoom}
+        episode={mockEpisode}
+        isOpen={true}
+        activeSession={created}
+        onClose={vi.fn()}
+        onSessionEnded={onSessionEnded}
+        onAudioTargetChange={onAudioTargetChange}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Audience Phone/i }).className).toContain('border-port-accent');
+
+    await user.click(screen.getByRole('button', { name: /Computer Speakers/i }));
+    await waitFor(() => expect(updateHostedLoomSession).toHaveBeenCalledWith('sess-9', { audioTarget: 'host' }));
+    expect(onAudioTargetChange).toHaveBeenCalledWith('host');
+
+    await user.click(screen.getByRole('button', { name: /End Hosted Session/i }));
+    await waitFor(() => expect(endHostedLoomSession).toHaveBeenCalledWith('sess-9'));
+    expect(onSessionEnded).toHaveBeenCalled();
   });
 });
