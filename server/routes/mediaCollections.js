@@ -35,6 +35,7 @@ const SERVICE_ERROR_STATUS = {
   [svc.ERR_NOT_FOUND]: 404,
   [svc.ERR_DUPLICATE]: 409,
   [svc.ERR_VALIDATION]: 400,
+  [svc.ERR_INCOMPLETE_INVENTORY]: 503,
 };
 
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);

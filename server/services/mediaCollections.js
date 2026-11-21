@@ -44,6 +44,7 @@ import { codedError } from '../lib/codedError.js';
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
+export const ERR_INCOMPLETE_INVENTORY = 'MEDIA_COLLECTION_INVENTORY_INCOMPLETE';
 
 export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
@@ -276,8 +277,11 @@ const store = () => {
 // Exposed for the boot-time verifier in server/index.js.
 export const mediaCollectionStore = () => store();
 
-export async function listCollections({ includeDeleted = false } = {}) {
-  const all = await store().loadAll();
+export async function listCollections({ includeDeleted = false, requireComplete = false } = {}) {
+  const { records: all, failedIds } = await store().loadAllResult();
+  if (requireComplete && failedIds.length) {
+    throw codedError('Some media collections could not be loaded. Unsorted consolidation did not start.', ERR_INCOMPLETE_INVENTORY);
+  }
   if (includeDeleted) return all;
   return all.filter((c) => c.deleted !== true);
 }

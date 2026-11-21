@@ -182,6 +182,31 @@ beforeEach(() => {
 // ── Unsorted view tests ───────────────────────────────────────────────────────
 
 describe('MediaCollectionDetail — Unsorted view', () => {
+  it('confirms a one-time Unsorted consolidation against the selected machine', async () => {
+    mockSetMediaCollectionPrimary.mockImplementationOnce(async () => {
+      mockGetMediaCollectionPrimary.mockResolvedValueOnce({
+        instanceId: null,
+        machines: [{ instanceId: 'inst-a', name: 'Studio' }],
+        run: { running: false, completed: 2, total: 2, released: 1, pending: 0, kept: 0, failed: 0, details: [] },
+      });
+    });
+    const user = userEvent.setup();
+    renderUnsorted();
+    const machine = await screen.findByRole('option', { name: 'Studio' });
+    await user.selectOptions(screen.getByLabelText('Primary machine'), machine);
+    expect(screen.getByText(/outside the current page or filters/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Consolidate Unsorted' }));
+    expect(screen.getByText(/Consolidate Unsorted on Studio.*Trash/)).toBeInTheDocument();
+    expect(mockSetMediaCollectionPrimary).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mockSetMediaCollectionPrimary).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Consolidate Unsorted' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm consolidation' }));
+    expect(mockSetMediaCollectionPrimary).toHaveBeenCalledWith(UNSORTED_ID, 'inst-a', { silent: true });
+    expect(await screen.findByText(/2 of 2 files verified/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Consolidate Unsorted' })).toBeDisabled();
+  });
+
   it('renders "Pull missing prompts" button on the unsorted view', async () => {
     renderUnsorted();
     await waitFor(() => {
