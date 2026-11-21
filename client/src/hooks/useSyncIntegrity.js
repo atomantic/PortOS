@@ -22,8 +22,8 @@ const KIND_TO_CATEGORY = Object.freeze({
 
 /**
  * Worst-case status ranking — lower index = worse / more actionable.
- * `assets-missing` is ranked worst because the record metadata is present
- * but the associated files are absent, which is the most disruptive to users.
+ * `assets-missing` indicates file inventories differ or a collection file
+ * is unavailable on both machines.
  * `diverged` means content differs (could overwrite in either direction).
  * `local-only` / `peer-only` mean one side is missing the record entirely.
  * `unknown` means the comparison could not establish parity; `in-parity` is
@@ -59,6 +59,7 @@ function worstStatus(a, b) {
  * @param {Array}  [opts.peers] - pre-fetched peer list (avoids a duplicate
  *   fetch when the calling page already has it). When omitted the hook fetches
  *   the instance list itself.
+ * @param {string} [opts.recordId] - request filename-level details for one collection
  *
  * @returns {{
  *   loading: boolean,
@@ -110,7 +111,7 @@ export function syncBadgeStatus(sync, recordId) {
     ?? (sync.integrityUnavailable ? unavailableBadgeStatus(sync.unavailablePeers) : undefined);
 }
 
-export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
+export function useSyncIntegrity(kind, { peers: peersProp, recordId } = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [noSyncingPeers, setNoSyncingPeers] = useState(false);
@@ -171,7 +172,9 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
       const results = await Promise.all(
         eligiblePeers.map(async (peer) => {
           try {
-            const data = await fetchSyncIntegrity(peer.instanceId, kind);
+            const data = recordId
+              ? await fetchSyncIntegrity(peer.instanceId, kind, recordId)
+              : await fetchSyncIntegrity(peer.instanceId, kind);
             return { peer, data };
           } catch {
             return { peer, data: { available: false, reason: 'fetch-failed', records: [] } };
@@ -205,7 +208,11 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
           newStatusById.set(rec.id, worstStatus(existing, status));
 
           const entries = newByPeer.get(rec.id) ?? [];
-          entries.push({ peerId: peer.instanceId, peerName: peer.name ?? peer.instanceId, status, ...(rec.reason ? { reason: rec.reason } : {}) });
+          entries.push({
+            peerId: peer.instanceId, peerName: peer.name ?? peer.instanceId, status,
+            ...(rec.reason ? { reason: rec.reason } : {}),
+            ...(rec.assetDifferences ? { assetDifferences: rec.assetDifferences } : {}),
+          });
           newByPeer.set(rec.id, entries);
         }
       }
@@ -224,7 +231,7 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
     } finally {
       if (gen === genRef.current) setLoading(false);
     }
-  }, [kind, peersProp]);
+  }, [kind, peersProp, recordId]);
 
   useEffect(() => {
     run();

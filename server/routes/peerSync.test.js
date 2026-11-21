@@ -808,6 +808,16 @@ describe('peer-sync routes', () => {
       });
     });
 
+    it('passes a collection ID through for filename-level integrity', async () => {
+      integritySvc.getPeerIntegrity.mockResolvedValue({ available: true, records: [] });
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=peer-x&kind=mediaCollection&recordId=col-1');
+      expect(res.status).toBe(200);
+      expect(integritySvc.getPeerIntegrity).toHaveBeenCalledWith({
+        peerId: 'peer-x', kind: 'mediaCollection', recordId: 'col-1',
+      });
+    });
+
     it('400 when peerId is missing', async () => {
       const res = await request(buildApp())
         .get('/api/peer-sync/integrity?kind=mediaCollection');

@@ -146,6 +146,25 @@ export async function buildCollectionAssetManifest(collection) {
   return hashAssetReferences(referenceCollectionAssetManifest(collection));
 }
 
+// The read-only sync diagnostic can use history to locate imported or
+// timeline videos whose filename is independent of their collection ref.
+// The legacy transfer manifest still follows the receiver's reference rules.
+export async function buildCollectionIntegrityAssets(collection) {
+  const references = referenceCollectionAssetManifest(collection);
+  const videos = collectCollectionAssetReferences(collection).directVideoFilenames;
+  const history = videos.length > 0 ? await videoHistoryFilenamesById() : new Map();
+  const videoFilenames = Object.fromEntries(videos.flatMap((ref) => {
+    if (!sanitizeAssetFilename(ref)) return [];
+    const fallback = collectionVideoRefToFilename(ref);
+    const filename = sanitizeAssetFilename(history.get(ref));
+    return filename && filename !== fallback ? [[fallback, filename]] : [];
+  }));
+  const assets = references.map((asset) => asset.kind === 'video' && Object.hasOwn(videoFilenames, asset.filename)
+    ? { ...asset, filename: videoFilenames[asset.filename] }
+    : asset);
+  return { assetManifest: await hashAssetReferences(assets), videoFilenames };
+}
+
 export function referenceCollectionAssetManifest(collection) {
   const refs = collectCollectionAssetReferences(collection);
   const out = [];

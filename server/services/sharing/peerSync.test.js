@@ -1809,6 +1809,25 @@ describe('peerSync', () => {
   });
 
   describe('getRecordPayloadForPeer', () => {
+    it('checks a collection video at its history filename for read-only integrity', async () => {
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.videos, 'imported.webm'), 'video bytes');
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([{ id: 'video-id', filename: 'imported.webm' }]));
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'collection-1', name: 'Test collection', items: [{ kind: 'video', ref: 'video-id' }],
+      });
+
+      const inventory = await getRecordPayloadForPeer('mediaCollection', 'collection-1', { collectionIntegrity: true });
+      expect(inventory).toMatchObject({
+        assetManifest: [{ kind: 'video', filename: 'imported.webm', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }],
+        videoFilenames: { 'video-id.mp4': 'imported.webm' },
+      });
+      const transfer = await getRecordPayloadForPeer('mediaCollection', 'collection-1');
+      expect(transfer.assetManifest).toEqual([]);
+      expect(transfer).not.toHaveProperty('videoFilenames');
+    });
+
     it('returns a push-payload for an existing universe', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
       const payload = await getRecordPayloadForPeer('universe', 'u1');

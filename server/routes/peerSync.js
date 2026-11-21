@@ -289,6 +289,7 @@ router.get('/record', asyncHandler(async (req, res) => {
   const recordQuery = validateRequest(peerRecordQuerySchema, req.query);
   const kind = (recordQuery.kind ?? '').trim();
   const id = (recordQuery.id ?? '').trim();
+  const collectionIntegrity = kind === 'mediaCollection' && recordQuery.collectionIntegrity === '1';
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -305,7 +306,9 @@ router.get('/record', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, {
     recordKind: kind, route: `record ${kind}`, alwaysEnforce: newlySupported, allowOperator: newlySupported,
   });
-  const payload = await getRecordPayloadForPeer(kind, id);
+  const payload = collectionIntegrity
+    ? await getRecordPayloadForPeer(kind, id, { collectionIntegrity })
+    : await getRecordPayloadForPeer(kind, id);
   if (!payload) {
     throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -324,13 +327,14 @@ router.get('/integrity', asyncHandler(async (req, res) => {
   const integrityQuery = validateRequest(peerIntegrityQuerySchema, req.query);
   const peerId = (integrityQuery.peerId ?? '').trim();
   const kind = (integrityQuery.kind ?? '').trim();
+  const recordId = integrityQuery.recordId?.trim();
   if (!peerId) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  res.json(await getPeerIntegrity({ peerId, kind }));
+  res.json(await getPeerIntegrity({ peerId, kind, ...(recordId ? { recordId } : {}) }));
 }));
 
 // --- POST /sync-record --- force a push for a specific record to a specific peer.

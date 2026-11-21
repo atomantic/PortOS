@@ -132,6 +132,27 @@ describe('SyncDetailDrawer', () => {
     expect(screen.getByRole('button', { name: /sync to peer/i })).toBeInTheDocument();
   });
 
+  it('shows unavailable filenames immediately and lets users inspect where other copies are stored', () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{
+        peerId: 'peer-a', peerName: 'Example peer', status: 'assets-missing',
+        assetDifferences: [
+          { kind: 'video', filename: 'missing.mp4', availability: 'neither' },
+          { kind: 'image', filename: 'local.png', availability: 'local' },
+          { kind: 'image', filename: 'remote.png', availability: 'peer' },
+          { kind: 'image', filename: 'different.png', availability: 'different' },
+        ],
+      }]),
+    }));
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(mockUseSyncIntegrity).toHaveBeenCalledWith('mediaCollection', { recordId: RECORD_ID });
+    expect(screen.getByText('No verified copy on either machine (1)').parentElement).toHaveAttribute('open');
+    expect(screen.getByText('missing.mp4')).toBeVisible();
+    expect(screen.getByText('Stored only here (1)').parentElement).not.toHaveAttribute('open');
+    expect(screen.getByText('Stored only on Example peer (1)')).toBeInTheDocument();
+    expect(screen.getByText('Different file contents (1)')).toBeInTheDocument();
+  });
+
   it('explains a timestamp tie and preserves manual sync actions', () => {
     mockUseSyncIntegrity.mockReturnValue(defaultHookState({
       byPeer: buildByPeer([{ peerId: 'peer-a', peerName: 'void', status: 'unknown', reason: 'timestamp-tie' }]),
