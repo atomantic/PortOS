@@ -27,7 +27,7 @@ vi.mock('./runway.js', async importOriginal => ({ ...await importOriginal(), get
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
 vi.mock('../../lib/pythonSetup.js', () => ({ isFlux2VenvHealthy: vi.fn(), FLUX2_VENV_DEFAULT: '/test/venv-flux2/bin/python3' }));
 
-import { checkConnection, cancelJob, getActiveJob, getActiveJobs } from './index.js';
+import { cancel, checkConnection, cancelJob, getActiveJob, getActiveJobs } from './index.js';
 import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 
@@ -147,6 +147,14 @@ describe('local image connection readiness', () => {
       remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/test/venv-flux2/bin/python3' },
     });
   });
+});
+
+it('bulk cancels cloud jobs even when local cancellation succeeds', () => {
+  expect(cancel()).toBe(true);
+  expect(localMock.cancel).toHaveBeenCalledOnce();
+  for (const provider of [codexMock, grokMock, agyMock, falMock]) {
+    expect(provider.cancelAll).toHaveBeenCalledOnce();
+  }
 });
 
 // Exact-ID cancel (#9932): signals only the owning backend; never a bulk method.

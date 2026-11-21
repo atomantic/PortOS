@@ -1,5 +1,5 @@
 /**
- * Shared immutable image/video render-backend alphabets and the media-queue lane and swim-lane rules.
+ * Shared immutable image/video render-backend alphabets, display labels, and the media-queue lane and swim-lane rules.
  *
  * Covers `IMAGE_GEN_MODE[S]`, `QUEUEABLE_IMAGE_MODES`,
  * `VIDEO_GEN_MODE[S]`, cloud subsets, plus `mediaJobExecutionLane(...)` / `MEDIA_JOB_EXECUTION_LANES`
@@ -61,6 +61,20 @@ export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
 export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
   VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.GOOGLE,
 ]);
+
+export const GENERATION_MODE_LABELS = Object.freeze({
+  [IMAGE_GEN_MODE.LOCAL]: 'Local',
+  [IMAGE_GEN_MODE.CODEX]: 'Codex',
+  [IMAGE_GEN_MODE.GROK]: 'Grok',
+  [IMAGE_GEN_MODE.AGY]: 'Agy',
+  [IMAGE_GEN_MODE.EXTERNAL]: 'External',
+  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
+  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
+  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
+  [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
+  [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
+  [VIDEO_GEN_MODE.GOOGLE]: 'Google',
+});
 
 /**
  * THE media-queue execution-lane rule, shared by the scheduler and the public job projection so the UI
