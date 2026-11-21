@@ -118,9 +118,10 @@ export async function applyAuditSuggestion(accountId, suggestionId) {
     await execGh(['api', '--hostname', account.host, '--method', 'DELETE', `repos/${suggestion.repo}/subscription`], GH_TIMEOUT_MS, { env });
   } else {
     const muted = [];
+    const env = await accountEnv(account);
     for (const threadId of suggestion.threadIds) {
       // A thread that is already gone from the inbox is skipped, not fatal.
-      const ok = await applyNotificationAction(account.id, threadId, 'mute', { detail: { via: 'audit' }, learn: false })
+      const ok = await applyNotificationAction(account.id, threadId, 'mute', { detail: { via: 'audit' }, learn: false, account, env })
         .then(() => true)
         .catch((error) => {
           console.log(`⏭️ Audit mute skipped thread ${threadId}: ${error.message}`);
@@ -167,8 +168,10 @@ export async function undoAuditChange(id) {
     const env = await accountEnv(account);
     await execGh(['api', '--hostname', account.host, '--method', 'PUT', `repos/${change.repo_full_name}/subscription`, '-F', 'subscribed=true'], GH_TIMEOUT_MS, { env });
   } else {
-    for (const threadId of change.detail?.threadIds || []) {
-      await applyNotificationAction(account.id, threadId, 'resubscribe', { detail: { via: 'audit-undo' }, learn: false }).catch((error) => {
+    const threadIds = change.detail?.threadIds || [];
+    const env = threadIds.length ? await accountEnv(account) : null;
+    for (const threadId of threadIds) {
+      await applyNotificationAction(account.id, threadId, 'resubscribe', { detail: { via: 'audit-undo' }, learn: false, account, env }).catch((error) => {
         console.log(`⏭️ Audit undo skipped thread ${threadId}: ${error.message}`);
       });
     }
