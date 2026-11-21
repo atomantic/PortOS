@@ -34,7 +34,7 @@ import { trackAudioFilename, getTrack } from '../tracks/index.js';
 import { startingImageFilename } from '../creativeDirector/local.js';
 import { imageUrlToAppAsset } from '../moodBoard/index.js';
 import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
-import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
+import { WORK_ID_RE, DRAFT_ID_RE } from '../writersRoom/_shared.js';
 import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
@@ -1152,24 +1152,8 @@ async function pullOneWorkBody(peer, base, entry) {
       console.log(`⚠️ peerSync: draft body ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(entry.sha256).slice(0, 8)})`);
       return;
     }
-    // Compare-and-swap against a local save that landed DURING this slow pull:
-    // the draft's merged metadata `contentHash` equals entry.sha256 right after
-    // the merge, but a local saveDraftBody bumps it (+ updatedAt) to the newer
-    // prose. If it no longer matches, the local copy is newer/authoritative (and
-    // will re-push) — don't clobber it with the older peer bytes. A vanished
-    // draft/work (deleted mid-pull) also skips. (sha256File of the .md equals
-    // contentHash(text) since the body is the file verbatim.)
-    // The download above stays outside the backup lease; the compare-and-swap
-    // and the write that replaces the draft file share it, so a cut never copies
-    // the file between the check and the write.
-    const written = await withBackupAssetPublication(async () => {
-      const current = await getWorkForSync(workId).catch(() => null);
-      const draft = Array.isArray(current?.drafts) ? current.drafts.find((d) => d?.id === draftId) : null;
-      if (!draft || draft.contentHash !== entry.sha256) return false;
-      await ensureDir(join(wrWorkDir(workId), 'drafts'));
-      await atomicWrite(wrDraftPath(workId, draftId), buffer);
-      return true;
-    });
+    const { applyPulledDraftBody } = await import('../writersRoom/local.js');
+    const written = await applyPulledDraftBody(entry, buffer, { via: 'peer-sync', peerId: peer.instanceId });
     if (!written) {
       console.log(`⚠️ peerSync: draft body ${safeLabel} target moved since diff — skipping write`);
       return;

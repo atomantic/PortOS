@@ -33,6 +33,8 @@ import { canonicalStringify, isPlainObject } from './objects.js';
 import { sanitizeRecordForWire, stripMusicVideoLocalRenderPins } from './syncWire.js';
 import { SUBMISSION_FIELDS as ARTIST_SUBMISSION_FIELDS } from './artistLimits.js';
 
+export const WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND = 'writersRoomDraftBody';
+
 const JOURNAL_TYPE_SCHEMA_VERSION = 1;
 const BASE_HASH_FILE = () => join(PATHS.data, 'sharing', 'sync_base_hashes.json');
 
@@ -359,11 +361,12 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // be restorable. Restore routes through restoreBoard → applyBoardRestore
   // (which, unlike applyBoardPatch, accepts items).
   moodBoard: ['name', 'description', 'items', 'style', 'posterImageRef', 'collageImageRef'],
-  // Restored via `updateWork`. Excluded: structural fields, draft-version structure
-  // (lineage-managed) and bridge links set by their own helpers.
   writersRoomCharacters: ['characters'],
   writersRoomPlaces: ['places'],
   writersRoomObjects: ['objects'],
+  [WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND]: ['body'],
+  // Restored via `updateWork`. Excluded: structural fields, draft-version structure
+  // (lineage-managed) and bridge links set by their own helpers.
   writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
   // Restored via `restoreFolder`.
   writersRoomFolder: ['name', 'parentId', 'sortOrder'],
