@@ -42,6 +42,11 @@ vi.mock('../services/embeddings.js', () => ({
   embedIngredient: vi.fn(async () => ({})),
 }));
 
+vi.mock('../services/instanceIdentity.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInstanceId: async () => 'catalog-route-test-local',
+}));
+
 // Only keys under this test's prefix resolve as library images; everything
 // else keeps the real resolver.
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
@@ -87,11 +92,13 @@ const createdIngredientIds = new Set();
 const createdScrapIds = new Set();
 const receiptKeys = new Set();
 const relatedImageKeys = new Set();
+const mergeIds = new Set();
 
 afterAll(async () => {
   if (!dbReady) return;
   await query('DELETE FROM media_assets WHERE media_key = ANY($1::text[])', [[...relatedImageKeys]]);
   await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
+  await query('DELETE FROM catalog_ingredient_merges WHERE id = ANY($1::text[])', [[...mergeIds]]);
   for (const id of createdIngredientIds) {
     await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
   }
@@ -431,6 +438,55 @@ describe.skipIf(!runDb)('catalog export identity round trip', () => {
       createdIngredientIds.add(ids.at(-1));
     }
     expect(new Set(ids).size).toBe(2);
+  });
+
+  it('rolls back an exported slice containing an active local merge source', async () => {
+    const refId = `merged-export-${NONCE}`;
+    const source = await catalogDB.createIngredient({
+      type: 'object', name: 'Source prop', payload: { description: 'Original source', locked: false }, tags: ['source'],
+    });
+    createdIngredientIds.add(source.id);
+    const survivor = await catalogDB.createIngredient({
+      type: 'object', name: 'Surviving prop', payload: { description: 'Original survivor', locked: false }, tags: ['survivor'],
+    });
+    createdIngredientIds.add(survivor.id);
+    await catalogDB.linkIngredientToRef(source.id, 'series', refId, 'source');
+    await catalogDB.linkIngredientToRef(survivor.id, 'series', refId, 'survivor');
+    await catalogDB.attachMedia(source.id, 'source.png', 'portrait');
+    await catalogDB.attachMedia(survivor.id, 'survivor.png', 'portrait');
+
+    const app = makeApp();
+    const merge = { sourceId: source.id, survivorId: survivor.id,
+      fieldChoices: { '/name': 'survivor', '/payload/description': 'survivor' } };
+    const preview = await request(app).post('/api/catalog/ingredients/merge').send(merge);
+    expect(preview.status).toBe(200);
+    const applied = await request(app).post('/api/catalog/ingredients/merge')
+      .send({ ...merge, dryRun: false, previewToken: preview.body.previewToken });
+    expect(applied.status).toBe(200);
+    mergeIds.add(applied.body.id);
+
+    const bundle = await catalogDB.exportSliceForRef('series', refId);
+    const sourceEntry = bundle.ingredients.find(row => row.id === source.id);
+    const survivorEntry = bundle.ingredients.find(row => row.id === survivor.id);
+    expect(sourceEntry).toMatchObject({ name: source.name, tags: ['source'] });
+    expect(survivorEntry).toMatchObject({ name: survivor.name, tags: ['survivor', 'source'] });
+
+    const editedSurvivor = {
+      ...survivorEntry,
+      name: 'Edited survivor',
+      payload: { description: 'Edited description' },
+      tags: ['edited'],
+      media: [{ mediaKey: 'edited.png', kind: 'portrait' }],
+      roleForExportedRef: 'edited-role',
+    };
+    const rejected = await send({ ...bundle, ingredients: [editedSurvivor, sourceEntry] });
+    expect(rejected.status).toBe(409);
+    expect(rejected.body).toMatchObject({ code: 'CATALOG_MERGE_CONFLICT' });
+    expect((await catalogDB.exportSliceForRef('series', refId)).ingredients).toEqual(bundle.ingredients);
+
+    const canonical = await send({ ...bundle, ingredients: [editedSurvivor] });
+    expect(canonical.status).toBe(201);
+    expect(canonical.body.created[0]).toMatchObject({ id: survivor.id, name: editedSurvivor.name });
   });
 
   it('rolls back ingredient updates, new ingredients, refs, scraps and media on a later SQL failure', async () => {

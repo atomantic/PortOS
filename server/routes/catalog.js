@@ -974,6 +974,19 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
       const existing = entry.id
         ? (await client.query('SELECT type, deleted FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [entry.id])).rows[0]
         : null;
+      if (existing) {
+        // Local merge and recovery lock the ingredient too. Read the receipt
+        // after acquiring that lock so a merge that just committed is visible.
+        const activeMerge = await client.query(
+          'SELECT 1 FROM catalog_ingredient_merges WHERE source_id = $1 AND restored_at IS NULL',
+          [entry.id],
+        );
+        if (activeMerge.rowCount) {
+          throw new ServerError('Imported ingredient ID is merged into another record; recover the merge or import the canonical ID', {
+            status: 409, code: 'CATALOG_MERGE_CONFLICT',
+          });
+        }
+      }
       if (existing && (existing.deleted || existing.type !== entry.type)) {
         throw new ServerError('Imported ingredient ID is deleted or has a different type', { status: 409 });
       }
