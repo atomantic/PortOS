@@ -37,6 +37,17 @@ async function readSidecar(filename) {
   return null;
 }
 
+/** Read the primary designation without consulting the image bytes or origin. */
+export async function readImagePrimary(filename) {
+  if (!isGalleryName(filename)) return null;
+  const sidecar = await readSidecar(filename);
+  if (!isNonBlankStr(sidecar?.primaryInstanceId)) return null;
+  return {
+    primaryInstanceId: sidecar.primaryInstanceId,
+    primaryAt: isNonBlankStr(sidecar.primaryAt) ? sidecar.primaryAt : null,
+  };
+}
+
 /**
  * The image held here as a record, `{ filename, createdAt?, originInstanceId?,
  * suppliedByInstanceId?, pendingDelete?, hidden? }`, or null when neither its

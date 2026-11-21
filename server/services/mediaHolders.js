@@ -37,9 +37,10 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isPairedPeer } from '../lib/peerPairing.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
+import { readImagePrimary, localInstanceId } from './imageGen/imageRecords.js';
 import { emitMediaHistoryChanged, emitMediaHoldersChanged, announceLocalHolding } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 
@@ -51,6 +52,7 @@ const KIND_MOUNT = { video: '/data/videos/', image: '/data/images/' };
 const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const VERIFIED_COMMAND_TIMEOUT_MS = 120_000;
+const IMAGE_PRIMARY_READ_CONCURRENCY = 16;
 const storeWrite = createFileWriteQueue();
 
 const peerLabel = (peer) => peer?.name || peer?.id || 'peer';
@@ -242,8 +244,8 @@ async function setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt) {
 /** This machine's recorded designation for a file: `{ instanceId, at }`, or null. */
 async function currentPrimary(kind, filename) {
   if (kind === 'image') {
-    const held = await readHeldImage(filename);
-    return held?.primaryInstanceId ? { instanceId: held.primaryInstanceId, at: held.primaryAt ?? null } : null;
+    const primary = await readImagePrimary(filename);
+    return primary ? { instanceId: primary.primaryInstanceId, at: primary.primaryAt } : null;
   }
   const history = await loadHistory();
   let newest = null;
@@ -337,7 +339,15 @@ async function collectHolders({ strict = false } = {}) {
  */
 export async function listMediaHolders() {
   const { self, registered, remote, releases } = await collectHolders();
-  const history = remote.size > 0 && [...remote.keys()].some((k) => k.startsWith('video:')) ? await loadHistory().catch(() => []) : [];
+  const remoteKeys = [...remote.keys()];
+  const [imagePrimaryEntries, history] = await Promise.all([
+    mapWithConcurrency(remoteKeys.filter((key) => key.startsWith('image:')), IMAGE_PRIMARY_READ_CONCURRENCY, async (key) => {
+      const primary = await readImagePrimary(key.slice('image:'.length));
+      return [key, primary?.primaryInstanceId ?? null];
+    }),
+    remoteKeys.some((key) => key.startsWith('video:')) ? loadHistory().catch(() => []) : [],
+  ]);
+  const imagePrimary = new Map(imagePrimaryEntries);
   const videoPrimary = new Map();
   const videoIds = new Map();
   for (const r of Array.isArray(history) ? history : []) {
@@ -358,7 +368,7 @@ export async function listMediaHolders() {
   for (const [key, instanceIds] of remote) {
     const kind = key.slice(0, key.indexOf(':'));
     const filename = key.slice(kind.length + 1);
-    const primaryInstanceId = kind === 'video' ? videoPrimary.get(filename) ?? null : (await readHeldImage(filename))?.primaryInstanceId ?? null;
+    const primaryInstanceId = (kind === 'video' ? videoPrimary.get(filename) : imagePrimary.get(key)) ?? null;
     const ids = [...(holdsHere(kind, filename) ? [self] : []), ...instanceIds];
     const pending = pendingByKey.get(key) ?? new Set();
     items[key] = {
