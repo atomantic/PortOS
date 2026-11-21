@@ -24,12 +24,13 @@ const MAX_ZOOM = 6;
 // A drag under this many pixels is a click, not a pan — otherwise a slightly
 // shaky click on a node never selects it.
 const CLICK_SLOP_PX = 3;
+const KEY_PAN_PX = 60;
 
 const LABELLED_KINDS = new Set(['character', 'place', 'series']);
 
 function drawGraph(ctx, {
   view, width, height, nodes, edges, degree, match, adjacency,
-  selectedId, hoveredId, timeIndex, layout, totalIssues, series, issues, kinds, dpr,
+  selectedId, hoveredId, activeId, timeIndex, layout, totalIssues, series, issues, kinds, dpr,
 }) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -200,7 +201,18 @@ function drawGraph(ctx, {
       ctx.arc(node.x, node.y, r + 3.5 / view.k, 0, Math.PI * 2);
       ctx.stroke();
     }
-    const wantsLabel = isSelected || isHovered
+    const isActive = node.id === activeId;
+    if (isActive) {
+      // Keyboard cursor: dashed so it reads distinctly from selection/hover.
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2 / view.k;
+      ctx.setLineDash([4 / view.k, 3 / view.k]);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 6 / view.k, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const wantsLabel = isSelected || isHovered || isActive
       || (near && near.has(node.id)) || (match && match.has(node.id))
       || node.kind === 'character' || (LABELLED_KINDS.has(node.kind) && view.k > 0.75)
       || view.k > 1.6;
@@ -243,11 +255,14 @@ export default function GraphCanvas({
   const [cursor, setCursor] = useState('grab');
   const [tip, setTip] = useState(null);
   const [legendOpen, setLegendOpen] = useState(true);
+  // Keyboard cursor over visible.nodes; independent of selection so arrowing
+  // around never changes the inspector until Enter.
+  const [activeId, setActiveId] = useState(null);
 
   // Everything the draw + step passes need, refreshed each render without
   // restarting the animation loop.
   const frame = useRef({});
-  frame.current = { index, visible, layout, kinds, selectedId, hoveredId, timeIndex };
+  frame.current = { index, visible, layout, kinds, selectedId, hoveredId, activeId, timeIndex };
 
   const markDirty = useCallback(() => { dirtyRef.current = true; }, []);
 
@@ -285,7 +300,7 @@ export default function GraphCanvas({
     markDirty();
   }, [visible.nodes, visible.edges, focusId, markDirty]);
 
-  useEffect(() => { markDirty(); }, [selectedId, hoveredId, timeIndex, markDirty]);
+  useEffect(() => { markDirty(); }, [selectedId, hoveredId, activeId, timeIndex, markDirty]);
 
   // "Reset view" from the toolbar — refit on the next frame rather than
   // reaching into the canvas from the parent.
@@ -358,6 +373,7 @@ export default function GraphCanvas({
         adjacency: f.index.adjacency,
         selectedId: f.selectedId,
         hoveredId: f.hoveredId,
+        activeId: f.activeId,
         timeIndex: f.timeIndex,
         layout: f.layout,
         totalIssues: f.index.totalIssues,
@@ -454,6 +470,65 @@ export default function GraphCanvas({
     if (node) onFocus(node.id);
   };
 
+  const activeNode = activeId ? visible.nodes.find((n) => n.id === activeId) || null : null;
+
+  const cycleActive = (step) => {
+    const nodes = visible.nodes;
+    if (!nodes.length) return;
+    const at = activeNode ? nodes.indexOf(activeNode) : -1;
+    const next = nodes[at === -1 ? (step > 0 ? 0 : nodes.length - 1) : (at + step + nodes.length) % nodes.length];
+    setActiveId(next.id);
+    // Centre on the node so a keyboard user never cycles to something offscreen.
+    const { width, height } = sizeRef.current;
+    const { k } = viewRef.current;
+    viewRef.current = { k, x: width / 2 - next.x * k, y: height / 2 - next.y * k };
+    markDirty();
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const { width, height } = sizeRef.current;
+    const pan = (dx, dy) => {
+      viewRef.current = { ...viewRef.current, x: viewRef.current.x + dx, y: viewRef.current.y + dy };
+      markDirty();
+    };
+    switch (event.key) {
+      // Arrows move the viewport, so content shifts the opposite way.
+      case 'ArrowLeft': pan(KEY_PAN_PX, 0); break;
+      case 'ArrowRight': pan(-KEY_PAN_PX, 0); break;
+      case 'ArrowUp': pan(0, KEY_PAN_PX); break;
+      case 'ArrowDown': pan(0, -KEY_PAN_PX); break;
+      case '+': case '=': zoomAt(width / 2, height / 2, ZOOM_STEP); break;
+      case '-': zoomAt(width / 2, height / 2, 1 / ZOOM_STEP); break;
+      case '0': fit(); break;
+      case ']': case 'n': cycleActive(1); break;
+      case '[': case 'p': cycleActive(-1); break;
+      case 'Tab': {
+        // Tab walks the nodes and only hands focus on at either end, so the
+        // canvas is never a keyboard trap.
+        const nodes = visible.nodes;
+        const at = activeNode ? nodes.indexOf(activeNode) : -1;
+        const next = at + (event.shiftKey ? -1 : 1);
+        if (next < 0 || next >= nodes.length) { setActiveId(null); return; }
+        cycleActive(event.shiftKey ? -1 : 1);
+        break;
+      }
+      case 'Enter': case ' ':
+        if (activeNode) onSelect(activeNode.id);
+        break;
+      case 'f': case 'F':
+        if (activeNode) onFocus(activeNode.id);
+        break;
+      case 'Escape':
+        setActiveId(null);
+        onSelect(null);
+        onFocus(null);
+        break;
+      default: return;
+    }
+    event.preventDefault();
+  };
+
   const legendKinds = useMemo(
     () => GRAPH_KIND_ORDER.filter((k) => kinds.has(k)).map((k) => ({ id: k, ...GRAPH_KINDS[k] })),
     [kinds],
@@ -471,12 +546,21 @@ export default function GraphCanvas({
         ref={canvasRef}
         className="absolute inset-0 w-full h-full block"
         style={{ touchAction: 'none' }}
+        tabIndex={0}
+        role="application"
+        aria-label="Universe relationship graph. Use arrow keys to pan, Tab or bracket keys to cycle nodes, Enter to select, F to focus neighborhood, plus and minus to zoom, 0 to fit."
+        onKeyDown={handleKeyDown}
         onPointerDown={handleDown}
         onPointerMove={handleMove}
         onPointerUp={handleUp}
         onPointerLeave={handleLeave}
         onDoubleClick={handleDoubleClick}
       />
+      <div className="sr-only" aria-live="polite" role="status">
+        {activeNode
+          ? `${activeNode.name}, ${kindDef(activeNode.kind).singular}, ${visible.degree.get(activeNode.id) || 0} visible links`
+          : ''}
+      </div>
       {loading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-port-bg/60 text-sm text-gray-400">
           <Loader2 size={16} className="animate-spin" /> Building graph…
