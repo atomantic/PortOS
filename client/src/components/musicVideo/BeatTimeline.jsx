@@ -19,6 +19,11 @@ import { lyricSpans } from '../../lib/musicVideoTimeline.js';
 
 const PX_PER_SEC = 80;
 const SNAP_TOLERANCE_SEC = 0.15;
+const KEY_STEP_FALLBACK_SEC = 0.25;
+const KEY_STEP_LARGE_SEC = 1;
+const EPSILON_SEC = 0.001;
+const OVERVIEW_STEP_SEC = 5;
+const OVERVIEW_PAGE_STEP_SEC = 30;
 
 // Timed lyric lines (#8964) render as a read-only strip under the scene
 // blocks, so the director can see which words each cut spans.
@@ -104,7 +109,55 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
     window.addEventListener('pointerup', onPointerUp);
   };
 
+  // Keyboard nudge for a scene's start (move) or end (right trim). Steps to the
+  // adjacent beat-grid point (Shift: adjacent downbeat/section point, else 1s;
+  // no grid: 0.25s) and commits through the same span/alignment helpers as drag.
+  const nudgeSpan = (e, sceneId, kind, span) => {
+    const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    const edge = kind === 'move' ? span.startSec : span.endSec;
+    const pool = e.shiftKey ? gridPoints.filter((p) => p.kind !== 'beat') : gridPoints;
+    const target = dir > 0
+      ? pool.find((p) => p.t > edge + EPSILON_SEC)?.t
+      : [...pool].reverse().find((p) => p.t < edge - EPSILON_SEC)?.t;
+    const fallback = e.shiftKey ? KEY_STEP_LARGE_SEC : gridPoints.length ? undefined : KEY_STEP_FALLBACK_SEC;
+    const deltaSec = target !== undefined ? target - edge : fallback !== undefined ? dir * fallback : dir * KEY_STEP_LARGE_SEC;
+    const startSpan = { startSec: span.startSec, endSec: span.endSec };
+    const result = computeDragSpan({ kind, startSpan, deltaSec, gridPoints, toleranceSec: SNAP_TOLERANCE_SEC });
+    if (result.startSec === span.startSec && result.endSec === span.endSec) return;
+    const beatAligned = shouldMarkBeatAligned({ kind, snapped: result.snapped, wasPersisted: !!span.persisted });
+    onCommit?.(sceneId, { startSec: result.startSec, endSec: result.endSec, beatAligned });
+  };
+
+  const scrollOverviewTo = (timeSec) => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const clamped = Math.max(0, Math.min(totalDurationSec, timeSec));
+    scroller.scrollTo({ left: Math.max(0, clamped * PX_PER_SEC - scroller.clientWidth / 2), behavior: 'smooth' });
+  };
+
+  const onOverviewKeyDown = (e) => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const centerSec = (scroller.scrollLeft + scroller.clientWidth / 2) / PX_PER_SEC;
+    const targets = {
+      ArrowLeft: centerSec - OVERVIEW_STEP_SEC,
+      ArrowRight: centerSec + OVERVIEW_STEP_SEC,
+      PageUp: centerSec - OVERVIEW_PAGE_STEP_SEC,
+      PageDown: centerSec + OVERVIEW_PAGE_STEP_SEC,
+      Home: 0,
+      End: totalDurationSec,
+    };
+    if (!(e.key in targets)) return;
+    e.preventDefault();
+    scrollOverviewTo(targets[e.key]);
+  };
+
   const jumpToOverviewTime = (e) => {
+    // Enter/Space synthesize a click at clientX 0 (detail 0); that would always
+    // seek to 0:00, so keyboard users get the arrow/Home/End handler instead.
+    if (e.detail === 0) return;
     const scroller = scrollRef.current;
     if (!scroller) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -120,7 +173,7 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
       <div className="flex flex-wrap items-start justify-between gap-1 text-xs text-port-text-muted">
         <span>
           Music timeline — waveform, sections, and 4/4 beat-grid assumption.
-          Drag a scene&apos;s right edge to trim, or its body to reposition.
+          Drag a scene&apos;s right edge to trim, or its body to reposition; with the keyboard, focus a scene control and use the arrow keys (Shift for larger steps).
         </span>
         <span className="whitespace-nowrap">
           {audioAnalysis.bpm ? `${audioAnalysis.bpm} BPM` : 'Waveform only · no beat grid'}
@@ -135,6 +188,8 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
         type="button"
         className="relative block h-16 w-full overflow-hidden rounded-lg border border-port-border bg-port-bg text-left"
         onClick={jumpToOverviewTime}
+        onKeyDown={onOverviewKeyDown}
+        aria-label="Song overview — use arrow keys, Page Up/Down, Home or End to scroll the detailed timeline"
         title="Song overview — click to center the detailed timeline"
       >
         <svg
@@ -243,19 +298,29 @@ export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrati
             const scene = scenes.find((s) => s.sceneId === span.sceneId);
             const dragging = liveSpan?.sceneId === span.sceneId;
             const snappedNow = dragging && liveSpan.snapped;
+            const sceneNumber = (scene?.order ?? i) + 1;
+            const range = `${formatTimecode(span.startSec)} to ${formatTimecode(span.endSec)}`;
             return (
               <div key={span.sceneId}
                 className={`absolute top-[92px] h-11 rounded border bg-port-card/90 select-none ${snappedNow ? 'border-port-success' : 'border-port-accent'}`}
                 style={{ left: span.startSec * PX_PER_SEC, width: Math.max(6, (span.endSec - span.startSec) * PX_PER_SEC) }}>
-                <div role="presentation"
-                  className="absolute inset-0 flex items-center justify-center text-[10px] px-2 cursor-grab truncate"
+                <div role="slider" tabIndex={0}
+                  aria-label={`Move scene ${sceneNumber}`}
+                  aria-valuemin={0} aria-valuemax={totalDurationSec} aria-valuenow={span.startSec}
+                  aria-valuetext={`starts ${formatTimecode(span.startSec)}, ${range}`}
+                  className="absolute inset-0 flex items-center justify-center text-[10px] px-2 cursor-grab truncate focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent"
                   onPointerDown={(e) => beginDrag(e, span.sceneId, 'move', span)}
+                  onKeyDown={(e) => nudgeSpan(e, span.sceneId, 'move', span)}
                   title={scene?.prompt || `Scene #${(scene?.order ?? i) + 1}`}>
                   #{(scene?.order ?? i) + 1}
                   {scene?.beatAligned && !dragging && <span className="ml-1 text-port-success">●</span>}
                 </div>
-                <div role="presentation"
-                  className="absolute inset-y-0 right-0 w-2 cursor-ew-resize hover:bg-port-accent/40"
+                <div role="slider" tabIndex={0}
+                  aria-label={`Trim end of scene ${sceneNumber}`}
+                  aria-valuemin={0} aria-valuemax={totalDurationSec} aria-valuenow={span.endSec}
+                  aria-valuetext={`ends ${formatTimecode(span.endSec)}, ${range}`}
+                  className="absolute inset-y-0 right-0 w-2 cursor-ew-resize hover:bg-port-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent"
+                  onKeyDown={(e) => nudgeSpan(e, span.sceneId, 'right', span)}
                   onPointerDown={(e) => beginDrag(e, span.sceneId, 'right', span)} />
               </div>
             );
