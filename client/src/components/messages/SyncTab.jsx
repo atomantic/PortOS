@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen } from 'lucide-react';
+import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen, Trash2, TestTube } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
 import SettingsLoadError from '../ui/SettingsLoadError';
@@ -12,6 +12,9 @@ import {
   syncMessageAccount,
   updateMessageSelectors,
   testMessageSelectors,
+  getMessageTokenStatus,
+  testMessageToken,
+  clearMessageToken,
 } from '../../services/apiMessages.js';
 import socket from '../../services/socket';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
@@ -73,6 +76,16 @@ export default function SyncTab({ accounts, onRefresh }) {
     setSelectorsState('ready');
   }, []);
 
+  const [tokenStatus, setTokenStatus] = useState(null);
+  const [tokenLoading, setTokenLoading] = useState(true);
+  const [clearingTokens, setClearingTokens] = useState({});
+
+  const fetchTokenStatus = useCallback(async () => {
+    const data = await getMessageTokenStatus({ silent: true }).catch(() => null);
+    setTokenStatus(data);
+    setTokenLoading(false);
+  }, []);
+
   const clearProgress = useCallback((accountId) => {
     setProgress(prev => { const next = { ...prev }; delete next[accountId]; return next; });
   }, []);
@@ -87,6 +100,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   });
 
   useEffect(() => { fetchSelectors(); }, [fetchSelectors]);
+  useEffect(() => { fetchTokenStatus(); }, [fetchTokenStatus]);
 
   useEffect(() => {
     const onSyncProgress = ({ accountId, current, total }) => {
@@ -124,6 +138,23 @@ export default function SyncTab({ accounts, onRefresh }) {
     const summary = TEST_STATUS_TEXT[result.status] || result.error || 'Selector test failed';
     if (result.status === 'ok') toast.success(summary);
     else toast.error(summary);
+  };
+
+  const handleTestToken = async (provider) => {
+    const result = await testMessageToken(provider).catch(() => null);
+    if (result?.token) toast.success(`${provider} token is valid`);
+    else toast.error(`${provider} token is invalid or expired`);
+    fetchTokenStatus();
+  };
+
+  const handleClearToken = async (provider) => {
+    if (clearingTokens[provider]) return;
+    setClearingTokens(prev => ({ ...prev, [provider]: true }));
+    const cleared = await clearMessageToken(provider).then(() => true).catch(() => false);
+    setClearingTokens(prev => ({ ...prev, [provider]: false }));
+    if (!cleared) return;
+    toast.success(`${provider} token cleared`);
+    fetchTokenStatus();
   };
 
   return (
@@ -313,6 +344,63 @@ export default function SyncTab({ accounts, onRefresh }) {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Token Debug (after selectors so selector controls keep their DOM order) */}
+      <div>
+        <h2 className="text-lg font-semibold text-white mb-3">Token Debug</h2>
+        <p className="text-sm text-gray-500 mb-3">
+          API tokens extracted from Outlook and Teams browser sessions.
+        </p>
+        {tokenLoading ? (
+          <RefreshCw size={16} className="text-port-accent animate-spin" />
+        ) : !tokenStatus ? (
+          <p className="text-sm text-gray-500">Could not load token status</p>
+        ) : (
+          <div className="space-y-2">
+            {(tokenStatus.providers || []).map((status) => (
+              <div
+                key={status.provider}
+                className="flex items-center justify-between p-4 bg-port-card rounded-lg border border-port-border"
+              >
+                <div>
+                  <div className="text-sm font-medium text-white capitalize">{status.provider}</div>
+                  <div className="text-xs text-gray-500">
+                    {status.hasToken ? (
+                      <span className="text-port-success">Token present</span>
+                    ) : (
+                      <span className="text-gray-500">No token</span>
+                    )}
+                    {status.expiresAt && (
+                      <span className="ml-2">Expires: {formatDateTime(status.expiresAt)}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTestToken(status.provider)}
+                    aria-label={`Test ${status.provider} token`}
+                    className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-white bg-port-border rounded transition-colors"
+                    title="Test token"
+                  >
+                    <TestTube size={12} /> Test token
+                  </button>
+                  {status.hasToken && (
+                    <button
+                      onClick={() => handleClearToken(status.provider)}
+                      disabled={clearingTokens[status.provider]}
+                      aria-label={`Clear ${status.provider} token`}
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-port-error bg-port-border rounded transition-colors disabled:opacity-50"
+                      title="Clear token"
+                    >
+                      <Trash2 size={12} /> Clear token
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
