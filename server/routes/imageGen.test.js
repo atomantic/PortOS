@@ -777,6 +777,51 @@ describe('Image Gen Routes', () => {
       expect(preview.body.referenceImages.map(item => item.filename)).toEqual(references);
     });
 
+    it.each([
+      ['flux3-klein-q4', 10, 'FLUX3_INPUT_UNSUPPORTED'],
+      ['minimax-h3-image-bf16', 16, 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED'],
+    ])('previews and queues canon and request references at the %s limit', async (modelId, referenceCap, inputError) => {
+      const canonNames = ['example-neutral.png', 'example-profile.png', 'example-full-body.png', 'example-hall.png'];
+      const references = Array.from({ length: referenceCap - canonNames.length + 1 }, (_, index) => `example-${modelId}-${index}.png`);
+      await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = {
+        prompt: 'The scout arrives', mode: 'local', modelId, referenceImageFiles: references.slice(1),
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const settings = { imageGen: { mode: 'local' } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+
+      expect([preview.status, preview.body.error, submit.status, submit.body.error]).toEqual([200, undefined, 200, undefined]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      const expected = [...canonNames, ...body.referenceImageFiles];
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual(expected);
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual(expected);
+      expect(preview.body.sentPrompt).toBe(params.prompt);
+      expect(preview.body.sentNegativePrompt).toBeUndefined();
+      expect(params.negativePrompt).toBe('');
+      expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ label: 'Visual exclusions', text: expect.stringContaining('wrong face') }));
+      expect(params.prompt).toContain('wrong face');
+      expect(params.visualConditioning.compiledNegativePrompt).toBe('');
+      expect(params.visualConditioning.capability.referenceBudget).toBe(referenceCap);
+
+      const { assertFlux3Inputs } = await import('../services/imageGen/flux3Runtime.js');
+      const { assertMinimaxH3ImageInputs } = await import('../services/imageGen/minimaxH3ImageRuntime.js');
+      const assertRunnerInputs = modelId.startsWith('flux3') ? assertFlux3Inputs : assertMinimaxH3ImageInputs;
+      expect(() => assertRunnerInputs({ ...params, referenceCount: params.referenceImagePaths.length })).not.toThrow();
+
+      getSettings.mockResolvedValueOnce(settings);
+      const overflow = await request(app).post('/api/image-gen/generate').send({ ...body, referenceImageFiles: references });
+      expect([overflow.status, overflow.body.code]).toEqual([400, 'FABLELOOM_INPUT_BUDGET_EXCEEDED']);
+
+      getSettings.mockResolvedValueOnce(settings);
+      const negative = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, negativePrompt: 'blur' });
+      expect([negative.status, negative.body.code]).toEqual([400, inputError]);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledOnce();
+    });
+
     it.each(['fal'])('retains more than four authored references on %s', async mode => {
       const references = Array.from({ length: 5 }, (_, index) => `example-cloud-${index}.png`);
       await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));

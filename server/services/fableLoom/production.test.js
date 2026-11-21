@@ -601,41 +601,6 @@ describe('fableLoom production service', () => {
     }));
   });
 
-  it.each([
-    { id: 'flux3-klein-q4', runner: 'flux3', referenceCap: 10 },
-    { id: 'minimax-h3-image', runner: 'minimax-h3-image', maxReferenceImages: 16, referenceCap: 16 },
-  ])('honors the $id reference cap across canon and request images', async ({ referenceCap, ...model }) => {
-    const dir = await mkdtemp(join(tmpdir(), 'fableloom-input-cap-'));
-    const originalImages = PATHS.images;
-    PATHS.images = dir;
-    try {
-      const paths = Array.from({ length: referenceCap }, (_, index) => join(dir, `reference-${index}.png`));
-      await Promise.all(paths.map(path => writeFile(path, 'synthetic image')));
-      const canonPath = join(dir, 'canon.png');
-      await writeFile(canonPath, 'synthetic canon image');
-      imagePrepareMocks.selectLocalImageModelFromSettings.mockReturnValue(model);
-      const realCompiler = await vi.importActual('./visualConditioning.js');
-      visualConditioningMocks.fableLoomImageCapabilities.mockImplementation(realCompiler.fableLoomImageCapabilities);
-      visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({
-        prompt: 'A scene', referenceImagePaths: [canonPath], referenceImageStrengths: [1],
-      });
-      const prepare = referenceImagePaths => prepareFableLoomImageParams({ mode: 'local', settings: {}, params: {
-        prompt: 'A scene', modelId: model.id, referenceImagePaths,
-        fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
-      } });
-      const prepared = await prepare(paths.slice(1));
-      expect(visualConditioningMocks.compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
-        capability: expect.objectContaining({ referenceBudget: referenceCap, referenceRoles: expect.arrayContaining(['character-neutral']) }),
-      }));
-      expect(prepared.referenceImagePaths).toEqual([canonPath, ...paths.slice(1)]);
-      expect(prepared.referenceImageStrengths).toEqual(Array(referenceCap).fill(1));
-      await expect(prepare(paths)).rejects.toMatchObject({ code: 'FABLELOOM_INPUT_BUDGET_EXCEEDED' });
-    } finally {
-      PATHS.images = originalImages;
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it('replays the same authored conditioning after persistence and refuses changed input bytes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'fableloom-replay-'));
     const originalImages = PATHS.images;
