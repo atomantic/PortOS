@@ -34,8 +34,8 @@ vi.mock('./privacySubjects.js', () => ({
 vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: scrubMock }));
 vi.mock('./privacyBrokers.js', () => ({ clearSubjectIdentityEvidence: clearEvidenceMock }));
 
-const { eraseMock, scrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), scrubMock: vi.fn(async () => 0) }));
-vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: scrubMock }));
+const { eraseMock, draftScrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), draftScrubMock: vi.fn(async () => 0) }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: draftScrubMock }));
 
 const {
   deleteVaultRecord, createVaultRecord, listVaultRecords, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
@@ -270,7 +270,7 @@ describe('getVaultStatus', () => {
 
 describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
   it('erases drafts that cite the record and scrubs its decrypted value from legacy drafts', async () => {
-    eraseMock.mockClear(); scrubMock.mockClear();
+    eraseMock.mockClear(); draftScrubMock.mockClear();
     const client = { query: vi.fn(async () => ({ rows: [{
       id: 'r1', type: 'phone', subject_id: 'subject-2', value_enc: encryptValue('555-0100'),
     }] })) };
@@ -280,16 +280,16 @@ describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
     expect(predicate({ privacyMeta: { vaultRecordIds: ['x', 'r1'] } })).toBe(true);
     expect(predicate({ privacyMeta: { vaultRecordIds: ['x'] } })).toBe(false);
     expect(predicate({})).toBe(false);
-    expect(scrubMock).toHaveBeenCalledWith(['555-0100']);
+    expect(draftScrubMock).toHaveBeenCalledWith(['555-0100']);
   });
 
   it('never decrypts a sensitive-type value for the legacy scrub', async () => {
-    scrubMock.mockClear();
+    draftScrubMock.mockClear();
     const client = { query: vi.fn(async () => ({ rows: [{
       id: 'r2', type: 'ssn', subject_id: 'subject-2', value_enc: encryptValue('000-00-0000'),
     }] })) };
     withTransactionMock.mockImplementation(async (fn) => fn(client));
     await deleteVaultRecord('r2');
-    expect(scrubMock).toHaveBeenCalledWith([]);
+    expect(draftScrubMock).toHaveBeenCalledWith([]);
   });
 });
