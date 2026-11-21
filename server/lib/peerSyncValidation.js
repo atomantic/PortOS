@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalog/catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
+import { MEDIA_COLLECTION_ITEMS_MAX } from './mediaItemKey.js';
 
 // Wire/request schemas for federated peer-to-peer record sync (see server/services/sharing/peerSync.js).
 
@@ -136,6 +137,7 @@ const seriesPushSchema = z.object({
 const mediaCollectionPushSchema = z.object({
   kind: z.literal('mediaCollection'),
   ...peerSyncPushBase,
+  assetManifest: z.array(peerAssetManifestEntrySchema).max(MEDIA_COLLECTION_ITEMS_MAX),
 }).strict();
 // Author personas push the bare record + headshot via the asset manifest; `.strict()` rejects smuggled bundle keys.
 const authorPushSchema = z.object({

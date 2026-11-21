@@ -30,7 +30,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { ITEM_KIND, REF_MAX_LENGTH, itemKey, parseKey } from '../lib/mediaItemKey.js';
+import { ITEM_KIND, REF_MAX_LENGTH, MEDIA_COLLECTION_ITEMS_MAX, itemKey, parseKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { compareNewerWins, compareEarlierWins, parseTsMs } from '../lib/lwwTimestamp.js';
@@ -47,7 +47,7 @@ export const ERR_VALIDATION = 'VALIDATION_ERROR';
 
 export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
-export const ITEMS_MAX = 5000;
+export const ITEMS_MAX = MEDIA_COLLECTION_ITEMS_MAX;
 
 // Bounded fan-out for the multi-record snapshot-merge / GC-sweep loops. Distinct
 // record ids ride distinct per-record write queues, so these are safe to run
