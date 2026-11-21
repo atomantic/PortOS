@@ -37,13 +37,12 @@ vi.mock('../services/videoGen/history.js', () => ({ loadHistory: async () => [
 ] }));
 vi.mock('../services/peerHostedMedia.js', () => ({
   resolveMediaLocations: vi.fn(async items => items.map(item => ({
-    location: item.ref === 'missing.png' || item.ref === 'clip-id' ? 'missing' : 'remote',
+    location: item.ref === 'missing.png' || item.ref === 'actual-name.mp4' ? 'missing' : 'remote',
   }))),
   findHostPeer: vi.fn(),
   unmarkHosted: vi.fn(),
 }));
 vi.mock('../services/sharing/peerSyncAssets.js', () => ({
-  collectionVideoRefToFilename: vi.fn(),
   pullMissingAssetsFromPeer: vi.fn(),
 }));
 

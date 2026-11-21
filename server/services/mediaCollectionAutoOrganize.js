@@ -144,12 +144,8 @@ async function organize() {
     for (const item of bucket.items) refs.set(itemKey(item), item);
   }
 
-  // Video history ids can differ from the actual stored filename (exports
-  // and downloads). Keep the id for membership and resolve using the filename.
-  const videoFiles = new Map(videos.map(video => [video.id, video.filename]));
   const { resolveMediaLocations } = await import('./peerHostedMedia.js');
-  const locations = await resolveMediaLocations([...refs.values()].map(item => item.kind === 'video' && videoFiles.has(item.ref)
-    ? videoItem(videoFiles.get(item.ref)) : item));
+  const locations = await resolveMediaLocations([...refs.values()]);
   const available = new Set([...refs.keys()].filter((_, index) => locations[index].location !== 'missing' && !locations[index].pendingDelete));
   const result = { added: 0, updatedCollections: 0, missingAssets: refs.size - available.size, failedCollections: 0 };
 
