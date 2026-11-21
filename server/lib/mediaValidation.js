@@ -434,6 +434,8 @@ export const localLlmCompareSchema = z.object({
 export const mediaCollectionJoinSchema = (nameMaxLength) => z.object({
   name: z.string().trim().min(1).max(nameMaxLength),
   collectionIds: z.array(z.string().min(1).max(128)).min(2),
+  // Default merges: the other selected collections are retired into the result.
+  keepOriginals: z.boolean().optional(),
 }).strict();
 
 // `ref` rules mirror server/services/mediaCollections.js#sanitizeItem: ":"

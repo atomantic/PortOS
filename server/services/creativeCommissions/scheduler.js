@@ -486,8 +486,13 @@ async function fireCommission(commission, trigger) {
     // geometry defaults (the planner only forces that geometry onto video render
     // steps) and let their directive drive the non-video tools.
     const projectParams = abilityAdapter.buildProjectParams(commission, { defaultVideoModelId });
+    // Every run of this job files into one collection named for the job, not
+    // a new dated collection per fire.
+    const { findOrCreateCommissionCollection } = await import('../mediaCollections.js');
+    const collection = await findOrCreateCommissionCollection({ commissionId, commissionName: commission.name });
     const project = await createProject({
       name: `${baseName}${dateSuffix}`,
+      collectionId: collection.id,
       ...projectParams,
       styleSpec: composeCommissionStyleSpec(commission.brief?.styleSpec, styleSource),
       // The style source's reference images as data, not just served paths in

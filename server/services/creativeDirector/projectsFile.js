@@ -35,6 +35,8 @@ export async function createProject(input) {
     seeded.videoOwnerInstanceId = await ensureInstanceId();
   }
   return store.createProject(seeded, async ({ id }) => {
+    // A Creative Commission run files into its job's shared collection.
+    if (typeof input.collectionId === 'string' && input.collectionId) return { collectionId: input.collectionId };
     const collection = await createCollection({
       name: `Creative Director: ${input.name}`,
       description: `Auto-created for project ${id}`,

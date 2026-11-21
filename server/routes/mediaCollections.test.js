@@ -94,7 +94,7 @@ describe('mediaCollections routes — provenance (#3311)', () => {
 });
 
 describe('mediaCollections routes — join', () => {
-  it('creates a named collection with the union of items and preserves the sources', async () => {
+  it('creates a named collection with the union of items and keeps the sources when asked', async () => {
     const first = await create('First source');
     const second = await create('Second source');
     await api('post', `/${first.id}/items`, { kind: 'image', ref: 'shared' });
@@ -102,14 +102,44 @@ describe('mediaCollections routes — join', () => {
     await api('post', `/${second.id}/items`, { kind: 'video', ref: 'shared' });
 
     const joined = await api('post', '/join', {
-      name: '  Selected media — 2026  ', collectionIds: [first.id, second.id, first.id],
+      name: '  Selected media — 2026  ', collectionIds: [first.id, second.id, first.id], keepOriginals: true,
     });
     expect(joined.status).toBe(201);
-    expect(joined.body).toMatchObject({ name: 'Selected media — 2026', source: 'user' });
+    expect(joined.body).toMatchObject({ name: 'Selected media — 2026', source: 'user', removedCollectionIds: [] });
     expect([first.id, second.id]).not.toContain(joined.body.id);
     expect(keysOf((await api('get', `/${joined.body.id}`)).body)).toEqual(['image:shared', 'video:shared']);
     expect(keysOf((await api('get', `/${first.id}`)).body)).toEqual(['image:shared']);
     expect(keysOf((await api('get', `/${second.id}`)).body)).toEqual(['image:shared', 'video:shared']);
+  });
+
+  it('merges into the same-named collection and retires the other sources', async () => {
+    const keeper = await create('Creative Director: Daily Video');
+    const dated = await create('Creative Director: Daily Video — 2026-07-16');
+    const twin = await create('creative director: daily video');
+    await api('post', `/${keeper.id}/items`, { kind: 'video', ref: 'v1' });
+    await api('post', `/${dated.id}/items`, { kind: 'video', ref: 'v2' });
+    await api('post', `/${twin.id}/items`, { kind: 'video', ref: 'v3' });
+
+    const joined = await api('post', '/join', { name: 'Creative Director: Daily Video', collectionIds: [dated.id, keeper.id, twin.id] });
+    expect(joined.status).toBe(201);
+    // Both case-insensitive matches qualify; the first selected one in order wins.
+    expect(joined.body.id).toBe(keeper.id);
+    expect(joined.body.removedCollectionIds).toEqual([dated.id, twin.id]);
+    expect(keysOf((await api('get', `/${keeper.id}`)).body)).toEqual(['video:v1', 'video:v2', 'video:v3']);
+    expect((await api('get', `/${dated.id}`)).status).toBe(404);
+    expect((await api('get', `/${twin.id}`)).status).toBe(404);
+    const names = (await api('get')).body.map((c) => c.name);
+    expect(names.filter((n) => n.toLowerCase() === 'creative director: daily video')).toHaveLength(1);
+  });
+
+  it('re-points a Creative Director project at the merged collection before retiring its old one', async () => {
+    const { createProject, getProject } = await import('../services/creativeDirector/local.js');
+    const project = await createProject({ name: 'Daily Video — 2026-07-17', aspectRatio: '16:9', quality: 'standard', modelId: 'example-model', targetDurationSeconds: 10 });
+    const target = await create('Creative Director: Daily Video');
+
+    const joined = await api('post', '/join', { name: target.name, collectionIds: [project.collectionId, target.id] });
+    expect(joined.body.removedCollectionIds).toEqual([project.collectionId]);
+    expect((await getProject(project.id)).collectionId).toBe(target.id);
   });
 
   it('rejects invalid selections without creating a destination', async () => {

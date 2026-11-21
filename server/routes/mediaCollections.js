@@ -2,7 +2,10 @@
  *   GET    /api/media/collections                  → Collection[]       (`?limit`/`?offset` switch it to
  *                                                                       `{ items, total, limit, offset }`)
  *   POST   /api/media/collections                  → Collection         (body: { name, description? })
- *   POST   /api/media/collections/join             → Collection         (body: { name, collectionIds })
+ *   POST   /api/media/collections/join             → Collection & { removedCollectionIds, keptCollectionIds }
+ *                                                  (body: { name, collectionIds, keepOriginals? }; merges into the
+ *                                                  selected collection already named `name`, else a new one, and
+ *                                                  retires the other non-owner-managed sources)
  *   GET    /api/media/collections/:id              → Collection
  *                                                  Each item carries `location` ('local' | 'remote' | 'missing')
  *                                                  and, when remote, `hostPeerId`/`hostPeerName` (peer-hosted media)

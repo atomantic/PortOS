@@ -114,6 +114,14 @@ export async function createProject(input) {
   return project;
 }
 
+/** Re-point projects filing into any of `fromIds` at collection `toId` (a collection join). */
+export async function repointProjectCollections(fromIds, toId) {
+  const from = new Set(fromIds);
+  const projects = (await listProjects()).filter((project) => from.has(project.collectionId));
+  for (const project of projects) await updateProject(project.id, { collectionId: toId });
+  return projects.length;
+}
+
 export async function updateProject(id, patch) {
   const next = await (await selectBackend()).updateProject(id, patch);
   // A standalone project reaches peers only via its per-record subscription —

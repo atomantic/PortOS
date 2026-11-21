@@ -356,15 +356,42 @@ async function persistNewCollection({ name, description = '', source = 'user' },
   return created;
 }
 
-export async function joinCollections({ name, collectionIds }) {
-  const ids = new Set(collectionIds);
-  if (ids.size < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
+// An owner-managed collection has a deterministic id (mood board, music video,
+// deck, commission, …) or a universe/series link: its owner finds it by that id,
+// so a join copies its items but never retires it.
+const RANDOM_COLLECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isOwnerManaged = (collection) => !RANDOM_COLLECTION_ID.test(collection.id)
+  || Boolean(collection.universeId) || Boolean(collection.seriesId);
+
+// Point every record that files renders into `fromId` at `toId`, so retiring
+// `fromId` does not make its owner mint a fresh bucket on the next render.
+async function retargetCollectionOwners(fromId, toId) {
+  const [{ repointProjectCollections }, { repointWorkMediaCollections }] = await Promise.all([
+    import('./creativeDirector/local.js'),
+    import('./writersRoom/local.js'),
+  ]);
+  await repointProjectCollections([fromId], toId);
+  await repointWorkMediaCollections([fromId], toId);
+}
+
+/**
+ * Merge several collections into one. The destination is the selected
+ * collection already carrying `name` (an owner-managed one first), else a new
+ * collection. Unless `keepOriginals`, every other selected collection is then
+ * retired: its owners are re-pointed at the destination and it is tombstoned,
+ * so the merge propagates to peers. Owner-managed sources are kept.
+ */
+export async function joinCollections({ name, collectionIds, keepOriginals = false }) {
+  const ids = [...new Set(collectionIds)];
+  if (ids.length < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
 
   // Read each source before writing the destination so a stale selection or
   // oversized union leaves no empty or partially populated collection behind.
+  const sources = [];
   const itemsByKey = new Map();
   for (const id of ids) {
     const collection = await getCollection(id);
+    sources.push(collection);
     for (const item of collection.items) {
       const key = itemKey(item);
       const existing = itemsByKey.get(key);
@@ -374,7 +401,24 @@ export async function joinCollections({ name, collectionIds }) {
       throw codedError(`Joined collection exceeds the limit of ${ITEMS_MAX} items`, ERR_VALIDATION);
     }
   }
-  return persistNewCollection({ name }, [...itemsByKey.values()]);
+  const union = [...itemsByKey.values()];
+  const needle = name.trim().toLowerCase();
+  const named = sources.filter((c) => c.name.trim().toLowerCase() === needle);
+  const target = named.find(isOwnerManaged) ?? named[0] ?? null;
+  const joined = target
+    ? (await bulkUpdateCollectionItems(target.id, { add: union.map(({ kind, ref }) => ({ kind, ref })) })).collection
+    : await persistNewCollection({ name }, union);
+
+  const removedCollectionIds = [];
+  const keptCollectionIds = [];
+  for (const source of sources) {
+    if (source.id === joined.id) continue;
+    if (keepOriginals || isOwnerManaged(source)) { keptCollectionIds.push(source.id); continue; }
+    await retargetCollectionOwners(source.id, joined.id);
+    await deleteCollection(source.id);
+    removedCollectionIds.push(source.id);
+  }
+  return { ...joined, removedCollectionIds, keptCollectionIds };
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
@@ -729,6 +773,23 @@ export async function findOrCreateDeckCollection({ deckId, deckName }) {
   const collection = await findOrCreateFixedCollection(`deck-${deckId}`, {
     name,
     description: 'Images generated for this deck.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// One collection per Creative Commission: every scheduled run of the same job
+// files into it instead of minting a dated bucket per fire. The id derives
+// from the commission id so peers converge on one bucket.
+export const commissionCollectionId = (commissionId) => `cdc-${String(commissionId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+export const commissionCollectionNameFor = (commissionName) =>
+  `Creative Director: ${typeof commissionName === 'string' && commissionName.trim() ? commissionName.trim() : 'Untitled job'}`.slice(0, NAME_MAX_LENGTH);
+
+export async function findOrCreateCommissionCollection({ commissionId, commissionName }) {
+  if (!commissionId || typeof commissionId !== 'string') throw codedError('commissionId is required', ERR_VALIDATION);
+  const name = commissionCollectionNameFor(commissionName);
+  const collection = await findOrCreateFixedCollection(commissionCollectionId(commissionId), {
+    name,
+    description: 'Every render from this Creative Director job.',
   });
   return collection.name === name ? collection : updateCollection(collection.id, { name });
 }
