@@ -131,7 +131,7 @@ vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <d
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
 vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div>Episode validation</div> }));
 
-import { getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo } from '../services/apiFableLoom.js';
+import { addLoomNode, getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo } from '../services/apiFableLoom.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { getPipelineSeries } from '../services/apiPipeline.js';
 import { listStoryboards, makeStoryboardFromFableLoom } from '../services/apiStoryboards.js';
@@ -534,6 +534,38 @@ describe('FableLoomStory scene media lifecycle', () => {
     renderEditor();
 
     expect(await screen.findByRole('button', { name: 'Canvas generate image' })).toBeDisabled();
+  });
+
+  it('explains why Render is disabled when the open composer receives a blocked episode', async () => {
+    const user = userEvent.setup();
+    const initialEpisode = episode({
+      nodes: [{ id: 'node-1', title: 'Threshold', imagePrompt: 'An ancient gate', transitions: [] }],
+    });
+    const initial = loom({ universeId: 'universe-1', episodes: [initialEpisode] });
+    getLoom.mockResolvedValue(initial);
+    getUniverse.mockResolvedValue({ id: 'universe-1' });
+    let finishAddingScene;
+    addLoomNode.mockImplementationOnce(() => new Promise(resolve => { finishAddingScene = resolve; }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Add scene' }));
+    await user.click(await findEnabledByRole('button', { name: 'Canvas generate image' }));
+    const composer = within(await screen.findByRole('dialog', { name: 'Render scene image' }));
+    const renderButton = await findEnabledByRole('button', { name: 'Render', exact: true });
+
+    finishAddingScene({
+      ...initial,
+      episodes: [{
+        ...initialEpisode,
+        storyOutline: null,
+        nodes: [...initialEpisode.nodes, { id: 'node-2', title: 'New scene', transitions: [] }],
+      }],
+    });
+
+    expect(await composer.findByText(
+      'Validate the complete ordered beat arc before generating media (Episode 1 still needs outline review).',
+    )).toBeVisible();
+    expect(renderButton).toBeDisabled();
   });
 
   it('queues a linked scene for the compiler to style and notifies when the render later fails', async () => {
