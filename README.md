@@ -32,7 +32,7 @@ Every page is one tap from the `⌘K` palette, and voice mode can drive it too. 
 
 ## What it runs
 
-PortOS is five background processes on your machine (managed by [PM2](https://pm2.keymetrics.io)), plus the models, agents, and services they call.
+PortOS is four background processes on your machine (managed by [PM2](https://pm2.keymetrics.io)), plus the models, agents, and services they call.
 
 ```mermaid
 flowchart TB
@@ -43,7 +43,7 @@ flowchart TB
     db[("PostgreSQL<br/>+ pgvector")]
     cos["<b>portos-cos</b><br/>agent runner"]
     browser["<b>portos-browser</b><br/>PortOS Browser<br/>(Chrome)"]
-    fixer["<b>portos-autofixer</b><br/>+ autofixer-ui"]
+    fixer["<b>portos-autofixer</b><br/>crash monitor + dashboard"]
     local["<b>Local models</b><br/>LLM: Ollama · LM Studio<br/>llama.cpp · MTPLX<br/>Video: LTX-2.5 · Wan 2.2<br/>MiniMax H3 (MLX)<br/>Image: FLUX.2 · MOSS<br/>Voice: Whisper · Piper<br/>Qwen3-TTS<br/>Music: ACE-Step · MusicGen<br/>3D: TRELLIS.2"]
   end
 
@@ -70,7 +70,7 @@ flowchart TB
 - **portos-cos** runs Chief of Staff agents in their own process, so a long agent run never stalls the app.
 - **portos-browser** is a managed Chrome that PortOS drives for sites without an API, like Gemini video and publishing.
 - **portos-autofixer** watches the other processes and asks an agent to fix a crash.
-- In development, a sixth process (`portos-ui`, Vite on `:5554`) adds hot reload.
+- In development, a fifth process (`portos-ui`, Vite on `:5554`) adds hot reload.
 
 Ports are listed in [docs/PORTS.md](./docs/PORTS.md) and the full design in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 

@@ -10,7 +10,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 
 | Doc | Covers |
 |-----|--------|
-| [SCRIPTS.md](./SCRIPTS.md) | Every `npm run` maintenance command and the operator scripts in `scripts/`, with when to run each |
+| [SCRIPTS.md](./SCRIPTS.md) | Selected `npm run` maintenance commands (API, lint, setup helpers, password reset, hidden-content scan) and the standalone operator and ML scripts under `scripts/`, with when to run each |
 | [CODEX_USAGE_PREVIEW.md](./CODEX_USAGE_PREVIEW.md) | Read-only bounded Codex raw/compressed/archive usage preview, deduplication and coverage limits |
 | [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [FLUX3_IMAGE.md](./FLUX3_IMAGE.md) | FLUX.3 Klein MLX profiles, isolated runtime, reference edits and license/access behavior |
