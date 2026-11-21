@@ -14,7 +14,7 @@ import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
+import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import { queueHealthWrite } from './meatspaceWriteQueues.js';
@@ -562,12 +562,22 @@ export async function removeBloodPressureReading(date) {
   return target;
 }
 
+// `snapshots` maps each pre-import row object (by reference: mergeBloodTests
+// mutates matching rows in place, and id-less rows have no other handle) to a
+// shallow copy taken before the merge.
 function stampImportedBloodRow(row, snapshots, now) {
-  if (!row?.id) return { ...row, id: randomUUID(), createdAt: now };
-  const prior = snapshots.get(row.id);
-  // An analyte added to a legacy row changes its content key. Keep the old
-  // key as an alias so a peer that still holds the pre-import copy matches.
-  return prior ? retainContentKey(prior, row) : row;
+  const prior = snapshots.get(row);
+  if (!prior) return { ...row, id: randomUUID(), createdAt: now };
+  if (canonicalStringify(prior) === canonicalStringify(row)) return row;
+  // Analytes added in place are an edit: without a newer `updatedAt` the peer's
+  // pre-import copy ties on the stamp and wins the merge, dropping the labs.
+  // An id-less legacy row takes its pre-import content key as its id (what
+  // every peer computes) rather than a fresh random id, so copies still match.
+  const edited = { ...row, updatedAt: now };
+  if (!edited.id) edited.id = rowIdentityKeys(prior).at(-1);
+  // The added analytes change a legacy row's content key; keep the old one as
+  // an alias so a peer that still holds the pre-import copy matches.
+  return retainContentKey(prior, edited);
 }
 
 async function mergeLocalReferenceRanges(fhirRanges) {
@@ -588,8 +598,9 @@ async function mergeLocalReferenceRanges(fhirRanges) {
 /**
  * Merge FHIR labs into the blood store inside the health write queue.
  * `mergeBloodTests` stays in the clinical module (this file must not import
- * it — that module already imports here). Rows that already have an id keep
- * it and do not gain `createdAt`; only a brand-new date is minted. Tombstones
+ * it — that module already imports here). A row that gains analytes is stamped
+ * `updatedAt` (an edit); an untouched row is left byte-identical; only a
+ * brand-new date is minted an id and `createdAt`. Tombstones
  * already on the file are preserved. MortalLoom, when on, is updated in place
  * and is never written back over the local file.
  */
@@ -605,7 +616,7 @@ export async function commitClinicalBloodImport(fhirData, mergeBloodTests) {
     const data = await loadLocalRowUnionQueued(BLOOD_TESTS_FILE, 'tests');
     if (!Array.isArray(data.tests)) throw new Error('Blood tests malformed');
     const existingDates = new Set(data.tests.map(row => row?.date));
-    const snapshots = new Map(data.tests.filter(row => row?.id).map(row => [row.id, { ...row }]));
+    const snapshots = new Map(data.tests.filter(isPlainObject).map(row => [row, { ...row }]));
     const merged = mergeBloodTests(data, { tests: fhirTests, referenceRanges: fhirRanges });
     const now = new Date().toISOString();
     const tests = merged.tests.map(row => stampImportedBloodRow(row, snapshots, now));
