@@ -114,10 +114,17 @@ it('keeps opted-in vault facts in the API dispatch only and makes its archive ma
   expect(updateTask.mock.calls[0][1].metadata).not.toHaveProperty('machineLocal');
 });
 
-it('preserves a prompt without vault facts and keeps its agent eligible to federate', async () => {
-  await dispatchAgentRun(newContext());
+it.each([
+  { policy: 'no task marker', metadata: {}, machineLocal: false },
+  { policy: 'explicit task marker', metadata: { machineLocal: true }, machineLocal: true },
+  { policy: 'legacy string task marker', metadata: { machineLocal: 'true' }, machineLocal: true },
+])('preserves a prompt without vault facts and applies $policy', async ({ metadata, machineLocal }) => {
+  const context = { ...newContext(), task: { ...task, metadata } };
+
+  await dispatchAgentRun(context);
+
   expect(writeFileGuarded).toHaveBeenCalledWith(expect.stringMatching(/prompt\.txt$/), f.prompt);
-  expect(registerAgent).toHaveBeenCalledWith('agent-x', task.id, expect.objectContaining({ machineLocal: false }));
+  expect(registerAgent).toHaveBeenCalledWith(context.agentId, task.id, expect.objectContaining({ machineLocal }));
 });
 
 describe('dispatchAgentRun with a server-provisioned claim checkout (#15517)', () => {
