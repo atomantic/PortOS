@@ -40,4 +40,51 @@ describe('memoryClassifier getConfig — env-derived endpoint', () => {
     const config = await getConfig();
     expect(config.endpoint).toBe('http://localhost:1234/v1/chat/completions');
   });
+
+  it('omits raw model response text from parse-failure logs (#17199)', async () => {
+    const fixtureSentence = 'Personal note about a private appointment';
+    const rawResponse = `Not valid JSON: ${fixtureSentence}`;
+
+    vi.doMock('../lib/fetchWithTimeout.js', () => ({
+      fetchWithTimeout: vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: rawResponse } }] }),
+        text: async () => JSON.stringify({ choices: [{ message: { content: rawResponse } }] })
+      })
+    }));
+    vi.doMock('./promptService.js', () => ({
+      getStageTemplate: vi.fn().mockResolvedValue('Classify: {{taskDescription}} {{agentOutput}} {{existingMemories}}')
+    }));
+    vi.doMock('./memoryBackend.js', () => ({
+      getMemories: vi.fn().mockResolvedValue({ memories: [] })
+    }));
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { classifyMemories } = await import('./memoryClassifier.js');
+      const result = await classifyMemories(
+        { id: 'task-1', description: 'Check logs' },
+        'x'.repeat(120)
+      );
+
+      expect(result).toEqual({
+        memories: [],
+        rejected: [],
+        usedLLM: true,
+        error: 'Failed to parse LLM response',
+        fallbackAvailable: true
+      });
+
+      const logged = logSpy.mock.calls.map(args => args.join(' '));
+      const parseFailLog = logged.find(line => line.includes('Failed to parse LLM response'));
+      expect(parseFailLog).toBeDefined();
+      expect(parseFailLog).toContain(`${rawResponse.length} chars`);
+      expect(logged.join('\n')).not.toContain(fixtureSentence);
+    } finally {
+      logSpy.mockRestore();
+      vi.doUnmock('../lib/fetchWithTimeout.js');
+      vi.doUnmock('./promptService.js');
+      vi.doUnmock('./memoryBackend.js');
+    }
+  });
 });

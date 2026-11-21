@@ -1548,6 +1548,22 @@ describe('cosTaskStore.addTask', () => {
     expect(tasks).toHaveLength(1);
   });
 
+  it('logs only the duplicate task id without the task description (#17199)', async () => {
+    const fixtureSentence = 'Private personal reminder about a doctor visit';
+    const first = await addTask({ description: fixtureSentence, app: 'portos' }, 'user');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const second = await addTask({ description: fixtureSentence, app: 'portos' }, 'user');
+      expect(second.duplicate).toBe(true);
+      expect(second.id).toBe(first.id);
+      const logged = logSpy.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain(first.id);
+      expect(logged).not.toContain(fixtureSentence);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('does NOT treat same description against different apps as a duplicate', async () => {
     await addTask({ description: 'shared', app: 'portos' }, 'user');
     const second = await addTask({ description: 'shared', app: 'bookloom' }, 'user');

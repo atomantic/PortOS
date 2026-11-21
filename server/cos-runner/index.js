@@ -941,7 +941,7 @@ app.post('/btw/:agentId', async (req, res) => {
   const header = existing ? '' : '# Additional Context from User\n\nThe user has sent you additional context while you are working. Read and incorporate this information.\n';
   await writeFile(btwPath, header + existing + entry);
 
-  console.log(`💬 BTW message delivered to agent ${agentId}: ${message.substring(0, 80)}`);
+  console.log(`💬 BTW message delivered to agent ${agentId} (${message.length} chars)`);
 
   // Emit the btw event so the main server can track it
   emitToServer('agent:btw', { agentId, message, timestamp });
