@@ -32,9 +32,9 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    spawn: vi.fn((bin, args) => {
+    spawn: vi.fn((bin, args, options) => {
       const child = makeFakeChild();
-      spawnCalls.push({ bin, args, child });
+      spawnCalls.push({ bin, args, cwd: options?.cwd, child });
       return child;
     }),
   };
@@ -166,7 +166,8 @@ describe('agy image provider', () => {
     expect(prompt).toContain('exactly one image');
     expect(prompt).toContain('a fox beneath the stars');
     expect(prompt).toContain('Avoid: watermark');
-    expect(prompt).toContain(stagingPathFor(job.jobId));
+    expect(prompt).toContain('working directory: output.png');
+    expect(prompt).not.toContain(stagingPathFor(job.jobId));
     expect(prompt).toContain('do not modify any code or workspace content');
     await closeChild();
   });
@@ -174,7 +175,7 @@ describe('agy image provider', () => {
   // resolveImageInputPath requires the file to exist under PATHS.images.
   const stageGalleryImages = async (...names) => {
     await mkdir(FAKE_IMAGES_DIR, { recursive: true });
-    for (const name of names) await writeFile(join(FAKE_IMAGES_DIR, name), 'fake');
+    for (const name of names) await writeFile(join(FAKE_IMAGES_DIR, name), `fixture for ${name}`);
   };
 
   it('directs an init image at the tool ImagePaths parameter with a fidelity phrase', async () => {
@@ -188,30 +189,30 @@ describe('agy image provider', () => {
     const { args } = spawnCalls[0];
     const prompt = args[args.indexOf('--print') + 1];
     expect(prompt).toContain('ImagePaths');
-    expect(prompt).toContain(join(FAKE_IMAGES_DIR, 'source.png'));
+    expect(prompt).toContain('in this order: input-1.png');
+    expect(prompt).not.toContain(FAKE_IMAGES_DIR);
     expect(prompt).toContain('the source image to edit');
     // Low strength → composition-preserving fidelity phrase.
     expect(prompt).toMatch(/preserve composition/i);
     await closeChild();
   });
 
-  it('passes reference images through in order and caps at the tool 3-image limit', async () => {
-    await stageGalleryImages('source.png', 'ref-a.png', 'ref-b.png', 'ref-c.png', 'ref-d.png');
+  it('stages a reference-only render in order and caps it at the tool 3-image limit', async () => {
+    await stageGalleryImages('ref-a.png', 'ref-b.jpg', 'ref-c.webp', 'ref-d.png');
     await agy.generateImage({
       prompt: 'a fox',
-      initImagePath: 'source.png',
-      referenceImagePaths: ['ref-a.png', 'ref-b.png', 'ref-c.png', 'ref-d.png'],
+      referenceImagePaths: ['ref-a.png', 'ref-b.jpg', 'ref-c.webp', 'ref-d.png'],
     });
     const { args } = spawnCalls[0];
     const prompt = args[args.indexOf('--print') + 1];
-    const listed = prompt.slice(prompt.indexOf('ImagePaths parameter, in this order: ')).split('\n')[0];
-    expect(listed).toContain(join(FAKE_IMAGES_DIR, 'source.png'));
-    expect(listed).toContain(join(FAKE_IMAGES_DIR, 'ref-a.png'));
-    expect(listed).toContain(join(FAKE_IMAGES_DIR, 'ref-b.png'));
-    // generate_image accepts at most 3 — the trailing references drop out
-    // rather than being sent and silently ignored.
-    expect(listed).not.toContain('ref-c.png');
-    expect(listed).not.toContain('ref-d.png');
+    expect(prompt).toContain('ImagePaths parameter, in this order: input-1.png, input-2.jpg, input-3.webp\n');
+    expect(prompt).not.toContain(FAKE_IMAGES_DIR);
+    expect(prompt).not.toContain('ref-a.png');
+    expect(await Promise.all(['input-1.png', 'input-2.jpg', 'input-3.webp'].map(name =>
+      readFile(join(spawnCalls[0].cwd, name), 'utf8')))).toEqual([
+      'fixture for ref-a.png', 'fixture for ref-b.jpg', 'fixture for ref-c.webp',
+    ]);
+    expect(existsSync(join(spawnCalls[0].cwd, 'input-4.png'))).toBe(false);
     expect(prompt).toContain('visual references');
     await closeChild();
   });
@@ -326,6 +327,8 @@ describe('agy image provider', () => {
     // Provenance records the FIXED server-side image model, distinct from the
     // agent/session model that drove the CLI (#3231).
     expect(sidecar.imageModel).toBe('imagen-3.0-generate-002');
+    const { args } = spawnCalls[0];
+    expect(sidecar.sentPrompt).toBe(args[args.indexOf('--print') + 1]);
     expect(sidecar.initImageFilename).toBe('source.png');
     expect(sidecar.inputProvenance).toBe('cli-requested');
     expect(sidecar.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
@@ -360,7 +363,7 @@ describe('agy image provider', () => {
   });
 
   it('forbids fabricating the image by any other means', () => {
-    const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox', stagingPath: '/tmp/out.png' });
+    const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox' });
     expect(prompt).toContain('Only the generate_image tool may produce this image');
     expect(prompt).toContain('Reporting the failure is the correct outcome');
   });
@@ -370,7 +373,7 @@ describe('agy image provider', () => {
     // an unsatisfiable instruction that invites the agent to reach for code —
     // and it leaked into the artwork as a rendered caption.
     const prompt = agy._internals.buildAgyPrompt({
-      prompt: 'a fox', stagingPath: '/tmp/out.png', width: 832, height: 1216,
+      prompt: 'a fox', width: 832, height: 1216,
     });
     expect(prompt).not.toContain('832');
     expect(prompt).not.toContain('1216');
@@ -384,7 +387,7 @@ describe('agy image provider', () => {
   // render square.
   describe('buildAgyPrompt aspect ratio', () => {
     const build = (width, height) => agy._internals.buildAgyPrompt({
-      prompt: 'a fox', stagingPath: '/tmp/out.png', width, height,
+      prompt: 'a fox', width, height,
     });
 
     it.each([
@@ -405,7 +408,7 @@ describe('agy image provider', () => {
     });
 
     it('omits the directive entirely when dimensions are absent', () => {
-      const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox', stagingPath: '/tmp/out.png' });
+      const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox' });
       expect(prompt).not.toContain('AspectRatio');
     });
 
@@ -503,10 +506,10 @@ describe('agy image provider — launch refusal settlement', () => {
   });
 
   it('terminates a live child whose setup fails and releases its scratch dir only after it physically closes', async () => {
-    spawn.mockImplementationOnce((bin, args) => {
+    spawn.mockImplementationOnce((bin, args, options) => {
       const child = makeFakeChild();
       child.stdout.on = () => { throw new Error('synthetic stream setup failure'); };
-      spawnCalls.push({ bin, args, child });
+      spawnCalls.push({ bin, args, cwd: options?.cwd, child });
       return child;
     });
     const failed = vi.fn();

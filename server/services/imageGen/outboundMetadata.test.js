@@ -194,25 +194,25 @@ describe('outbound metadata stripping', () => {
 
     // Grok
     await grokImage.generateImage({ prompt: 'relight', initImagePath: 'cli-gps.jpg' });
-    const grokPrompt = spawnCalls[0].child.stdinData;
-    const grokPathMatch = grokPrompt.match(/source image at ([^\s]+)/);
-    expect(grokPathMatch).toBeTruthy();
-    const grokStagedPath = grokPathMatch[1];
-    expect(grokStagedPath).not.toBe(origPath);
-    const grokBytes = await readFile(grokStagedPath);
+    const grokCall = spawnCalls[0];
+    const grokPromptPath = grokCall.args[grokCall.args.indexOf('--prompt-file') + 1];
+    const grokPrompt = grokCall.child.stdinData ?? await readFile(grokPromptPath, 'utf8');
+    const grokInput = grokPrompt.match(/source image at ([^\s]+)/)?.[1];
+    expect(grokInput).toBe('input-1.jpg');
+    expect(grokPrompt).not.toContain(FAKE_IMAGES_DIR);
+    const grokBytes = await readFile(join(grokCall.opts.cwd, grokInput));
     expect((await sharp(grokBytes).metadata()).exif).toBeUndefined();
     expect(grokBytes.includes(Buffer.from('private-location-tag'))).toBe(false);
     await closeSpawned(0);
 
     // Agy
     await agyImage.generateImage({ prompt: 'relight', initImagePath: 'cli-gps.jpg' });
-    const agyArgs = spawnCalls[1].args;
-    const agyPrompt = agyArgs[agyArgs.indexOf('--print') + 1];
-    const agyPathMatch = agyPrompt.match(/in this order: ([^\n]+)/);
-    expect(agyPathMatch).toBeTruthy();
-    const agyStagedPath = agyPathMatch[1].trim();
-    expect(agyStagedPath).not.toBe(origPath);
-    const agyBytes = await readFile(agyStagedPath);
+    const agyCall = spawnCalls[1];
+    const agyPrompt = agyCall.args[agyCall.args.indexOf('--print') + 1];
+    const agyInput = agyPrompt.match(/in this order: ([^\n]+)/)?.[1];
+    expect(agyInput).toBe('input-1.jpg');
+    expect(agyPrompt).not.toContain(FAKE_IMAGES_DIR);
+    const agyBytes = await readFile(join(agyCall.opts.cwd, agyInput));
     expect((await sharp(agyBytes).metadata()).exif).toBeUndefined();
     expect(agyBytes.includes(Buffer.from('private-location-tag'))).toBe(false);
     await closeSpawned(1);

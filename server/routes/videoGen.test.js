@@ -1402,15 +1402,15 @@ describe('videoGen routes', () => {
       const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
       expect(preview.status).toBe(200);
       expect(preview.body.sentPrompt).toContain('<IMAGE_1> shows how Person looks');
-      expect(preview.body.sentPrompt).toContain('/mock/inputs/person.png');
+      expect(preview.body.sentPrompt).toContain('Set images to this character reference: input-2.png');
+      expect(preview.body.sentPrompt).not.toContain('/mock/');
       expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'agent-instructions' }));
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
 
       const submitted = await request(app).post('/api/video-gen/').send(body);
       expect(submitted.status).toBe(200);
       const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
-      const scratchDir = join((await import('node:os')).tmpdir(), 'portos-grok-video-<job>');
-      expect(preview.body.sentPrompt).toBe(grokVideoSentPrompt({ ...params, scratchDir }).record.sentPrompt);
+      expect(preview.body.sentPrompt).toBe(grokVideoSentPrompt(params).record.sentPrompt);
       expect(params.castReferences).toEqual(refs);
     });
 
@@ -1503,7 +1503,7 @@ describe('videoGen routes', () => {
       const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'grok', ...guided });
       expect(r.status).toBe(200);
       const chip = r.body.promptAdditions.find((a) => a.id === 'storyboard-guidance');
-      expect(chip.text).toMatch(/panel\.png is a storyboard panel.*It is not the first frame/s);
+      expect(chip.text).toMatch(/input-1\.png is a storyboard panel.*It is not the first frame/s);
       expect(r.body.sentPrompt).toContain(chip.text);
       expect(r.body.sentPrompt).toContain('image_edit');
     });
