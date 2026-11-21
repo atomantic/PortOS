@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { OAuth2Client } from 'google-auth-library';
+import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
 import { createGmailApi } from './gmailApi.js';
 import { GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { messageLogError } from '../lib/messageLogError.js';
@@ -12,14 +12,12 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 let calls;
 let answer;
 function client({ expired = false } = {}) {
-  const oauth = new OAuth2Client({
+  const oauth = createGoogleOAuthClient({
     clientId: 'example-client', clientSecret: 'example-secret',
-    transporterOptions: {
-      fetchImplementation: async (url, init) => {
-        const text = init?.body ? String(init.body) : '';
-        calls.push({ url: String(url), method: init?.method || 'GET', headers: new Headers(init?.headers), body: text && String(url).startsWith(ORIGIN) ? JSON.parse(text) : undefined });
-        return answer(String(url));
-      }
+    fetchImplementation: async (url, init) => {
+      const text = init?.body ? String(init.body) : '';
+      calls.push({ url: String(url), method: init?.method || 'GET', headers: new Headers(init?.headers), body: text && String(url).startsWith(ORIGIN) ? JSON.parse(text) : undefined });
+      return answer(String(url));
     }
   });
   oauth.setCredentials({ access_token: 'example-token', refresh_token: 'example-refresh', expiry_date: expired ? 1 : Date.now() + 3_600_000 });
