@@ -313,7 +313,7 @@ it('loads legacy benchmark labels after upgrade and preserves evidence through s
 
 it('plots local Ornith and Qwen Coder with zero API charges and sourced quality without borrowing hosted costs', async () => {
   const providers = [
-    { id: 'ollama', name: 'Ollama', models: ['ornith:35b', 'qwen3-coder:30b', 'qwen2.5-coder:32b', 'unknown:7b'] },
+    { id: 'ollama', name: 'Ollama', models: ['ornith:35b', 'qwen3-coder:30b', 'qwen2.5-coder:32b', 'inkling-2-mini:26b-a5b', 'inkling-2-mini:26b-a5b-nvfp4', 'unknown:7b'] },
     { id: 'local-wrapper', name: 'Example CLI', ollamaBacked: true, models: ['ollama/qwen3-coder:30b'] },
     { id: 'declared-local', name: 'Example private runtime', servicePlan: 'local', models: ['ornith:35b'] },
     { id: 'lmstudio', name: 'LM Studio', models: ['lmstudio-community/Ornith-1.0-35B-GGUF'] },
@@ -347,6 +347,13 @@ it('plots local Ornith and Qwen Coder with zero API charges and sourced quality 
   expect(ornith.quality.method).toContain('base-model proxy');
   expect(sources[ornith.quality.sourceIds[0]].url).toBe('https://huggingface.co/ornith-ai/Ornith-1.0-35B');
   expect(local.find(row => row.model === 'qwen3-coder:30b').quality.value).toBeGreaterThan(0);
+  for (const tag of ['inkling-2-mini:26b-a5b', 'inkling-2-mini:26b-a5b-nvfp4']) {
+    const inkling = local.find(row => row.model === tag);
+    expect(inkling.quality.estimated).toBe(true);
+    expect(inkling.quality.value).toBeGreaterThan(0);
+    expect(inkling.quality.sourceIds.length).toBeGreaterThan(0);
+    expect(inkling.quality.method).toContain('quantization');
+  }
   for (const row of rows.filter(row => ['hosted', 'gateway', 'free-tier'].includes(row.providerId))) {
     expect(row.inputPerMillion.value).toBeGreaterThan(0);
     expect(row.costPerTask).toBeNull();

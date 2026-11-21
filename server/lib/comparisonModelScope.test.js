@@ -36,6 +36,12 @@ describe('catalogSlugForProviderModel', () => {
     expect(catalogSlugForProviderModel('unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF')).toBe('devstral-small-2-24b');
   });
 
+  it('gives both Ollama Inkling 2 Mini tags the hosted reference, since they share one NVFP4 manifest', () => {
+    for (const id of ['inkling-2-mini:26b-a5b', 'inkling-2-mini:26b-a5b-nvfp4', 'inkling-2-mini', 'ollama/inkling-2-mini:26b-a5b']) {
+      expect(catalogSlugForProviderModel(id)).toBe('inkling-2-mini');
+    }
+  });
+
   it('gives a local build no benchmark identity unless its entry declares one', () => {
     // These are all real catalog entries — the mappings a textual rule would
     // invent are simply wrong: `-Reasoning` is model identity, not an effort
