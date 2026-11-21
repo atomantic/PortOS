@@ -664,25 +664,50 @@ export const musicVideoCollectionId = (projectId) => `mvc-${String(projectId).sl
 export const musicVideoCollectionNameFor = (projectName) =>
   `Music video: ${typeof projectName === 'string' && projectName.trim() ? projectName.trim() : 'Untitled'}`.slice(0, NAME_MAX_LENGTH);
 
-export async function findOrCreateMusicVideoCollection({ projectId, projectName }) {
+export const findOrCreateMusicVideoCollection = async ({ projectId, projectName }) => {
   if (!projectId || typeof projectId !== 'string') throw codedError('projectId is required', ERR_VALIDATION);
-  const id = musicVideoCollectionId(projectId);
+  return findOrCreateFixedCollection(musicVideoCollectionId(projectId), {
+    name: musicVideoCollectionNameFor(projectName),
+    description: 'Every still and clip generated for this music video.',
+  });
+};
+
+// The "External" collection: everything downloaded from outside (Video
+// Downloader, Mood Board Pinterest / X / URL imports). A fixed id so every
+// peer converges on one bucket instead of minting a same-named copy each.
+export const EXTERNAL_COLLECTION_ID = 'external';
+export const findOrCreateExternalCollection = () => findOrCreateFixedCollection(EXTERNAL_COLLECTION_ID, {
+  name: 'External',
+  description: 'Images and videos downloaded from outside sources (Video Downloader, Mood Board imports).',
+});
+
+// A mood board's own collection: every image generated for the board, named
+// exactly like the board. Deterministic id so peers converge on one bucket.
+export const moodBoardCollectionId = (boardId) => `mbc-${String(boardId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+const moodBoardCollectionName = (boardName) =>
+  (typeof boardName === 'string' && boardName.trim() ? boardName.trim() : 'Untitled mood board').slice(0, NAME_MAX_LENGTH);
+
+/** Find or create the board's collection, re-syncing its name to the board's current name. */
+export async function findOrCreateMoodBoardCollection({ boardId, boardName }) {
+  if (!boardId || typeof boardId !== 'string') throw codedError('boardId is required', ERR_VALIDATION);
+  const name = moodBoardCollectionName(boardName);
+  const collection = await findOrCreateFixedCollection(moodBoardCollectionId(boardId), {
+    name,
+    description: 'Every image generated for this mood board.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// Find a collection by its deterministic id, or create it. A tombstone at the
+// id is overwritten (re-creating a deleted auto bucket on next use).
+async function findOrCreateFixedCollection(id, { name, description }) {
   assertCollectionId(id);
   let createdId = null;
   const result = await store().queueRecordWrite(id, async () => {
     const current = await store().loadOne(id);
     if (current && !current.deleted) return current;
     const now = new Date().toISOString();
-    const next = {
-      id,
-      name: musicVideoCollectionNameFor(projectName),
-      description: 'Every still and clip generated for this music video.',
-      coverKey: null,
-      source: 'auto',
-      items: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+    const next = { id, name, description, coverKey: null, source: 'auto', items: [], createdAt: now, updatedAt: now };
     createdId = id;
     await store().saveOneNow(id, next);
     return next;
