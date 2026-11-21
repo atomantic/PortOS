@@ -40,6 +40,9 @@ export const githubNotificationsDdl = [
   // open row that turned read there without PortOS reading it is shown under
   // Handled. Cleared by new activity. A PortOS read/done never sets it.
   `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS read_on_github_at TIMESTAMPTZ`,
+  // The CoS agent:completed/error listener looks a row up by the notification-
+  // resolve task it was handed to; without this every agent event seq-scans.
+  `CREATE INDEX IF NOT EXISTS idx_github_notifications_resolve_task ON github_notifications ((evidence->'handoff'->>'taskId')) WHERE state = 'open' AND evidence->'handoff'->>'lane' = 'notification-resolve'`,
   `CREATE TABLE IF NOT EXISTS github_notification_sync (
     account_id TEXT PRIMARY KEY,
     last_modified TEXT,
@@ -59,6 +62,10 @@ export const githubNotificationsDdl = [
     created_at TIMESTAMPTZ DEFAULT NOW()
   )`,
   `CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC)`,
+  // Automations activity tab: newest automation events across accounts. The
+  // predicate omits kind (the query filters kind = ANY(...), which the planner
+  // cannot prove implies `kind <> 'triaged'`, so that predicate would never match).
+  `CREATE INDEX IF NOT EXISTS idx_github_notification_events_automation ON github_notification_events (account_id, created_at DESC, id DESC) WHERE actor = 'automation'`,
   // Learned rules (#12872): the operator's own corrections, replayed for the
   // same repo, reason and actor ('' = any actor). Never a trust input.
   `CREATE TABLE IF NOT EXISTS github_notification_rules (
