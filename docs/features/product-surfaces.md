@@ -31,6 +31,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | **Web Shell** | `/shell` | Browser-based interactive terminal multiplexer for host command execution and active debugging. | — |
 | **Process Manager** | `/devtools/processes` | Real-time PM2 process table, status inspection, memory/CPU usage, and manual process restarts. | [PM2.md](../PM2.md) |
+| **Security Camera** | `/security` | Live webcam and microphone monitor with audio level meter, device selection, and a feed that can route host microphone audio to the speakers. | — |
 | **System Resources & Health** | `/system-resources/overview`, `/system-resources` | Host-level operational signals, CPU/RAM utilization, disk thresholds, top processes, and running build/commit hash validation. | [METRICS.md](../METRICS.md) |
 | **Storage Report & Disk Cleanup** | `/system-resources/storage` | Comprehensive disk usage breakdown, cache directory inspection, AI-assisted cleanup triage, and temporary artifact removal. | [STORAGE.md](../STORAGE.md) |
 | **Active Queues** | `/system-resources/queues` | Live inspection of background job queues (media renders, agent tasks, batch jobs), queue prioritization, and cancellation. | — |
