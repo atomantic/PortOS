@@ -399,4 +399,74 @@ describe('health erasure survives a peer that still holds the row (#14155)', () 
     expect((await apply('blood-tests.json', { tests: [imported] })).applied).toBe(false);
     expect((await readDoc('blood-tests.json')).tests.map(row => row.date)).toEqual(['2026-04-02']);
   });
+
+  describe('clinical import adding analytes to an existing panel', () => {
+    const lab = (code, display, value, date = '2026-03-02') => JSON.stringify({
+      resourceType: 'Observation',
+      status: 'final',
+      category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'laboratory' }] }],
+      code: { coding: [{ system: 'http://loinc.org', code, display }], text: display },
+      effectiveDateTime: `${date}T10:30:00Z`,
+      valueQuantity: { value, unit: 'mg/dL' },
+    });
+    const importLabs = async (...labs) => (await import('./appleHealthClinical.js')).importClinicalRecords(labs);
+
+    it('keeps the imported analytes when a peer still holds the pre-import copy', async () => {
+      const original = { id: 'a1', date: '2026-03-02', createdAt: '2026-03-02T08:00:00.000Z', glucose: 90 };
+      await persist('blood-tests.json', { tests: [original], referenceRanges: {} });
+      await importLabs(lab('2345-7', 'Glucose', 99), lab('2085-9', 'HDL Cholesterol', 55));
+      const [row] = (await readDoc('blood-tests.json')).tests;
+      expect(row.id).toBe('a1');
+      expect(row.createdAt).toBe(original.createdAt);
+      expect(row.updatedAt).toEqual(expect.any(String));
+      const gained = Object.keys(row).filter(k => !(k in original) && k !== 'updatedAt');
+      expect(gained.length).toBeGreaterThan(0);
+
+      // Peer pushes its pre-import copy: the local imported row must stay.
+      await apply('blood-tests.json', { tests: [original] });
+      const after = (await readDoc('blood-tests.json')).tests;
+      expect(after).toHaveLength(1);
+      for (const key of gained) expect(after[0][key]).toBe(row[key]);
+
+      // Other direction: the peer receives the imported row over its old copy.
+      await persist('blood-tests.json', { tests: [original], referenceRanges: {} });
+      await apply('blood-tests.json', { tests: [row] });
+      const peerSide = (await readDoc('blood-tests.json')).tests;
+      expect(peerSide).toHaveLength(1);
+      for (const key of gained) expect(peerSide[0][key]).toBe(row[key]);
+    });
+
+    it('merges an id-less legacy panel that gained analytes into one row with the peer copy', async () => {
+      const original = { date: '2026-03-02', glucose: 90 };
+      await persist('blood-tests.json', { tests: [original], referenceRanges: {} });
+      await importLabs(lab('2085-9', 'HDL Cholesterol', 55));
+      const [row] = (await readDoc('blood-tests.json')).tests;
+      expect(row.createdAt).toBeUndefined();
+      expect(row.id).toBe(legacyRowId(original));
+      const gained = Object.keys(row).filter(k => !['id', 'updatedAt', 'date', 'glucose', 'aliasIds'].includes(k));
+      expect(gained.length).toBeGreaterThan(0);
+
+      await apply('blood-tests.json', { tests: [original] });
+      const after = (await readDoc('blood-tests.json')).tests;
+      expect(after).toHaveLength(1);
+      for (const key of gained) expect(after[0][key]).toBe(row[key]);
+
+      await persist('blood-tests.json', { tests: [original], referenceRanges: {} });
+      await apply('blood-tests.json', { tests: [row] });
+      const peerSide = (await readDoc('blood-tests.json')).tests;
+      expect(peerSide).toHaveLength(1);
+      for (const key of gained) expect(peerSide[0][key]).toBe(row[key]);
+    });
+
+    it('leaves a panel byte-identical when the import adds nothing, and still mints a new date', async () => {
+      const original = { id: 'a1', date: '2026-03-02', createdAt: '2026-03-02T08:00:00.000Z', glucose: 90 };
+      await persist('blood-tests.json', { tests: [original], referenceRanges: {} });
+      await importLabs(lab('2345-7', 'Glucose', 123), lab('2345-7', 'Glucose', 95, '2026-06-01'));
+      const tests = (await readDoc('blood-tests.json')).tests;
+      expect(tests.find(r => r.date === '2026-03-02')).toEqual(original);
+      const minted = tests.find(r => r.date === '2026-06-01');
+      expect(minted.id).toEqual(expect.any(String));
+      expect(minted.createdAt).toEqual(expect.any(String));
+    });
+  });
 });
