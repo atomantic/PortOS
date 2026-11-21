@@ -165,7 +165,9 @@ export default function ModelComparison() {
   }, new Map()).values()].map(point => {
     if (point.efforts.length < 2) return point;
     const efforts = point.efforts.sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
-    const effort = `${efforts[0]}–${efforts.at(-1)}`;
+    // A range only when no effort between them scored differently; otherwise list them.
+    const contiguous = efforts.every((e, i) => !i || EFFORTS.indexOf(e) - EFFORTS.indexOf(efforts[i - 1]) === 1);
+    const effort = contiguous ? `${efforts[0]}–${efforts.at(-1)}` : efforts.join(', ');
     return { ...point, effort, label: `${point.model} (${effort}, same score)${point.quality.estimated || point[price[0]].estimated ? ' ≈' : ''}` };
   });
   const excludedCount = selected.length - plotCandidates.length;

@@ -8,7 +8,7 @@ vi.mock('../../services/apiAgents', () => ({ triggerCosOnDemandTask: vi.fn() }))
 vi.mock('./ComparisonResearch', () => ({ default: () => <div>Research configuration</div> }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
-  Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />,
+  Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} data-labels={JSON.stringify(data?.map(({ label }) => label))} />,
   CartesianGrid: () => null, Tooltip: () => null, LabelList: () => null,
   XAxis: ({ label }) => <div data-testid="xaxis" data-label={label?.value} />, YAxis: () => null,
 }));
@@ -213,7 +213,18 @@ it('plots one point for a model whose efforts all carry the same score', async (
   render(<ModelComparison />);
   const local = await screen.findByTestId('scatter-example:example-local');
   expect(JSON.parse(local.dataset.values)).toEqual([[0, 20]]);
+  expect(JSON.parse(local.dataset.labels)).toEqual(['example-local (low–high, same score) ≈']);
   // Measured efforts that differ still plot separately.
   expect(JSON.parse(screen.getByTestId('scatter-example:gpt-6-luna').dataset.values)).toHaveLength(2);
   expect(screen.getByText(/2 identical provider or effort points combined/)).toBeTruthy();
+});
+
+it('lists, rather than ranges, equal-score efforts separated by a different one', async () => {
+  const efforts = [['low', 20], ['medium', 25], ['high', 20]].map(([effort, quality]) => ({ ...row('example-local', effort, quality, 0, true), costPerTask: metric(0) }));
+  api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows: efforts } });
+  render(<ModelComparison />);
+  const local = await screen.findByTestId('scatter-example:example-local');
+  expect(JSON.parse(local.dataset.values)).toEqual(expect.arrayContaining([[0, 20], [0, 25]]));
+  expect(JSON.parse(local.dataset.values)).toHaveLength(2);
+  expect(JSON.parse(local.dataset.labels)).toContain('example-local (low, high, same score) ≈');
 });
