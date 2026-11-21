@@ -66,12 +66,13 @@ const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value
 export async function managedAppsByRepoKey() {
   const { getAllApps } = await import('./apps.js');
   const apps = await getAllApps({ includeArchived: false }).catch(() => []);
+  const withRepo = apps.filter((app) => app.repoPath);
+  const remotes = await Promise.all(withRepo.map((app) => readOriginRemoteUrl(app.repoPath).catch(() => null)));
   const byKey = new Map();
-  for (const app of apps) {
-    if (!app.repoPath) continue;
-    const parsed = parseGitRemoteUrl(await readOriginRemoteUrl(app.repoPath).catch(() => null));
+  withRepo.forEach((app, index) => {
+    const parsed = parseGitRemoteUrl(remotes[index]);
     if (parsed) byKey.set(`${parsed.host}/${parsed.owner}/${parsed.repo}`.toLowerCase(), app);
-  }
+  });
   return byKey;
 }
 

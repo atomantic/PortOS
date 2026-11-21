@@ -118,11 +118,13 @@ export async function automateNotificationPullRequests(account, env) {
     AND (${filter.sql}) ORDER BY (evidence->'pullRequestAttempt'->>'at')::timestamptz ASC NULLS FIRST, gh_updated_at DESC LIMIT 50`,
   [account.id, ...filter.params]);
   const counts = { merged: 0, reviews: 0 };
+  const apps = rows.length ? await managedAppsByRepoKey() : new Map();
   for (const row of rows) {
     const rule = pullRequestAutomationRule(account, row);
     if (!rule) continue;
     const result = await actOnNotificationPullRequest(account, row.thread_id, { action: rule.action,
-      method: rule.mergeMethod, deleteBranch: rule.deleteBranch }, { automatic: true, env })
+      method: rule.mergeMethod, deleteBranch: rule.deleteBranch },
+    { automatic: true, env, app: apps.get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null })
       .catch(error => ({ refused: error.code || 'GITHUB_PR_ACTION_FAILED' }));
     if (result.refused) {
       // Keep the reason bounded and visible; no raw forge output or thread text.
