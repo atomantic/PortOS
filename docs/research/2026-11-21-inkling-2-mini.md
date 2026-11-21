@@ -15,14 +15,14 @@ Thinking Machines released Inkling 2 Mini (`thinkingmachines/Inkling-2-Mini`) on
 | Runtime | State on 2026-11-21 |
 | --- | --- |
 | llama.cpp | Added in b12406 (PR #32217). bartowski's GGUFs were made with b12600 and declare arch `inkling2_loop`. Older builds fail with `unknown model architecture: 'inkling2_loop'`. |
-| Ollama | Use the library build (`inkling-2-mini:26b-a5b`, or `inkling-2-mini:26b-a5b-nvfp4` on Ollama's MLX engine). Third-party `hf.co/…` GGUFs go through Ollama's bundled llama.cpp, which still fails on an updated Ollama with `unknown projector type: inkling2v` and `unknown model architecture: 'inkling2_loop'`. |
+| Ollama | The library has one build: `latest`, `26b-a5b` and `26b-a5b-nvfp4` are the same NVFP4 safetensors manifest on Ollama's MLX runner (Apple Silicon, 20 GB; tested at ~42-52 tok/s warm, ~1 s to first token). There is no library GGUF. Third-party `hf.co/…` GGUFs go through Ollama's bundled llama.cpp, which still fails on an updated Ollama with `unknown projector type: inkling2v` and `unknown model architecture: 'inkling2_loop'`. |
 | LM Studio | `lmstudio-community/Inkling-2-Mini-GGUF` (Q4_K_M, Q6_K, Q8_0) needs an updated llama.cpp engine. |
 | MLX | Ollama's `inkling-2-mini:26b-a5b-nvfp4` is in the catalog for Apple Silicon. `mlx-community/Inkling-2-Mini-4bit` (17 GB) needs mlx-lm PR #2086, unmerged, so LM Studio's MLX engine has no entry yet (#17205). |
 | vLLM / SGLang | Supported upstream with the NVFP4 checkpoint. No validated recipe for the RTX 3090 fleet host (Ampere has no native FP4). |
 
 ## What PortOS ships
 
-- Catalog entries in `server/lib/localLlmCatalog.js`: `inkling-2-mini` (Ollama library GGUF and LM Studio) and `inkling-2-mini-mlx` (Ollama MLX, Apple Silicon only). Neither is featured, and both have a 32 GB memory floor.
+- Catalog entries in `server/lib/localLlmCatalog.js`: `inkling-2-mini` (LM Studio GGUF) and `inkling-2-mini-mlx` (the Ollama library build, Apple Silicon only, with every library tag as an alias). Neither is featured, and both have a 32 GB memory floor.
 - A llama-server preset (`inkling-2-mini` in `server/lib/specDecodePresets.js`) with bartowski Q4_K_M, a pinned f16 vision projector, and no drafter.
 - `unknown model architecture` from any llama.cpp-based runtime is classified as a request-specific model fault with an "update the runtime" fix, rather than an unknown error that escalates.
 - The fleet host advertises the model id its runtime actually serves instead of a hardcoded one, so a host pointed at another checkpoint is reported truthfully.
