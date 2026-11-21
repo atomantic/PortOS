@@ -2,7 +2,7 @@
  * Pipeline (issues + stages + canon; series names and index summaries).
  */
 
-import { request } from './apiCore.js';
+import { request, throwApiError, API_BASE } from './apiCore.js';
 import { buildFormData } from './apiImageVideo.js';
 import {
   PIPELINE_STAGE_IDS,
@@ -337,15 +337,55 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
   return `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/volume.pdf${qs}`;
 };
 
-// Prose-series export download URLs (#2181). Used as <a href> so the browser
-// streams each artifact straight to disk (no in-app blob handling). All three
-// read the persisted per-series export settings server-side.
-export const proseExportManuscriptUrl = (seriesId) =>
-  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/manuscript.md`;
-export const proseExportEpubUrl = (seriesId) =>
-  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/book.epub`;
-export const proseExportPdfUrl = (seriesId) =>
-  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/interior.pdf`;
+// Prose-series export downloads (#2181, #17102). Fetched rather than linked so a
+// refusal (409 no drafted prose, 5xx) surfaces as a structured error on the page
+// instead of a silently canceled browser download. The server reads the persisted
+// per-series export settings, so callers gate on the form being saved.
+export const PROSE_EXPORT_NO_CONTENT = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
+// Plain string scan (no regex literal): the route-parity scanner's comment
+// stripper mis-tracks a quote inside a regex literal. Keeps every character of a
+// quoted name, including ';' and parentheses.
+const filenameFromDisposition = (header, fallback) => {
+  const text = header || '';
+  const at = text.toLowerCase().indexOf('filename=');
+  if (at < 0) return fallback;
+  const rest = text.slice(at + 'filename='.length).trimStart();
+  const quote = '"';
+  let name;
+  if (rest.startsWith(quote)) {
+    const end = rest.indexOf(quote, 1);
+    name = rest.slice(1, end < 0 ? undefined : end);
+  } else {
+    name = rest.split(';')[0].trim();
+  }
+  return name || fallback;
+};
+
+// Settles a prose-export fetch into `{ blob, filename }`, or rejects with the
+// shared API error shape (`.code`, `.status`).
+async function readProseExport(pending, fallbackName) {
+  const response = await pending.catch(() => null);
+  if (!response) {
+    const err = new Error('Server unreachable — check your connection and try again');
+    err.code = 'SERVER_UNREACHABLE';
+    throw err;
+  }
+  if (!response.ok) await throwApiError(response);
+  const blob = await response.blob();
+  return { blob, filename: filenameFromDisposition(response.headers.get('Content-Disposition'), fallbackName) };
+}
+
+const proseExportFetchers = {
+  md: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/manuscript.md`), 'manuscript.md'),
+  epub: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/book.epub`), 'book.epub'),
+  pdf: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/interior.pdf`), 'interior.pdf'),
+};
+
+export const fetchProseExport = (seriesId, kind) => {
+  const fetcher = proseExportFetchers[kind];
+  if (!fetcher) throw new Error(`Unknown export kind: ${kind}`);
+  return fetcher(seriesId);
+};
 
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
