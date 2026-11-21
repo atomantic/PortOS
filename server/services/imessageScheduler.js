@@ -8,9 +8,9 @@
  * OFF by default: the scheduler is only registered when the user has opted in via
  * the iMessage Settings drawer on Comms → Messages → iMessage
  * (`settings.imessage.enabled`). Reading chat.db needs macOS Full Disk Access,
- * so we never poll it silently. The interval value is locked in
- * at registration (changing it needs a restart), but the `enabled` toggle is
- * re-read on every tick so disabling from settings stops runs without a restart.
+ * so we never poll it silently. The interval and `enabled` are reconciled on
+ * every settings save by `createSyncScheduler` (createSettingsGatedSyncScheduler.js),
+ * and `enabled` is also re-read on every tick so disabling mid-tick skips the run.
  *
  * No LLM calls happen on this path — ingestion is deterministic — so the
  * no-cold-bootstrap AI policy does not gate it; the opt-in is purely about Full
