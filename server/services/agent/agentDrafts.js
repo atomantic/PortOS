@@ -91,7 +91,7 @@ async function createDraftUnlocked(agentId, draft) {
 
   drafts.push(entry);
   await saveDrafts(agentId, drafts);
-  console.log(`📋 Draft saved for agent ${agentId}: ${entry.type} "${entry.title || entry.content?.substring(0, 40)}..."`);
+  console.log(`📋 Draft saved for agent ${agentId}: ${entry.id} (${entry.type})`);
   return entry;
 }
 

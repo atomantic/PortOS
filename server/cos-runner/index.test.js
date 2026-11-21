@@ -219,3 +219,16 @@ describe('runner browser boundary wiring', () => {
     expect(RUNNER_SRC).not.toContain("origin: '*'");
   });
 });
+
+describe('cos-runner BTW operational logging (#17199)', () => {
+  it('logs only agentId and message length without user-authored message text', () => {
+    const btwStart = RUNNER_SRC.indexOf("app.post('/btw/:agentId'");
+    const btwEnd = RUNNER_SRC.indexOf("app.get('/agents/:agentId/output'", btwStart);
+    expect(btwStart).toBeGreaterThan(-1);
+    expect(btwEnd).toBeGreaterThan(btwStart);
+    const btwBlock = RUNNER_SRC.slice(btwStart, btwEnd);
+    expect(btwBlock).toContain('console.log(`💬 BTW message delivered to agent ${agentId} (${message.length} chars)`)');
+    expect(btwBlock).not.toMatch(/console\.log\([^)]*message\.substring/);
+    expect(btwBlock).not.toMatch(/console\.log\([^)]*\$\{message\}/);
+  });
+});

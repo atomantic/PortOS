@@ -161,4 +161,25 @@ describe('agentDrafts service', () => {
     release();
     await blocked;
   });
+
+  it('createDraft logs agent id, draft id, and type without draft title or body (#17199)', async () => {
+    const fixtureTitle = 'Private health note title';
+    const fixtureContent = 'Personal message body that must not appear in logs';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const entry = await createDraft('agent-log', {
+        type: 'post',
+        title: fixtureTitle,
+        content: fixtureContent
+      });
+      const logged = logSpy.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain('agent-log');
+      expect(logged).toContain(entry.id);
+      expect(logged).toContain('post');
+      expect(logged).not.toContain(fixtureTitle);
+      expect(logged).not.toContain(fixtureContent);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
