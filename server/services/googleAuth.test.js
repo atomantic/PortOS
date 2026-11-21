@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createServer } from 'node:http';
 
-// Drive the real OAuth2Client against a loopback token endpoint to catch
+// Drive the owned OAuth client against a loopback token endpoint to catch
 // regressions in refresh, credential merging, and the tokens event (#7372).
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -11,9 +11,11 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async () => {}),
 }));
 
-import { OAuth2Client } from 'google-auth-library';
+import * as googleOAuthClient from '../lib/googleOAuthClient.js';
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { clearAuth, getAuthenticatedClient, handleCallback } from './googleAuth.js';
+
+const { createGoogleOAuthClient } = googleOAuthClient;
 
 const CREDENTIALS = { clientId: 'test-client-id', clientSecret: 'test-secret', redirectUri: 'http://localhost:5555/cb' };
 const REFRESHED = { access_token: 'refreshed-access', expires_in: 3600, scope: 'https://www.googleapis.com/auth/calendar', token_type: 'Bearer' };
@@ -81,14 +83,14 @@ afterEach(async () => {
 });
 
 describe('googleAuth OAuth2 client contract', () => {
-  it('exports a constructible OAuth2Client', () => {
-    expect(typeof OAuth2Client).toBe('function');
-    const client = new OAuth2Client(CREDENTIALS.clientId, CREDENTIALS.clientSecret, CREDENTIALS.redirectUri);
+  it('exports a constructible OAuth client', () => {
+    expect(typeof createGoogleOAuthClient).toBe('function');
+    const client = createGoogleOAuthClient(CREDENTIALS);
     expect(client.credentials).toEqual({});
   });
 
   it('generates a consent URL carrying the offline/consent/state options getAuthUrl passes', () => {
-    const client = new OAuth2Client(CREDENTIALS.clientId, CREDENTIALS.clientSecret, CREDENTIALS.redirectUri);
+    const client = createGoogleOAuthClient(CREDENTIALS);
     const url = client.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
@@ -182,8 +184,13 @@ describe('googleAuth token refresh', () => {
 describe('googleAuth callback', () => {
   it('stores the exchanged tokens and leaves the client authorized', async () => {
     stubFiles({ tokens: null });
-    const exchange = vi.spyOn(OAuth2Client.prototype, 'getToken')
-      .mockResolvedValue({ tokens: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expiry_date: Date.now() + 3_600_000 } });
+    const exchange = vi.fn().mockResolvedValue({ tokens: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expiry_date: Date.now() + 3_600_000 } });
+    const realCreate = createGoogleOAuthClient;
+    vi.spyOn(googleOAuthClient, 'createGoogleOAuthClient').mockImplementation((options) => {
+      const client = realCreate(options);
+      client.getToken = exchange;
+      return client;
+    });
 
     const result = await handleCallback('auth-code');
 

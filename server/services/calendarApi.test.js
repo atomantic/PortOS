@@ -1,9 +1,9 @@
 import { expect, it, vi } from 'vitest';
-import { OAuth2Client } from 'google-auth-library';
+import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
 import { createCalendarApi } from './calendarApi.js';
 
 function makeClient(fetchImplementation) {
-  const auth = new OAuth2Client({ transporterOptions: { fetchImplementation } });
+  const auth = createGoogleOAuthClient({ fetchImplementation });
   auth.setCredentials({ access_token: 'example-token', expiry_date: Date.now() + 3_600_000 });
   return auth;
 }

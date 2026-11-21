@@ -23,6 +23,7 @@ vi.mock('./calendarGoogleSync.js', async importOriginal => ({
   getSyncDateRange: vi.fn(() => ({ pastDate: new Date('2026-03-01T00:00:00Z'), futureDate: new Date('2026-04-01T00:00:00Z') })),
 }));
 
+import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
 import { apiDiscoverCalendars, apiSyncAccount } from './calendarGoogleApiSync.js';
 import { createCalendarApi } from './calendarApi.js';
 import { getAuthenticatedClient } from './googleAuth.js';
@@ -240,7 +241,6 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
   });
 
   it('aborts stalled Calendar requests at the default deadline and releases the account lock', async () => {
-    const { OAuth2Client } = await import('google-auth-library');
     const realAdapter = await vi.importActual('./calendarApi.js');
     vi.useFakeTimers();
     // Node's native AbortSignal timer bypasses fake timers. Inject only its
@@ -254,7 +254,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     const started = Promise.withResolvers();
     const attempts = [];
     let healthy = false;
-    const auth = new OAuth2Client({ transporterOptions: {
+    const auth = createGoogleOAuthClient({
       signal: cleanup.signal,
       fetchImplementation: async (_url, { signal }) => {
         if (healthy) return Response.json({ items: [] });
@@ -267,7 +267,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
           else signal.addEventListener('abort', abort, { once: true });
         });
       },
-    } });
+    });
     auth.setCredentials({ access_token: 'synthetic-token', expiry_date: Date.now() + 3_600_000 });
     getAuthenticatedClient.mockResolvedValue(auth);
     createCalendarApi.mockImplementation(realAdapter.createCalendarApi);
