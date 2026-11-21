@@ -40,7 +40,6 @@ import {
   withBaseHashFlushBatch,
 } from '../lib/conflictJournal.js';
 import { codedError } from '../lib/codedError.js';
-import { UUID_RE } from '../lib/fileCore.js';
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
@@ -360,7 +359,10 @@ async function persistNewCollection({ name, description = '', source = 'user' },
 // An owner-managed collection has a deterministic id (mood board, music video,
 // deck, commission, …) or a universe/series link: its owner finds it by that id,
 // so a join copies its items but never retires it.
-export const isOwnerManaged = (collection) => !UUID_RE.test(collection.id)
+// The shape of randomUUID(); fileCore's UUID_RE would pull its child-process
+// imports into every suite that loads collections.
+const RANDOM_COLLECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isOwnerManaged = (collection) => !RANDOM_COLLECTION_ID.test(collection.id)
   || Boolean(collection.universeId) || Boolean(collection.seriesId);
 
 // Point every record that files renders into one of `fromIds` at `toId`, so
