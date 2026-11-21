@@ -43,7 +43,7 @@ const router = Router();
 
 function assertVideoDispatchAvailable(project) {
   if (project?.workspace === 'video') {
-    throw new ServerError('Video production is waiting for revision-specific approval support. Save the brief and model choices; Start will be available when dispatch gates are installed.', {
+    throw new ServerError('Commission actions (auto-cast, directive, replan, plan-step) are not used for a video project. Start and resume it through the video execution controls on the project Overview.', {
       status: 409, code: 'VIDEO_DISPATCH_UNAVAILABLE',
     });
   }

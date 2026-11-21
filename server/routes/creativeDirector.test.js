@@ -200,7 +200,13 @@ describe('creativeDirector routes', () => {
         ['auto-cast', { compose: true, generateFirstPass: true }],
         ['plan/step/example', { action: 'retry' }],
       ]) {
-        expect((await request(app).post('/api/creative-director/cd-video/' + action).send(body)).status).toBe(['start', 'resume'].includes(action) ? 400 : 409);
+        const r = await request(app).post('/api/creative-director/cd-video/' + action).send(body);
+        expect(r.status).toBe(['start', 'resume'].includes(action) ? 400 : 409);
+        if (!['start', 'resume'].includes(action)) {
+          expect(r.body.code).toBe('VIDEO_DISPATCH_UNAVAILABLE');
+          expect(r.body.error).toMatch(/video execution controls/);
+          expect(r.body.error).not.toMatch(/dispatch gates/);
+        }
       }
       expect(cdService.updateProject).not.toHaveBeenCalled();
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();

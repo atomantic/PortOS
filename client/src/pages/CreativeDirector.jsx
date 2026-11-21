@@ -23,6 +23,7 @@ import CreativeDirectorModelsDrawer from '../components/creative-director/Creati
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
 import ProjectLibrary from '../components/creative-director/ProjectLibrary.jsx';
 import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
+import { describeCreativeDirectorStatus } from '../lib/creativeDirectorStatus.js';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -517,7 +518,14 @@ export default function CreativeDirector() {
                 {p.treatment?.scenes?.length ? `${p.treatment.scenes.filter((s) => s.status === 'accepted').length}/${p.treatment.scenes.length} scenes accepted` : 'No treatment yet'}
               </div>
               <div className="flex gap-1 mt-1">
-                {p.workspace === 'video' && <span className="text-xs text-port-text-muted">Draft · next: edit brief · production not enabled</span>}
+                {/* Video start needs the limits and config revision VideoExecutionPanel
+                    collects, so the card points at the project instead of starting it. */}
+                {p.workspace === 'video' && (
+                  <span className="text-xs text-port-text-muted">
+                    {describeCreativeDirectorStatus(p).headline}
+                    {['draft', 'paused', 'failed'].includes(p.status) && ' · open the project to start'}
+                  </span>
+                )}
                 {/* Pause is meaningful only when the agent could be in flight.
                     `draft` has nothing running yet, and the terminal states are
                     obviously inert — match the detail page's gating. */}
