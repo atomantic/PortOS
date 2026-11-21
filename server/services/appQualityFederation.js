@@ -63,12 +63,43 @@ export const FEDERATION_LEGACY_CATEGORIES = Object.freeze([
 // form used for self-directed calls resolves to this install's checkout.
 const appRepoPath = app => app.repoPath || (app.id === PORTOS_APP_ID ? PATHS.root : null);
 
+// One `git remote get-url` per checkout per window: the Apps page and every peer
+// ask for the same repoPaths repeatedly. The expiry is absolute (set at lookup
+// time, never refreshed on read) so a changed origin is picked up within the
+// window. The in-flight promise is cached so concurrent callers share one spawn;
+// a rejected lookup is dropped so the next caller retries.
+const REPOSITORY_KEY_TTL_MS = 60_000;
+const originLookups = new Map();
+
+// Sweeping on each miss keeps the map to lookups from the last window; without it,
+// a checkout path that is never requested again would stay for the process lifetime.
+export function originLookupCacheSize() {
+  return originLookups.size;
+}
+
+function cachedOriginInfo(repoPath) {
+  const now = Date.now();
+  const cached = originLookups.get(repoPath);
+  if (cached && cached.expiresAt > now) return cached.promise;
+  for (const [key, entry] of originLookups) {
+    if (entry.expiresAt <= now) originLookups.delete(key);
+  }
+  const promise = getOriginInfo(repoPath);
+  const entry = { promise, expiresAt: now + REPOSITORY_KEY_TTL_MS };
+  originLookups.set(repoPath, entry);
+  promise.catch(() => {
+    if (originLookups.get(repoPath) === entry) originLookups.delete(repoPath);
+  });
+  return promise;
+}
+
 // Match repositories without sharing remote URLs, names, credentials or local paths.
 // Independent versions of the same repository intentionally contribute to one score.
 async function repositoryKey(deps, app = { id: PORTOS_APP_ID }) {
   const repoPath = appRepoPath(app);
   if (!repoPath) return null;
-  const origin = await (deps.getOriginInfo || getOriginInfo)(repoPath);
+  // An injected lookup is a test seam; it bypasses the process-wide cache.
+  const origin = await (deps.getOriginInfo ? deps.getOriginInfo(repoPath) : cachedOriginInfo(repoPath));
   return origin.host && origin.fullName ? hash(`${origin.host}/${origin.fullName}`.toLowerCase()) : null;
 }
 
