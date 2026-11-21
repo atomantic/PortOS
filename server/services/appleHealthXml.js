@@ -11,6 +11,7 @@ import { unlink } from 'fs/promises';
 import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueHealthDayMutation } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
 import { bucketFor } from '../lib/objects.js';
+import { healthPointOrigin } from '../lib/appleHealthPoints.js';
 
 // === Mapping Tables ===
 
@@ -166,71 +167,49 @@ export function normalizeXmlRecord(node) {
 
 // === Aggregation ===
 
-/**
- * Group data points by their `src` (source device name), preserving insertion order.
- *
- * @param {Array} points - Data points, each optionally carrying `src`
- * @returns {Map<string|null, Array>} Points grouped by src
- */
-function groupBySrc(points) {
-  const bySrc = new Map();
-  for (const p of points) {
-    const src = p.src ?? null;
-    if (!bySrc.has(src)) bySrc.set(src, []);
-    bySrc.get(src).push(p);
+// step_count and sleep_analysis collapse to one aggregate per day per source
+// device. Apple Health emits per-activity step records, often from several
+// devices (iPhone + Watch) covering the same walk, and several sleep sources can
+// record the same night, so summing across sources would double-count: keep one
+// aggregate per `src` and defer picking the source of truth to read time (see
+// `pickDaySumPoints` in appleHealthQuery.js).
+//
+// These are accumulated in memory across the WHOLE file (days x sources, small
+// even for a 3GB export) and written only once at the end. Flushing a partial
+// aggregate mid-day would key it by whichever record happened to sit at a flush
+// boundary; a newer export moves the boundary, so the old partial would survive
+// next to the new total and inflate it (#17312).
+const AGGREGATED_METRICS = new Set(['step_count', 'sleep_analysis']);
+const SLEEP_STAGES = ['deep', 'rem', 'core', 'awake', 'inBed', 'asleep'];
+
+function newAggregate(metricName, point) {
+  if (metricName === 'step_count') {
+    return { date: point.date, qty: 0, unit: point.unit ?? null, src: point.src ?? null, origin: 'xml' };
   }
-  return bySrc;
+  return {
+    date: point.date, totalSleep: 0, deep: 0, rem: 0, core: 0, awake: 0, inBed: 0, asleep: 0,
+    src: point.src ?? null, origin: 'xml',
+  };
 }
 
-/**
- * Aggregate step_count entries in a day bucket into one total PER SOURCE DEVICE.
- * Apple Health emits per-activity step records, often from multiple devices
- * (iPhone + Watch) covering the same walk — summing across sources would
- * double-count, so this keeps one aggregate per `src` and defers picking the
- * single source of truth to read time (see `pickDaySumPoints` in appleHealthQuery.js).
- *
- * @param {Array} points - Array of step_count data points
- * @returns {Array} One aggregated entry per source device
- */
-function aggregateStepCount(points) {
-  if (!points.length) return points;
-  return Array.from(groupBySrc(points).entries()).map(([src, pts]) => ({
-    date: pts[0].date,
-    qty: pts.reduce((sum, p) => sum + (p.qty || 0), 0),
-    unit: pts[0].unit ?? null,
-    src,
-    origin: 'xml',
-  }));
-}
+/** Fold one record into its day/metric/source aggregate; `date` tracks the earliest startdate. */
+function accumulateAggregate(aggregates, dateStr, metricName, point) {
+  if (!aggregates.has(dateStr)) aggregates.set(dateStr, new Map());
+  const byMetric = aggregates.get(dateStr);
+  if (!byMetric.has(metricName)) byMetric.set(metricName, new Map());
+  const bySrc = byMetric.get(metricName);
+  const src = point.src ?? null;
+  if (!bySrc.has(src)) bySrc.set(src, newAggregate(metricName, point));
+  const agg = bySrc.get(src);
 
-/**
- * Aggregate sleep_analysis entries in a day bucket into one summary PER SOURCE DEVICE.
- * Multiple sleep sources (Watch, iPhone, third-party trackers) can record the
- * same night — summing across sources would double-count, so this keeps one
- * summary per `src` and defers picking the single source of truth to read
- * time (see `pickDaySumPoints` in appleHealthQuery.js).
- *
- * @param {Array} points - Array of sleep_analysis data points with stage/durationHours
- * @returns {Array} One aggregated summary per source device: { date, totalSleep, deep, rem, core, awake, inBed, asleep, src, origin }
- */
-function aggregateSleepAnalysis(points) {
-  if (!points.length) return points;
-  return Array.from(groupBySrc(points).entries()).map(([src, pts]) => {
-    const summary = { date: pts[0].date, totalSleep: 0, deep: 0, rem: 0, core: 0, awake: 0, inBed: 0, asleep: 0, src, origin: 'xml' };
-    for (const p of pts) {
-      const stage = p.stage;
-      const dur = p.durationHours || 0;
-      if (stage === 'deep') summary.deep += dur;
-      else if (stage === 'rem') summary.rem += dur;
-      else if (stage === 'core') summary.core += dur;
-      else if (stage === 'awake') summary.awake += dur;
-      else if (stage === 'inBed') summary.inBed += dur;
-      else if (stage === 'asleep') summary.asleep += dur;
-    }
-    // totalSleep = meaningful sleep stages (deep + rem + core)
-    summary.totalSleep = summary.deep + summary.rem + summary.core;
-    return summary;
-  });
+  if (point.date < agg.date) agg.date = point.date;
+  if (metricName === 'step_count') {
+    agg.qty += point.qty || 0;
+    return;
+  }
+  if (SLEEP_STAGES.includes(point.stage)) agg[point.stage] += point.durationHours || 0;
+  // totalSleep = meaningful sleep stages (deep + rem + core)
+  agg.totalSleep = agg.deep + agg.rem + agg.core;
 }
 
 // === Main Export ===
@@ -238,7 +217,7 @@ function aggregateSleepAnalysis(points) {
 const FLUSH_INTERVAL = 200000; // Flush to disk every 200K records to stay under memory limits
 
 /**
- * Flush accumulated day buckets to disk: aggregate, merge with existing, write, clear.
+ * Flush accumulated day buckets to disk: merge with existing, write, clear.
  * Uses upsert to handle re-imports that update existing day totals.
  *
  * @param {Object} dayBuckets - { [dateStr]: { [metricName]: [...dataPoints] } }
@@ -253,16 +232,6 @@ async function flushDayBuckets(dayBuckets) {
     // every later day re-reads the restored file rather than a stale one.
     await queueHealthDayMutation(dateStr, async () => {
       const metrics = dayBuckets[dateStr];
-
-      // Aggregate step_count: sum all qty values into single daily total
-      if (metrics.step_count) {
-        metrics.step_count = aggregateStepCount(metrics.step_count);
-      }
-
-      // Aggregate sleep_analysis: sum stage durations into daily summary
-      if (metrics.sleep_analysis) {
-        metrics.sleep_analysis = aggregateSleepAnalysis(metrics.sleep_analysis);
-      }
 
       const dayData = await readDayFile(dateStr);
 
@@ -285,17 +254,42 @@ async function flushDayBuckets(dayBuckets) {
 }
 
 /**
+ * Write the whole-file step/sleep aggregates. For each day, metric and source the
+ * single new aggregate REPLACES every existing XML point of that source (not just
+ * the one with an equal timestamp), so partials stranded by an earlier import
+ * are repaired. HAE points and other sources are untouched.
+ *
+ * @param {Map<string, Map<string, Map<string|null, Object>>>} aggregates
+ */
+async function flushAggregates(aggregates) {
+  for (const [dateStr, byMetric] of aggregates) {
+    await queueHealthDayMutation(dateStr, async () => {
+      const dayData = await readDayFile(dateStr);
+      for (const [metricName, bySrc] of byMetric) {
+        const kept = (dayData.metrics[metricName] || []).filter(
+          (p) => !(healthPointOrigin(p) === 'xml' && bySrc.has(p.src ?? null)),
+        );
+        dayData.metrics[metricName] = [...kept, ...bySrc.values()];
+      }
+      await writeDayFile(dateStr, dayData, [...byMetric.keys()]);
+    });
+  }
+}
+
+/**
  * Stream-parse an Apple Health export.xml file with the dependency-free
  * `<Record>` parser. Accumulates records in batches, flushing to disk
  * periodically to avoid OOM.
  *
  * @param {string} filePath - Absolute path to the XML file (temp upload)
  * @param {Object|null} io - Socket.IO server instance for progress events
+ * @param {{ flushInterval?: number }} [options] - Records between intermediate flushes
  * @returns {Promise<{ days: number, records: number }>}
  */
-export async function importAppleHealthXml(filePath, io = null) {
+export async function importAppleHealthXml(filePath, io = null, { flushInterval = FLUSH_INTERVAL } = {}) {
   // dayBuckets: { [dateStr]: { [metricName]: [...dataPoints] } }
   const dayBuckets = {};
+  const aggregates = new Map();
   let processedRecords = 0;
   let lastFlush = 0;
   const allDays = new Set();
@@ -312,11 +306,15 @@ export async function importAppleHealthXml(filePath, io = null) {
 
           const { metricName, dateStr, dataPoint } = normalized;
 
-          // dateStr and metricName both come from the uploaded export.
-          const metrics = bucketFor(dayBuckets, dateStr, () => ({}));
-          const points = metrics && bucketFor(metrics, metricName, () => []);
-          if (!points) return;
-          points.push(dataPoint);
+          if (AGGREGATED_METRICS.has(metricName)) {
+            accumulateAggregate(aggregates, dateStr, metricName, dataPoint);
+          } else {
+            // dateStr and metricName both come from the uploaded export.
+            const metrics = bucketFor(dayBuckets, dateStr, () => ({}));
+            const points = metrics && bucketFor(metrics, metricName, () => []);
+            if (!points) return;
+            points.push(dataPoint);
+          }
           allDays.add(dateStr);
 
           processedRecords++;
@@ -327,7 +325,7 @@ export async function importAppleHealthXml(filePath, io = null) {
           }
 
           // Batch flush to prevent OOM — pause input stream, flush to disk, resume
-          if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
+          if (processedRecords - lastFlush >= flushInterval && !flushing) {
             flushing = true;
             lastFlush = processedRecords;
             inputStream.pause();
@@ -354,6 +352,7 @@ export async function importAppleHealthXml(filePath, io = null) {
 
     // Final flush for remaining records
     await flushDayBuckets(dayBuckets);
+    await flushAggregates(aggregates);
   } finally {
     // Runs on success AND on every rejection route (parser error, input-stream
     // error, rejected batch flush). Destroy before unlink: a batch-flush
