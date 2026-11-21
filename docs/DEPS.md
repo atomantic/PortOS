@@ -32,7 +32,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@googleapis/gmail` | — | REPLACED | Messages/Gmail integration | Issue #12219 → `server/services/gmailApi.js`, a six-operation adapter over the `@googleapis/calendar` OAuth client's `request()` (fixed Gmail v1 origin; auth, refresh and transport stay upstream). Calendar still retains `googleapis-common`, Google auth and their transport dependencies, so this trims a direct dependency and its update churn, not that transitive supply chain |
 | `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
-| `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
+| `compression` | — | REPLACED | server HTTP responses | Issue #17213 moved response compression to `node:zlib` in `server/lib/httpCompression.js` and removed four lockfile packages |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
 | `google-auth-library` | — | REMOVED (direct) | Google OAuth | Consolidated under `@googleapis/calendar`'s transitive `googleapis-common` dependency |
 | `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |
@@ -162,7 +162,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 
 `/do:depfree --extreme` (and the `better-dependency-freedom` scheduled audit with its removal bar set to **Extreme**) aims at zero dependencies: it forces the strongest model tier at maximum reasoning effort, drops the line ceiling in favor of a parity-test gate, and keeps only what cannot be owned responsibly — the Node runtime and npm, security-sensitive protocol implementations (the `pg` wire protocol and its authentication, TLS), native bindings (`node-pty`, `better-sqlite3-multiple-ciphers`, `sharp`), and the CI-required test runner. Under that bar the following Tier 1 entries become candidates, each needing a written replacement design and a parity suite before any call site switches:
 
-- `express` and `compression` — the used surface is routing, middleware chaining, static files, body parsing, and Brotli/gzip negotiation over `node:http` and `node:zlib`.
+- `express` — the used surface is routing, middleware chaining, static files, and body parsing over `node:http`.
 - `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
 - `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
 - `@googleapis/*` — direct REST calls plus owned OAuth signing.
