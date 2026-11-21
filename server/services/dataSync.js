@@ -755,7 +755,7 @@ async function applyUniverseRemote(remoteData, source, meta = {}) {
 async function getPipelineSnapshot({ exclude } = {}) {
   const [series, issues] = await Promise.all([
     listSeries({ includeDeleted: true }),
-    listAllIssues({ includeDeleted: true }),
+    listAllIssues({ includeDeleted: true, withHistory: false }),
   ]);
   // The pipeline category bundles series + their child issues — a `series`
   // subscription covers the whole sub-tree via the per-record push (which

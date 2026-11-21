@@ -17,8 +17,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   memoryHistory: 1,
   // Universe canon layout (characters, places, objects, styles, mood-board link); v22 = place `world` map.
   universes: 22,
-  // Pipeline issue record (stages, arc role, shot framings); v6 = shot framing `group`.
-  pipelineIssues: 6,
+  // Pipeline issues; v7 omits stage run history, which older receivers would erase on overwrite.
+  pipelineIssues: 7,
   // Pipeline series record (arc, styleGuide, characterArcs, exportSettings); v14 = author-owned `arc.seriesDesign`.
   pipelineSeries: 14,
   // Media collections; v2 = per-item `removedItems` removal records.

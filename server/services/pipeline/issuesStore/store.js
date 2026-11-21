@@ -31,8 +31,8 @@ import { createFileWriteQueue } from '../../../lib/fileWriteQueue.js';
 import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 
 // Strip history before file-backend sanitization; PG already removes it in
-// SQL. Full records remain the default because exports and sync must retain
-// every version. Public sanitized list stages still expose runHistory: [].
+// SQL. Detail, exports, and inbound merge need full records. Sanitized lean
+// lists still expose runHistory: [].
 export const stripRunHistoryFromIssue = (issue) => {
   if (!issue || typeof issue !== 'object' || !issue.stages) return issue;
   const strippedStages = {};

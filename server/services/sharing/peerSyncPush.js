@@ -787,7 +787,7 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   // Bundle child issues — the series + its issues form one unit of edit
   // for downstream consumers (panels, comic pages), so the receiver
   // applies them atomically per merge cycle.
-  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true });
+  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true, withHistory: false });
   const sanitizedIssues = childIssues
     .map((i) => sanitizeRecordForWire('issue', i))
     .filter(Boolean);
