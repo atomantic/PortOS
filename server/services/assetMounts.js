@@ -126,7 +126,7 @@ const imageSidecarGate = async (req, res, next) => {
 };
 
 // Mounts whose files a peer may host instead of copying (peerHostedMedia.js).
-const HOSTED_FALLBACK_ROUTES = new Set(['/data/images', '/data/videos', '/data/video-thumbnails']);
+const HOSTED_FALLBACK_ROUTES = new Set(['/data/images', '/data/videos', '/data/video-thumbnails', '/data/image-refs', '/data/audio', '/data/models']);
 
 const ASSET_GATES = {
   '/data/images': imageSidecarGate,

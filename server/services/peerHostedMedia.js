@@ -2,11 +2,13 @@
  * Peer-hosted media index — the "host" half of media sync.
  *
  * A peer whose `mediaSyncMode` is `host` never has its collection or mood-board image/video
- * bytes copied into this install's `data/`. Instead the receiver records, per
+ * bytes, or the reference images, audio and 3D models catalog rows name, copied
+ * into this install's `data/`. Instead the receiver records, per
  * `<kind>:<filename>`, WHICH peer hosts the file, and the local static mounts
- * (`/data/images`, `/data/videos`, `/data/video-thumbnails`,
- * `/data/image-thumbnails`) fall back to streaming that file from the peer when
- * the local copy is absent (`streamHostedAsset`, wired in assetMounts.js). Every
+ * (`/data/images`, `/data/videos`, `/data/image-refs`, `/data/audio`,
+ * `/data/models`, `/data/video-thumbnails`, `/data/image-thumbnails`) fall back
+ * to streaming that file from the peer when the local copy is absent
+ * (`hostedAssetFallback`, wired in assetMounts.js). Every
  * existing `<img src="/data/images/x.png">` therefore renders unchanged.
  *
  * Storage: `file-primary` — machine-local, never federated: it describes where
@@ -26,7 +28,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isStr } from '../lib/textUtils.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerStreamRequest } from '../lib/peerHttpClient.js';
+import { peerFetch, peerStreamRequest } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { getPeers } from './instances.js';
@@ -40,13 +42,23 @@ const STREAM_TIMEOUT_MS = 30000;
 // original, while leaving large original-media streams their longer deadline.
 const THUMBNAIL_TIMEOUT_MS = 3000;
 
-// Hosted gallery media kinds. Thumbnails are derived views of these two,
-// resolved below; other record assets retain their copy behavior.
+// A HEAD answers at headers; a peer that can't do that promptly is unreachable.
+const PROBE_TIMEOUT_MS = 15000;
+
+// Hosted media kinds. Gallery images and videos come from collections and mood
+// boards; image-ref, audio and model files come from the catalog sweep
+// (catalog/catalogMediaBytesSync.js). Thumbnails are derived views of images and
+// videos, resolved below. Other record assets keep their copy behavior.
 const KIND_DIRS = {
   image: () => PATHS.images,
   video: () => PATHS.videos,
+  'image-ref': () => PATHS.imageRefs,
+  audio: () => PATHS.audio,
+  model: () => PATHS.models,
 };
-const KIND_PREFIX = { image: '/data/images', video: '/data/videos' };
+const KIND_PREFIX = { image: '/data/images', video: '/data/videos', 'image-ref': '/data/image-refs', audio: '/data/audio', model: '/data/models' };
+// Static mount → the kind it serves directly (thumbnail mounts are derived, so absent).
+const MOUNT_KIND = Object.fromEntries(Object.entries(KIND_PREFIX).map(([kind, mount]) => [mount, kind]));
 
 export const hostedKey = (kind, filename) => `${kind}:${filename}`;
 const hostsOf = (entry) => Array.isArray(entry?.hosts) ? entry.hosts : (entry?.peerId ? [{ peerId: entry.peerId, at: entry.at, revision: entry.revision }] : []);
@@ -115,6 +127,35 @@ export function hostFileOn(kind, filename, peerInstanceId) {
     await writeEntries(entries);
     return true;
   });
+}
+
+/** `<kind>:<filename>` keys `peerInstanceId` is recorded as hosting (any position, any revision). */
+export async function hostedKeysOf(peerInstanceId) {
+  const entries = await readEntriesOrEmpty();
+  return new Set(Object.keys(entries).filter((key) => hostsOf(entries[key]).some((host) => host?.peerId === peerInstanceId)));
+}
+
+/**
+ * Ask `peer` whether it serves `kind:filename` from its own disk: `held`,
+ * `not-held` (absent, or only streamed from another peer) or `unreachable`.
+ * A HEAD on the kind's static mount, which every peer version answers.
+ */
+export async function peerServesFile(peer, kind, filename) {
+  const mount = KIND_PREFIX[kind];
+  if (!mount || !isStr(filename) || sanitizeAssetFilename(filename) !== filename) return 'not-held';
+  let res;
+  try {
+    res = await withAbortTimeout(PROBE_TIMEOUT_MS, (signal) => peerFetch(
+      `${peerBaseUrl(peer)}${mount}/${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
+    ));
+  } catch {
+    return 'unreachable';
+  }
+  if (res.status === 404) return 'not-held';
+  if (!res.ok) return 'unreachable';
+  // A peer streaming the file from a third machine is not a host: chaining
+  // through it would break whenever it is the one offline.
+  return res.headers?.get('x-portos-media-location') === 'remote' ? 'not-held' : 'held';
 }
 
 /** `<kind>:<filename>` keys whose local copy was released to a Make-primary host. */
@@ -352,13 +393,10 @@ async function videoFilenamesForThumbnail(filename) {
 async function resolveHostedRequest(mount, filename) {
   const safe = sanitizeAssetFilename(filename);
   if (!safe) return null;
-  if (mount === '/data/images') {
-    const hosted = await lookupHosted('image', safe);
-    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `${KIND_PREFIX.image}/${encodeURIComponent(safe)}`, drop: { kind: 'image', filename: safe } };
-  }
-  if (mount === '/data/videos') {
-    const hosted = await lookupHosted('video', safe);
-    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `${KIND_PREFIX.video}/${encodeURIComponent(safe)}`, drop: { kind: 'video', filename: safe } };
+  const kind = MOUNT_KIND[mount];
+  if (kind) {
+    const hosted = await lookupHosted(kind, safe);
+    return hosted && { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `${KIND_PREFIX[kind]}/${encodeURIComponent(safe)}`, drop: { kind, filename: safe } };
   }
   if (mount === '/data/image-thumbnails') {
     // `<stem>.webp` is derived from `<stem>.png`; the peer serves its own
@@ -412,8 +450,9 @@ function logStreamFailure(peer, mount, err, isThumbnail) {
 
 /**
  * Express fallback mounted AFTER a static mount: when the local file is absent
- * and a peer hosts it, stream it from the peer (Range forwarded so video
- * scrubbing works). Anything else falls through to the mount's 404.
+ * and a peer hosts it, stream it from the peer (Range forwarded so video and
+ * audio scrubbing and partial model reads work). Anything else falls through
+ * to the mount's 404.
  */
 export function hostedAssetFallback(mount) {
   return async (req, res, next) => {
