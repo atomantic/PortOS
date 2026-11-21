@@ -15,7 +15,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { isOllamaBackedProvider } from './provider/providers.js'
 // Straight from `internal/`: deliberately not re-exported from providers.js, so
 // the normalization cannot drift.
-import { ollamaBaseFromProvider } from '../lib/aiToolkit/internal/ollamaBacked.js'
+import { ollamaBaseFromProvider, withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js'
 import {
   OLLAMA_AGENT_MIN_CONTEXT,
   describeOllamaContextTooSmall,
@@ -43,7 +43,7 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
     return { skipped: true, reason: 'remote-daemon' }
   }
 
-  const contextLength = resolveOllamaContextLength(provider, env)
+  const contextLength = resolveOllamaContextLength(withModelNumCtx(provider, model), env)
   const providerName = provider.name || provider.id || null
 
   if (!contextLength) {

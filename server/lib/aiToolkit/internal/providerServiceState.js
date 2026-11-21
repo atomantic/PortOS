@@ -326,6 +326,7 @@ export function createProviderServiceState(config = {}) {
       fallbackProvider: providerData.fallbackProvider || null,
       fallbackModel: providerData.fallbackModel || null,
       numCtx: providerData.numCtx || null,
+      ...(providerData.modelNumCtx && Object.keys(providerData.modelNumCtx).length ? { modelNumCtx: providerData.modelNumCtx } : {}),
       temperature: providerData.temperature,
       topP: providerData.topP,
       thinking: providerData.thinking,

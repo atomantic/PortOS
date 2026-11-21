@@ -26,7 +26,7 @@ import {
 // The Ollama `num_ctx` ceiling, resolved through the same module as the pre-dispatch gate so
 // budgeter and gate agree (#7466). The dependency-free `internal/` leaf, not the toolkit barrel
 // (which reaches `fs`/`child_process`; this module is inside the server suite's import budget).
-import { clampToRuntimeContextWindow } from '../lib/aiToolkit/internal/ollamaBacked.js';
+import { clampToRuntimeContextWindow, withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
 // …and the rung the toolkit cannot resolve itself: the ambient `OLLAMA_CONTEXT_LENGTH` (#7472).
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { createRun, patchRunMetadata } from './runner.js';
@@ -167,7 +167,7 @@ function claimedContextWindow(provider, model) {
  * it itself because both of its branches need the same ceiling.
  */
 export function effectiveContextWindow(provider, model) {
-  const runtime = withOllamaRuntimeContextWindow(provider);
+  const runtime = withOllamaRuntimeContextWindow(withModelNumCtx(provider, model));
   return clampToRuntimeContextWindow(runtime, claimedContextWindow(runtime, model));
 }
 
