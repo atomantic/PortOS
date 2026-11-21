@@ -85,7 +85,7 @@ describe('PostgreSQL row', () => {
     expect(postgresRow(pg(), now)).toMatchObject({ state: 'current', version: '17.12', latest: '17.12', home: { path: '/settings/database' } });
     const native = postgresRow(pg({ version: '17.11' }), now);
     expect(native).toMatchObject({ state: 'update', latest: '17.12', action: null });
-    expect(native.summary).toContain('brew upgrade postgresql@17 pgvector');
+    expect(native.summary).toContain('Upgrade postgresql@17 and pgvector in the Homebrew section');
     expect(postgresRow(pg({ version: '17.9', mode: 'docker' }), now).summary).toContain('npm run setup:db');
   });
 

@@ -24,6 +24,7 @@ vi.mock('../../services/apiSystem.js', () => ({
   updatePm2Runtime: vi.fn(),
   installManagedBlender: vi.fn(),
 }));
+vi.mock('./HomebrewUpgrades', () => ({ default: () => null }));
 vi.mock('../../services/apiVideoDownload.js', () => ({
   updateYtDlp: vi.fn(),
 }));

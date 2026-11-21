@@ -121,7 +121,7 @@ const EOL_WARNING_DAYS = 365;
 
 function postgresUpdateHow({ mode, major, build }) {
   if (mode === 'docker') return 'The pinned image arrives with a PortOS update; then run `npm run setup:db`, which recreates the container on the existing volume.';
-  if (/homebrew/i.test(build || '')) return `Run \`brew upgrade postgresql@${major} pgvector && brew services restart postgresql@${major}\`.`;
+  if (/homebrew/i.test(build || '')) return `Upgrade postgresql@${major} and pgvector in the Homebrew section below, which checks that pgvector still loads afterwards.`;
   return `Update the system PostgreSQL ${major} package and pgvector together, then restart the server.`;
 }
 
