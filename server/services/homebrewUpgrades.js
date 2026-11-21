@@ -107,7 +107,9 @@ async function linkedFormulae(python, { run = runFile } = {}) {
     .filter((dir) => existsSync(dir));
   const files = [python.real, ...dynload.flatMap((dir) => readdirSync(dir).filter((name) => name.endsWith('.so')).map((name) => join(dir, name)))];
   const { stdout } = await run('/usr/bin/otool', ['-L', ...files], safeChildProcessOptions({ timeout: READ_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 }));
-  const names = [...String(stdout).matchAll(/\/(?:opt|Cellar)\/([\w.+@-]+)\/[^\s]*\.dylib/g)].map((match) => match[1]);
+  // Anchored at the Homebrew prefix (Apple Silicon or Intel), so the `/opt/` in
+  // `/opt/homebrew/` itself is never read as a formula name.
+  const names = [...String(stdout).matchAll(/(?:\/opt\/homebrew|\/usr\/local)\/(?:opt|Cellar)\/([\w.+@-]+)\/\S*\.dylib/g)].map((match) => match[1]);
   return [...new Set(names)];
 }
 

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testing, getHomebrewStatus, setHomebrewHold, startHomebrewJob } from './homebrewUpgrades.js';
 
@@ -134,5 +137,30 @@ describe('setHomebrewHold', () => {
     expect(await setHomebrewHold({ names: ['pgvector'], hold: true, io, deps: { platform: 'darwin', brew: BREW, run } })).toEqual({ names: ['pgvector'], held: true });
     expect(run).toHaveBeenCalledWith(BREW, ['pin', 'pgvector'], expect.any(Object));
     expect(frames).toContainEqual(['software:changed', { reason: 'homebrew' }]);
+  });
+});
+
+describe('linkedFormulae', () => {
+  it('names the formulae a Python built outside Homebrew links, on Apple Silicon and Intel prefixes', async () => {
+    const prefix = mkdtempSync(join(tmpdir(), 'brew-linked-'));
+    try {
+      mkdirSync(join(prefix, 'bin'));
+      mkdirSync(join(prefix, 'lib', 'python3.8', 'lib-dynload'), { recursive: true });
+      writeFileSync(join(prefix, 'bin', 'python3.8'), '');
+      writeFileSync(join(prefix, 'lib', 'python3.8', 'lib-dynload', '_ssl.so'), '');
+      const run = vi.fn(async () => ({ stdout: [
+        `${prefix}/bin/python3.8:`,
+        '\t/opt/homebrew/opt/gettext/lib/libintl.8.dylib (compatibility version 12.0.0)',
+        '\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)',
+        `${prefix}/lib/python3.8/lib-dynload/_ssl.so:`,
+        '\t/opt/homebrew/Cellar/openssl@3/3.4.0/lib/libssl.3.dylib (compatibility version 3.0.0)',
+        '\t/usr/local/opt/xz/lib/liblzma.5.dylib (compatibility version 6.0.0)',
+      ].join('\n') }));
+      const python = { real: join(prefix, 'bin', 'python3.8') };
+      expect(await __testing.linkedFormulae(python, { run })).toEqual(['gettext', 'openssl@3', 'xz']);
+      expect(run.mock.calls[0][1]).toEqual(['-L', python.real, join(prefix, 'lib', 'python3.8', 'lib-dynload', '_ssl.so')]);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
   });
 });
