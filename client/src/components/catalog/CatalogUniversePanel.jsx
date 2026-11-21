@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Copy, Globe, Loader2 } from 'lucide-react';
@@ -192,7 +193,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
               <select id={`${fieldId}-universe`} value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy}
                 className="w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
                 <option value="">Choose a universe…</option>
-                {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}{universe.id === owner?.refId ? ' (same universe · redesign)' : ''}</option>)}
+                {sortByLabel(universes).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}{universe.id === owner?.refId ? ' (same universe · redesign)' : ''}</option>)}
               </select></div>
             <div><label htmlFor={`${fieldId}-name`} className="block text-xs text-gray-400 mb-1">Fork name</label>
               <input id={`${fieldId}-name`} value={forkName} maxLength={200} onChange={(event) => setForkName(event.target.value)} disabled={busy}

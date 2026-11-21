@@ -7,6 +7,7 @@
  * visual editor lives at /fableloom/:loomId/:episodeId.
  */
 
+import { sortByLabel } from '../lib/sortByLabel.js';
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Sparkles, Trash2, Waypoints } from 'lucide-react';
@@ -179,7 +180,7 @@ export default function FableLoom() {
                   onChange={(e) => setForm((p) => ({ ...p, universeId: e.target.value }))}
                 >
                   <option value="">No universe</option>
-                  {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {sortByLabel(universes).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
                 {universesResource.state === 'error' && (
                   <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} className="mt-2" />
@@ -192,7 +193,7 @@ export default function FableLoom() {
                   onChange={(e) => setForm((p) => ({ ...p, seriesId: e.target.value }))}
                 >
                   <option value="">Standalone</option>
-                  {series.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {sortByLabel(series).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
                 {seriesResource.state === 'error' && (
                   <ListLoadError what="series" error={seriesResource.error} onRetry={seriesResource.retry} className="mt-2" />

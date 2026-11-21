@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import MediaImage from '../MediaImage';
@@ -34,7 +35,7 @@ export default function SceneGreyboxReference({ project, scene, places = {}, onC
         <select id={`${id}-set`} value={selected?.subjectId || ''} onChange={(e) => save(e.target.value ? { subjectId: e.target.value } : null)} className="min-h-[44px] max-w-full rounded border border-port-border bg-port-bg text-xs">
           <option value="">No greybox reference</option>
           {selected && !subject && <option value={selected.subjectId}>Missing set</option>}
-          {sets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
+          {sortByLabel(sets).map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
         </select>
         {subject && <>
           <label htmlFor={`${id}-shot`} className="text-xs">Camera shot</label>

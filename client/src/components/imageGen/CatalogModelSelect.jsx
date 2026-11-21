@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 // A select over a curated provider model catalog (fal.ai, Higgsfield, Google) rather
 // than a text box: every id is a different price and the server refuses an id
 // the catalog does not list. Either endpoint id of a family selects its row; a
@@ -21,7 +22,7 @@ export default function CatalogModelSelect({
     >
       <option value="">{defaultLabel}</option>
       {orphaned && <option value={selected}>{`${selected} (not in the ${providerLabel} catalog)`}</option>}
-      {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      {sortByLabel(options, (model) => model.label).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
     </select>
   );
 }

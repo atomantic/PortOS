@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, ShieldCheck, Wand2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
@@ -256,7 +257,7 @@ function TaskTypeFields({ form, compact, queueFirst }) {
               className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white"
             >
               <option value="">Custom Profile</option>
-              {state.orchestrationProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+              {sortByLabel(state.orchestrationProfiles).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
             </select>
           </div>
         )}

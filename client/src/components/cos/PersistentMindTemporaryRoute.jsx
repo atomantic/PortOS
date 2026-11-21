@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useId } from 'react';
 import { RotateCcw, Settings2, TriangleAlert } from 'lucide-react';
 import { classifyMindRouteBilling, findMindThinkingPreset } from '../../lib/mindThinkingPresets.js';
@@ -51,7 +52,7 @@ export default function PersistentMindTemporaryRoute({
           className="min-h-[32px] max-w-full flex-1 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
         >
           <option value="">Default profile (unchanged)</option>
-          {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          {sortByLabel(presets, (preset) => preset.label).map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
         </select>
         {selectedPresetId && (
           <button

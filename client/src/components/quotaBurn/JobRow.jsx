@@ -9,6 +9,7 @@
  * move controls are part of the configuration rather than a convenience.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Play, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -220,7 +221,7 @@ export default function JobRow({
                   })}
                 >
                   <option value="">Select an app…</option>
-                  {targetApps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
+                  {sortByLabel(targetApps).map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
                 </select>
                 {targetApps.length === 0 && (
                   <span className="mt-1 block text-[11px] text-amber-300">

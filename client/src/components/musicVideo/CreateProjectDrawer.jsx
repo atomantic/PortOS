@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import MediaModePicker from './MediaModePicker.jsx';
 import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
@@ -208,7 +209,7 @@ export default function CreateProjectDrawer({
               className={inputClass}
             >
               <option value="">{universeResource?.state === 'loading' || (universes === null && !universeResource) ? 'Loading…' : 'No universe'}</option>
-              {availableUniverses.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {sortByLabel(availableUniverses).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
             {universeRefusal && (
               <p className="text-xs text-port-error mt-1" role="alert">

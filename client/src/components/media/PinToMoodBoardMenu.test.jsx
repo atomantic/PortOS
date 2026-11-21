@@ -156,23 +156,20 @@ describe('PinToMoodBoardMenu', () => {
     expect(api.removeMoodBoardItem).toHaveBeenCalledWith('b1', 'mbi-7', { silent: true });
   });
 
-  it('keeps the server board order — collection auto-empty bucketing must not apply (#3312)', async () => {
-    // A board a user named like an auto-created collection. The shell's default
-    // ordering would classify it as an auto-generated empty and sink it; boards
-    // inject their own filter and keep `updatedAt DESC` from the server.
+  it('sorts by the full board name, including any prefix', async () => {
     api.listMoodBoards.mockResolvedValue([
       { id: 'b0', name: 'Universe: Refs', items: [], updatedAt: '2026-01-09T00:00:00Z' },
-      { id: 'b1', name: 'Palettes', items: [{ id: 'mbi-1', type: 'image' }], updatedAt: '2026-01-08T00:00:00Z' },
+      { id: 'b1', name: 'Sketches', items: [{ id: 'mbi-1', type: 'image' }], updatedAt: '2026-01-08T00:00:00Z' },
     ]);
 
     render(<PinToMoodBoardMenu item={imageItem} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    await screen.findByRole('button', { name: /Palettes/ });
+    await screen.findByRole('button', { name: /Sketches/ });
 
     // Rows are buttons inside the picker's <ul> — scoping to the list keeps
     // the trigger and create-form submit buttons out of the row order check.
     expect(within(screen.getByRole('list')).getAllByRole('button').map((el) => el.textContent.trim()))
-      .toEqual(['Universe: Refs', 'Palettes']);
+      .toEqual(['Sketches', 'Universe: Refs']);
   });
 
   it('renders nothing when there is no valid media-key and no renderable thumbnail', () => {

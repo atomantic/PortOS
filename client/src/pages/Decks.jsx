@@ -7,6 +7,7 @@
  * at `/decks/:id`. Mirrors the Mood Boards index.
  */
 
+import { sortByLabel } from '../lib/sortByLabel.js';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Globe, Plus, Spade, Trash2 } from 'lucide-react';
@@ -98,7 +99,7 @@ export default function Decks() {
             <label htmlFor="deck-new-universe" className="block text-xs text-gray-400 mb-1">Universe (optional)</label>
             <select id="deck-new-universe" value={universeId} onChange={(e) => setUniverseId(e.target.value)} className={INPUT_CLASS}>
               <option value="">— none —</option>
-              {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {sortByLabel(universes).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
             {universesResource.state === 'error' ? (
               <ListLoadError what="universes" error={universesResource.error} onRetry={universesResource.retry} className="mt-2" />

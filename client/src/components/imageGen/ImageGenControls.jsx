@@ -8,6 +8,7 @@
 // reshaping. `mode` drives which knobs are visible: codex hides everything except
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Dice5 } from 'lucide-react';
 import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
@@ -126,7 +127,7 @@ export default function ImageGenControls({
             disabled={disabled}
             className={inputCls}
           >
-            {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            {sortByLabel(models).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
           {isFlux3 && (
             <p className="mt-2 text-xs text-gray-400">

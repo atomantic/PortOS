@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { listMusicVideoProjectSummaries } from '../../services/apiMusicVideo.js';
 import useListResource from '../../hooks/useListResource.js';
 import ListLoadError from '../ui/ListLoadError.jsx';
@@ -22,7 +23,7 @@ export default function ExistingSongSelect({ id, value, onChange }) {
       <select id={id} value={value || ''} onChange={(e) => onChange(e.target.value)} className={inputClass}>
         <option value="">{state === 'loading' ? 'Loading…' : 'Make a new song'}</option>
         {missing && <option value={value}>{value} (not found)</option>}
-        {projects.map((p) => <option key={p.id} value={p.id}>Use the song from {p.name}</option>)}
+        {sortByLabel(projects).map((p) => <option key={p.id} value={p.id}>Use the song from {p.name}</option>)}
       </select>
       {state === 'error' && <ListLoadError what="projects with a song" error={error} onRetry={retry} className="mt-1" />}
       {value && (
