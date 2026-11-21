@@ -4,6 +4,7 @@
  */
 
 import { festivalPacketSchema } from './musicVideo/musicVideoFestivalPacket.js';
+import { isPlainObject } from './objects.js';
 import {
   BIBLE_LIMITS,
   IDENTITY_ASSET_ROLES,
@@ -207,13 +208,10 @@ function stripUniverseCharacterLocalProductionFields(record) {
  * upgraded peer for the same live records (the merge LWW would no-op because
  * `updatedAt` is equal, so the files never converge and sync churns forever).
  *
- * Per-record field stripping (e.g. dropping `runHistory` from issue stages
- * once it grows too large for sync) goes here when the time comes — the
- * function exists today so the new push path has the same callsite as the
- * snapshot path, and so the next "should this field cross the wire?"
- * decision lands in one place.
+ * Stage run history is local. Only the conflict journal sets
+ * `includeIssueRunHistory` to reproduce pre-v2 baseline hashes.
  */
-export function sanitizeRecordForWire(kind, record) {
+export function sanitizeRecordForWire(kind, record, { includeIssueRunHistory = false } = {}) {
   // Reject non-objects, arrays (typeof [] === 'object'), and records missing
   // a usable id. Receiver-side merge functions (mergeUniversesFromSync etc.)
   // skip records without an `id`, so including such records here would mean
@@ -323,6 +321,13 @@ export function sanitizeRecordForWire(kind, record) {
           return { ...universeRest, ...sanitizeSoftDeleteFields(record) };
         }
         return { ...noPinRest, ...sanitizeSoftDeleteFields(record) };
+      }
+      if (!includeIssueRunHistory && isPlainObject(rest.stages)) {
+        rest.stages = Object.fromEntries(Object.entries(rest.stages).map(([id, stage]) => {
+          if (!isPlainObject(stage)) return [id, stage];
+          const { runHistory: _runHistory, ...current } = stage;
+          return [id, current];
+        }));
       }
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }

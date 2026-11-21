@@ -13,7 +13,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord,
   flushBaseHashes, deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
-import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue, TEXT_STAGE_IDS } from './issuesShared.js';
+import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue, STAGE_IDS } from './issuesShared.js';
 import { isStr } from '../../lib/textUtils.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
@@ -30,8 +30,8 @@ export async function mergeIssuesFromSync(remoteIssues, {
   senderSchemaVersions = null,
 } = {}) {
   if (!Array.isArray(remoteIssues)) return { applied: false, count: 0 };
-  const senderCannotRepresentClimax = senderSchemaVersions !== null
-    && (Number(senderSchemaVersions?.pipelineIssues) || 0) < 3;
+  const senderIssueVersion = Number(senderSchemaVersions?.pipelineIssues) || 0;
+  const senderCannotRepresentClimax = senderSchemaVersions !== null && senderIssueVersion < 3;
   // Series IDs whose issue set saw at least one delete-transition — drives a
   // post-write renumber so the receiver's issue numbering catches up with the
   // sender's (otherwise a synced tombstone would leave a gap).
@@ -104,18 +104,19 @@ export async function mergeIssuesFromSync(remoteIssues, {
           if (senderCannotRepresentClimax && local.arcRole === 'climax' && sanitized.arcRole !== 'climax') {
             sanitized = { ...sanitized, arcRole: 'climax' };
           }
-          // Legacy peers may edit the issue while round-tripping an unchanged
-          // stage through a sanitizer that drops generation ownership. Retain
-          // the marker only for the exact same stage revision. An actual stage
-          // edit has unknown execution ownership, never the old local owner's.
-          if (senderSchemaVersions === null || (Number(senderSchemaVersions.pipelineIssues) || 0) < 4) {
-            for (const stageId of TEXT_STAGE_IDS) {
-              const prior = local.stages[stageId];
-              const incoming = sanitized.stages[stageId];
-              if (prior.generation && !incoming.generation
-                && JSON.stringify({ ...prior, generation: null }) === JSON.stringify({ ...incoming, generation: null })) {
-                sanitized.stages[stageId] = { ...incoming, generation: prior.generation };
-              }
+          for (const stageId of STAGE_IDS) {
+            const prior = local.stages[stageId];
+            const incoming = sanitized.stages[stageId];
+            // New peers omit local undo history. A legacy peer may still send
+            // its history alongside the winning record.
+            if (incoming.runHistory.length === 0 && prior.runHistory.length > 0) {
+              incoming.runHistory = prior.runHistory;
+            }
+            // A legacy peer can round-trip an unchanged stage without its
+            // generation owner. Keep ownership only for the same active revision.
+            if (senderIssueVersion < 4 && prior.generation && !incoming.generation
+              && JSON.stringify({ ...prior, generation: null }) === JSON.stringify({ ...incoming, generation: null })) {
+              incoming.generation = prior.generation;
             }
           }
           // Non-blocking conflict journal — archive the losing local issue on

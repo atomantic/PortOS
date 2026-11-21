@@ -36,10 +36,8 @@ afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 // adds the soft-delete pair). Distinct content → distinct content hashes.
 const uni = (over = {}) => ({ id: 'u-1', name: 'X', starterPrompt: 'base', updatedAt: '2026-05-01T00:00:00Z', ...over });
 
-// Minimal issue-shaped record — sanitizeRecordForWire('issue', …) passes the
-// content through verbatim (it does NOT run sanitizeIssue), so `stages`
-// round-trips into the content hash. `number` is deliberately EXCLUDED from
-// the issue conflict hash (renumber-managed; see HASH_EXCLUDED_FIELDS).
+// Minimal issue-shaped record. Hashing includes current stage fields and
+// excludes renumber-managed `number` and local run history.
 const iss = (over = {}) => ({ id: 'iss-1', seriesId: 'ser-1', title: 'T', number: 1, status: 'draft', stages: {}, updatedAt: '2026-05-01T00:00:00Z', ...over });
 
 // Minimal track-shaped record — sanitizeRecordForWire('track', …) passes the
@@ -254,6 +252,27 @@ describe('conflictJournal', () => {
     // A real content edit (title) still changes the hash.
     expect(cj.contentHashForRecord('issue', iss({ title: 'A' })))
       .not.toBe(cj.contentHashForRecord('issue', iss({ title: 'B' })));
+  });
+
+  it('issue history is excluded from new hashes and retained for legacy comparisons', async () => {
+    const local = iss({ stages: { prose: { output: 'current', runHistory: [{ output: 'earlier' }] } } });
+    const remote = iss({ stages: { prose: { output: 'remote edit' } } });
+    const lean = iss({ stages: { prose: { output: 'current' } } });
+    const legacyHash = cj.contentHashForRecord('issue', local, { maxVersion: 1 });
+    expect(legacyHash).not.toBe(cj.contentHashForRecord('issue', lean, { maxVersion: 1 }));
+    expect(cj.contentHashForRecord('issue', local)).toBe(cj.contentHashForRecord('issue', lean));
+
+    const sharingDir = join(TEST_DATA_ROOT, 'sharing');
+    mkdirSync(sharingDir, { recursive: true });
+    const basePath = join(sharingDir, 'sync_base_hashes.json');
+    writeFileSync(basePath, JSON.stringify({ 'issue:iss-1': legacyHash }));
+    await cj.maybeJournalBeforeOverwrite({ kind: 'issue', id: local.id, local, remote, source: { via: 'sync' } });
+
+    expect(await pendingEntries()).toHaveLength(0);
+    await cj.flushBaseHashes();
+    expect(JSON.parse(readFileSync(basePath, 'utf8'))['issue:iss-1']).toEqual({
+      v: 2, h: cj.contentHashForRecord('issue', remote),
+    });
   });
 
   it('Music Video content hash ignores each install render pins (#3245)', () => {

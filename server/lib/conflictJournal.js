@@ -65,6 +65,7 @@ const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'co
 // existing tracks, so hashing it would invalidate every pre-upgrade base hash.
 // Both remain restorable. Contrast HASH_FIELDS, for user-authored additive fields.
 const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
+const ISSUE_HASH_VERSION_WITHOUT_RUN_HISTORY = 2;
 
 // User-authored fields added to a kind's wire shape later, keyed by a LOCAL
 // version (independent of PORTOS_SCHEMA_VERSIONS, which gates wire compat). They
@@ -97,11 +98,11 @@ const HASH_FIELD_VERSION_BY_KIND = Object.freeze(Object.fromEntries(
   }),
 ));
 
-// Highest HASH_FIELDS version for `kind`, which `setSyncBaseHash` stamps; 1 is inert for kinds with no entry.
+// Highest projection version for `kind`, which `setSyncBaseHash` stamps.
 function currentHashVersionForKind(kind) {
+  const minimum = kind === 'issue' ? ISSUE_HASH_VERSION_WITHOUT_RUN_HISTORY : 1;
   const versioned = HASH_FIELDS[kind];
-  if (!versioned) return 1;
-  return Math.max(1, ...Object.keys(versioned).map(Number));
+  return versioned ? Math.max(minimum, ...Object.keys(versioned).map(Number)) : minimum;
 }
 
 /**
@@ -115,7 +116,8 @@ function currentHashVersionForKind(kind) {
  * base's version when comparing. Omitted (stamping a new base) means current.
  */
 export function contentHashForRecord(kind, record, { maxVersion } = {}) {
-  const wire = sanitizeRecordForWire(kind, record);
+  const includeIssueRunHistory = kind === 'issue' && maxVersion != null && maxVersion < ISSUE_HASH_VERSION_WITHOUT_RUN_HISTORY;
+  const wire = sanitizeRecordForWire(kind, record, { includeIssueRunHistory });
   if (!wire) return null;
   let hashInput = wire;
   if (kind === 'mediaCollection') {

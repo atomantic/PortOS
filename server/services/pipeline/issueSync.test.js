@@ -128,6 +128,28 @@ describe('pipeline issues service', () => {
         expect(await svc.getIssue(local.id)).toMatchObject({ title: remoteWins ? 'Remote' : 'Local', updatedAt: remoteWins ? remoteTs : localTs });
       });
 
+      it.each([
+        { name: 'a lean stage', senderVersion: 7, history: undefined, expectedRunId: 'local-old', expectedOutput: 'local earlier draft' },
+        { name: 'empty legacy history', senderVersion: 6, history: [], expectedRunId: 'local-old', expectedOutput: 'local earlier draft' },
+        { name: 'legacy history entries', senderVersion: 6, history: [{ runId: 'remote-old', output: 'remote earlier draft' }], expectedRunId: 'remote-old', expectedOutput: 'remote earlier draft' },
+      ])('merges current stage text and keeps the correct undo trail with $name', async ({ senderVersion, history, expectedRunId, expectedOutput }) => {
+        const local = {
+          id: 'iss-history', seriesId: 'ser-1', title: 'History', updatedAt: '2026-05-17T10:00:00Z',
+          stages: { prose: { output: 'local draft', runHistory: [{ runId: 'local-old', output: 'local earlier draft' }] } },
+        };
+        await svc.mergeIssuesFromSync([local]);
+        const stage = { status: 'edited', input: 'remote input', output: 'remote draft' };
+        if (history !== undefined) stage.runHistory = history;
+        const result = await svc.mergeIssuesFromSync([{
+          ...local, updatedAt: '2026-05-17T11:00:00Z', stages: { prose: stage },
+        }], { senderSchemaVersions: { pipelineIssues: senderVersion } });
+
+        expect(result).toEqual({ applied: true, count: 1 });
+        const saved = (await svc.getIssue(local.id)).stages.prose;
+        expect(saved).toMatchObject({ status: 'edited', input: 'remote input', output: 'remote draft' });
+        expect(saved.runHistory).toEqual([{ runId: expectedRunId, createdAt: null, input: '', output: expectedOutput }]);
+      });
+
       it('applies an inbound soft-delete from a peer', async () => {
         const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Synced' });
         const ts = new Date(Date.now() + 60_000).toISOString();

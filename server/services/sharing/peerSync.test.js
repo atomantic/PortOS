@@ -2650,10 +2650,13 @@ describe('peerSync', () => {
       expect(peerFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('bundles child issues with a series push', async () => {
+    it('bundles child issues with current stage content and without run history', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValue([
-        { id: 'i1', seriesId: 'ser-1', number: 1 },
+        { id: 'i1', seriesId: 'ser-1', number: 1, stages: {
+          prose: { input: 'prompt', output: 'current prose', status: 'ready', runHistory: [{ runId: 'older' }] },
+          audio: { status: 'empty', runHistory: [] },
+        } },
         { id: 'i1001', seriesId: 'ser-1', number: 1001 },
       ]);
       let captured = null;
@@ -2667,7 +2670,11 @@ describe('peerSync', () => {
       expect(captured.kind).toBe('series');
       expect(captured.issues).toHaveLength(2);
       expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i1001']);
-      expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true });
+      expect(captured.issues[0].stages).toEqual({
+        prose: { input: 'prompt', output: 'current prose', status: 'ready' },
+        audio: { status: 'empty' },
+      });
+      expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true, withHistory: false });
     });
 
     it('stamps a conflict-journal base hash for every bundled issue after a series push lands', async () => {
