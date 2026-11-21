@@ -48,7 +48,6 @@ const STORE_FILE = () => join(PATHS.data, 'media-holders.json');
 const SCHEMA_VERSION = 1;
 const KINDS = ['video', 'image'];
 const KIND_DIR = { video: () => PATHS.videos, image: () => PATHS.images };
-const KIND_MOUNT = { video: '/data/videos/', image: '/data/images/' };
 const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const VERIFIED_COMMAND_TIMEOUT_MS = 120_000;
@@ -195,22 +194,12 @@ export function notePeerHolding(instanceId, kind, filename, held) {
 }
 
 /**
- * Ask `peer` whether it serves `kind:filename` from its own disk: `held`,
- * `not-held` (absent, or only streamed from another peer) or `unreachable`. A
- * HEAD on the static mount, so an older peer without the holders routes answers too.
+ * `held` | `not-held` | `unreachable`: a HEAD on the static mount, so an older
+ * peer without the holders routes answers too.
  */
 async function peerHoldsFile(peer, kind, filename) {
-  let res;
-  try {
-    res = await withAbortTimeout(COMMAND_TIMEOUT_MS, (signal) => peerFetch(
-      `${peerBaseUrl(peer)}${KIND_MOUNT[kind]}${encodeURIComponent(filename)}`, { method: 'HEAD', signal }, peer,
-    ));
-  } catch {
-    return 'unreachable';
-  }
-  if (res.status === 404) return 'not-held';
-  if (!res.ok) return 'unreachable';
-  return res.headers?.get('x-portos-media-location') === 'remote' ? 'not-held' : 'held';
+  const { peerServesFile } = await import('./peerHostedMedia.js');
+  return peerServesFile(peer, kind, filename);
 }
 
 /**
