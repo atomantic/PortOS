@@ -765,10 +765,10 @@ export default function TestTab({ onRefresh }) {
               'bg-port-bg text-gray-400'
             }`}>
               {feedbackStats.recentTrend.direction === 'improving'
-                ? `Twin accuracy is improving: ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (+${feedbackStats.recentTrend.delta}%)`
+                ? `More recent responses were rated "Sounds like me": ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (+${feedbackStats.recentTrend.delta}%)`
                 : feedbackStats.recentTrend.direction === 'declining'
-                ? `Twin accuracy needs attention: ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (${feedbackStats.recentTrend.delta}%)`
-                : `Twin accuracy is stable at ${feedbackStats.recentTrend.recentRate}%`
+                ? `Fewer recent responses were rated "Sounds like me": ${feedbackStats.recentTrend.previousRate}% → ${feedbackStats.recentTrend.recentRate}% (${feedbackStats.recentTrend.delta}%)`
+                : `About the same share of recent responses were rated "Sounds like me": ${feedbackStats.recentTrend.recentRate}%`
               }
             </div>
           )}
