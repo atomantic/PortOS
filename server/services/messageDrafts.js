@@ -38,8 +38,10 @@ const MAX_SEND_ATTEMPTS = 20;
 
 // Called only under queueWrite. A persisted send with no live dispatcher is
 // ambiguous even if it never reached the transport. Never retry it at boot.
-async function loadDrafts() {
-  await ensureDir(PATHS.messages);
+// `ensure: false` (erasure helpers) never creates the messages dir: with no
+// store there is nothing to erase, and a read must not write into data/.
+async function loadDrafts({ ensure = true } = {}) {
+  if (ensure) await ensureDir(PATHS.messages);
   const { ok, value } = await readJSONFileStrict(DRAFTS_FILE, MISSING_STORE, { logError: false });
   if (ok && value === MISSING_STORE) return [];
   const parsed = ok && draftStoreSchema.safeParse(value);
@@ -279,7 +281,7 @@ const isSendLocked = d => ['sending', 'delivery_unknown'].includes(d.status);
  */
 export async function erasePrivacyDrafts(predicate, { onlyUnsent = false, generatedBy = PRIVACY_GENERATORS } = {}) {
   return queueWrite(async () => {
-    const drafts = await loadDrafts();
+    const drafts = await loadDrafts({ ensure: false });
     const result = { deleted: 0, redacted: 0, skipped: 0 };
     const remaining = [];
     for (const d of drafts) {
@@ -313,7 +315,7 @@ export async function scrubLegacyPrivacyDraftValues(values) {
   const alternatives = needles.sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
   const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`, 'gu');
   return queueWrite(async () => {
-    const drafts = await loadDrafts();
+    const drafts = await loadDrafts({ ensure: false });
     let changed = 0;
     for (const d of drafts) {
       if (!isPrivacyDraft(d) || isSendLocked(d)) continue;

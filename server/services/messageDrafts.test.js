@@ -139,6 +139,15 @@ describe('privacy draft erasure (#17233)', () => {
 
   beforeEach(() => fileStore.clear());
 
+  it('is a no-op that never creates the messages dir when no drafts store exists', async () => {
+    const { ensureDir, atomicWrite } = await import('../lib/fileUtils.js');
+    ensureDir.mockClear(); atomicWrite.mockClear();
+    expect(await erasePrivacyDrafts(() => true)).toEqual({ deleted: 0, redacted: 0, skipped: 0 });
+    expect(await scrubLegacyPrivacyDraftValues(['Alex Example'])).toBe(0);
+    expect(ensureDir).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
   it('createDraft persists privacyMeta and omits the key for ordinary drafts', async () => {
     const withMeta = await createDraft({ accountId: 'a', generatedBy: 'privacy-optout', privacyMeta: { subjectId: 's1' } });
     const plain = await createDraft({ accountId: 'a' });
