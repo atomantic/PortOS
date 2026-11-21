@@ -56,6 +56,12 @@ export async function getDeletionStatus(id) {
   return rows[0]?.deleted ?? null;
 }
 
+// Include tombstones: a winning remote revision may resurrect one in another series.
+export async function listSeriesIdsForIssues(ids) {
+  const { rows } = await query('SELECT DISTINCT series_id FROM pipeline_issues WHERE id = ANY($1::text[])', [ids]);
+  return rows.map((row) => row.series_id);
+}
+
 export async function listLiveIssueSeriesIds() {
   const { rows } = await query('SELECT DISTINCT series_id FROM pipeline_issues WHERE deleted = FALSE');
   return rows.map((r) => r.series_id);

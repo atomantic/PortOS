@@ -70,9 +70,48 @@ export const issueStore = () => store();
 // stale index and clobber each other. A single tail per seriesId collapses that
 // race: each write awaits the previous one and merges against the freshest state.
 const seriesIssueQueue = createKeyCachedQueue();
+const seriesQueueKey = (seriesId) => typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
 function queueSeriesIssuesWrite(seriesId, fn) {
-  const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
-  return seriesIssueQueue(key, fn);
+  return seriesIssueQueue(seriesQueueKey(seriesId), fn);
+}
+
+// The id tail also covers a concurrent import of a previously unseen id under
+// a different parent. Writers needing both take series tails before id tails.
+const issueIdQueue = createKeyCachedQueue();
+export const queueIssueInsert = (seriesId, id, fn) =>
+  queueSeriesIssuesWrite(seriesId, () => issueIdQueue(id, fn));
+
+function withSortedKeys(queue, keys, work) {
+  const ordered = [...new Set(keys)].sort();
+  const acquire = (index) => index === ordered.length
+    ? work()
+    : queue(ordered[index], () => acquire(index + 1));
+  return acquire(0);
+}
+
+export const queueIssueIdsWrite = (ids, work) => withSortedKeys(issueIdQueue, ids, work);
+
+export const queueIssueSeriesWrites = (seriesIds, work) =>
+  withSortedKeys(seriesIssueQueue, Array.from(seriesIds, seriesQueueKey), work);
+
+// Start with the incoming parents. If a fresh local row belongs elsewhere,
+// release every queue before acquiring the expanded set in the same order
+// as a local series move. Never wait on a new series while holding an id.
+export async function queueInboundIssueWrites(incoming, work) {
+  const ids = [...new Set(incoming.map((issue) => issue.id))];
+  const seriesIds = new Set(incoming.map((issue) => issue.seriesId));
+  const retry = Symbol('retry with current parents');
+  while (true) {
+    const result = await queueIssueSeriesWrites(seriesIds, () => queueIssueIdsWrite(ids, async () => {
+      const parents = await store().listSeriesIdsForIssues(ids);
+      if (parents.some((id) => !seriesIds.has(id))) {
+        for (const id of parents) seriesIds.add(id);
+        return retry;
+      }
+      return work({ issues: await store().loadAllForSeriesIds([...seriesIds]) });
+    }));
+    if (result !== retry) return result;
+  }
 }
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
@@ -661,7 +700,11 @@ async function saveIssueNow(issue) {
 }
 
 async function saveIssuesNow(issues) {
-  await Promise.all(issues.map((issue) => saveIssueNow(issue)));
+  // A failed sibling must not release the series queue while other writes
+  // from the same renumber are still in flight.
+  const results = await Promise.allSettled(issues.map((issue) => saveIssueNow(issue)));
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed) throw failed.reason;
 }
 
 async function renumberInline(state, seriesId, fromSeasonId = null, preloadedSeries = null) {

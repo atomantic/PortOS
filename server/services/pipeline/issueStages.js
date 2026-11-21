@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { isPlainObject } from '../../lib/objects.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
-import { getIssue } from './issueCrud.js';
+import { withLiveIssueWrite } from './issueCrud.js';
 import {
   store, queueSeriesIssuesWrite, saveIssueNow, saveIssuesNow,
   sanitizeIssue, sanitizeTextStage, sanitizeVisualStage, sanitizeAudioStage,
@@ -165,18 +165,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     // rather than waiting in line for an error it already knows about.
     return Promise.reject(codedError(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
-  // Serialize on the SERIES tail (not the per-id queue) so a stage save can't
-  // interleave with a series-wide renumber/bulk write that rewrites this same
-  // issue — both share one mutex per series. The per-record split (migrations
-  // 035/036) otherwise left renumbers on the series queue and stage saves on
-  // the per-id queue (two independent mutexes over the same shared resource);
-  // see AGENTS.md "single tail per shared file". seriesId is immutable, so read
-  // it outside the lock to pick the queue, then re-read the issue INSIDE the
-  // lock for the freshest stage.
-  const work = async () => {
-    const cur = await store().loadOne(issueId);
-    if (!cur) throw codedError(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-    if (cur.deleted) throw codedError(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+  const work = async (cur) => {
     const currentStage = cur.stages[stageId];
     const patch = computeFn(currentStage);
     // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
@@ -207,13 +196,11 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
       frontCoverChanged,
     };
   };
-  return getIssue(issueId, { includeDeleted: true }).then((existing) =>
-    queueSeriesIssuesWrite(existing.seriesId, work).then(async ({ result, frontCoverChanged }) => {
-      if (frontCoverChanged) {
-        const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
-        await refreshSeriesCoverImage(result.issue.seriesId).catch(() => {});
-      }
-      return result;
-    }),
-  );
+  return withLiveIssueWrite(issueId, work).then(async ({ result, frontCoverChanged }) => {
+    if (frontCoverChanged) {
+      const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+      await refreshSeriesCoverImage(result.issue.seriesId).catch(() => {});
+    }
+    return result;
+  });
 }
