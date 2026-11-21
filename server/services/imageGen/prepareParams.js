@@ -20,7 +20,8 @@
  *                       stripped; initImagePath/referenceImagePaths/Strengths added)
  *     mode            - resolved IMAGE_GEN_MODE string
  *     settings        - raw settings object (caller reuses for dispatch)
- *     uploadedTempPaths - multer temp paths to unlink after the response closes
+ *     uploadedTempPaths - multer temp paths for the caller to unlink
+ *     stagedRefPaths    - request-owned copies to unlink if dispatch is refused
  *   }
  *
  * On validation failure throws ServerError so the route's asyncHandler
@@ -52,10 +53,10 @@ import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { CLOUD_IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin, getUniverseVisualProfile } from '../universeBuilder/crud.js';
-import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
+import { getImageModels, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesFlux3, usesMossSwift, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
-import { usesDiffusersRunner } from '../../lib/runners.js';
+import { isFlux2, usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { QUICK_EDIT_PREFIX, QUICK_EDIT_PREFIX_WITH_REFERENCES } from '../../lib/quickEditPrompt.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
@@ -138,7 +139,15 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
 // as this label, so the preview shows where the image goes without copying it.
 export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
 
-const QWEN_IMAGE_21_PIPELINE = 'QwenImage21Pipeline';
+const isQwenImage21 = (model) => model?.pipelineClass === 'QwenImage21Pipeline';
+
+export const localModelSupportsReferences = (model) =>
+  isFlux2(model) || isQwenImage21(model) || model?.runner === 'flux3' || model?.maxReferenceImages > 0;
+
+export function inputImageCap({ peerRouted, mode, localModel, cloudModel }) {
+  if (peerRouted) return null;
+  return isQwenImage21(localModel) ? 10 : maxInputImages(mode, cloudModel);
+}
 
 // An uploaded or named reference without a parallel strength entry gets full influence.
 const referenceStrengthOrFull = (strength) => (typeof strength === 'number' ? strength : 1.0);
@@ -215,28 +224,8 @@ function reconcileCardFrameReferences(data, namedReferenceFiles, { project, scen
   }
 }
 
-// A music-video scene render adds its greybox capture, its composed shot prompt
-// and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
-async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, referenceFilesOmitted = false }) {
-  let tag = data.musicVideo;
-  const referencesOff = tag.refine === true && tag.includeReferences === false;
-  const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
-  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia, subjectScale] = await Promise.all([
-    import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
-    tag.compose ? import('../musicVideo/castGuideMedia.js') : null,
-    tag.compose ? import('../musicVideo/subjectScale.js') : null,
-  ]);
-  const [greybox, panel, castMedia, sizes] = await Promise.all([
-    referencesOff ? null : loadMusicVideoGreybox(project, scene), tag.compose && !referencesOff ? loadLinkedStoryboardPanel(project, scene) : null,
-    referencesOff ? null : castGuideMedia?.loadSceneCastMedia(scene, { project }),
-    referencesOff ? null : subjectScale?.loadMusicVideoSubjectSizes(project),
-  ]);
-  reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted });
-  tag = data.musicVideo;
-  const greyboxFiles = musicVideoGreyboxReferences(greybox).map((ref) => ref.imageId);
-  if (greybox) {
-    placeGreyboxReferences(namedReferenceFiles, greyboxFiles, { cached: [tag.greyboxImageId, tag.greyboxBlockingImageId], fromFrame: tag.fromFrame || tag.refine });
-  }
+function limitMusicVideoReferences(data, { scene, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, greyboxFiles }) {
+  const tag = data.musicVideo;
   // The board sends its priority-ordered references; this renderer takes as many as it can (a peer decides its own).
   const rendererCapacity = musicVideoReferenceCapacity(mode, { modelId: cloudModel, localModel });
   if (!data.mediaProviderPeerId && rendererCapacity > 0) {
@@ -267,11 +256,13 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
       } };
     }
   }
+}
+
+function applyMusicVideoShotPrompt(data, { project, scene, tag, greybox, panel, castMedia, sizes, namedReferenceFiles, referenceUploads, initInputCount }) {
   if (tag.compose) {
     // A peer chooses its runner; local incompatible inputs are rejected below.
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
-    const sentInitCount = initInputCount;
     const known = [...musicVideoGreyboxReferences(greybox), ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
@@ -280,11 +271,11 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
       slot: tag.slot === 'end' ? 'end' : 'start', authored: data.prompt || '', greybox,
       fromFrame: tag.fromFrame === true, refine: tag.refine === true,
       // The picked frame comes first; any reference after it is the shot's character or set reference.
-      otherReferences: Math.max(0, sentInitCount + sentFiles.length + referenceUploads.length - 1),
-      panel, panelReference: panelIndex >= 0 ? sentInitCount + panelIndex + 1 : 0, sizes,
+      otherReferences: Math.max(0, initInputCount + sentFiles.length + referenceUploads.length - 1),
+      panel, panelReference: panelIndex >= 0 ? initInputCount + panelIndex + 1 : 0, sizes,
       // An init image or picked frame occupies a slot without being a character sheet.
-      references: [...Array(sentInitCount).fill(null), ...sentFiles.map((file, index) =>
-        !sentInitCount && index === 0 && (tag.fromFrame || tag.refine) ? null : known.find((ref) => ref?.imageId === file) || null)],
+      references: [...Array(initInputCount).fill(null), ...sentFiles.map((file, index) =>
+        !initInputCount && index === 0 && (tag.fromFrame || tag.refine) ? null : known.find((ref) => ref?.imageId === file) || null)],
       // The bible describes only the subjects these references show, even when a peer decides their positions.
       subjectReferences: namedReferenceFiles.map((file) => known.find((ref) => ref?.imageId === file) || null),
     });
@@ -294,6 +285,32 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     data.prompt = [data.prompt, ...greybox.promptAdditions.map((a) => a.text)].filter(Boolean).join('\n');
     data.promptAdditions = [...(data.promptAdditions || []), ...greybox.promptAdditions];
   }
+}
+
+// A music-video scene render adds its greybox capture, its composed shot prompt
+// and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
+async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, referenceFilesOmitted = false }) {
+  let tag = data.musicVideo;
+  const referencesOff = tag.refine === true && tag.includeReferences === false;
+  const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
+  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia, subjectScale] = await Promise.all([
+    import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
+    tag.compose ? import('../musicVideo/castGuideMedia.js') : null,
+    tag.compose ? import('../musicVideo/subjectScale.js') : null,
+  ]);
+  const [greybox, panel, castMedia, sizes] = await Promise.all([
+    referencesOff ? null : loadMusicVideoGreybox(project, scene), tag.compose && !referencesOff ? loadLinkedStoryboardPanel(project, scene) : null,
+    referencesOff ? null : castGuideMedia?.loadSceneCastMedia(scene, { project }),
+    referencesOff ? null : subjectScale?.loadMusicVideoSubjectSizes(project),
+  ]);
+  reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted });
+  tag = data.musicVideo;
+  const greyboxFiles = musicVideoGreyboxReferences(greybox).map((ref) => ref.imageId);
+  if (greybox) {
+    placeGreyboxReferences(namedReferenceFiles, greyboxFiles, { cached: [tag.greyboxImageId, tag.greyboxBlockingImageId], fromFrame: tag.fromFrame || tag.refine });
+  }
+  limitMusicVideoReferences(data, { scene, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, greyboxFiles });
+  applyMusicVideoShotPrompt(data, { project, scene, tag, greybox, panel, castMedia, sizes, namedReferenceFiles, referenceUploads, initInputCount });
   const reservedSlots = referenceUploads.length + initInputCount;
   const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel, cloudModel) - reservedSlots);
   const styles = referencesOff ? [] : musicVideoStyleImages(project, namedReferenceFiles, capacity);
@@ -315,11 +332,13 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
 // Reference images one request may carry. A peer-routed render is bounded by the
 // request limit alone; a FableLoom cloud render takes its provider's own limit
 // within that bound; everything else not named here takes 4.
-function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, localMaxReferences, fableLoom, cloudModel }) {
+export function referenceImageCap({ peerRouted, mode, localModel, fableLoom, cloudModel }) {
   if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
-  if (mode === IMAGE_GEN_MODE.LOCAL && Number.isInteger(localMaxReferences)) return Math.min(localMaxReferences, IMAGE_REFERENCE_REQUEST_LIMIT);
+  if (mode === IMAGE_GEN_MODE.LOCAL && Number.isInteger(localModel?.maxReferenceImages)) {
+    return Math.min(localModel.maxReferenceImages, IMAGE_REFERENCE_REQUEST_LIMIT);
+  }
   if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
-  if (isQwen21 || isFlux3) return 10;
+  if (isQwenImage21(localModel) || localModel?.runner === 'flux3') return 10;
   // A cloud image CLI takes its own provider's (or model's) limit, not a fixed 4.
   if (CLOUD_IMAGE_GEN_MODES.includes(mode)) {
     if (fableLoom) return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
@@ -329,80 +348,9 @@ function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, localMaxRefere
   return 4;
 }
 
-/**
- * @param {object} opts
- * @param {object} opts.data    - validated + coerced body from Zod (mutated in place)
- * @param {object} opts.files   - req.files from multer (may be undefined)
- * @param {string[]} opts.referenceImageFields - field names for multi-ref slots
- * @returns {Promise<{ data, mode, settings, uploadedTempPaths }>}
- */
-export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
-  if (data.quickEdit) data = withQuickEditInstruction(data);
-  let profile = data.visualProfileOverride;
-  if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
-    profile = await getUniverseVisualProfile(data.universeRun.universeId);
-  }
-  // FableLoom's canon compiler owns the photography block. Keep authored
-  // intent untouched until that compiler has resolved explicit overrides.
-  if (!data.fableLoom) data = applyImageVisualProfile(data, profile);
-  let initImagePath = null;
-  const uploadedTempPaths = [];
-  const initUpload = files?.initImage;
-  const referenceImagePaths = [];
-  const referenceImageStrengths = [];
-  const namedReferenceFiles = Array.isArray(data.referenceImageFiles) ? [...data.referenceImageFiles] : [];
-  let musicVideoProject = null;
-  let musicVideoProjectLoaded = false;
-
-  // Pair strengths by PACK position (post-filter), not slot position — the
-  // client renumbers populated slots into `referenceImage1..N` and sends a
-  // parallel `referenceStrengths` array sized N. A curl user could leave a
-  // gap (`referenceImage2` + `referenceImage4` only); the strength at index 0
-  // still pairs with the first surviving upload in slot order.
-  const referenceUploads = referenceImageFields
-    .map((field) => files?.[field])
-    .filter(Boolean)
-    .map((upload, packedIndex) => ({
-      upload,
-      strength: data.referenceStrengths?.[namedReferenceFiles.length + packedIndex],
-    }));
-
-  // Best-effort cleanup of every multer-staged file currently on `files`.
-  // The multipart parser writes uploads to `os.tmpdir()` as they stream in,
-  // so a 400 thrown from validation BEFORE we've registered the `res.on('close')`
-  // sweep would otherwise leak those temp files. Call this from any pre-stage
-  // throw site (the local-FLUX.2 gate, the edit-incapable-backend gate).
-  const cleanupReqFilesTemp = () => {
-    if (!files) return;
-    for (const f of Object.values(files)) {
-      if (f?.path) unlinkGuarded(f.path).catch(() => {});
-    }
-  };
-
-  // Every file THIS request copied into PATHS.imageRefs. A throw AFTER staging
-  // has to unlink these or they are orphaned forever: nothing downstream knows
-  // they exist, and the route's `res.on('close')` sweep only covers multer
-  // temps — it is wired from `uploadedTempPaths`, which a throw prevents
-  // prepareGenerateParams from ever returning. Only staged COPIES go in here,
-  // never a gallery path resolved by `resolveGalleryImage` (that's a real
-  // gallery image the user still owns).
-  const stagedRefPaths = [];
-  const cleanupStagedAndTemp = () => {
-    cleanupReqFilesTemp();
-    for (const p of stagedRefPaths) unlinkGuarded(p).catch(() => {});
-  };
-
-  // Resolve the effective backend BEFORE staging reference uploads — an
-  // `external` request that uploaded refs would otherwise stage files under
-  // `PATHS.imageRefs` and write sidecar metadata claiming references were used,
-  // while the actual generation silently ignored them. (Reading settings here
-  // is cheap — it's already read again below for the per-mode dispatch.)
-  const settings = await getSettings();
-  if (data.fableLoom && (data.referenceStrengths?.length || 0) > namedReferenceFiles.length + referenceUploads.length) {
-    cleanupReqFilesTemp();
-    throw new ServerError('Each requested reference strength needs a matching reference image.', { status: 400, code: 'FABLELOOM_REFERENCE_STRENGTH_MISMATCH' });
-  }
+async function resolveRecordRenderPin(data, settings) {
   let mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  let musicVideoProject;
   // #3231 Phase 4 — a render tagged with the record that owns it resolves
   // through the render-target ladder: that record's pin
   // (`imageMode`/`imageModelId`) → `renderDefaults[target]` → the install
@@ -423,7 +371,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       if (source.tag === 'musicVideo') throw error;
       return null;
     });
-    if (source.tag === 'musicVideo') { musicVideoProject = record; musicVideoProjectLoaded = true; }
+    if (source.tag === 'musicVideo') musicVideoProject = record ?? null;
     const pin = recordRenderPin(record || {});
     const resolved = resolveRenderTargetConfig(settings, source.target, {
       model: data.cloudModel || null,
@@ -444,148 +392,90 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       data.cloudModelIsShippedDefault = resolved.cloud.modelIsShippedDefault === true;
     }
   }
-  // The render's input images, counted once: the init image (uploaded this
-  // request or named by an earlier one) plus every reference slot. Every gate
-  // below keys off these two, rather than respelling "carries input images"
-  // per gate and having to keep the spellings in sync.
-  const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
-  const initInputCount = initUpload || data.initImageFile ? 1 : 0;
-  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.HIGGSFIELD, IMAGE_GEN_MODE.GOOGLE].includes(mode)
-    ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
-  if (data.musicVideo?.sceneId) {
-    const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');
-    const project = await requireCatalogRenderReady(musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId));
-    assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
-    assertCatalogReferenceFiles(project, [...namedReferenceFiles, data.initImageFile]);
-    if (project?.castAndSets?.source === 'catalog') data.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
-    const standardSize = musicVideoFrameGenSize(project);
-    if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
-      Object.assign(data, musicVideoFrameGenSize(project, localModel));
-    }
-    await applyMusicVideoSceneInputs(data, {
-      project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount,
-      referenceFilesOmitted: !Array.isArray(data.referenceImageFiles),
-    });
-    // A list the server filled still has to name the catalog basis the files came from.
-    assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
-    assertCatalogReferenceFiles(project, namedReferenceFiles);
+  return { mode, localModelCandidates, musicVideoProject };
+}
+
+async function prepareMusicVideoScene(data, { mode, localModel, cloudModel, musicVideoProject, namedReferenceFiles, referenceUploads, initInputCount }) {
+  if (!data.musicVideo?.sceneId) return;
+  const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');
+  const project = await requireCatalogRenderReady(musicVideoProject === undefined ? await getMusicVideoProject(data.musicVideo.projectId) : musicVideoProject);
+  assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
+  assertCatalogReferenceFiles(project, [...namedReferenceFiles, data.initImageFile]);
+  if (project?.castAndSets?.source === 'catalog') data.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
+  const standardSize = musicVideoFrameGenSize(project);
+  if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
+    Object.assign(data, musicVideoFrameGenSize(project, localModel));
   }
-  const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
-  const inputImageCount = initInputCount + referenceImageCount;
-  if (localModel?.runner === 'flux3') {
+  await applyMusicVideoSceneInputs(data, {
+    project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount,
+    referenceFilesOmitted: !Array.isArray(data.referenceImageFiles),
+  });
+  // A list the server filled still has to name the catalog basis the files came from.
+  assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
+  assertCatalogReferenceFiles(project, namedReferenceFiles);
+}
+
+async function assertLocalModelInputs(localModel, data, { initInputCount, referenceImageCount }) {
+  if (!localModel) return;
+  const inputs = {
+    negativePrompt: data.negativePrompt,
+    hasInitImage: Boolean(initInputCount),
+    referenceCount: referenceImageCount,
+    referenceImageStrengths: data.referenceStrengths || [],
+    loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0),
+  };
+  if (localModel.runner === 'flux3') {
     const { assertFlux3Inputs } = await import('./flux3Runtime.js');
-    try {
-      assertFlux3Inputs({ negativePrompt: data.negativePrompt, width: Number(data.width ?? 1024), height: Number(data.height ?? 1024),
-        hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount, referenceImageStrengths: data.referenceStrengths || [],
-        loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0) });
-    } catch (error) { cleanupReqFilesTemp(); throw error; }
+    assertFlux3Inputs({ ...inputs, width: Number(data.width ?? 1024), height: Number(data.height ?? 1024) });
   }
   if (usesMinimaxH3Image(localModel)) {
     const { assertMinimaxH3ImageInputs } = await import('./minimaxH3ImageRuntime.js');
-    try {
-      assertMinimaxH3ImageInputs({ negativePrompt: data.negativePrompt, width: Number(data.width ?? 2048), height: Number(data.height ?? 2048), steps: data.steps || null,
-        hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount, referenceImageStrengths: data.referenceStrengths || [],
-        loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0) });
-    } catch (error) { cleanupReqFilesTemp(); throw error; }
+    assertMinimaxH3ImageInputs({ ...inputs, width: Number(data.width ?? 2048), height: Number(data.height ?? 2048), steps: data.steps || null });
   }
-  if (localModel) {
-    // Preserve the existing temporary-upload cleanup on every pre-stage refusal.
-    await Promise.resolve().then(() => assertFlux2InputsCompatible(localModel, {
-      hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount,
-      loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0),
-    })).catch((error) => {
-      cleanupReqFilesTemp();
-      throw error;
-    });
-  }
-  // Freeze the selected preference before capability checks. Explicit ids stay
-  // untouched so the existing unknown/hardware rejection still applies.
-  if (!data.modelId && localModel?.id) data.modelId = localModel.id;
-  const isQwen21 = localModel?.pipelineClass === QWEN_IMAGE_21_PIPELINE;
-  const isFlux3 = localModel?.runner === 'flux3';
-  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, isFlux3,
-    localMaxReferences: localModel?.maxReferenceImages, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
+  assertFlux2InputsCompatible(localModel, inputs);
+}
+
+async function assertPreStageGates(data, { settings, mode, cloudModel, localModel, referenceImageCount, initInputCount, preview }) {
+  const peerRouted = Boolean(data.mediaProviderPeerId);
+  const inputImageCount = initInputCount + referenceImageCount;
+  const referenceCap = referenceImageCap({ peerRouted, mode, localModel, fableLoom: data.fableLoom, cloudModel });
   if (referenceImageCount > referenceCap) {
-    cleanupReqFilesTemp();
     throw new ServerError(
       `Image generation accepts at most ${referenceCap} reference images; received ${referenceImageCount}`,
       { status: 400, code: 'TOO_MANY_REFERENCE_IMAGES' },
     );
   }
+  if (!peerRouted && !isEditCapableMode(mode) && inputImageCount) throw editIncapableModeError(mode);
 
-  if (!data.mediaProviderPeerId && !isEditCapableMode(mode) && inputImageCount) {
-    cleanupReqFilesTemp();
-    throw editIncapableModeError(mode);
-  }
-
-  // A disabled cloud CLI is rejected BEFORE anything is staged. The route
-  // throws the same `disabledError` a few steps later, but by then the uploads
-  // have been copied into PATHS.imageRefs and the route's `res.on('close')`
-  // sweep only covers multer temps — so the staged copies would survive the
-  // 400 forever. Same "reject up-front rather than copy-then-fail" rule the
-  // reference gates below follow.
   const cloudConfig = resolveCloudProviderConfig(settings, mode);
-  if (!data.mediaProviderPeerId && cloudConfig && !cloudConfig.enabled && inputImageCount) {
-    cleanupReqFilesTemp();
-    throw cloudConfig.disabledError;
+  if (!peerRouted && cloudConfig && !cloudConfig.enabled && inputImageCount) throw cloudConfig.disabledError;
+
+  if (!preview && (peerRouted || QUEUEABLE_IMAGE_MODES.includes(mode))) {
+    const { assertMediaQueueRoom } = await import('../mediaJobQueue/index.js');
+    await assertMediaQueueRoom(1);
   }
 
-  // A full media queue (#8326) is refused before anything is staged too — the
-  // route's enqueue would refuse the same render, after these copies landed.
-  // Lazy: only a queue-bound render needs the queue loaded.
-  if (!preview && (data.mediaProviderPeerId || QUEUEABLE_IMAGE_MODES.includes(mode))) {
-    await import('../mediaJobQueue/index.js')
-      .then(({ assertMediaQueueRoom }) => assertMediaQueueRoom(1))
-      .catch((err) => {
-        cleanupReqFilesTemp();
-        throw err;
-      });
-  }
-
-  // Resolve cleaners ONCE at the route layer so all three dispatch paths
-  // (synchronous external, codex queue, local queue) see the same values.
-  // Stamp onto `data` so they flow through the spread-into-params calls
-  // below verbatim.
-  const cleaners = resolveImageCleaners(data, settings, mode);
-  data.cleanC2PA = cleaners.cleanC2PA;
-  data.denoise = cleaners.denoise;
-  delete data.autoClean; // legacy field — already mapped into both flags above
-
-  // Reference images reach every backend that can consume them: local via
-  // local.js's buildArgs (--reference-images/--reference-strengths, emitted
-  // for FLUX.2, and --reference-images for Qwen 2.1) and each cloud CLI via its tool's
-  // reference array (codex `referenced_image_paths`, grok `image_edit.image`,
-  // agy `ImagePaths`). The two that CAN'T are rejected up-front rather than
-  // copying the uploads to PATHS.imageRefs and silently dropping them
-  // downstream — that would orphan files on disk and produce metadata sidecars
-  // that lie about how the render was conditioned.
-  if (!data.mediaProviderPeerId && referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    if (!isFlux2(localModel) && !isQwen21 && !isFlux3 && !(localModel?.maxReferenceImages > 0)) {
-      cleanupReqFilesTemp();
-      throw new ServerError(
-        'Reference images require a FLUX.2, FLUX.3, MiniMax H3-Image or Qwen Image 2.1 model on the local backend',
-        { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
-      );
-    }
-  }
-
-  // Reject an over-cap request instead of staging every upload and letting
-  // `resolveInputImages` silently keep the first N. Same reasoning as the
-  // gates above: the extra copies would be orphaned in PATHS.imageRefs, and
-  // the render would 200 while quietly ignoring images the caller submitted.
-  // The Image Gen form already caps its slots per backend (referenceSlotsFor),
-  // so this only fires for direct API callers — but a silent drop is exactly
-  // the failure the sidecar-honesty rule exists to prevent. `resolveInputImages`
-  // keeps its own cap as the backstop for in-process callers that skip the route.
-  const inputImageCap = data.mediaProviderPeerId ? null : isQwen21 ? 10 : maxInputImages(mode, selectedCloudModel);
-  if (inputImageCap != null && inputImageCount > inputImageCap) {
-    cleanupReqFilesTemp();
+  // Reject inputs the backend would silently discard, before copying uploads.
+  if (!peerRouted && mode === IMAGE_GEN_MODE.LOCAL && referenceImageCount && !localModelSupportsReferences(localModel)) {
     throw new ServerError(
-      `${modeLabel(mode)} accepts at most ${inputImageCap} input images (init image + references); received ${inputImageCount}`,
+      'Reference images require a FLUX.2, FLUX.3, MiniMax H3-Image or Qwen Image 2.1 model on the local backend',
+      { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
+    );
+  }
+  const totalCap = inputImageCap({ peerRouted, mode, localModel, cloudModel });
+  if (totalCap != null && inputImageCount > totalCap) {
+    throw new ServerError(
+      `${modeLabel(mode)} accepts at most ${totalCap} input images (init image + references); received ${inputImageCount}`,
       { status: 400, code: 'TOO_MANY_INPUT_IMAGES' },
     );
   }
+}
 
+async function stageAndResolveInputImages(data, { initUpload, namedReferenceFiles, referenceUploads, preview, stagedRefPaths }) {
+  let initImagePath = null;
+  const referenceImagePaths = [];
+  const referenceImageStrengths = [];
+  const uploadedTempPaths = [];
   // Stage into PATHS.imageRefs (sibling of the gallery), NOT PATHS.images —
   // listGallery() enumerates every .png in PATHS.images, so an init upload
   // landing there surfaces as a duplicate "(no prompt)" card in the gallery
@@ -597,8 +487,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
     const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
     const stagedPath = join(PATHS.imageRefs, `${prefix}-${randomUUID()}${ext}`);
-    await copyFileGuarded(upload.path, stagedPath);
     stagedRefPaths.push(stagedPath);
+    await copyFileGuarded(upload.path, stagedPath);
     uploadedTempPaths.push(upload.path);
     return stagedPath;
   };
@@ -610,7 +500,6 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   } else if (data.initImageFile) {
     const resolved = resolveGalleryImage(data.initImageFile) || resolveImageInputPath(data.initImageFile);
     if (!resolved) {
-      cleanupStagedAndTemp();
       throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
     }
     initImagePath = resolved;
@@ -623,7 +512,6 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     // The gallery first; a Casting guide (#12763) may sit in any image-input root the catalog accepts.
     const resolved = resolveGalleryImage(filename) || resolveImageInputPath(filename);
     if (!resolved) {
-      cleanupStagedAndTemp();
       throw new ServerError(
         'Reference image not found in gallery',
         { status: 400, code: 'REFERENCE_IMAGE_NOT_FOUND' },
@@ -652,30 +540,81 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     data.referenceImageStrengths = referenceImageStrengths;
   }
 
-  // Empty prompt is allowed for i2i / local / external, but a cloud-CLI render
-  // still needs one whenever its tool can't run image-only — text-to-image
-  // everywhere, plus agy even with input images (`Prompt` is required by its
-  // tool schema). Reject synchronously here so direct API callers get a 400
-  // instead of a 200-then-async-job-failure. Mirrors the guards in
-  // codex.js/grok.js/agy.js and the client's needs-prompt gate.
-  // This is the one throw that can fire with an input image already staged:
-  // agy requires a prompt even then, so a prompt-less agy render with a
-  // reference upload reaches here having already copied it into
-  // PATHS.imageRefs. Unlink before throwing or it is orphaned on disk.
-  const hasInputImage = Boolean(initImagePath) || referenceImagePaths.length > 0;
+  return { uploadedTempPaths, hasInputImage: Boolean(initImagePath) || referenceImagePaths.length > 0 };
+}
+
+function assertCloudPrompt(data, mode, hasInputImage) {
   if (!data.mediaProviderPeerId && cloudPromptRequired(mode, hasInputImage) && !data.prompt?.trim()) {
-    cleanupStagedAndTemp();
-    // Naming "text-to-image" would be wrong for the agy-with-input-images case,
-    // which is precisely the one that isn't.
     const what = hasInputImage ? 'an image render' : 'text-to-image';
     throw new ServerError(`Prompt is required for ${modeLabel(mode)} ${what}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+}
 
-  if (data.guidance == null && data.cfgScale != null) {
-    data.guidance = data.cfgScale;
+async function applyRequestProfile(data) {
+  if (data.quickEdit) data = withQuickEditInstruction(data);
+  let profile = data.visualProfileOverride;
+  if (profile === undefined && !data.musicVideo && data.universeRun?.universeId) {
+    profile = await getUniverseVisualProfile(data.universeRun.universeId);
   }
+  // FableLoom's canon compiler owns the photography block and explicit overrides.
+  return data.fableLoom ? data : applyImageVisualProfile(data, profile);
+}
 
-  return { data, mode, settings, uploadedTempPaths };
+function collectReferenceUploads(data, files, referenceImageFields, namedReferenceCount) {
+  // Pair strengths by PACK position (post-filter), not slot position — the
+  // client renumbers populated slots into `referenceImage1..N` and sends a
+  // parallel `referenceStrengths` array sized N. A curl user could leave a
+  // gap (`referenceImage2` + `referenceImage4` only); the strength at index 0
+  // still pairs with the first surviving upload in slot order.
+  return referenceImageFields
+    .map((field) => files?.[field])
+    .filter(Boolean)
+    .map((upload, packedIndex) => ({
+      upload,
+      strength: data.referenceStrengths?.[namedReferenceCount + packedIndex],
+    }));
+}
+
+/** Prepare validated generation inputs and transfer ownership of staged copies to the caller. */
+export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
+  // Track only copies owned by this request. Resolved gallery images belong to the user.
+  const stagedRefPaths = [];
+  try {
+    data = await applyRequestProfile(data);
+    const initUpload = files?.initImage;
+    const namedReferenceFiles = Array.isArray(data.referenceImageFiles) ? [...data.referenceImageFiles] : [];
+    const referenceUploads = collectReferenceUploads(data, files, referenceImageFields, namedReferenceFiles.length);
+    const settings = await getSettings();
+    if (data.fableLoom && (data.referenceStrengths?.length || 0) > namedReferenceFiles.length + referenceUploads.length) {
+      throw new ServerError('Each requested reference strength needs a matching reference image.', { status: 400, code: 'FABLELOOM_REFERENCE_STRENGTH_MISMATCH' });
+    }
+
+    const { mode, localModelCandidates, musicVideoProject } = await resolveRecordRenderPin(data, settings);
+    const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL
+      ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
+    const initInputCount = initUpload || data.initImageFile ? 1 : 0;
+    const cloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.HIGGSFIELD, IMAGE_GEN_MODE.GOOGLE].includes(mode)
+      ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
+    await prepareMusicVideoScene(data, { mode, localModel, cloudModel, musicVideoProject, namedReferenceFiles, referenceUploads, initInputCount });
+    const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
+    await assertLocalModelInputs(localModel, data, { initInputCount, referenceImageCount });
+    // Freeze the selected preference, leaving explicit ids for dispatch validation.
+    if (!data.modelId && localModel?.id) data.modelId = localModel.id;
+    await assertPreStageGates(data, { settings, mode, cloudModel, localModel, referenceImageCount, initInputCount, preview });
+
+    Object.assign(data, resolveImageCleaners(data, settings, mode));
+    delete data.autoClean;
+    const { uploadedTempPaths, hasInputImage } = await stageAndResolveInputImages(data, {
+      initUpload, namedReferenceFiles, referenceUploads, preview, stagedRefPaths,
+    });
+    assertCloudPrompt(data, mode, hasInputImage);
+    if (data.guidance == null && data.cfgScale != null) data.guidance = data.cfgScale;
+    return { data, mode, settings, uploadedTempPaths, stagedRefPaths };
+  } catch (error) {
+    const tempPaths = Object.values(files || {}).map(file => file?.path).filter(Boolean);
+    await Promise.allSettled([...stagedRefPaths, ...tempPaths].map(path => unlinkGuarded(path)));
+    throw error;
+  }
 }
 
 /**

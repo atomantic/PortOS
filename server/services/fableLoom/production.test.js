@@ -69,7 +69,7 @@ vi.mock('../voice/profiles.js');
 vi.mock('../loras.js');
 vi.mock('../settings.js', () => settingsMocks);
 vi.mock('../../lib/mediaModels.js', () => mediaModelMocks);
-vi.mock('../imageGen/prepareParams.js', () => imagePrepareMocks);
+vi.mock('../imageGen/prepareParams.js', async (original) => ({ ...await original(), ...imagePrepareMocks }));
 vi.mock('../imageGen/local.js', () => imageSidecarMocks);
 vi.mock('../videoGen/local.js', () => videoModelMocks);
 vi.mock('../videoGen/history.js', () => videoHistoryMocks);
