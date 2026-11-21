@@ -21,7 +21,6 @@ Both branches need an HF_TOKEN with the FLUX.2-klein license accepted.
 """
 
 import argparse
-import inspect
 import json
 import os
 import sys
@@ -36,48 +35,24 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
+    add_common_image_args,
     apply_memory_optimizations,
+    build_common_pipe_kwargs,
+    common_image_metadata,
     emit_image_execution_marker,
+    empty_device_cache,
     heartbeat,
     install_hf_error_handler,
+    log_stepwise_summary,
     make_generator,
     make_stepwise_callback,
     pick_device,
+    probe_hf_auth,
     set_vae_tiling,
     suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
 from lora_utils import apply_loras  # noqa: E402
-
-
-def probe_hf_auth(repo: str) -> None:
-    """Fail early with a clear message when HF_TOKEN is missing or the
-    license hasn't been accepted. Without this probe, the user sees a vague
-    HTTP 401 stack trace mid-pipeline-load."""
-    from huggingface_hub import HfApi
-    from huggingface_hub.utils import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
-    try:
-        HfApi().model_info(repo)
-    except GatedRepoError:
-        print(
-            f"❌ HF gated repo: accept license at https://huggingface.co/{repo} "
-            f"and set HF_TOKEN before generating.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    except RepositoryNotFoundError:
-        print(f"❌ HF repo not found: {repo}", file=sys.stderr)
-        sys.exit(2)
-    except HfHubHTTPError as err:
-        if getattr(err.response, "status_code", None) == 401:
-            print(
-                f"❌ HF auth required for {repo}. Set HF_TOKEN (and accept the "
-                f"license at https://huggingface.co/{repo}).",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        # Network blip / HF down — let the pipeline call retry.
-        print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
 
 
 def _resolve_pipeline_cls(use_kv: bool):
@@ -239,7 +214,6 @@ def _unpack_flux2_latents(latents, height: int, width: int, vae_scale: int = 8, 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS FLUX.2-klein runner")
-    p.add_argument("--model", required=True, help="model id (e.g. flux2-klein-4b)")
     p.add_argument("--quantization", required=True, choices=["sdnq", "int8", "none"])
     p.add_argument("--repo", required=True, help="HF repo for the quantized weights")
     p.add_argument("--tokenizer-repo", default=None, help="HF repo for tokenizer (sdnq variants)")
@@ -250,21 +224,7 @@ def parse_args() -> argparse.Namespace:
     # instead. Absent (or no reference images) → the plain bf16 path stays on
     # `--repo`. See server/lib/mediaModels.js `kvRepo`.
     p.add_argument("--kv-repo", default=None, help="HF repo to load for multi-reference editing on the bf16 path (FLUX.2-klein-9B-kv)")
-    p.add_argument("--prompt", required=True)
-    p.add_argument("--negative-prompt", default="")
-    p.add_argument("--width", type=int, default=1024)
-    p.add_argument("--height", type=int, default=1024)
-    p.add_argument("--steps", type=int, default=8)
-    p.add_argument("--guidance", type=float, default=3.5)
-    p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--output", required=True)
-    p.add_argument("--metadata", action="store_true", help="write <output>.metadata.json sidecar")
-    p.add_argument("--image-path", default=None, help="optional init image for i2i")
-    p.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
-    p.add_argument("--stepwise-image-output-dir", default=None)
-    p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
-    p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
-    p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
+    add_common_image_args(p, default_guidance=3.5)
     # Multi-reference editing. When at least one reference image is provided,
     # the runner loads `Flux2KleinKVPipeline` instead of `Flux2KleinPipeline`
     # and forwards the list of PIL refs as the pipeline's `image=` kwarg.
@@ -364,14 +324,7 @@ def _install_per_ref_strength_patch() -> None:
     _t2.Flux2KVLayerCache._portos_per_ref_patched = True
 
 
-@install_hf_error_handler
-def main() -> None:
-    args = parse_args()
-
-    device = pick_device(args.device)
-    dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
-
-    use_kv = bool(args.reference_images)
+def validate_flux2_args(args, use_kv: bool) -> None:
     # Multi-reference editing is gated to SDNQ + bf16 today. The int8 path
     # attaches a quanto-rehydrated transformer directly and the KV pipeline's
     # reference-token attention hooks don't compose through that wrapper, so it
@@ -398,14 +351,16 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(64)
+
+
+def load_flux2_pipeline(args, device: str, dtype, use_kv: bool):
     pipeline_cls = _resolve_pipeline_cls(use_kv)
-    if use_kv:
-        if args.image_path:
-            print(
-                "⚠️ --image-path supplied alongside --reference-images; the KV pipeline "
-                "doesn't support i2i strength, so the init image will be ignored.",
-                file=sys.stderr,
-            )
+    if use_kv and args.image_path:
+        print(
+            "⚠️ --image-path supplied alongside --reference-images; the KV pipeline "
+            "doesn't support i2i strength, so the init image will be ignored.",
+            file=sys.stderr,
+        )
 
     if args.quantization == "sdnq":
         if not args.tokenizer_repo:
@@ -430,23 +385,10 @@ def main() -> None:
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)
-    # The runner only reports accelerator evidence after the pipeline has been
-    # placed. A successful image alone must not be read as GPU confirmation.
-    emit_image_execution_marker(
-        "flux2",
-        args.device,
-        device,
-        device,
-        ["torch", "diffusers", "transformers", "accelerate"],
-    )
-    suppress_cosmetic_clip_truncation()
+    return pipe
 
-    apply_memory_optimizations(pipe, width=args.width, height=args.height)
-    apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
 
-    seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
-    generator = make_generator(device, seed)
-
+def load_flux2_inputs(args, use_kv: bool):
     # `formats=` pins PIL's decoder dispatch to the route layer's allowed-mime
     # set — defense in depth against a Ghostscript-pipeline invocation via a
     # spoofed EPS/PDF magic in a file the upload filter validated only by
@@ -479,6 +421,10 @@ def main() -> None:
             file=sys.stderr,
         )
 
+    return init_image, reference_pils
+
+
+def run_flux2_inference(pipe, args, device: str, seed: int, generator, init_image, reference_pils):
     callback = make_stepwise_callback(
         args.stepwise_image_output_dir,
         pipe,
@@ -486,29 +432,7 @@ def main() -> None:
         int(args.width),
         unpack_latents=_unpack_flux2_latents,
     )
-    # Flux2KleinPipeline.__call__ doesn't always accept negative_prompt,
-    # strength, or guidance_scale — passing an unsupported kwarg raises
-    # TypeError. Filter to what the live signature actually accepts.
-    # Flux2KleinKVPipeline (multi-reference editing) is guidance-distilled and
-    # omits `guidance_scale` entirely, so gate it like the rest.
-    accepted = set(inspect.signature(pipe.__call__).parameters.keys())
-    pipe_kwargs = dict(
-        prompt=args.prompt,
-        height=int(args.height),
-        width=int(args.width),
-        num_inference_steps=int(args.steps),
-        generator=generator,
-    )
-    if "guidance_scale" in accepted:
-        pipe_kwargs["guidance_scale"] = float(args.guidance)
-    if args.negative_prompt and "negative_prompt" in accepted:
-        pipe_kwargs["negative_prompt"] = args.negative_prompt
-    if callback is not None and "callback_on_step_end" in accepted:
-        pipe_kwargs["callback_on_step_end"] = callback
-        # Some pipelines accept the callback but not the explicit input list;
-        # only set when supported.
-        if "callback_on_step_end_tensor_inputs" in accepted:
-            pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+    pipe_kwargs, accepted = build_common_pipe_kwargs(pipe, args, generator, callback)
     if reference_pils is not None and "image" in accepted:
         # Flux2KleinKVPipeline accepts `image` as a single PIL or List[PIL].
         # Pass the list verbatim so it routes through the multi-reference
@@ -537,7 +461,7 @@ def main() -> None:
     # Padded to len(reference_pils) with 1.0 (the route always sends a full
     # parallel array, but a curl/test caller might omit trailing slots).
     honored_strengths: list[float] = []
-    if use_kv and reference_pils:
+    if reference_pils:
         _install_per_ref_strength_patch()
         honored_strengths = [float(s) for s in (args.reference_strengths or [])][: len(reference_pils)]
         while len(honored_strengths) < len(reference_pils):
@@ -552,31 +476,52 @@ def main() -> None:
             result = pipe(**pipe_kwargs)
     finally:
         _PORTOS_KV_REF_STRENGTHS.clear()
+    return result, callback, honored_strengths
+
+
+@install_hf_error_handler
+def main() -> None:
+    args = parse_args()
+
+    device = pick_device(args.device)
+    dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
+
+    use_kv = bool(args.reference_images)
+    validate_flux2_args(args, use_kv)
+    pipe = load_flux2_pipeline(args, device, dtype, use_kv)
+    # The runner only reports accelerator evidence after the pipeline has been
+    # placed. A successful image alone must not be read as GPU confirmation.
+    emit_image_execution_marker(
+        "flux2",
+        args.device,
+        device,
+        device,
+        ["torch", "diffusers", "transformers", "accelerate"],
+    )
+    suppress_cosmetic_clip_truncation()
+
+    apply_memory_optimizations(pipe, width=args.width, height=args.height)
+    apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
+
+    seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
+    generator = make_generator(device, seed)
+
+    init_image, reference_pils = load_flux2_inputs(args, use_kv)
+    result, callback, honored_strengths = run_flux2_inference(
+        pipe, args, device, seed, generator, init_image, reference_pils
+    )
     image = result.images[0]
     image.save(args.output)
 
-    if callback is not None and hasattr(callback, "_stats"):
-        s = callback._stats
-        print(f"🖼️  stepwise summary: callback fired {s['count']} times, saved {s['saved']} previews", file=sys.stderr)
+    log_stepwise_summary(callback)
 
     if args.metadata:
-        sidecar = {
-            "id": Path(args.output).stem,
-            "prompt": args.prompt,
-            "negativePrompt": args.negative_prompt,
-            "modelId": args.model,
-            "seed": seed,
-            "width": int(args.width),
-            "height": int(args.height),
-            "steps": int(args.steps),
-            "guidance": float(args.guidance),
-            "quantization": args.quantization,
-            "filename": Path(args.output).name,
-            "initImageFilename": Path(args.image_path).name if (args.image_path and not use_kv) else None,
-            "initImageStrength": float(args.image_strength) if (args.image_strength is not None and not use_kv) else None,
-        }
+        sidecar = common_image_metadata(args, seed)
+        sidecar["quantization"] = args.quantization
         if use_kv:
-            sidecar["pipelineClass"] = pipeline_cls.__name__
+            sidecar["initImageFilename"] = None
+            sidecar["initImageStrength"] = None
+            sidecar["pipelineClass"] = type(pipe).__name__
             sidecar["referenceImageFilenames"] = [Path(p).name for p in args.reference_images]
             # Honored end-to-end: the runtime patch on Flux2KVLayerCache.store +
             # _flux2_kv_causal_attention scales each reference's V slice by the
@@ -587,12 +532,7 @@ def main() -> None:
     # Free VRAM eagerly so a back-to-back generation in the same process
     # doesn't OOM. The PortOS runner respawns per request right now, so this
     # is mostly belt-and-suspenders.
-    if torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-        torch.mps.synchronize()
-    elif torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+    empty_device_cache(device, synchronize=True)
 
     print(f"✅ flux2 saved {args.output} (seed={seed})", file=sys.stderr)
 

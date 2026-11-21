@@ -199,7 +199,7 @@ class RunnerContract(unittest.TestCase):
                     argv += ['--reference-images'] + [str(source)] * references
                 pipe = Qwen21Pipeline()
                 stderr = io.StringIO()
-                with patch.object(sys, 'argv', argv), patch.multiple(
+                with patch.dict(sys.modules, {'torch': torch}), patch.object(sys, 'argv', argv), patch.multiple(
                     runner, pick_device=lambda _: 'cpu',
                     load_pipeline=lambda *a, **kw: (pipe, 'cpu'),
                     emit_image_execution_marker=lambda *a: None,
@@ -232,9 +232,13 @@ class RunnerContract(unittest.TestCase):
 
     def test_qwen21_mps_frees_the_text_encoder_before_denoising(self):
         emptied = []
+        synced = []
         torch = SimpleNamespace(
             bfloat16='bf16', float32='fp32', inference_mode=contextlib.nullcontext,
-            mps=SimpleNamespace(empty_cache=lambda: emptied.append(True)),
+            mps=SimpleNamespace(
+                empty_cache=lambda: emptied.append(True),
+                synchronize=lambda: synced.append(True),
+            ),
             backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
             cuda=SimpleNamespace(is_available=lambda: False),
         )
@@ -252,7 +256,8 @@ class RunnerContract(unittest.TestCase):
                     argv += ['--reference-images'] + [str(source)] * references
                 pipe = EncodingQwen21Pipeline()
                 emptied.clear()
-                with patch.object(sys, 'argv', argv), patch.multiple(
+                synced.clear()
+                with patch.dict(sys.modules, {'torch': torch}), patch.object(sys, 'argv', argv), patch.multiple(
                     runner, pick_device=lambda _: device,
                     load_pipeline=lambda *a, **kw: (pipe, device),
                     emit_image_execution_marker=lambda *a: None,
@@ -269,7 +274,8 @@ class RunnerContract(unittest.TestCase):
                 self.assertEqual(pipe.encoded, [('A lighthouse', references), ('blurry', references)])
                 resident = device != 'mps'
                 self.assertEqual(pipe.encoder_resident_per_step, [resident] * 3)
-                self.assertEqual(emptied, [] if resident else [True])
+                self.assertEqual(emptied, [] if resident else [True, True])
+                self.assertEqual(synced, [] if resident else [True])
                 self.assertEqual(pipe.transformer.hooks, {})
 
 

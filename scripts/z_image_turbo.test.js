@@ -1,14 +1,15 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
+const pillowPython = resolveTestPython({ modules: ['PIL'] });
+const commonContract = fileURLToPath(new URL('./ml/_runner_common_test.py', import.meta.url));
 const commonScript = fileURLToPath(new URL('./ml/_runner_common.py', import.meta.url));
 const qwenRunner = fileURLToPath(new URL('./ml/z_image_turbo.py', import.meta.url));
 const runnerContract = fileURLToPath(new URL('./ml/z_image_turbo_test.py', import.meta.url));
-const hasPillow = python && spawnSync(python, ['-c', 'import PIL'], { stdio: 'ignore' }).status === 0;
 
 const exerciseGuard = `
 import importlib.util, json, sys
@@ -57,6 +58,16 @@ describe.skipIf(!python)('Qwen Image 2.1 MPS decode guard', () => {
 
 });
 
+describe.skipIf(!python)('Shared image runner contract', () => {
+  it('uses resolved device cleanup and preserves structured auth errors and pipeline kwargs', () => {
+    expect(() => execFileSync(python, [commonContract], {
+      encoding: 'utf8',
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      stdio: 'pipe',
+    })).not.toThrow();
+  });
+});
+
 describe('Qwen Image 2.1 runner contract', () => {
   it('owns the Qwen MPS latent decode and reports model/reference diagnostics', () => {
     const source = readFileSync(qwenRunner, 'utf8');
@@ -66,8 +77,8 @@ describe('Qwen Image 2.1 runner contract', () => {
     expect(source).toContain('references={len(args.reference_images)}');
   });
 
-  it.skipIf(!hasPillow)('preserves generation/edit inputs and model-aware logs without model weights', () => {
-    expect(() => execFileSync(python, [runnerContract], {
+  it.skipIf(!pillowPython)('preserves generation/edit inputs and model-aware logs without model weights', () => {
+    expect(() => execFileSync(pillowPython, [runnerContract], {
       encoding: 'utf8',
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       stdio: 'pipe',

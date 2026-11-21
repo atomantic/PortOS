@@ -15,8 +15,7 @@ HEAD + torch).
 
 Other models routed through this runner can require a gated external text
 encoder (e.g. HiDream-I1 loads Llama-3.1-8B-Instruct as `text_encoder_4`), so
-`load_external_text_encoder()` probes HF auth up front — mirroring the
-`probe_hf_auth()` fail-fast in `flux2_macos.py`.
+`load_external_text_encoder()` uses the shared Hugging Face auth probe.
 """
 
 import argparse
@@ -33,50 +32,26 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import (  # noqa: E402
+    add_common_image_args,
     apply_memory_optimizations,
+    build_common_pipe_kwargs,
+    common_image_metadata,
     decode_with_finite_retry,
     emit_image_execution_marker,
+    empty_device_cache,
     heartbeat,
     install_hf_error_handler,
+    log_stepwise_summary,
     make_generator,
     make_stepwise_callback,
     pick_device,
     place_pipeline,
+    probe_hf_auth,
     set_vae_tiling,
     suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
 from lora_utils import apply_loras  # noqa: E402
-
-
-def probe_hf_auth(repo: str) -> None:
-    """Fail early with a clear message when HF_TOKEN is missing or the
-    license hasn't been accepted. Without this probe, the user sees a vague
-    HTTP 401 stack trace mid-pipeline-load."""
-    from huggingface_hub import HfApi
-    from huggingface_hub.utils import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
-    try:
-        HfApi().model_info(repo)
-    except GatedRepoError:
-        print(
-            f"❌ HF gated repo: accept license at https://huggingface.co/{repo} "
-            f"and set HF_TOKEN before generating.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    except RepositoryNotFoundError:
-        print(f"❌ HF repo not found: {repo}", file=sys.stderr)
-        sys.exit(2)
-    except HfHubHTTPError as err:
-        if getattr(err.response, "status_code", None) == 401:
-            print(
-                f"❌ HF auth required for {repo}. Set HF_TOKEN (and accept the "
-                f"license at https://huggingface.co/{repo}).",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        # Network blip / HF down — let the pipeline call retry.
-        print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
 
 
 def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: str, dtype):
@@ -290,24 +265,9 @@ def release_text_encoder_before_denoising(pipe) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Z-Image-Turbo runner")
-    p.add_argument("--model", required=True, help="model id (e.g. z-image-turbo-bf16)")
     p.add_argument("--repo", required=True, help="HF repo for the pipeline weights")
-    p.add_argument("--prompt", required=True)
-    p.add_argument("--negative-prompt", default="")
-    p.add_argument("--width", type=int, default=1024)
-    p.add_argument("--height", type=int, default=1024)
-    p.add_argument("--steps", type=int, default=8)
-    p.add_argument("--guidance", type=float, default=1.0)
-    p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--output", required=True)
-    p.add_argument("--metadata", action="store_true", help="write <output>.metadata.json sidecar")
+    add_common_image_args(p, default_guidance=1.0)
     p.add_argument("--reference-images", nargs="+", default=[], help="Qwen 2.1 reference images (10 inputs total)")
-    p.add_argument("--image-path", default=None, help="optional init image for i2i")
-    p.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
-    p.add_argument("--stepwise-image-output-dir", default=None)
-    p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
-    p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
-    p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
     p.add_argument("--pipeline-class", default="", help="optional explicit diffusers pipeline class (e.g. ErnieImagePipeline, HiDreamImagePipeline)")
     p.add_argument("--use-pe", action="store_true", help="enable the prompt enhancer (ERNIE-Image's use_pe kwarg)")
     p.add_argument("--text-encoder-repo", default="", help="HF repo for an external text encoder (HiDream → Llama-3.1-8B-Instruct)")
@@ -316,36 +276,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-@install_hf_error_handler
-def main() -> None:
-    args = parse_args()
-
-    input_count = len(args.reference_images) + bool(args.image_path)
-    if args.reference_images and args.pipeline_class != "QwenImage21Pipeline":
-        raise ValueError("Reference images require QwenImage21Pipeline")
-    if args.pipeline_class == "QwenImage21Pipeline" and input_count > 10:
-        raise ValueError("Qwen Image 2.1 accepts at most 10 input images")
-
-    device = pick_device(args.device)
-    dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
-
-    pipe, placement = load_pipeline(
-        args.repo,
-        device,
-        dtype,
-        pipeline_class=args.pipeline_class,
-        text_encoder_repo=args.text_encoder_repo,
-        text_encoder_class=args.text_encoder_class,
-        tokenizer_class=args.tokenizer_class,
-    )
-    emit_image_execution_marker(
-        "diffusers-image",
-        args.device,
-        device,
-        placement,
-        ["torch", "diffusers", "transformers", "accelerate"],
-    )
-
+def load_conditioning_images(pipe, args):
     init_image = None
     if args.image_path:
         # Unified editing pipelines already accept `image`; auto-conversion
@@ -373,18 +304,10 @@ def main() -> None:
                 images.append(source.convert("RGBA"))
         init_image = images
 
-    apply_memory_optimizations(pipe, width=args.width, height=args.height)
-    apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
+    return pipe, init_image
 
-    qwen21_mps = args.pipeline_class == "QwenImage21Pipeline" and device == "mps"
-    if qwen21_mps:
-        pipe.vae.to(dtype=torch.float32)
-        encode_references_in_vae_dtype(pipe)
-        release_text_encoder_before_denoising(pipe)
 
-    seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
-    generator = make_generator(device, seed)
-
+def build_preview_hooks(pipe, pipeline_class: str):
     # ERNIE keeps latents 2x2 patch-packed during the loop (e.g. 32→128 ch at
     # half spatial) and decodes via vae.bn unnormalization + _unpatchify_latents
     # before vae.decode — the generic scaling/shift path fails with a channel
@@ -417,7 +340,7 @@ def main() -> None:
         qwen_mean_cpu = torch.tensor(pipe_vae.config.latents_mean).view(1, z_dim, 1, 1, 1)
         # 2.1 stores the standard deviation; legacy Qwen stores its inverse.
         qwen_std = torch.tensor(pipe_vae.config.latents_std)
-        qwen_scale_cpu = (qwen_std if args.pipeline_class == "QwenImage21Pipeline" else 1.0 / qwen_std).view(1, z_dim, 1, 1, 1)
+        qwen_scale_cpu = (qwen_std if pipeline_class == "QwenImage21Pipeline" else 1.0 / qwen_std).view(1, z_dim, 1, 1, 1)
         qwen_norm_cache = {}
 
         def unpack_latents(latents, height, width):  # noqa: E306
@@ -440,34 +363,11 @@ def main() -> None:
             # `decoded[0].permute(1, 2, 0)` receives the expected 4-D shape.
             return decoded[:, :, 0]
 
-    callback = make_stepwise_callback(
-        args.stepwise_image_output_dir,
-        pipe,
-        int(args.height),
-        int(args.width),
-        unpack_latents=unpack_latents,
-        preview_decoder=preview_decoder,
-    )
+    return unpack_latents, preview_decoder
 
-    accepted = set(inspect.signature(pipe.__call__).parameters.keys())
-    pipe_kwargs = dict(
-        prompt=args.prompt,
-        height=int(args.height),
-        width=int(args.width),
-        num_inference_steps=int(args.steps),
-        generator=generator,
-    )
-    # Qwen 2.1 exposes true_cfg_scale instead of guidance_scale.
-    if "guidance_scale" in accepted:
-        pipe_kwargs["guidance_scale"] = float(args.guidance)
-    elif "true_cfg_scale" in accepted:
-        pipe_kwargs["true_cfg_scale"] = float(args.guidance)
-    if args.negative_prompt and "negative_prompt" in accepted:
-        pipe_kwargs["negative_prompt"] = args.negative_prompt
-    if callback is not None and "callback_on_step_end" in accepted:
-        pipe_kwargs["callback_on_step_end"] = callback
-        if "callback_on_step_end_tensor_inputs" in accepted:
-            pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+
+def run_diffusers_inference(pipe, args, device: str, seed: int, generator, callback, init_image, qwen21_mps: bool):
+    pipe_kwargs, accepted = build_common_pipe_kwargs(pipe, args, generator, callback)
     if init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image
@@ -502,38 +402,73 @@ def main() -> None:
             if qwen21_mps
             else result.images
         )
+    return images
+
+
+@install_hf_error_handler
+def main() -> None:
+    args = parse_args()
+
+    input_count = len(args.reference_images) + bool(args.image_path)
+    if args.reference_images and args.pipeline_class != "QwenImage21Pipeline":
+        raise ValueError("Reference images require QwenImage21Pipeline")
+    if args.pipeline_class == "QwenImage21Pipeline" and input_count > 10:
+        raise ValueError("Qwen Image 2.1 accepts at most 10 input images")
+
+    device = pick_device(args.device)
+    dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
+
+    pipe, placement = load_pipeline(
+        args.repo,
+        device,
+        dtype,
+        pipeline_class=args.pipeline_class,
+        text_encoder_repo=args.text_encoder_repo,
+        text_encoder_class=args.text_encoder_class,
+        tokenizer_class=args.tokenizer_class,
+    )
+    emit_image_execution_marker(
+        "diffusers-image",
+        args.device,
+        device,
+        placement,
+        ["torch", "diffusers", "transformers", "accelerate"],
+    )
+
+    pipe, init_image = load_conditioning_images(pipe, args)
+
+    apply_memory_optimizations(pipe, width=args.width, height=args.height)
+    apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
+
+    qwen21_mps = args.pipeline_class == "QwenImage21Pipeline" and device == "mps"
+    if qwen21_mps:
+        pipe.vae.to(dtype=torch.float32)
+        encode_references_in_vae_dtype(pipe)
+        release_text_encoder_before_denoising(pipe)
+
+    seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
+    generator = make_generator(device, seed)
+
+    unpack_latents, preview_decoder = build_preview_hooks(pipe, args.pipeline_class)
+    callback = make_stepwise_callback(
+        args.stepwise_image_output_dir,
+        pipe,
+        int(args.height),
+        int(args.width),
+        unpack_latents=unpack_latents,
+        preview_decoder=preview_decoder,
+    )
+
+    images = run_diffusers_inference(pipe, args, device, seed, generator, callback, init_image, qwen21_mps)
     image = images[0]
     image.save(args.output)
 
-    if callback is not None and hasattr(callback, "_stats"):
-        s = callback._stats
-        print(f"🖼️  stepwise summary: callback fired {s['count']} times, saved {s['saved']} previews", file=sys.stderr)
+    log_stepwise_summary(callback)
 
     if args.metadata:
-        write_sidecar(
-            args.output,
-            {
-                "id": Path(args.output).stem,
-                "prompt": args.prompt,
-                "negativePrompt": args.negative_prompt,
-                "modelId": args.model,
-                "seed": seed,
-                "width": int(args.width),
-                "height": int(args.height),
-                "steps": int(args.steps),
-                "guidance": float(args.guidance),
-                "filename": Path(args.output).name,
-                "initImageFilename": Path(args.image_path).name if args.image_path else None,
-                "initImageStrength": float(args.image_strength) if args.image_strength is not None else None,
-            },
-        )
+        write_sidecar(args.output, common_image_metadata(args, seed))
 
-    if torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-        torch.mps.synchronize()
-    elif torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+    empty_device_cache(device, synchronize=True)
 
     print(f"✅ {args.model} saved {args.output} (seed={seed})", file=sys.stderr)
 

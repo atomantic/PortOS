@@ -5,9 +5,13 @@ Run: ./data/python/venv/bin/python scripts/ml/_runner_common_test.py
 (or any python3 — the helpers under test defer the torch/PIL imports).
 Exits non-zero on first failure.
 """
+import contextlib
+import io
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 # ✅/❌ are cp1252-unencodable on a Windows console, which would abort the run
 # before the first result printed — these runners are used on CUDA/Windows too.
@@ -257,6 +261,91 @@ check("empty_device_cache('cpu') clears nothing",
 check("empty_device_cache does not synchronize by default", _clear("cuda").cuda.synced == 0)
 check("empty_device_cache(synchronize=True) drains the queue",
       _clear("cuda", synchronize=True).cuda.synced == 1)
+
+
+class _HubError(Exception):
+    def __init__(self, status_code):
+        self.response = SimpleNamespace(status_code=status_code)
+
+
+class _MissingRepo(_HubError):
+    pass
+
+
+class _GatedRepo(_MissingRepo):
+    pass
+
+
+_repo = "example/test-model"
+_api = Mock()
+_hub = SimpleNamespace(HfApi=lambda: _api)
+_hub_errors = SimpleNamespace(
+    GatedRepoError=_GatedRepo,
+    HfHubHTTPError=_HubError,
+    RepositoryNotFoundError=_MissingRepo,
+)
+with patch.dict(sys.modules, {"huggingface_hub": _hub, "huggingface_hub.errors": _hub_errors}):
+    for error, kind in (
+        (_GatedRepo(403), "gated_repo"),
+        (_MissingRepo(404), "repo_not_found"),
+        (_HubError(401), "hf_unauthorized"),
+        (_HubError(503), None),
+        (None, None),
+    ):
+        _api.model_info.reset_mock(side_effect=True)
+        _api.model_info.side_effect = error
+        stderr = io.StringIO()
+        code = None
+        with contextlib.redirect_stderr(stderr):
+            try:
+                runner_common.probe_hf_auth(_repo)
+            except SystemExit as exc:
+                code = exc.code
+        _api.model_info.assert_called_once_with(_repo)
+        markers = [line for line in stderr.getvalue().splitlines() if line.startswith("USER_ERROR:")]
+        check(f"HF probe exits only on fatal errors ({kind}, {error})", code == (2 if kind else None))
+        check(f"HF probe emits the expected marker ({kind}, {error})",
+              markers == ([f"USER_ERROR:{kind}:{_repo}"] if kind else []))
+
+
+class _FluxPipe:
+    def __call__(self, prompt, height, width, num_inference_steps, generator, callback_on_step_end=None):
+        pass
+
+
+class _QwenPipe:
+    def __call__(self, prompt, height, width, num_inference_steps, generator, *,
+                 true_cfg_scale=1.0, negative_prompt="", callback_on_step_end=None,
+                 callback_on_step_end_tensor_inputs=None, image=None):
+        pass
+
+
+class _GuidancePipe:
+    def __call__(self, prompt, height, width, num_inference_steps, generator, *,
+                 guidance_scale=1.0, true_cfg_scale=1.0, negative_prompt=""):
+        pass
+
+
+_args = SimpleNamespace(prompt="a picture", height=32, width=48, steps=8, guidance=3.5,
+                        negative_prompt="unwanted")
+_generator = object()
+_callback = object()
+_base = dict(prompt="a picture", height=32, width=48, num_inference_steps=8, generator=_generator)
+
+_flux_kwargs, _ = runner_common.build_common_pipe_kwargs(_FluxPipe(), _args, _generator, _callback)
+check("kwargs omit unsupported negatives, guidance, and callback inputs",
+      _flux_kwargs == dict(_base, callback_on_step_end=_callback))
+_qwen_kwargs, _accepted = runner_common.build_common_pipe_kwargs(_QwenPipe(), _args, _generator, _callback)
+check("kwargs support Qwen's guidance alias and explicit callback inputs",
+      _qwen_kwargs == dict(_base, true_cfg_scale=3.5, negative_prompt="unwanted",
+                           callback_on_step_end=_callback, callback_on_step_end_tensor_inputs=["latents"]))
+check("the live signature remains available for model-specific image input",
+      "image" in _accepted and "image" not in _qwen_kwargs)
+_args.negative_prompt = ""
+_guidance_kwargs, _ = runner_common.build_common_pipe_kwargs(_GuidancePipe(), _args, _generator, None)
+check("guidance_scale takes priority and optional empty inputs stay absent",
+      _guidance_kwargs == dict(_base, guidance_scale=3.5))
+
 
 if FAILS:
     print(f"\n❌ {len(FAILS)} test(s) failed:")
