@@ -373,9 +373,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'image-generation-completion-tails',
     status: 'admitted',
     modules: [
-      'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
-      // The hosted runner publishes for fal.ai, Runway, Higgsfield and Google (#16098).
-      'services/imageGen/grok.js', 'services/imageGen/hostedJobRunner.js', 'services/imageGen/external.js',
+      'services/imageGen/local.js',
+      // The shared runners hold admission for their CLI and hosted adapters.
+      'services/imageGen/cliJobRunner.js', 'services/imageGen/hostedJobRunner.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
       'services/imageGen/publication.js', 'services/imageGen/index.js',
       // A storyboard-guided Grok clip files the first frame it built into the

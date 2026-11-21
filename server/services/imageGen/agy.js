@@ -1,6 +1,3 @@
-import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
-import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Antigravity (`agy`) CLI provider.
  *
@@ -15,9 +12,9 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { mkdir, open, stat } from 'fs/promises';
+import { mkdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import {
   ANTIGRAVITY_CLI_ID,
@@ -31,18 +28,11 @@ import {
   pickAntigravityRelayModel,
   splitAntigravityModel,
 } from '../../lib/provider/providerModels.js';
-import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
-import { atomicWrite, copyFileGuarded, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
-import { detectImageFormat } from '../../lib/mimeTypes.js';
+import { killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
+import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { renderTimingFields } from '../../lib/renderTiming.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
-import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
-import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
+import { noFabricationClause } from './fabricationGuard.js';
 import {
   AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, describeFidelity,
   nearestAgyAspectRatio, visualReferenceRole,
@@ -51,8 +41,8 @@ import { resolveInputImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
-import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { checkCliVersionConnection, createCliImageJobRunner, harvestStagedImage } from './cliJobRunner.js';
 
 const AGY_TIMEOUT_MS = (() => {
   const n = Number(process.env.AGY_IMAGEGEN_TIMEOUT_MS);
@@ -62,64 +52,17 @@ const DEFAULT_BIN = 'agy';
 const DEFAULT_HARVEST_TIMEOUT_MS = 5000;
 let harvestTimeoutMs = DEFAULT_HARVEST_TIMEOUT_MS;
 
-const jobs = new Map();
-const activeProcs = new Map();
-const activeJobs = new Map();
+const runner = createCliImageJobRunner({
+  mode: IMAGE_GEN_MODE.AGY, provider: 'Agy', logName: 'agy', defaultBin: DEFAULT_BIN, timeoutMs: AGY_TIMEOUT_MS,
+});
 
-export const getActiveJob = () => {
-  const entries = [...activeJobs.values()];
-  return entries.length ? entries[entries.length - 1] : null;
-};
-export const getActiveJobs = () => [...activeJobs.values()];
+export const { getActiveJob, getActiveJobs, attachSseClient, cancel, cancelAll } = runner;
 
-export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
-
-const terminate = (jobId, proc) => {
-  if (process.platform === 'win32') {
-    killProcessTree(proc);
-    return;
-  }
-  killWithEscalation(proc, {
-    label: 'agy child',
-    delayMs: 5000,
-    stillRunning: () => activeProcs.get(jobId) === proc,
-  });
-};
-
-const preparations = createMediaJobPreparation();
-
-export const cancel = (jobId) => {
-  if (!jobId) throw new Error('agy.cancel requires a jobId — use agy.cancelAll() to terminate every in-flight render');
-  const pending = preparations.cancel(jobId);
-  if (pending) return pending;
-  const proc = activeProcs.get(jobId);
-  if (!proc) return false;
-  terminate(jobId, proc);
-  return true;
-};
-
-export const cancelAll = () => {
-  const ids = [...preparations.ids(), ...activeProcs.keys()];
-  if (ids.length === 0) return false;
-  for (const id of ids) cancel(id);
-  return true;
-};
-
+// A version probe establishes CLI availability without spending image quota.
 export async function checkConnection({ agyPath } = {}) {
-  const bin = agyPath || DEFAULT_BIN;
-  const prepared = prepareCliSpawn(bin, ['--version']);
-  const result = await bufferedSpawn(prepared.command, prepared.args, { timeoutMs: 15_000, shell: false });
-  if (result.error) {
-    return { connected: false, mode: IMAGE_GEN_MODE.AGY, reason: `Agy CLI not found (${result.error})` };
-  }
-  if (result.timedOut) {
-    return { connected: false, mode: IMAGE_GEN_MODE.AGY, reason: 'agy --version timed out' };
-  }
-  if (result.code !== 0) {
-    return { connected: false, mode: IMAGE_GEN_MODE.AGY, reason: `agy --version exited ${result.code}` };
-  }
-  const versionMatch = `${result.stdout}${result.stderr}`.match(/(\d+\.\d+\.\d+)/);
-  return { connected: true, mode: IMAGE_GEN_MODE.AGY, model: versionMatch ? `agy ${versionMatch[1]}` : 'agy' };
+  return checkCliVersionConnection({
+    bin: agyPath || DEFAULT_BIN, mode: IMAGE_GEN_MODE.AGY, label: 'Agy', modelPrefix: 'agy',
+  });
 }
 
 // `agy models` waits for stdin EOF before printing its catalog, so this probe
@@ -284,7 +227,7 @@ export function agySentPrompt({ prompt = '', negativePrompt, width, height, stag
   };
 }
 
-export const generateImage = (params) => preparations.run(params, generateImagePrepared);
+export const generateImage = (params) => runner.preparations.run(params, generateImagePrepared);
 
 async function generateImagePrepared({
   promptAdditions = [],
@@ -324,7 +267,6 @@ async function generateImagePrepared({
   await ensureDir(PATHS.images);
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
   const scratchDir = join(tmpdir(), `portos-agy-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
 
@@ -337,7 +279,6 @@ async function generateImagePrepared({
   const { model: driverModel, models } = await resolveAgyDriverModel(model, modelIsShippedDefault);
   const baseArgs = ensureAntigravityPrintArgs([], { model: driverModel, models });
   const { args } = prepareAntigravityPrompt(baseArgs, fullPrompt);
-  const bin = agyPath || DEFAULT_BIN;
   const meta = {
     id: jobId,
     prompt: prompt.trim(),
@@ -359,36 +300,31 @@ async function generateImagePrepared({
     createdAt: new Date().toISOString(),
   };
   // The scratch dir is the last fallible step before the job exists, so a
-  // refusal above leaves nothing behind; from here on runAgy owns it.
+  // refusal above leaves nothing behind; from here on the runner owns it.
   await mkdir(scratchDir, { recursive: true });
   try {
     await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
   } catch (error) {
-    await rmGuarded(scratchDir, { recursive: true, force: true });
+    await runner.removeScratchDirectory(scratchDir);
     throw error;
   }
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
-  activeJobs.set(jobId, {
-    ...meta,
-    generationId: jobId,
-    totalSteps: 1,
-    step: 0,
-    progress: 0,
-    currentImage: null,
-  });
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] agy`);
-  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  broadcastSse(job, { type: 'status', message: 'Spawning agy…' });
-
-  runAgy(job, jobId, bin, args, {
-    scratchDir,
-    stagingPath,
-    outputPath,
-    filename,
-    meta,
-    cleanC2PA,
-    denoise,
+  const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir });
+  runner.run(job, {
+    bin: agyPath || undefined, args, scratchDir, meta, cleanC2PA, denoise,
+    prepareAttempt: () => ({
+      discover: ({ stdoutTail }) => runner.discoverStagedImage({
+        stagingPath, harvestTimeoutMs, scratchDir, toolName: AGY_TOOL, noImageReason, stdoutTail,
+      }),
+    }),
+    async recordUsage(renderMeta) {
+      const { recordAgyImageUsage } = await import('../agyMediaUsage.js');
+      await recordAgyImageUsage({
+        jobId,
+        createdAt: renderMeta.createdAt,
+        inputImages: (inputImages.initPath ? 1 : 0) + inputImages.referencePaths.length,
+        model: renderMeta.imageModel || AGY_IMAGEGEN_IMAGE_MODEL,
+      });
+    },
   });
 
   return {
@@ -400,209 +336,6 @@ async function generateImagePrepared({
     model: driverModel,
     status: 'running',
   };
-}
-
-// Launch is synchronous so every failure has one owner: a refusal before a
-// child exists (shim resolution, or Node rejecting an invalid argv/bin
-// synchronously) releases the scratch dir and settles the job here; a setup
-// failure after spawn terminates the child and leaves the close handler to
-// release the scratch dir once it has physically exited.
-function runAgy(job, jobId, bin, args, {
-  scratchDir,
-  stagingPath,
-  outputPath,
-  filename,
-  meta,
-  cleanC2PA,
-  denoise,
-}) {
-  // A failed removal keeps the maintenance settlement unsettled rather than
-  // claiming the scratch dir was released; removal is idempotent.
-  const removeScratch = () => maintenance.continueSettlement(
-    () => rmGuarded(scratchDir, { recursive: true, force: true }),
-  ).catch((err) => {
-    maintenance.markCurrentUnsettled();
-    console.error(`❌ agy scratch cleanup failed: ${err.message}`);
-  });
-  if (preparations.take(jobId)) {
-    void removeScratch();
-    return finalizeJobFailure.canceled(job, jobId);
-  }
-  let proc;
-  try {
-    const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
-    const { command, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). agy reads
-    // process.cwd(), so this is defensive rather than a live fix; it keeps every
-    // scratch-dir spawn telling the child one consistent story about where it is.
-    proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (err) {
-    removeScratch();
-    return finalizeJobFailure(job, jobId, null, `Failed to spawn ${bin}: ${err?.message || err}`);
-  }
-  activeProcs.set(jobId, proc);
-  let stdoutTail = '';
-  let stderrTail = '';
-  let timeoutTimer = null;
-  let setupError = null;
-  let processError;
-  proc.on('error', (err) => {
-    processError = err;
-    // A failed kill/send on a live child is not physical exit.
-    if (proc.pid) return;
-    clearTimeout(timeoutTimer);
-    removeScratch();
-    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
-  });
-  proc.on('close', async (code, signal) => {
-    await withBackupAssetPublication(async () => {
-      clearTimeout(timeoutTimer);
-      try {
-        if (setupError) {
-          removeScratch();
-          return finalizeJobFailure(job, jobId, proc, `Agy launch setup failed: ${setupError?.message || setupError}`);
-        }
-        if (code !== 0 || processError) {
-          removeScratch();
-          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-          return finalizeJobFailure(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
-        }
-        const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
-        if (!harvested.found) {
-          removeScratch();
-          const prefix = harvested.invalid ? 'Agy wrote a non-image file at the directed path. ' : '';
-          return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
-        }
-        // A PNG landed — but the harvest gate only proves it is image bytes, not
-        // that generate_image made them. Reject a file the agent drew itself.
-        // The narration tail rides along like every other failure path here: it
-        // carries WHY the tool was skipped (the 429 that triggers a fabricated
-        // stand-in is only ever stated there), which the quota card then reads.
-        const fabricated = await checkFabrication(scratchDir, AGY_TOOL);
-        if (fabricated) {
-          removeScratch();
-          return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
-        }
-        if (harvested.format === 'png') {
-          await copyFileGuarded(stagingPath, outputPath);
-          await unlinkGuarded(stagingPath).catch(() => {});
-        } else {
-          const { default: sharp } = await import('sharp');
-          const pngBytes = await sharp(stagingPath).png().toBuffer();
-          await atomicWrite(outputPath, pngBytes);
-        }
-        removeScratch();
-        // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
-        // contentless canvas never becomes a gallery record.
-        const emptyFrame = await rejectDegenerateFrame(outputPath);
-        if (emptyFrame) {
-          return finalizeJobFailure(job, jobId, proc, emptyFrame);
-        }
-        const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-        // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
-        // captured, so the spread measures the render itself — not the time the
-        // job spent queued behind other renders.
-        await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) });
-        await autoCleanGeneratedImage({
-          cleanC2PA,
-          denoise,
-          pngPath: outputPath,
-          sidecarPath: sidecar,
-          mode: IMAGE_GEN_MODE.AGY,
-        });
-        try {
-          const inputImageCount = (meta.initImageFilename ? 1 : 0) + (Array.isArray(meta.referenceImageFilenames) ? meta.referenceImageFilenames.length : 0);
-          const { recordAgyImageUsage } = await import('../agyMediaUsage.js');
-          await recordAgyImageUsage({
-            jobId,
-            createdAt: meta.createdAt,
-            inputImages: inputImageCount,
-            model: meta.imageModel || AGY_IMAGEGEN_IMAGE_MODEL,
-          });
-        } catch (usageErr) {
-          console.error(`❌ Failed to record Antigravity image usage [${jobId.slice(0, 8)}]: ${usageErr.message}`);
-        }
-        job.status = 'complete';
-        if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-        activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (agy)`);
-        const result = { filename, path: `/data/images/${filename}` };
-        dispatchTerminalEvent(
-          jobId,
-          () => broadcastSse(job, { type: 'complete', result }),
-          () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, inputProcessSettled: true, path: result.path, filename }),
-        );
-        closeJobAfterDelay(jobs, jobId);
-      } catch (err) {
-        await Promise.all([outputPath, join(PATHS.images, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-        removeScratch();
-        // force: true — 'complete' is already stamped above; see
-        // createJobFailureFinalizer's doc comment in sseUtils.js.
-        finalizeJobFailure(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`, { force: true });
-      }
-    }).catch(err => {
-      // Admission can reject before the publication callback is entered.
-      // EventEmitter does not await this listener, so settle the job here too.
-      clearTimeout(timeoutTimer);
-      removeScratch();
-      finalizeJobFailure(job, jobId, proc, `Agy publication admission failed: ${err?.message || err}`);
-    });
-  });
-
-  // Post-spawn setup. The error/close owners above are already installed, so a
-  // throw here must not settle the job or release its scratch dir under a live
-  // child: record it, terminate the child, and let close settle after exit.
-  try {
-    timeoutTimer = setTimeout(() => {
-      if (activeProcs.get(jobId) === proc) {
-        console.log(`⏱️ agy timed out after ${AGY_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-        terminate(jobId, proc);
-      }
-    }, AGY_TIMEOUT_MS);
-
-    proc.stdout.on('data', (chunk) => {
-      stdoutTail = `${stdoutTail}${chunk}`.slice(-8192);
-      broadcastSse(job, { type: 'status', message: 'Running…' });
-    });
-    proc.stderr.on('data', (chunk) => {
-      stderrTail = `${stderrTail}${chunk}`.slice(-32768);
-    });
-  } catch (err) {
-    setupError = err;
-    clearTimeout(timeoutTimer);
-    terminate(jobId, proc);
-  }
-}
-
-const finalizeJobFailure = createJobFailureFinalizer({
-  jobs,
-  activeJobs,
-  activeSlots: activeProcs,
-  label: 'agy image generation',
-  events: imageGenEvents,
-  failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
-});
-
-async function harvestStagedImage(stagingPath, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let sawInvalid = false;
-  while (Date.now() < deadline) {
-    const fileStat = await stat(stagingPath).catch(() => null);
-    if (fileStat?.size > 0) {
-      const head = Buffer.alloc(16);
-      const handle = await open(stagingPath, 'r').catch(() => null);
-      if (handle) {
-        const { bytesRead } = await handle.read(head, 0, 16, 0).catch(() => ({ bytesRead: 0 }));
-        await handle.close().catch(() => {});
-        const detected = detectImageFormat(head.subarray(0, bytesRead));
-        if (detected) return { found: true, invalid: false, format: detected.format };
-        sawInvalid = true;
-      }
-    }
-    const remainingMs = Math.max(1, deadline - Date.now());
-    await sleep(Math.min(250, remainingMs));
-  }
-  return { found: false, invalid: sawInvalid };
 }
 
 export const _internals = {
