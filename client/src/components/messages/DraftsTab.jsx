@@ -13,6 +13,10 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
+import socket from '../../services/socket';
+
+// Server invalidations only; the list is re-read rather than patched from the payload.
+const DRAFT_EVENTS = ['messages:draft:created', 'messages:draft:sent', 'messages:changed'];
 
 function DeliveryReconciliation({ draft, onReconciled }) {
   const [checkedMailbox, setCheckedMailbox] = useState(false);
@@ -103,6 +107,14 @@ export default function DraftsTab({ accounts }) {
 
   useEffect(() => {
     fetchDrafts();
+  }, [fetchDrafts]);
+
+  useEffect(() => {
+    const refresh = () => { fetchDrafts(); };
+    for (const event of DRAFT_EVENTS) socket.on(event, refresh);
+    return () => {
+      for (const event of DRAFT_EVENTS) socket.off(event, refresh);
+    };
   }, [fetchDrafts]);
 
   const handleApprove = async (id) => {
