@@ -371,7 +371,25 @@ describe('localLlm', () => {
   describe('installModel / deleteModel dispatch', () => {
     it('routes Ollama install to pullModel', async () => {
       await svc.installModel('ollama', 'llama3.2');
-      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', undefined);
+      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', undefined, { signal: expect.any(AbortSignal) });
+    });
+    it('cancels an in-flight install, reports it, and lists only live downloads', async () => {
+      let started;
+      const pulling = new Promise((resolve) => { started = resolve; });
+      mocks.ollama.pullModel.mockImplementationOnce((id, _onProgress, { signal }) => new Promise((resolve) => {
+        started();
+        signal.addEventListener('abort', () => resolve({ success: false, canceled: true, code: 'INSTALL_CANCELED', modelId: id }));
+      }));
+      const install = svc.installModel('ollama', 'example-model:7b');
+      await pulling;
+      expect(svc.listActiveInstalls()).toEqual([expect.objectContaining({ backend: 'ollama', modelId: 'example-model:7b' })]);
+      // A second request for the same download is refused, not started twice.
+      await expect(svc.installModel('ollama', 'example-model:7b')).resolves.toMatchObject({ code: 'INSTALL_IN_PROGRESS' });
+
+      expect(svc.cancelModelInstall('ollama', 'example-model:7b')).toEqual({ success: true });
+      await expect(install).resolves.toMatchObject({ canceled: true, code: 'INSTALL_CANCELED' });
+      expect(svc.listActiveInstalls()).toEqual([]);
+      expect(svc.cancelModelInstall('ollama', 'example-model:7b')).toMatchObject({ success: false, code: 'INSTALL_NOT_RUNNING' });
     });
     it('does not evict LM Studio files on a normal install', async () => {
       await svc.installModel('lmstudio', 'unsloth/Qwen3.8-27B-GGUF');
@@ -400,7 +418,7 @@ describe('localLlm', () => {
     });
     it('force is a no-op for Ollama beyond a regular pull', async () => {
       await svc.installModel('ollama', 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M', undefined, { force: true });
-      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M', undefined);
+      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M', undefined, { signal: expect.any(AbortSignal) });
       expect(mocks.lmstudio.evictDownloadedQuant).not.toHaveBeenCalled();
     });
     it('routes a curated Safetensors model through Ollama create instead of registry pull', async () => {
@@ -668,7 +686,7 @@ describe('localLlm', () => {
       expect(r.success).toBe(true);
       expect(r.from).toBe('lmstudio');
       expect(r.to).toBe('ollama');
-      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function));
+      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function), { signal: expect.any(AbortSignal) });
       expect(r.results.find((x) => x.target === 'llama3.2').status).toBe('installed');
       expect(svc.getBackend()).toBe('lmstudio'); // default marker untouched
       expect(mocks.providers.updateProvider).not.toHaveBeenCalled(); // providers untouched
@@ -771,7 +789,7 @@ describe('localLlm', () => {
 
       const r = await svc.migrateBackend('ollama');
       expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
-      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function));
+      expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function), { signal: expect.any(AbortSignal) });
       expect(r.results[0].status).toBe('installed');
     });
 

@@ -1467,15 +1467,23 @@ async function warmModel(modelName, keepAlive = '30m') {
  * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, retrying?: boolean, finalizing?: boolean }) => void} [onProgress]
  * @returns {Promise<{ success: boolean, modelId: string, error?: string, recovered?: boolean }>}
  */
-async function pullModel(modelId, onProgress) {
+async function pullModel(modelId, onProgress, { signal } = {}) {
   if (!(await checkOllamaAvailable())) {
     return { success: false, error: 'Ollama not available', modelId }
   }
   console.log(`📥 Ollama pull: ${modelId}`)
 
+  // Layer digests this pull touched, so a cancel can remove exactly their
+  // `-partial` scratch files and nothing another model owns.
+  const digests = new Set()
   let lastError = null
   for (let attempt = 1; attempt <= PULL_MAX_ATTEMPTS; attempt++) {
-    const result = await attemptOllamaPull(modelId, onProgress)
+    const result = await attemptOllamaPull(modelId, onProgress, { signal, digests })
+    if (signal?.aborted) {
+      const removed = await removePartialBlobs(digests)
+      console.log(`🛑 Ollama pull canceled: ${modelId} (removed ${removed} partial file${removed === 1 ? '' : 's'})`)
+      return { success: false, canceled: true, code: 'INSTALL_CANCELED', error: 'Download canceled', modelId }
+    }
     if (result.success) {
       installedModels = null  // bust cache so the new model shows on next list
       console.log(`✅ Ollama pull complete: ${modelId}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`)
@@ -1811,12 +1819,15 @@ function isOllamaOutdatedError(error) {
  * @param {(p: object) => void} [onProgress]
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
-async function attemptOllamaPull(modelId, onProgress) {
+async function attemptOllamaPull(modelId, onProgress, { signal, digests } = {}) {
   // No timeout — multi-GB pulls take minutes; the stream is the lifecycle.
+  // Aborting the request is what cancels: Ollama stops a blob download once no
+  // request is waiting on it.
   const response = await fetchWithTimeout(`${config.baseUrl}/api/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: modelId, stream: true })
+    body: JSON.stringify({ name: modelId, stream: true }),
+    ...(signal ? { signal } : {}),
   }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
@@ -1824,6 +1835,7 @@ async function attemptOllamaPull(modelId, onProgress) {
   }
 
   const lastError = await streamNdjson(response, (frame) => {
+    if (digests && typeof frame.digest === 'string') digests.add(frame.digest)
     if (typeof onProgress === 'function') {
       const percent = frame.total > 0 && frame.completed >= 0
         ? Math.round((frame.completed / frame.total) * 100)
@@ -1833,6 +1845,26 @@ async function attemptOllamaPull(modelId, onProgress) {
   }).catch((err) => err?.message || String(err))
 
   return lastError ? { success: false, error: lastError } : { success: true }
+}
+
+/**
+ * Delete the `<blob>-partial*` scratch files Ollama keeps for the given layer
+ * digests (`sha256:<hex>`). Completed blobs are never touched: a layer another
+ * model already shares has no partial file. Returns how many files went.
+ * @param {Iterable<string>} digests
+ * @returns {Promise<number>}
+ */
+async function removePartialBlobs(digests) {
+  const prefixes = [...digests]
+    .map((digest) => /^sha256:([a-f0-9]{64})$/.exec(digest)?.[1])
+    .filter(Boolean)
+    .map((hex) => `sha256-${hex}-partial`)
+  if (!prefixes.length) return 0
+  const blobsDir = join(getModelsDir(), 'blobs')
+  const names = await readdir(blobsDir).catch(() => [])
+  const doomed = names.filter((name) => prefixes.some((prefix) => name.startsWith(prefix)))
+  const results = await Promise.all(doomed.map((name) => unlink(join(blobsDir, name)).then(() => true, () => false)))
+  return results.filter(Boolean).length
 }
 
 /**

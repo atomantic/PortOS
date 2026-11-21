@@ -251,6 +251,41 @@ describe('ollamaManager.pullModel transient-error retry', () => {
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('hit transient error'))
   })
 
+  it('stops on cancel without retrying and removes only that pull\'s partial blobs', async () => {
+    const { mkdtemp, mkdir, writeFile, access, rm } = await import('fs/promises')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-cancel-'))
+    const hex = 'a'.repeat(64)
+    const other = 'b'.repeat(64)
+    await mkdir(join(dir, 'blobs'), { recursive: true })
+    for (const name of [`sha256-${hex}-partial`, `sha256-${hex}-partial-0`, `sha256-${other}-partial`, `sha256-${'c'.repeat(64)}`]) {
+      await writeFile(join(dir, 'blobs', name), 'x')
+    }
+    vi.stubEnv('OLLAMA_MODELS', dir)
+    const pullModel = await loadPullModel()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const controller = new AbortController()
+    const { pullUrls } = stubFetch([
+      makeStreamResponse([{ status: 'pulling', digest: `sha256:${hex}`, total: 100, completed: 10 }], { rejectAt: 1 }),
+    ])
+    const onProgress = vi.fn(() => controller.abort())
+
+    const promise = pullModel('example-model:7b', onProgress, { signal: controller.signal })
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toMatchObject({ success: false, canceled: true, code: 'INSTALL_CANCELED' })
+    expect(pullUrls).toHaveLength(1)
+    const exists = (name) => access(join(dir, 'blobs', name)).then(() => true, () => false)
+    expect(await exists(`sha256-${hex}-partial`)).toBe(false)
+    expect(await exists(`sha256-${hex}-partial-0`)).toBe(false)
+    expect(await exists(`sha256-${other}-partial`)).toBe(true)
+    expect(await exists(`sha256-${'c'.repeat(64)}`)).toBe(true)
+    vi.unstubAllEnvs()
+    await rm(dir, { recursive: true, force: true })
+  })
+
   it('retries a dropped-connection read rejection (undici "terminated")', async () => {
     const pullModel = await loadPullModel()
     const { pullUrls } = stubFetch([

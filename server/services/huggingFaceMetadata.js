@@ -92,15 +92,17 @@ function hfFetch(url) {
 // the Apple-MLX query, or null/'' to relax the format filter (audio category and
 // the GGUF-signal fallback). Only one filter at a time; MLX runs as a separate
 // query so its results don't pollute the GGUF list.
+// `filter` is one Hub filter or a list of them; repeated `filter` params AND
+// together (`['gguf', 'base_model:quantized:<repo>']` = that repo's GGUF quants).
 export async function fetchModels(search, limit, filter) {
   const params = new URLSearchParams({
-    search,
     sort: 'downloads',
     direction: '-1',
     limit: String(limit),
     full: 'true'
   })
-  if (filter) params.set('filter', filter)
+  if (search) params.set('search', search)
+  for (const value of [filter].flat().filter(Boolean)) params.append('filter', value)
 
   const result = await hfSearchGate.run(() => hfFetch(`${HF_API_BASE}?${params.toString()}`))
   if (result.outcome !== 'ok') {
