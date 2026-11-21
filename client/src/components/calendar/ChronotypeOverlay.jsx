@@ -32,6 +32,15 @@ export default function ChronotypeOverlay({ startHour, pxPerHour }) {
   // rather than dropping the zone's identity entirely.
   const labelColor = (color) => chipColors(color, theme?.mode)?.color || color;
 
+  // The band tint goes on the background as an alpha channel, NOT as element
+  // `opacity`: CSS opacity composites the whole subtree, so a label inside the
+  // band would be drawn at the tint's strength (~10%) and fail contrast.
+  // Zone colors are server-emitted `#rrggbb`; any other form keeps the raw color.
+  const bandTint = (color, alpha) => {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
+    return `${color}${Math.round(alpha * 255).toString(16).padStart(2, '0')}`;
+  };
+
   const startMinutes = startHour * 60;
 
   const minToTop = (min) => ((min - startMinutes) / 60) * pxPerHour;
@@ -74,13 +83,12 @@ export default function ChronotypeOverlay({ startHour, pxPerHour }) {
             style={{
               top: Math.max(top, 0),
               height,
-              backgroundColor: zone.color,
-              opacity: zone.opacity
+              backgroundColor: bandTint(zone.color, zone.opacity)
             }}
           >
             <span
               className="absolute right-1 top-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded"
-              style={{ color: labelColor(zone.color), backgroundColor: `${zone.color}30`, opacity: 1 }}
+              style={{ color: labelColor(zone.color), backgroundColor: `${zone.color}30` }}
             >
               {zone.label}
             </span>
