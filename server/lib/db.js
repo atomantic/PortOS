@@ -15,6 +15,7 @@ import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './dat
 import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 import { createDatabaseRestoreRecovery, databaseRestoreRecoveryError } from './databaseRestoreRecovery.js';
 import { normalizePgParams } from './pgJson.js';
+import { translateExtensionLibraryError } from './pgExtensionError.js';
 import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from './databaseMaintenanceSchema.js';
 
 const { Pool } = pg;
@@ -271,6 +272,8 @@ async function databaseOperation(fn) {
   activeOperations += 1;
   try {
     return await databaseContext.run(context, () => fn());
+  } catch (err) {
+    throw translateExtensionLibraryError(err);
   } finally {
     context.active = false;
     activeOperations -= 1;

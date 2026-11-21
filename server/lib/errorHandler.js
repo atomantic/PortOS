@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { DB_EXTENSION_UNAVAILABLE } from './pgExtensionError.js';
 
 // Global error event emitter for broadcasting errors
 export const errorEvents = new EventEmitter();
@@ -217,6 +218,10 @@ export function asyncHandler(fn) {
       if (error.code === 'PLATFORM_UNAVAILABLE') {
         // An upstream outage, not a defect here — the response already says so.
         console.log(`🌩️ Platform unavailable [${route}]: ${error.message}${suffix}`);
+      } else if (error.code === DB_EXTENSION_UNAVAILABLE) {
+        // A broken local Postgres install: one line naming the fix, not a
+        // stack trace per request (peers poll these routes every minute).
+        console.error(`🗄️ Database extension unavailable [${route}]: ${error.message}`);
       } else if (error.severity === 'warning') {
         // Expected high-volume 404s (e.g. speculative media-job archive
         // lookups) — already classified as benign; don't pollute server logs.

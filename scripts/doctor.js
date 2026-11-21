@@ -308,7 +308,9 @@ function loadDbState(root = ROOT) {
     // Only ask about pgvector once we know the connection works — otherwise the
     // extension probe would just re-report the same connection failure.
     const vector = health.connected
-      ? await db.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'").then((r) => r.rowCount > 0).catch(() => false)
+      // The cast makes the server load the library, so an installed extension
+      // whose library a Homebrew upgrade removed reports missing too.
+      ? await db.query("SELECT '[1]'::vector").then(() => true).catch(() => false)
       : false;
     return { db, health, vector, depsMissing: false };
   });
@@ -355,7 +357,7 @@ async function probePgvector(root) {
   if (!health.connected) return { available: false, detail: 'not checked — database unreachable' };
   return vector
     ? { available: true, detail: 'extension installed' }
-    : { available: false, detail: 'extension missing — the creative catalog needs pgvector; run: npm run setup:db' };
+    : { available: false, detail: 'extension missing or its library cannot load — the creative catalog needs pgvector; run: npm run setup:db' };
 }
 
 /**

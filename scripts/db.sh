@@ -590,6 +590,35 @@ provision_role() {
       pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
 }
 
+# Homebrew's pgvector bottle only ships builds for the newest PostgreSQL
+# majors. A `brew upgrade` can move it past postgresql@17 and unlink the old
+# vector library, leaving the running server failing every vector query with
+# `could not access file "$libdir/vector"`. When the pg17 keg has no vector
+# library, build the same pgvector release from source against that keg.
+# `make install` writes real files into the keg's shared lib/extension dirs,
+# which later pgvector upgrades (symlink-only) leave alone.
+ensure_pgvector_for_pg17() {
+  local pg_config pkglibdir version build_dir
+  pg_config="$(brew --prefix postgresql@17)/bin/pg_config"
+  pkglibdir="$("$pg_config" --pkglibdir)"
+  if [ -e "$pkglibdir/vector.dylib" ] || [ -e "$pkglibdir/vector.so" ]; then
+    log "pgvector library present for PostgreSQL 17"
+    return 0
+  fi
+  version="$(brew list --versions pgvector | awk '{print $2}' | sed 's/_.*//')"
+  warn "Homebrew's pgvector ${version:-build} has no PostgreSQL 17 library in $pkglibdir; building it from source"
+  build_dir="$(mktemp -d)"
+  if ! git clone --quiet --depth 1 ${version:+--branch "v$version"} https://github.com/pgvector/pgvector.git "$build_dir/pgvector" ||
+     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" >/dev/null ||
+     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" install >/dev/null; then
+    rm -rf "$build_dir"
+    err "Could not build pgvector for PostgreSQL 17 (needs git and the Xcode command line tools)"
+    exit 1
+  fi
+  rm -rf "$build_dir"
+  log "pgvector ${version} built and installed for PostgreSQL 17"
+}
+
 cmd_setup_native() {
   info "Setting up native PostgreSQL for PortOS..."
 
@@ -613,6 +642,7 @@ cmd_setup_native() {
     else
       log "pgvector already installed"
     fi
+    ensure_pgvector_for_pg17
 
     # Ensure pg17 binaries are on PATH
     PG_BIN="$(brew --prefix postgresql@17)/bin"

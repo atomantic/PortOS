@@ -10,6 +10,7 @@ import {
   buildErrorEnvelope,
   sendErrorResponse
 } from './errorHandler.js';
+import { translateExtensionLibraryError } from './pgExtensionError.js';
 
 // Build a fake Express req/res pair. `res.status()` and `res.json()` are
 // chainable (they return `res`) to mirror Express, and `req.app.get('io')`
@@ -445,6 +446,22 @@ describe('errorHandler.js', () => {
       const body = res.json.mock.calls[0][0];
       expect(body.code).toBe('INTERNAL_ERROR');
       expect(body.error).toBe('kaboom');
+    });
+
+    it('answers a missing Postgres extension library with a 503 and one log line, no stack', async () => {
+      const { req, res } = makeReqRes({ emit: vi.fn() });
+      const pgErr = Object.assign(new Error('could not access file "$libdir/vector": No such file or directory'), { code: '58P01' });
+
+      await asyncHandler(async () => { throw translateExtensionLibraryError(pgErr); })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      const body = res.json.mock.calls[0][0];
+      expect(body.code).toBe('DB_EXTENSION_UNAVAILABLE');
+      expect(body.error).toContain('npm run setup:db');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]).toHaveLength(1);
+      expect(errorSpy.mock.calls[0][0]).toMatch(/^🗄️ Database extension unavailable \[/);
     });
 
     // Mid-stream the envelope can't land, so the catch hands off to the error
