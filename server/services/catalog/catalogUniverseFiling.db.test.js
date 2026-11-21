@@ -25,6 +25,10 @@ let collections;
 const missingFiles = new Set();
 const collectionDeps = {
   isGalleryImage: (mediaKey) => !missingFiles.has(mediaKey),
+  findOrCreateCatalogTypeCollection: async (type) => {
+    if (!collections.has(type)) collections.set(type, { id: `catalog-${type}`, items: [], removedItems: {} });
+    return collections.get(type);
+  },
   findCollectionByUniverseId: async (universeId) => collections.get(universeId) || null,
   findOrCreateUniverseCollection: async ({ universeId, universeName }) => {
     if (!collections.has(universeId)) collections.set(universeId, { id: `uc-${universeId}`, name: `Universe: ${universeName}`, items: [], removedItems: {} });
@@ -97,6 +101,14 @@ describe.skipIf(!ready)('catalog universe filing', () => {
     expect(collections.has(ids.other)).toBe(false);
   });
 
+  it('files every live portrait and reference into its record type collection', async () => {
+    const result = await filing.fileCatalogImagesIntoTypeCollections({ ingredientIds: records });
+    expect(refsIn('character')).toEqual([img('cast-sheet'), img('owned-portrait'), img('owned-remix')]);
+    expect(refsIn('place')).toEqual([img('set-plate')]);
+    expect(refsIn('object')).toEqual([img('loose')]);
+    expect(result).toEqual({ added: 5, types: 3 });
+  });
+
   it('files a newly attached reference into the universe after the attach announces it', async () => {
     filing.__testing.reset();
     filing.initCatalogUniverseFiling();
@@ -104,6 +116,7 @@ describe.skipIf(!ready)('catalog universe filing', () => {
     await filing.__testing.flushNow();
     // Only the changed record files; the owned record's images wait for the pass.
     expect(refsIn(ids.world)).toEqual([img('cast-new'), img('cast-sheet')]);
+    expect(refsIn('character')).toEqual([img('cast-new'), img('cast-sheet')]);
     expect(collections.has(ids.other)).toBe(false);
   });
 });

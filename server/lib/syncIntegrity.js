@@ -30,6 +30,23 @@ const hashesEqual = (a, b) => {
   return sa.length === sb.length && sa.every((h, i) => h === sb[i]);
 };
 
+const hostedCount = (row, hostId) => {
+  const n = hostId ? row?.hostedBy?.[hostId] : 0;
+  return Number.isInteger(n) && n > 0 ? n : 0;
+};
+
+// Host mode leaves a file stored on one machine and streamed by the other, so
+// the two hash lists legitimately differ. Accept the gap only when each side's
+// extra hashes are exactly accounted for by the other side's files hosted on it.
+const hostedGapExplained = (local, remote, { selfId, peerId } = {}) => {
+  if (!selfId || !peerId) return false;
+  const localSet = new Set(sortedHashes(local.assetHashes));
+  const remoteSet = new Set(sortedHashes(remote.assetHashes));
+  const onlyLocal = [...localSet].filter((h) => !remoteSet.has(h)).length;
+  const onlyRemote = [...remoteSet].filter((h) => !localSet.has(h)).length;
+  return onlyLocal === hostedCount(remote, selfId) && onlyRemote === hostedCount(local, peerId);
+};
+
 // Different strings can be an LWW tie at millisecond precision, but a clock
 // alone cannot prove that the two record bodies match.
 const sameLwwTime = (a, b) => {
@@ -57,7 +74,7 @@ const sameLwwTime = (a, b) => {
  *
  * @returns {Array<{id:string, name:string, status:string, assessment?:string, reason?:string}>}
  */
-export function computeRecordIntegrity(localList, remoteList) {
+export function computeRecordIntegrity(localList, remoteList, hostIds = {}) {
   const byId = new Map();
 
   for (const l of localList || []) {
@@ -89,7 +106,7 @@ export function computeRecordIntegrity(localList, remoteList) {
       continue;
     } else if (local.updatedAt !== remote.updatedAt && !sameLwwTime(local.updatedAt, remote.updatedAt)) {
       status = INTEGRITY_STATUS.DIVERGED;
-    } else if (!hashesEqual(local.assetHashes, remote.assetHashes)) {
+    } else if (!hashesEqual(local.assetHashes, remote.assetHashes) && !hostedGapExplained(local, remote, hostIds)) {
       status = INTEGRITY_STATUS.ASSETS_MISSING;
     } else if (local.metadataMissing === true || remote.metadataMissing === true) {
       status = INTEGRITY_STATUS.METADATA_MISSING;

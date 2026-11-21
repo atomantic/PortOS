@@ -442,7 +442,7 @@ describe('MediaCollections', () => {
 
   it('joins selected collections under the entered name and opens the result', async () => {
     const { joinMediaCollections } = await import('../services/apiImageVideo.js');
-    joinMediaCollections.mockResolvedValueOnce({ id: 'joined', name: 'Handpicked media', items: [] });
+    joinMediaCollections.mockResolvedValueOnce({ id: 'joined', name: 'Handpicked media', items: [], removedCollectionIds: [], keptCollectionIds: [] });
     const user = userEvent.setup();
     renderPage('/media/collections?empty=1');
     await user.click(await screen.findByRole('button', { name: 'Select collections' }));
@@ -457,8 +457,23 @@ describe('MediaCollections', () => {
     expect(screen.getByRole('status')).toHaveTextContent('2 selected');
     await user.click(join);
     expect(joinMediaCollections).toHaveBeenCalledWith({
-      name: 'Handpicked media', collectionIds: ['col-1', 'col-2'],
+      name: 'Handpicked media', collectionIds: ['col-1', 'col-2'], keepOriginals: false,
     }, { silent: true });
     await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/joined'));
+  });
+
+  it('sends keepOriginals when the user keeps the original collections', async () => {
+    const { joinMediaCollections } = await import('../services/apiImageVideo.js');
+    joinMediaCollections.mockResolvedValueOnce({ id: 'col-1', name: 'Alpha', items: [], removedCollectionIds: ['col-2'], keptCollectionIds: [] });
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await user.click(await screen.findByRole('button', { name: 'Select collections' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Alpha' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Beta' }));
+    await user.click(screen.getByLabelText('Keep the original collections'));
+    await typeSettled(user, screen.getByLabelText('Joined collection name'), 'Alpha');
+    await user.click(screen.getByRole('button', { name: 'Join collections' }));
+    expect(joinMediaCollections).toHaveBeenCalledWith({ name: 'Alpha', collectionIds: ['col-1', 'col-2'], keepOriginals: true }, { silent: true });
+    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-1'));
   });
 });

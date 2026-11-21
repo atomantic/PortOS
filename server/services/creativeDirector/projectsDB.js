@@ -13,7 +13,7 @@
  */
 
 import { query } from '../../lib/db.js';
-import { createCollection } from '../mediaCollections.js';
+import { projectCollectionFor } from './projectCollection.js';
 import { createProjectDbStore } from '../projectDbStore.js';
 import * as logic from './projectsLogic.js';
 
@@ -49,14 +49,7 @@ export async function createProject(input) {
     const { ensureInstanceId } = await import('../instanceIdentity.js');
     seeded.videoOwnerInstanceId = await ensureInstanceId();
   }
-  return store.createProject(seeded, async ({ id }) => {
-    const collection = await createCollection({
-      name: `Creative Director: ${input.name}`,
-      description: `Auto-created for project ${id}`,
-      source: 'auto',
-    });
-    return { collectionId: collection.id };
-  });
+  return store.createProject(seeded, ({ id }) => projectCollectionFor(input, id));
 }
 
 export async function setTreatment(id, treatmentInput) {

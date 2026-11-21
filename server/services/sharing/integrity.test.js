@@ -32,6 +32,11 @@ vi.mock('./peerSync.js', async () => ({
   PEER_SUBSCRIBABLE_KINDS: ['universe', 'series', 'mediaCollection'],
 }));
 vi.mock('./peerSyncAssets.js', () => ({ referenceCollectionAssetManifest: vi.fn() }));
+vi.mock('../peerHostedMedia.js', async (importOriginal) => ({
+  hostedCountsByPeer: (await importOriginal()).hostedCountsByPeer,
+  hostedByForCollectionItems: vi.fn().mockResolvedValue({}),
+  listHostedEntries: vi.fn().mockResolvedValue({}),
+}));
 
 // Mock mediaCollections, universeBuilder, series so tests control the record set.
 vi.mock('../mediaCollections.js', async () => ({
@@ -264,6 +269,42 @@ describe('getPeerIntegrity', () => {
     });
     expect(peerFetch).toHaveBeenCalledWith('http://peer-x.test:5555/api/peer-sync/record?kind=mediaCollection&id=col-1&collectionIntegrity=1', expect.any(Object), makePeer());
     expect(listCollections).not.toHaveBeenCalled();
+  });
+
+  it('treats a file one machine streams from the other (host mode) as in parity', async () => {
+    const record = makeCollection({ items: [{ kind: 'image', ref: 'here.png' }, { kind: 'image', ref: 'there.png' }] });
+    const image = (filename, hex) => ({ kind: 'image', filename, sha256: hex.repeat(64), sidecarSha256: '0'.repeat(64) });
+    vi.mocked(referenceCollectionAssetManifest).mockReturnValue(record.items.map(({ kind, ref }) => ({ kind, filename: ref })));
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    vi.mocked(getRecordPayloadForPeer).mockResolvedValue({
+      record, sourceInstanceId: 'local-instance', assetManifest: [image('here.png', 'a')],
+      hostedBy: { 'image:there.png': ['peer-x'] },
+    });
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        kind: 'mediaCollection', sourceInstanceId: 'peer-x', record,
+        assetManifest: [image('there.png', 'b')], hostedBy: { 'image:here.png': ['local-instance'] },
+      }),
+    });
+    expect(await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection', recordId: record.id })).toEqual({
+      available: true,
+      records: [{ id: record.id, name: record.name, status: INTEGRITY_STATUS.IN_PARITY, assetDifferences: [] }],
+    });
+  });
+
+  it('still reports a file hosted by some other machine as a difference', async () => {
+    const record = makeCollection({ items: [{ kind: 'image', ref: 'here.png' }] });
+    const image = (filename, hex) => ({ kind: 'image', filename, sha256: hex.repeat(64), sidecarSha256: '0'.repeat(64) });
+    vi.mocked(referenceCollectionAssetManifest).mockReturnValue([{ kind: 'image', filename: 'here.png' }]);
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    vi.mocked(getRecordPayloadForPeer).mockResolvedValue({ record, sourceInstanceId: 'local-instance', assetManifest: [image('here.png', 'a')] });
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ kind: 'mediaCollection', sourceInstanceId: 'peer-x', record, assetManifest: [], hostedBy: { 'image:here.png': ['third-machine'] } }),
+    });
+    const { records } = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection', recordId: record.id });
+    expect(records[0]).toMatchObject({ status: INTEGRITY_STATUS.ASSETS_MISSING, assetDifferences: [{ kind: 'image', filename: 'here.png', availability: 'local' }] });
   });
 
   it('matches history filenames to collection video refs when peers use different storage names', async () => {

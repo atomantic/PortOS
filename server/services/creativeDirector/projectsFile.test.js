@@ -329,3 +329,13 @@ describe('projectsFile federation merge', () => {
     expect(await cj.getSyncBaseHash('creativeDirectorProject', 'cd-1')).toBeNull();
   });
 });
+
+describe('createProject collection', () => {
+  it('files into a supplied job collection instead of creating one', async () => {
+    const { createCollection } = await import('../mediaCollections.js');
+    vi.mocked(createCollection).mockClear();
+    const p = await file.createProject({ name: 'Daily Video — 2026-11-21', aspectRatio: '16:9', quality: 'draft', modelId: '', targetDurationSeconds: 10, collectionId: 'cdc-job' });
+    expect(p.collectionId).toBe('cdc-job');
+    expect(createCollection).not.toHaveBeenCalled();
+  });
+});

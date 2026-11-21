@@ -54,6 +54,7 @@ export default function MediaCollections() {
   const [selectedIds, setSelectedIds] = useState(null);
   const [joinedName, setJoinedName] = useState('');
   const [joining, setJoining] = useState(false);
+  const [keepOriginals, setKeepOriginals] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [removedId, setRemovedId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
@@ -132,10 +133,13 @@ export default function MediaCollections() {
     cancelDelete();
     setOrganizing(true);
     try {
-      const { added, updatedCollections, missingAssets, failedCollections } = await autoOrganizeMediaCollections({ silent: true });
-      const summary = added
+      const { added, updatedCollections, missingAssets, failedCollections, mergedCollections } = await autoOrganizeMediaCollections({ silent: true });
+      const filed = added
         ? `Added ${formatCount(added)} memberships across ${formatCount(updatedCollections)} collections.`
         : 'No new collection memberships found.';
+      const summary = mergedCollections
+        ? `Merged ${formatCount(mergedCollections)} Creative Director run collections into their jobs. ${filed}`
+        : filed;
       const missing = missingAssets ? ` ${formatCount(missingAssets)} unavailable assets skipped.` : '';
       if (failedCollections) toast.error(`${summary}${missing} ${formatCount(failedCollections)} collections could not be updated.`);
       else toast.success(summary + missing);
@@ -187,14 +191,21 @@ export default function MediaCollections() {
     if (joining || selected.length < 2 || !joinedName.trim()) return;
     setJoining(true);
     try {
-      const joined = await joinMediaCollections({
+      const { removedCollectionIds = [], keptCollectionIds = [], ...joined } = await joinMediaCollections({
         name: joinedName.trim(),
         collectionIds: selected.map((c) => c.id),
+        keepOriginals,
       }, { silent: true });
-      setCollections((prev) => prev ? [...prev, joined] : prev);
+      const removed = new Set(removedCollectionIds);
+      setCollections((prev) => prev
+        ? [...prev.filter((c) => c.id !== joined.id && !removed.has(c.id)), joined]
+        : prev);
       setSelectedIds(null);
       setJoinedName('');
-      toast.success(`Created "${joined.name}"`);
+      const retired = removed.size ? `; merged and removed ${formatCount(removed.size)} original${removed.size === 1 ? '' : 's'}` : '';
+      const kept = !keepOriginals && keptCollectionIds.length
+        ? `; kept ${formatCount(keptCollectionIds.length)} owned by a project or board` : '';
+      toast.success(`Joined into "${joined.name}"${retired}${kept}`);
       cancelQueryMirror();
       navigate(`/media/collections/${encodeURIComponent(joined.id)}`);
     } catch (err) {
@@ -339,8 +350,20 @@ export default function MediaCollections() {
         <form onSubmit={handleJoin} className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
           <p className="text-sm text-gray-400">
             <span role="status">{formatCount(selected.length)} selected.</span>{' '}
-            Join at least two collections into a new one. The original collections are kept.
+            Join at least two collections. Items go into the selected collection with this name, or a new one,
+            and the other selected collections are merged away unless you keep them. Collections owned by a
+            mood board, music video or project are always kept.
           </p>
+          <label htmlFor="join-keep-originals" className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              id="join-keep-originals"
+              type="checkbox"
+              checked={keepOriginals}
+              onChange={(e) => setKeepOriginals(e.target.checked)}
+              disabled={joining}
+            />
+            Keep the original collections
+          </label>
           <div className="flex flex-wrap gap-2 items-center">
             <label htmlFor="joined-collection-name" className="sr-only">Joined collection name</label>
             <input

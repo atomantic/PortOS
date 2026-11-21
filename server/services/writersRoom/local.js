@@ -288,6 +288,20 @@ export async function ensureWorkMediaCollection(workId) {
   });
 }
 
+/** Re-point works filing into any of `fromIds` at collection `toId` (a collection join). */
+export async function repointWorkMediaCollections(fromIds, toId) {
+  const from = new Set(fromIds);
+  const works = (await store().listWorks()).filter((manifest) => from.has(manifest?.mediaCollectionId));
+  for (const { id } of works) {
+    await queueWorkWrite(id, async () => {
+      const manifest = await getWork(id);
+      if (!from.has(manifest.mediaCollectionId)) return;
+      await saveManifest(id, { ...manifest, mediaCollectionId: toId, updatedAt: nowIso() });
+    });
+  }
+  return works.length;
+}
+
 function summarizeWork(manifest) {
   const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
   return {

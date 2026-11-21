@@ -295,6 +295,16 @@ describe('mediaCollections service', () => {
     }
   });
 
+  it('findOrCreateCommissionCollection keeps one job-named collection per commission and follows renames', async () => {
+    const first = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Daily Video' });
+    const again = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Daily Video' });
+    expect(first).toMatchObject({ id: 'cdc-job-1', name: 'Creative Director: Daily Video', source: 'auto' });
+    expect(again.id).toBe(first.id);
+    const renamed = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Nightly Video' });
+    expect(renamed).toMatchObject({ id: 'cdc-job-1', name: 'Creative Director: Nightly Video' });
+    expect((await svc.listCollections()).filter((c) => c.id.startsWith('cdc-'))).toHaveLength(1);
+  });
+
   it('findOrCreateCollectionByName returns the existing collection on case-insensitive match', async () => {
     const a = await svc.createCollection({ name: 'World: Foo' });
     const reused = await svc.findOrCreateCollectionByName({ name: '  world: foo  ' });

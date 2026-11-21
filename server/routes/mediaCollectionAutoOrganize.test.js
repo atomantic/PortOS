@@ -30,7 +30,20 @@ vi.mock('../services/fableLoom/records.js', () => ({ listLooms: async () => [] }
 vi.mock('../services/creativeDirector/local.js', () => ({ listProjects: async () => [] }));
 vi.mock('../services/videoTimeline/local.js', () => ({ listProjects: async () => [] }));
 vi.mock('../services/writersRoom/local.js', () => ({ listWorks: async () => [] }));
-vi.mock('../services/sprites/records.js', () => ({ listRecords: async () => [] }));
+vi.mock('../services/sprites/records.js', () => ({ listRecords: async () => [{ id: 'hero', name: 'Hero' }] }));
+vi.mock('../services/universeBuilder/crud.js', () => ({ listUniverses: async () => [
+  { id: 'uni-a', name: 'Example World', places: [{ greybox: { shots: [{ plate: 'plate.png' }] } }] },
+] }));
+vi.mock('../services/pipeline/series.js', () => ({ listSeries: async () => [{ id: 'series-a', name: 'Example Series' }] }));
+vi.mock('../services/pipeline/issueCrud.js', () => ({ listAllIssues: async () => [
+  { id: 'issue-a', seriesId: 'series-a', stages: { comicPages: { pages: [{ proofImage: { filename: 'proof.png' } }] } } },
+] }));
+vi.mock('../services/creativeCommissions/collections.js', () => ({
+  consolidateCommissionCollections: async () => ({ jobs: 0, mergedCollections: 0, repointedProjects: 0 }),
+}));
+vi.mock('../services/catalog/catalogUniverseFiling.js', () => ({
+  fileCatalogImages: async () => ({ added: 0, updatedCollections: 0 }),
+}));
 vi.mock('../services/externalMediaCollection.js', () => ({ collectExistingExternalMedia: async () => [] }));
 vi.mock('../services/videoGen/history.js', () => ({ loadHistory: async () => [
   { id: 'clip-id', filename: 'actual-name.mp4', musicVideoProjectId: 'mv-a' },
@@ -56,10 +69,18 @@ const collections = await import('../services/mediaCollections.js');
 const app = express();
 app.use('/api/media/collections', router);
 app.use(errorMiddleware);
+const { PATHS } = await import('../lib/fileUtils.js');
+const { mkdir, writeFile } = await import('fs/promises');
+const { join } = await import('path');
+const candidates = join(PATHS.sprites, 'hero', 'reference', 'candidates');
+await mkdir(candidates, { recursive: true });
+await writeFile(join(candidates, 'walk-east-candidate-01.generation.json'), JSON.stringify({
+  candidatePath: 'reference/candidates/walk-east-candidate-01.png', sourceFilename: 'sprite-source.png',
+}));
 const organize = () => request(app).post('/api/media/collections/auto-organize');
 const refs = collection => collection.items.map(item => item.ref).sort();
 
-it('repairs deck, mood board and project collections idempotently, preserving removals', async () => {
+it('repairs deck, mood board, project, universe and series collections idempotently, preserving removals', async () => {
   const liveJob = {
     id: 'live', kind: 'image', status: 'completed', params: { deckCard: { deckId: 'deck-a', cardId: 'card-a' } },
     result: { filename: 'live.png', finishedVariant: { filename: 'live-finished.png' } },
@@ -74,16 +95,21 @@ it('repairs deck, mood board and project collections idempotently, preserving re
 
   const first = await organize();
   expect(first.status).toBe(200);
-  expect(first.body).toEqual({ added: 6, updatedCollections: 4, missingAssets: 1, failedCollections: 0 });
+  expect(first.body).toEqual({ added: 10, updatedCollections: 7, missingAssets: 1, failedCollections: 0, mergedCollections: 0 });
   const deck = await collections.getCollection('deck-deck-a');
   expect(deck).toMatchObject({ name: 'Deck: Match', source: 'auto' });
   expect(refs(deck)).toEqual(['kept.png', 'live-finished.png']);
   expect(refs(await collections.getCollection('deck-deck-b'))).toEqual(['different.png']);
-  expect(refs(await collections.getCollection('mbc-board-a'))).toEqual(['poster.png', 'rendered.png']);
+  // Every image a board holds belongs to its collection, pinned references included.
+  expect(refs(await collections.getCollection('mbc-board-a'))).toEqual(['poster.png', 'reference.png', 'rendered.png']);
+  const byName = Object.fromEntries((await collections.listCollections()).map(c => [c.name, c]));
+  expect(refs(byName['Universe: Example World'])).toEqual(['plate.png']);
+  expect(refs(await collections.getCollection('sprite-hero'))).toEqual(['sprite-source.png']);
+  expect(refs(byName['Series: Example Series'] ?? Object.values(byName).find(c => c.seriesId === 'series-a'))).toEqual(['proof.png']);
   expect(refs(await collections.getCollection('mvc-mv-a'))).toEqual(['clip-id', 'frame.png']);
   expect((await collections.listCollectionIds())).not.toContain('deck-deck-removed');
 
   const second = await organize();
-  expect(second.body).toEqual({ added: 0, updatedCollections: 0, missingAssets: 1, failedCollections: 0 });
+  expect(second.body).toEqual({ added: 0, updatedCollections: 0, missingAssets: 1, failedCollections: 0, mergedCollections: 0 });
   expect((await collections.getCollection('deck-deck-a')).updatedAt).toBe(deck.updatedAt);
 });

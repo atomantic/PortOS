@@ -356,15 +356,45 @@ async function persistNewCollection({ name, description = '', source = 'user' },
   return created;
 }
 
-export async function joinCollections({ name, collectionIds }) {
-  const ids = new Set(collectionIds);
-  if (ids.size < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
+// An owner-managed collection has a deterministic id (mood board, music video,
+// deck, commission, …) or a universe/series link: its owner finds it by that id,
+// so a join copies its items but never retires it.
+// The shape of randomUUID(); fileCore's UUID_RE would pull its child-process
+// imports into every suite that loads collections.
+const RANDOM_COLLECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isOwnerManaged = (collection) => !RANDOM_COLLECTION_ID.test(collection.id)
+  || Boolean(collection.universeId) || Boolean(collection.seriesId);
+
+// Point every record that files renders into one of `fromIds` at `toId`, so
+// retiring them does not make an owner mint a fresh bucket on its next render.
+// Random-id collections are minted only by Creative Director projects and
+// Writers Room works.
+async function retargetCollectionOwners(fromIds, toId) {
+  const [{ repointProjectCollections }, { repointWorkMediaCollections }] = await Promise.all([
+    import('./creativeDirector/local.js'),
+    import('./writersRoom/local.js'),
+  ]);
+  await Promise.all([repointProjectCollections(fromIds, toId), repointWorkMediaCollections(fromIds, toId)]);
+}
+
+/**
+ * Merge several collections into one. The destination is the selected
+ * collection already carrying `name` (an owner-managed one first), else a new
+ * collection. Unless `keepOriginals`, every other selected collection is then
+ * retired: its owners are re-pointed at the destination and it is tombstoned,
+ * so the merge propagates to peers. Owner-managed sources are kept.
+ */
+export async function joinCollections({ name, collectionIds, keepOriginals = false }) {
+  const ids = [...new Set(collectionIds)];
+  if (ids.length < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
 
   // Read each source before writing the destination so a stale selection or
   // oversized union leaves no empty or partially populated collection behind.
+  const sources = [];
   const itemsByKey = new Map();
   for (const id of ids) {
     const collection = await getCollection(id);
+    sources.push(collection);
     for (const item of collection.items) {
       const key = itemKey(item);
       const existing = itemsByKey.get(key);
@@ -374,7 +404,27 @@ export async function joinCollections({ name, collectionIds }) {
       throw codedError(`Joined collection exceeds the limit of ${ITEMS_MAX} items`, ERR_VALIDATION);
     }
   }
-  return persistNewCollection({ name }, [...itemsByKey.values()]);
+  const union = [...itemsByKey.values()];
+  const needle = name.trim().toLowerCase();
+  const named = sources.filter((c) => c.name.trim().toLowerCase() === needle);
+  const target = named.find(isOwnerManaged) ?? named[0] ?? null;
+  const joined = target
+    ? (await bulkUpdateCollectionItems(target.id, { add: union.map(({ kind, ref }) => ({ kind, ref })) })).collection
+    : await persistNewCollection({ name }, union);
+
+  const others = sources.filter((source) => source.id !== joined.id);
+  const retire = keepOriginals ? [] : others.filter((source) => !isOwnerManaged(source)).map((source) => source.id);
+  const keptCollectionIds = others.map((source) => source.id).filter((id) => !retire.includes(id));
+  if (retire.length) await retargetCollectionOwners(retire, joined.id);
+  for (const id of retire) {
+    // A render filed into a source after it was read above moves too, so the
+    // tombstone (which empties the record) loses nothing.
+    const latest = await getCollection(id).catch(() => null);
+    const late = (latest?.items || []).filter((item) => !itemsByKey.has(itemKey(item)));
+    if (late.length) await bulkUpdateCollectionItems(joined.id, { add: late.map(({ kind, ref }) => ({ kind, ref })) });
+    await deleteCollection(id);
+  }
+  return { ...joined, removedCollectionIds: retire, keptCollectionIds };
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
@@ -731,6 +781,37 @@ export async function findOrCreateDeckCollection({ deckId, deckName }) {
     description: 'Images generated for this deck.',
   });
   return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// One collection per Creative Commission: every scheduled run of the same job
+// files into it instead of minting a dated bucket per fire. The id derives
+// from the commission id so peers converge on one bucket.
+export const commissionCollectionId = (commissionId) => `cdc-${String(commissionId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+export const commissionCollectionNameFor = (commissionName) =>
+  `Creative Director: ${typeof commissionName === 'string' && commissionName.trim() ? commissionName.trim() : 'Untitled job'}`.slice(0, NAME_MAX_LENGTH);
+
+export async function findOrCreateCommissionCollection({ commissionId, commissionName }) {
+  if (!commissionId || typeof commissionId !== 'string') throw codedError('commissionId is required', ERR_VALIDATION);
+  const name = commissionCollectionNameFor(commissionName);
+  const collection = await findOrCreateFixedCollection(commissionCollectionId(commissionId), {
+    name,
+    description: 'Every render from this Creative Director job.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// Catalog record types get one library-wide collection each, so every cast
+// portrait, environment plate and object reference is findable by kind.
+export const CATALOG_TYPE_COLLECTIONS = Object.freeze({
+  character: { id: 'catalog-cast', name: 'Cast', description: 'Portraits and references of every catalog cast member.' },
+  place: { id: 'catalog-environments', name: 'Environments', description: 'References of every catalog environment.' },
+  object: { id: 'catalog-objects', name: 'Objects', description: 'References of every catalog object.' },
+});
+
+export function findOrCreateCatalogTypeCollection(type) {
+  const spec = CATALOG_TYPE_COLLECTIONS[type];
+  if (!spec) throw codedError(`No collection for catalog type: ${type}`, ERR_VALIDATION);
+  return findOrCreateFixedCollection(spec.id, spec);
 }
 
 export const findOrCreateStoryboardCollection = ({ id, name }) => findOrCreateFixedCollection(`storyboard-${id}`, {

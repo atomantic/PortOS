@@ -32,6 +32,8 @@ import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
 import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
+import { hostedByForCollectionItems, hostedCountsByPeer, listHostedEntries } from '../peerHostedMedia.js';
 import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
 import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
 import { sanitizeAssetFilename } from './buckets.js';
@@ -77,6 +79,7 @@ async function recordsForKind(kind) {
  */
 export async function buildLocalManifest(kind) {
   const records = await recordsForKind(kind);
+  const hostedEntries = kind === 'mediaCollection' ? await listHostedEntries() : null;
   // Hash records SEQUENTIALLY (for...of, not Promise.all(map)) so a large
   // library can't fan out an unbounded number of concurrent file-hash reads and
   // spike CPU/disk. Each assetShaListForRecord already reads many files; doing
@@ -94,6 +97,11 @@ export async function buildLocalManifest(kind) {
       const { buildWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
       workAssets = [...await buildWorkBodyManifest(r), ...await buildWorkBibleManifest(r)];
     }
+    // Per-peer count of this collection's files streamed from that peer, so
+    // the requester can accept hash gaps that host mode explains.
+    const hostedBy = hostedEntries && !deleted
+      ? hostedCountsByPeer(await hostedByForCollectionItems(r.items, { entries: hostedEntries }))
+      : {};
     out.push({
       id: r.id,
       name: r.name ?? r.title,
@@ -105,6 +113,7 @@ export async function buildLocalManifest(kind) {
       // still-on-disk assets is pure wasted file I/O.
       assetHashes: [...assetIntegrity.assetHashes, ...workAssets.map((asset) => asset.sha256)].sort(),
       metadataMissing: assetIntegrity.metadataMissing,
+      ...(Object.keys(hostedBy).length ? { hostedBy } : {}),
     });
   }
   return out;
@@ -112,7 +121,7 @@ export async function buildLocalManifest(kind) {
 
 const assetKey = ({ kind, filename }) => `${kind}:${filename}`;
 
-function collectionInventory({ record, assetManifest, videoFilenames }) {
+function collectionInventory({ record, assetManifest, videoFilenames, hostedBy, sourceInstanceId }) {
   const filenames = new Map(Object.entries(videoFilenames ?? {}));
   const manifest = new Map(assetManifest.filter((asset) => asset.sha256).map((asset) => [assetKey(asset), asset]));
   const files = new Map();
@@ -127,6 +136,9 @@ function collectionInventory({ record, assetManifest, videoFilenames }) {
   const assets = [...matched];
   return {
     ...record,
+    instanceId: sourceInstanceId,
+    hostedFiles: hostedBy ?? {},
+    hostedBy: hostedCountsByPeer(hostedBy),
     files,
     assetHashes: assets.map((asset) => asset.sha256),
     metadataMissing: assets.some((asset) => asset.kind === 'image' && !asset.sidecarSha256),
@@ -136,7 +148,7 @@ function collectionInventory({ record, assetManifest, videoFilenames }) {
 function compareCollections(localPayload, peerPayload) {
   const local = localPayload ? collectionInventory(localPayload) : null;
   const peer = collectionInventory(peerPayload);
-  const records = computeRecordIntegrity(local ? [local] : [], [peer]);
+  const records = computeRecordIntegrity(local ? [local] : [], [peer], { selfId: local?.instanceId, peerId: peer.instanceId });
   if (!local || local.deleted === true || peer.deleted === true) return records;
 
   const differences = new Map();
@@ -146,6 +158,11 @@ function compareCollections(localPayload, peerPayload) {
     const localSha = here?.sha256;
     const peerSha = there?.sha256;
     if (localSha && localSha === peerSha) continue;
+    // Host mode: one side streams the file from the other instead of copying
+    // it, so the single stored copy is the intended state, not a gap.
+    const fileKey = assetKey(here ?? there ?? ref);
+    if (localSha && !peerSha && peer.hostedFiles[fileKey]?.includes(local.instanceId)) continue;
+    if (peerSha && !localSha && local.hostedFiles[fileKey]?.includes(peer.instanceId)) continue;
     const availability = localSha ? (peerSha ? 'different' : 'local') : (peerSha ? 'peer' : 'neither');
     const filename = (localSha ? here.filename : peerSha ? there.filename : here?.alias ?? there?.alias) ?? ref.filename;
     const asset = { kind: ref.kind, filename, availability };
@@ -228,5 +245,6 @@ export async function getPeerIntegrity({ peerId, kind, recordId }) {
   );
 
   const local = await buildLocalManifest(kind);
-  return { available: true, records: computeRecordIntegrity(local, remote) };
+  const selfId = await getInstanceId().catch(() => null);
+  return { available: true, records: computeRecordIntegrity(local, remote, { selfId, peerId }) };
 }

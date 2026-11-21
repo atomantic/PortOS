@@ -88,7 +88,8 @@ export async function deleteCameo(projectId, cameoId) {
 
 export async function addCameoReferences(projectId, cameoId, references) {
   assertGalleryImages(references.map((r) => r.imageId));
-  return mutate(projectId, (project) => withCameo(project, cameoId, (current) => {
+  let filed = null;
+  const result = await mutate(projectId, (project) => withCameo((filed = project), cameoId, (current) => {
     const existing = current.references || [];
     const now = new Date().toISOString();
     const added = references.filter((r, i) => !existing.some((e) => e.imageId === r.imageId)
@@ -100,6 +101,10 @@ export async function addCameoReferences(projectId, cameoId, references) {
     }
     return { ...current, references: [...existing, ...added] };
   }));
+  // A cameo's reference photos belong to the video's collection with its renders.
+  const { fileMusicVideoMedia } = await import('./mediaPool.js');
+  await fileMusicVideoMedia(filed, references.map((r) => ({ kind: 'image', ref: r.imageId })));
+  return result;
 }
 
 export async function removeCameoReference(projectId, cameoId, imageId) {

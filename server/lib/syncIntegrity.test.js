@@ -152,3 +152,23 @@ describe('computeRecordIntegrity', () => {
     expect(byId.c).toBe(INTEGRITY_STATUS.PEER_ONLY);
   });
 });
+
+describe('computeRecordIntegrity host-mode gaps', () => {
+  const ids = { selfId: 'me', peerId: 'peer' };
+  const row = (assetHashes, hostedBy) => ({ id: 'c', updatedAt: '2026-01-01T00:00:00.000Z', assetHashes, ...(hostedBy ? { hostedBy } : {}) });
+
+  it('accepts hashes the other side streams from this one', () => {
+    const [result] = computeRecordIntegrity([row(['a', 'b'], { peer: 1 })], [row(['a', 'c'], { me: 1 })], ids);
+    expect(result.status).toBe(INTEGRITY_STATUS.IN_PARITY);
+  });
+
+  it('flags a gap the hosted counts do not explain', () => {
+    const [result] = computeRecordIntegrity([row(['a', 'b', 'd'])], [row(['a'], { me: 1 })], ids);
+    expect(result.status).toBe(INTEGRITY_STATUS.ASSETS_MISSING);
+  });
+
+  it('ignores hosted counts without both instance ids', () => {
+    const [result] = computeRecordIntegrity([row(['a', 'b'])], [row(['a'], { me: 1 })]);
+    expect(result.status).toBe(INTEGRITY_STATUS.ASSETS_MISSING);
+  });
+});

@@ -57,8 +57,15 @@ describe('MediaHostsChip', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Primary set; copy removed from This machine'));
   });
 
-  it('identifies an unnamed host in the list and confirmation', () => {
+  it('shows a host literally named "null" by its name', () => {
     render(<MediaHostsChip entry={entry([holder('inst-self', 'This machine', { self: true }), holder('inst-a', 'null')])} />);
+    fireEvent.click(screen.getByRole('button', { name: /2 hosts/ }));
+    expect(screen.getByText('null')).toBeTruthy();
+    expect(screen.queryByText(/Unnamed host/)).toBeNull();
+  });
+
+  it('identifies an unnamed host in the list and confirmation', () => {
+    render(<MediaHostsChip entry={entry([holder('inst-self', 'This machine', { self: true }), holder('inst-a', '  ')])} />);
     fireEvent.click(screen.getByRole('button', { name: /2 hosts/ }));
     expect(screen.getByText('Unnamed host (inst-a)')).toBeTruthy();
     fireEvent.click(screen.getAllByRole('button', { name: 'Make primary' })[1]);
