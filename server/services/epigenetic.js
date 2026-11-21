@@ -259,7 +259,7 @@ export async function addIntervention(intervention) {
     };
 
     await saveData(data);
-    console.log(`🧬 Epigenetic intervention tracked: ${data.interventions[id].name}`);
+    console.log('🧬 Epigenetic intervention tracked');
     return data.interventions[id];
   });
 }
@@ -298,7 +298,7 @@ export async function logEntry(interventionId, entry) {
     intervention.logs.sort((a, b) => a.date.localeCompare(b.date));
 
     await saveData(data);
-    console.log(`🧬 Logged ${log.amount} ${log.unit} of ${intervention.name} for ${log.date}`);
+    console.log(`🧬 Epigenetic entry logged for ${log.date}`);
     return log;
   });
 }
@@ -319,7 +319,7 @@ export async function updateIntervention(interventionId, updates) {
     if (updates.name !== undefined) intervention.name = updates.name;
 
     await saveData(data);
-    console.log(`🧬 Updated intervention: ${intervention.name}`);
+    console.log('🧬 Updated epigenetic intervention');
     return intervention;
   });
 }
@@ -332,10 +332,9 @@ export async function deleteIntervention(interventionId) {
     const data = await loadData();
     if (!data.interventions[interventionId]) return { error: 'Intervention not found' };
 
-    const name = data.interventions[interventionId].name;
     delete data.interventions[interventionId];
     await saveData(data);
-    console.log(`🧬 Deleted intervention: ${name}`);
+    console.log('🧬 Deleted epigenetic intervention');
     return { success: true };
   });
 }
