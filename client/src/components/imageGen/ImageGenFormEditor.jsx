@@ -177,7 +177,7 @@ function resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable }) {
   const backendBlocked = derived.remoteTargetActive
     ? derived.remoteBlocked !== null
     : derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt;
-  const disabled = Boolean(modelUnavailable || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || backendBlocked);
+  const disabled = Boolean(modelUnavailable || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || derived.unsupportedCloudInputs || remix.pending || backendBlocked);
 
   if (derived.unsupportedLocalInputs) return { disabled, title: 'Remove unsupported LoRAs and input images in Options before rendering.' };
   if (loraTest.pending) return { disabled, title: 'Preparing this LoRA test…' };
@@ -192,7 +192,7 @@ function resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable }) {
 }
 
 function ImageGenActionBar({ form, generation }) {
-  const { fields, derived, loraTest, remix, cloudModelPicker } = form;
+  const { fields, derived, images, loraTest, remix, cloudModelPicker } = form;
   const { generating, statusMsg, progressPct, pendingQueued, stageLabel, error } = generation;
   const submitGuard = resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable: cloudModelPicker.unavailable });
   return (
@@ -204,11 +204,29 @@ function ImageGenActionBar({ form, generation }) {
         type="submit"
         disabled={submitGuard.disabled}
         title={submitGuard.title}
+        aria-describedby={derived.unsupportedCloudInputs ? 'image-gen-unsupported-cloud-inputs' : undefined}
         className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
         {derived.isAsyncMode && fields.batchCount > 1 && <span className="text-xs opacity-80">× {fields.batchCount}</span>}
       </button>
+      {derived.unsupportedCloudInputs && (
+        <>
+          <span id="image-gen-unsupported-cloud-inputs" role="status" className="text-xs text-port-warning">
+            This text-only model cannot use the selected images. Clear them or switch to a model that accepts images.
+          </span>
+          <button
+            type="button"
+            className="min-h-[44px] rounded-lg border border-port-border px-3 text-xs hover:bg-port-border/30"
+            onClick={() => {
+              images.handleClearInitImage();
+              images.clearReferenceImages();
+            }}
+          >
+            Clear selected images
+          </button>
+        </>
+      )}
       {derived.editImageMissing && (
         <span className="text-xs text-port-warning">Open Options to upload a source image for this edit model</span>
       )}
@@ -311,7 +329,7 @@ function ImageGenModelInputs({ form, backend }) {
         />
       )}
 
-      {derived.droppedRefCount > 0 && (
+      {derived.droppedRefCount > 0 && !derived.unsupportedCloudInputs && (
         <p className="text-xs text-amber-400" role="status">
           {derived.droppedRefCount} reference image{derived.droppedRefCount === 1 ? '' : 's'} you picked
           {' '}won't be sent — {isLocalMode ? 'this model' : cloudModeLabel} takes {derived.referenceSlotCount}

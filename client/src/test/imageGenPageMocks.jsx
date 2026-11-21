@@ -110,6 +110,7 @@ export const state = {
   getImageGenStatus: vi.fn(defaultStatus),
   /** `generateImage`; a spy so a suite can assert payloads or reject. */
   generateImage: vi.fn(async () => ({ jobId: 'job-1' })),
+  generateImageMultipart: vi.fn(async () => ({})),
   /** `previewImagePrompt` (#11317); a spy so a suite can assert the preview body and answer. */
   previewImagePrompt: vi.fn(async () => ({ sentPrompt: '' })),
   /** `getActiveImageJob`'s payload. */
@@ -161,6 +162,7 @@ export function resetImageGenMockState() {
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
   state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
+  state.generateImageMultipart.mockReset().mockResolvedValue({});
   state.previewImagePrompt.mockReset().mockResolvedValue({ sentPrompt: '' });
   // The real media-run hook opens this for a started/resumed render; a silent
   // stream keeps the job open mid-render without leaking timers, and a test
@@ -197,7 +199,7 @@ vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () 
 
 vi.mock('../services/apiImageVideo', () => ({
   listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
-  generateImageMultipart: vi.fn(async () => ({})),
+  generateImageMultipart: state.generateImageMultipart,
   previewImagePrompt: (...args) => state.previewImagePrompt(...args),
   listImageModels: (...args) => state.listImageModels(...args),
   getGalleryImages: (...args) => state.getGalleryImages(...args),

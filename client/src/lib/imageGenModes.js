@@ -369,12 +369,12 @@ export function referenceSlotsFor(mode, {
 } = {}) {
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     if (!localSupportsReferences) return 0;
-    return Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0));
+    return Math.max(0, Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0)));
   }
   if (!isCloudCliMode(mode)) return 0;
-  // `cloudModelId` refines the cap for a backend whose limit is per model (fal.ai).
+  // `cloudModelId` refines the cap for backends whose limits vary by model.
   const cap = maxInputImages(mode, cloudModelId) ?? Infinity;
-  return Math.min(maxSlots, cap - (hasInitImage ? 1 : 0));
+  return Math.max(0, Math.min(maxSlots, cap - (hasInitImage ? 1 : 0)));
 }
 
 // Backends that honor a NUMERIC per-reference strength. Only the local FLUX.2
