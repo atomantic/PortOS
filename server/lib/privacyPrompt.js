@@ -1,5 +1,5 @@
 /**
- * Recognize generated Digital Twin vault facts and replace their section in stored prompts.
+ * Redact generated Digital Twin vault facts from stored prompts and track pending private run output.
  */
 
 import { escapeRegExp } from './textUtils.js';
@@ -24,4 +24,26 @@ export function redactStoredPrivacyPrompt(prompt) {
 
 export function hasStoredPrivacyFacts(prompt) {
   return recordedSection.test(prompt) || generatedSection.test(prompt);
+}
+
+const activePrivateOutputs = new Map();
+
+// The scrubber and finalizer share a file turn. Keep the redactions reachable
+// until the terminal write (including a canceled or timed-out run) has settled.
+export function trackPrivateRunOutput(outputPath, prompt, withFileTurn) {
+  if (!hasStoredPrivacyFacts(prompt)) return null;
+  const redactions = [];
+  activePrivateOutputs.set(outputPath, redactions);
+  return {
+    redact: text => redactions.reduce((result, scrub) => scrub(result), text),
+    publish: work => withFileTurn(outputPath, work),
+    release: () => activePrivateOutputs.delete(outputPath),
+  };
+}
+
+export function redactActivePrivateOutput(outputPath, scrubValue) {
+  const redactions = activePrivateOutputs.get(outputPath);
+  if (!redactions) return false;
+  redactions.push(scrubValue);
+  return true;
 }

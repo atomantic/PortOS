@@ -26,7 +26,9 @@ export function createRunFinalizer({
   consumeActiveStop,
   onPersistenceFailure,
   withAssetPublication = work => work(),
+  recording,
 }) {
+  const publishTerminal = work => withAssetPublication(() => recording ? recording.publish(work) : work());
   const pendingHooks = [];
   const failed = () => onPersistenceFailure?.();
   // Invoke host callbacks only after releasing the recording lease. Hooks can
@@ -219,7 +221,7 @@ export function createRunFinalizer({
     activeRuns.delete(runId);
     let admitted = false;
     try {
-      await withAssetPublication(async () => {
+      await publishTerminal(async () => {
         admitted = true;
         try {
           if (cause.type === 'success') await finalizeSuccess(cause);
@@ -255,6 +257,7 @@ export function createRunFinalizer({
       settleTerminal(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
       return true;
     } finally {
+      recording?.release();
       for (const { fn, label } of terminalCallbacks) runTerminal(fn, label);
       await Promise.all(pendingHooks);
     }
