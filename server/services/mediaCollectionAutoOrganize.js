@@ -82,6 +82,8 @@ async function musicVideoItems(project) {
 // sits, parsed by the same rule the media-usage index uses. Unlike that index
 // this keeps take pools and histories: every render a project holds belongs in
 // its collection. Unavailable names are dropped by the availability check.
+// Another record's media a render used as an input belongs to that record.
+const NOT_OWNED_KEYS = new Set(['renderDependencies']);
 function referencedMedia(value, mediaKeyOf, videos, out = []) {
   if (typeof value === 'string') {
     const item = parseKey(mediaKeyOf(value, videos));
@@ -89,7 +91,9 @@ function referencedMedia(value, mediaKeyOf, videos, out = []) {
   } else if (Array.isArray(value)) {
     for (const entry of value) referencedMedia(entry, mediaKeyOf, videos, out);
   } else if (value && typeof value === 'object') {
-    for (const entry of Object.values(value)) referencedMedia(entry, mediaKeyOf, videos, out);
+    for (const [key, entry] of Object.entries(value)) {
+      if (!NOT_OWNED_KEYS.has(key)) referencedMedia(entry, mediaKeyOf, videos, out);
+    }
   }
   return out;
 }

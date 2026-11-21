@@ -27,7 +27,7 @@ import { PATHS } from '../../lib/paths.js';
 import { CANONICAL_REFS_CTE, STORYBOARD_PANEL_MEMBERS_SQL } from '../catalogDB/shared.js';
 import { catalogEvents } from './catalogEvents.js';
 import {
-  CATALOG_TYPE_COLLECTIONS, REF_MAX_LENGTH, bulkUpdateCollectionItems, findCollectionByUniverseId,
+  CATALOG_TYPE_COLLECTIONS, ITEMS_MAX, REF_MAX_LENGTH, bulkUpdateCollectionItems, findCollectionByUniverseId,
   findOrCreateCatalogTypeCollection, findOrCreateUniverseCollection,
 } from '../mediaCollections.js';
 
@@ -165,11 +165,19 @@ export async function fileCatalogImagesIntoTypeCollections({ ingredientIds = nul
   }
   let added = 0;
   for (const [type, mediaKeys] of byType) {
-    const collection = await deps.findOrCreateCatalogTypeCollection(type);
-    const result = await deps.bulkUpdateCollectionItems(collection.id, {
-      add: [...mediaKeys].map((ref) => ({ kind: 'image', ref })),
-    }, { preserveRemovals: true });
-    added += result.added;
+    try {
+      const collection = await deps.findOrCreateCatalogTypeCollection(type);
+      // A library-wide collection can outgrow the item cap: file what fits
+      // instead of rejecting the whole batch on every pass.
+      const present = new Set((collection.items || []).map((item) => item.ref));
+      const room = Math.max(0, ITEMS_MAX - present.size);
+      const add = [...mediaKeys].filter((ref) => !present.has(ref)).slice(0, room).map((ref) => ({ kind: 'image', ref }));
+      if (!add.length) continue;
+      const result = await deps.bulkUpdateCollectionItems(collection.id, { add }, { preserveRemovals: true });
+      added += result.added;
+    } catch (error) {
+      console.error(`❌ catalog ${type} collection filing failed: ${error.message}`);
+    }
   }
   return { added, types: byType.size };
 }

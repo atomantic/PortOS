@@ -414,7 +414,14 @@ export async function joinCollections({ name, collectionIds, keepOriginals = fal
   const retire = keepOriginals ? [] : others.filter((source) => !isOwnerManaged(source)).map((source) => source.id);
   const keptCollectionIds = others.map((source) => source.id).filter((id) => !retire.includes(id));
   if (retire.length) await retargetCollectionOwners(retire, joined.id);
-  for (const id of retire) await deleteCollection(id);
+  for (const id of retire) {
+    // A render filed into a source after it was read above moves too, so the
+    // tombstone (which empties the record) loses nothing.
+    const latest = await getCollection(id).catch(() => null);
+    const late = (latest?.items || []).filter((item) => !itemsByKey.has(itemKey(item)));
+    if (late.length) await bulkUpdateCollectionItems(joined.id, { add: late.map(({ kind, ref }) => ({ kind, ref })) });
+    await deleteCollection(id);
+  }
   return { ...joined, removedCollectionIds: retire, keptCollectionIds };
 }
 

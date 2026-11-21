@@ -21,22 +21,26 @@ describe('consolidateCommissionCollections', () => {
     const runA = await createProject({ ...PROJECT, name: 'Daily Video — 2026-07-16', commissionId: 'commission-daily' });
     const runB = await createProject({ ...PROJECT, name: 'Daily Video — 2026-07-17', commissionId: 'commission-daily' });
     const solo = await createProject({ ...PROJECT, name: 'Unrelated' });
+    // A standalone project that happens to share the job's name keeps its own collection.
+    const namesake = await createProject({ ...PROJECT, name: 'Daily Video' });
     await collections.addItem(runA.collectionId, { kind: 'video', ref: 'clip-a' });
     await collections.addItem(runB.collectionId, { kind: 'video', ref: 'clip-b' });
     const stray = await collections.createCollection({ name: 'Creative Director: Daily Video' });
     await collections.addItem(stray.id, { kind: 'video', ref: 'clip-c' });
 
-    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 3, repointedProjects: 0 });
+    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 3, repointedProjects: 0, failedJobs: 0 });
 
     const live = await collections.listCollections();
     const job = live.find((c) => c.id === 'cdc-commission-daily');
     expect(job.name).toBe('Creative Director: Daily Video');
     expect(job.items.map((i) => i.ref).sort()).toEqual(['clip-a', 'clip-b', 'clip-c']);
-    expect(live.filter((c) => c.name.startsWith('Creative Director: Daily Video'))).toHaveLength(1);
+    expect(live.filter((c) => c.name.startsWith('Creative Director: Daily Video') && c.id !== namesake.collectionId)).toHaveLength(1);
     expect((await getProject(runA.id)).collectionId).toBe(job.id);
     expect((await getProject(runB.id)).collectionId).toBe(job.id);
     expect((await getProject(solo.id)).collectionId).toBe(solo.collectionId);
+    expect((await getProject(namesake.id)).collectionId).toBe(namesake.collectionId);
+    expect(live.some((c) => c.id === namesake.collectionId)).toBe(true);
 
-    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 0, repointedProjects: 0 });
+    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 0, repointedProjects: 0, failedJobs: 0 });
   });
 });

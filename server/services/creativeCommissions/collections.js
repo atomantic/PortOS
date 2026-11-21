@@ -23,26 +23,42 @@ export async function consolidateCommissionCollections() {
   const liveCollectionIds = new Set(collections.map((c) => c.id));
   const byCommission = Map.groupBy(projects.filter((project) => project?.commissionId), (project) => project.commissionId);
 
-  const result = { jobs: 0, mergedCollections: 0, repointedProjects: 0 };
+  const result = { jobs: 0, mergedCollections: 0, repointedProjects: 0, failedJobs: 0 };
   for (const [commissionId, jobProjects] of byCommission) {
-    const newest = [...jobProjects].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
-    const commissionName = commissionNames.get(commissionId) || jobNameFromProject(newest);
-    const target = await findOrCreateCommissionCollection({ commissionId, commissionName });
-    const needle = target.name.trim().toLowerCase();
-    const strays = collections
-      .filter((c) => !isOwnerManaged(c) && c.name.trim().toLowerCase() === needle)
-      .map((c) => c.id);
-    const sourceIds = [...new Set([...jobProjects.map((p) => p.collectionId), ...strays])]
-      .filter((id) => id && id !== target.id && liveCollectionIds.has(id));
-    if (sourceIds.length) {
-      const joined = await joinCollections({ name: target.name, collectionIds: [target.id, ...sourceIds] });
-      result.mergedCollections += joined.removedCollectionIds.length;
+    try {
+      await consolidateJob(commissionId, jobProjects, { projects, commissionNames, collections, liveCollectionIds, result });
+      result.jobs += 1;
+    } catch (error) {
+      // One job's failure (a union over the item cap, a vanished collection)
+      // must not stop the other jobs or the organize pass that runs this.
+      result.failedJobs += 1;
+      console.error(`❌ Commission collection consolidation for ${commissionId} failed: ${error.message}`);
     }
-    // The join re-pointed projects on the collections it retired; this covers
-    // projects still on a deleted collection.
-    const stale = jobProjects.map((p) => p.collectionId).filter((id) => id && id !== target.id && !sourceIds.includes(id));
-    if (stale.length) result.repointedProjects += await repointProjectCollections(stale, target.id);
-    result.jobs += 1;
   }
   return result;
+}
+
+async function consolidateJob(commissionId, jobProjects, { projects, commissionNames, collections, liveCollectionIds, result }) {
+  const newest = [...jobProjects].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+  const commissionName = commissionNames.get(commissionId) || jobNameFromProject(newest);
+  const target = await findOrCreateCommissionCollection({ commissionId, commissionName });
+  const needle = target.name.trim().toLowerCase();
+  // A same-named collection that another project files into is that
+  // project's, not this job's.
+  const jobIds = new Set(jobProjects.map((p) => p.id));
+  const ownedElsewhere = new Set(projects.filter((p) => !jobIds.has(p.id)).map((p) => p.collectionId));
+  const strays = collections
+    .filter((c) => !isOwnerManaged(c) && !ownedElsewhere.has(c.id) && c.name.trim().toLowerCase() === needle)
+    .map((c) => c.id);
+  const sourceIds = [...new Set([...jobProjects.map((p) => p.collectionId), ...strays])]
+    .filter((id) => id && id !== target.id && liveCollectionIds.has(id));
+  if (sourceIds.length) {
+    const joined = await joinCollections({ name: target.name, collectionIds: [target.id, ...sourceIds] });
+    result.mergedCollections += joined.removedCollectionIds.length;
+    for (const id of joined.removedCollectionIds) liveCollectionIds.delete(id);
+  }
+  // The join re-pointed projects on the collections it retired; this covers
+  // projects still on a deleted collection.
+  const stale = jobProjects.map((p) => p.collectionId).filter((id) => id && id !== target.id && !sourceIds.includes(id));
+  if (stale.length) result.repointedProjects += await repointProjectCollections(stale, target.id);
 }
