@@ -12,7 +12,7 @@ inference call must emit periodic STAGE heartbeat markers so the media queue can
 distinguish a slow render from a wedged child.
 
 The runner-specific bits each script still owns:
-  - argparse + which pipeline class / weight repo to load
+  - model-specific arguments + which pipeline class / weight repo to load
   - `load_pipeline_*` (sdnq / int8 / auto-pipeline / ERNIE)
   - the txt2img-vs-i2i pipe swap (`to_i2i_pipeline` in z-image)
 
@@ -23,6 +23,7 @@ walker that turns a buried `GatedRepoError` into a friendly link — belongs her
 
 import json
 import importlib.util
+import inspect
 import logging
 import os
 import platform
@@ -346,6 +347,74 @@ def establish_process_group() -> None:
         os.setpgid(0, 0)
     except OSError:
         pass
+
+
+def add_common_image_args(parser, *, default_guidance: float) -> None:
+    """Register the shared CLI contract used by the local image dispatcher."""
+    parser.add_argument("--model", required=True, help="model id")
+    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--negative-prompt", default="")
+    parser.add_argument("--width", type=int, default=1024)
+    parser.add_argument("--height", type=int, default=1024)
+    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--guidance", type=float, default=default_guidance)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--metadata", action="store_true", help="write <output>.metadata.json sidecar")
+    parser.add_argument("--image-path", default=None, help="optional init image for i2i")
+    parser.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
+    parser.add_argument("--stepwise-image-output-dir", default=None)
+    parser.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
+    parser.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
+    parser.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
+
+
+def build_common_pipe_kwargs(pipe, args, generator, callback):
+    """Build shared kwargs and expose the live signature for model-specific arguments."""
+    accepted = inspect.signature(pipe.__call__).parameters
+    pipe_kwargs = dict(
+        prompt=args.prompt,
+        height=int(args.height),
+        width=int(args.width),
+        num_inference_steps=int(args.steps),
+        generator=generator,
+    )
+    # Qwen 2.1 exposes true_cfg_scale instead of guidance_scale.
+    if "guidance_scale" in accepted:
+        pipe_kwargs["guidance_scale"] = float(args.guidance)
+    elif "true_cfg_scale" in accepted:
+        pipe_kwargs["true_cfg_scale"] = float(args.guidance)
+    if args.negative_prompt and "negative_prompt" in accepted:
+        pipe_kwargs["negative_prompt"] = args.negative_prompt
+    if callback is not None and "callback_on_step_end" in accepted:
+        pipe_kwargs["callback_on_step_end"] = callback
+        if "callback_on_step_end_tensor_inputs" in accepted:
+            pipe_kwargs["callback_on_step_end_tensor_inputs"] = ["latents"]
+    return pipe_kwargs, accepted
+
+
+def log_stepwise_summary(callback) -> None:
+    if callback is not None and hasattr(callback, "_stats"):
+        s = callback._stats
+        print(f"🖼️  stepwise summary: callback fired {s['count']} times, saved {s['saved']} previews", file=sys.stderr)
+
+
+def common_image_metadata(args, seed: int) -> dict:
+    """Build the fields shared by the FLUX.2 and diffusers image sidecars."""
+    return {
+        "id": Path(args.output).stem,
+        "prompt": args.prompt,
+        "negativePrompt": args.negative_prompt,
+        "modelId": args.model,
+        "seed": seed,
+        "width": int(args.width),
+        "height": int(args.height),
+        "steps": int(args.steps),
+        "guidance": float(args.guidance),
+        "filename": Path(args.output).name,
+        "initImageFilename": Path(args.image_path).name if args.image_path else None,
+        "initImageStrength": float(args.image_strength) if args.image_strength is not None else None,
+    }
 
 
 def pick_device(requested: str) -> str:
@@ -740,6 +809,38 @@ def _emit_user_error(kind: str, message: str, repo: str = "") -> None:
         line += f":{repo}"
     print(line, file=sys.stderr, flush=True)
     print(f"❌ {message}", file=sys.stderr, flush=True)
+
+
+def probe_hf_auth(repo: str) -> None:
+    """Report gated, missing, or unauthorized repos before loading a pipeline."""
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+
+    try:
+        HfApi().model_info(repo)
+    except GatedRepoError:
+        _emit_user_error(
+            "gated_repo",
+            f"HF gated repo: accept license at https://huggingface.co/{repo} "
+            "and set HF_TOKEN before generating.",
+            repo,
+        )
+    except RepositoryNotFoundError:
+        _emit_user_error("repo_not_found", f"HF repo not found: {repo}", repo)
+    except HfHubHTTPError as err:
+        if getattr(err.response, "status_code", None) != 401:
+            # Let the pipeline retry transient API failures.
+            print(f"⚠️ HF probe non-fatal error: {err}", file=sys.stderr)
+            return
+        _emit_user_error(
+            "hf_unauthorized",
+            f"HF auth required for {repo}. Set HF_TOKEN (and accept the "
+            f"license at https://huggingface.co/{repo}).",
+            repo,
+        )
+    else:
+        return
+    sys.exit(2)
 
 
 def _repo_from_hf_error(hf_err) -> str:
