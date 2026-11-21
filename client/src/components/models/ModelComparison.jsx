@@ -150,15 +150,26 @@ export default function ModelComparison() {
   const price = PRICES.find(([id]) => id === settings.priceId) || PRICES[0];
   const plotCandidates = selected.filter(row => row.quality && row[price[0]] && (showEstimates || (!row.quality.estimated && !row[price[0]].estimated)) && (!settings.log || row[price[0]].value > 0))
     .map(row => ({ ...row, x: row[price[0]].value, y: row.quality.value, label: `${row.model} (${row.effort})${row.quality.estimated || row[price[0]].estimated ? ' ≈' : ''}` }));
+  // Identical points of one model combine across providers AND efforts: a single
+  // published score with no effort split is carried to every effort as an
+  // estimate, and N stacked dots read like N measurements that agree.
   const plotted = [...plotCandidates.reduce((unique, row) => {
-    const key = `${row.model}:${row.effort}:${row.x}:${row.y}:${row.quality.estimated}:${row[price[0]].estimated}`;
+    const key = `${row.model}:${row.x}:${row.y}:${row.quality.estimated}:${row[price[0]].estimated}`;
     const prior = unique.get(key);
     if (prior) {
       if (!prior.providers.includes(row.provider)) prior.providers.push(row.provider);
       prior.provider = prior.providers.join(', ');
-    } else unique.set(key, { ...row, providers: [row.provider] });
+      if (!prior.efforts.includes(row.effort)) prior.efforts.push(row.effort);
+    } else unique.set(key, { ...row, providers: [row.provider], efforts: [row.effort] });
     return unique;
-  }, new Map()).values()];
+  }, new Map()).values()].map(point => {
+    if (point.efforts.length < 2) return point;
+    const efforts = point.efforts.sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
+    // A range only when no effort between them scored differently; otherwise list them.
+    const contiguous = efforts.every((e, i) => !i || EFFORTS.indexOf(e) - EFFORTS.indexOf(efforts[i - 1]) === 1);
+    const effort = contiguous ? `${efforts[0]}–${efforts.at(-1)}` : efforts.join(', ');
+    return { ...point, effort, label: `${point.model} (${effort}, same score)${point.quality.estimated || point[price[0]].estimated ? ' ≈' : ''}` };
+  });
   const excludedCount = selected.length - plotCandidates.length;
   const groups = useMemo(() => {
     const result = new Map();
@@ -166,7 +177,7 @@ export default function ModelComparison() {
       if (!result.has(row.modelKey)) result.set(row.modelKey, []);
       result.get(row.modelKey).push(row);
     }
-    return [...result].map(([key, points]) => ({ key, points: points.sort((a, b) => EFFORTS.indexOf(a.effort) - EFFORTS.indexOf(b.effort)) }));
+    return [...result].map(([key, points]) => ({ key, points: points.sort((a, b) => EFFORTS.indexOf(a.efforts?.[0] ?? a.effort) - EFFORTS.indexOf(b.efforts?.[0] ?? b.effort)) }));
   }, [plotted]);
   const toggle = (key, value, all) => update({ [key]: (settings[key] ?? all).includes(value) ? (settings[key] ?? all).filter(item => item !== value) : [...(settings[key] ?? all), value] });
   const selectedModels = settings.models === null ? models : settings.models;
@@ -233,7 +244,7 @@ export default function ModelComparison() {
         const isSelected = settings.models === null || settings.models.includes(model);
         return <button key={model} className={`${buttonClass} max-w-full break-all text-left inline-flex items-center gap-1.5`} aria-pressed={isSelected} onClick={() => toggle('models', model, models)}><span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} /><span>{isSelected ? '✓ ' : ''}{model}</span></button>;
       })}</div>
-      <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider points combined. ≈ identifies estimates. Zero prices remain visible on the linear scale.</p>
+      <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider or effort points combined. ≈ identifies estimates. Zero prices remain visible on the linear scale.</p>
       {composites.length > 1 && <p className="text-xs text-port-text-muted">Newer indexes can have fewer historical task-cost measurements. Select an earlier index to compare its published results.</p>}
     </section>
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3" aria-label="Cost versus intelligence chart">
