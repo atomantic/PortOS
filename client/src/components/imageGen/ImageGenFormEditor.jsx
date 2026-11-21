@@ -1,4 +1,3 @@
-import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { ChevronDown, Sparkles, X } from 'lucide-react';
 import StylePresetPicker from '../media/StylePresetPicker';
 import UniverseStylePicker from '../media/UniverseStylePicker';
@@ -17,48 +16,12 @@ import InitImagePicker from './InitImagePicker';
 import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
-import {
-  RUNWAY_IMAGE_DEFAULT_MODEL,
-  AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, HIGGSFIELD_IMAGE_DEFAULT_MODEL,
-  HIGGSFIELD_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, GOOGLE_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_MODEL_OPTIONS,
-  falImageFamily, higgsfieldImageFamily, googleImageFamily,
-} from '../../lib/imageGenBackends';
-
-const ERROR_HEADINGS = {
-  gated_repo: 'Model access required',
-  hf_unauthorized: 'HuggingFace token rejected',
-  repo_not_found: 'Model repo not found',
-};
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
-  const runwayCatalog = useRunwayCatalog(backend?.isRunwayMode);
+  const { fields, catalogs, settings, derived, actions, loraTest, cloudModelPicker } = form;
+  const { effectiveMode, isLocalMode, isAgyMode, remoteTarget } = backend;
   const {
-    fields,
-    catalogs,
-    settings,
-    images,
-    derived,
-    actions,
-    remix,
-    loraTest,
-  } = form;
-  const {
-    effectiveMode,
-    isLocalMode,
-    isAgyMode,
-    isFalMode, isHiggsfieldMode, isGoogleMode, isRunwayMode, effectiveRunwayModel,
-    remoteTarget,
-    effectiveAgyModel,
-    effectiveFalModel, effectiveHiggsfieldModel, effectiveGoogleModel,
-  } = backend;
-  const {
-    generating,
-    statusMsg,
-    errorMeta,
-    progressPct,
-    pendingQueued,
-    stageLabel,
-    error,
     modelDownload,
     hfTokenPresent,
     refreshHfTokenStatus,
@@ -66,7 +29,6 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     refreshFlux2Status,
     needsFlux2Token,
   } = generation;
-  const resolvedRunwayModel = effectiveRunwayModel || settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL;
 
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
@@ -81,65 +43,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
       </FormField>
       <ModelInputPreview preview={generation.modelInputPreview} prompt={fields.prompt} />
 
-      <div
-        className="sticky top-0 z-10 -mx-3 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
-        data-testid="image-primary-actions"
-      >
-        <button
-          type="submit"
-          disabled={(isRunwayMode && !runwayCatalog.imageModels.some((m) => m.id === resolvedRunwayModel)) || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || (derived.remoteTargetActive
-            ? derived.remoteBlocked !== null
-            : (derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt))}
-          title={derived.unsupportedLocalInputs ? 'Remove unsupported LoRAs and input images in Options before rendering.' : loraTest.pending ? 'Preparing this LoRA test…' : loraTest.error || (remix.pending
-            ? 'Restoring this image’s settings…'
-            : derived.localBackendPending
-              ? 'Checking the image backend…'
-              : derived.remoteBlocked || (derived.editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : derived.cloudNeedsPrompt ? derived.cloudPromptHint : undefined))}
-          className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
-          {derived.isAsyncMode && fields.batchCount > 1 && <span className="text-xs opacity-80">× {fields.batchCount}</span>}
-        </button>
-        {derived.editImageMissing && (
-          <span className="text-xs text-port-warning">Open Options to upload a source image for this edit model</span>
-        )}
-        {derived.cloudNeedsPrompt && (
-          <span className="text-xs text-port-warning">{derived.cloudPromptHint}</span>
-        )}
-        {derived.isAsyncMode && (
-          <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
-            <span className="select-none">×</span>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={fields.batchCount}
-              onChange={(event) => fields.setBatchCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-              className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-            />
-          </label>
-        )}
-        {generating && (
-          <button
-            type="button"
-            onClick={generation.handleCancel}
-            className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-error px-3 py-2 text-sm font-medium text-white hover:bg-port-error/80"
-          >
-            <X className="w-4 h-4" /> Cancel current
-          </button>
-        )}
-        {pendingQueued > 0 && (
-          <span className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
-            +{pendingQueued} queued
-          </span>
-        )}
-        {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
-        {(generating || error) && (
-          <span role="status" className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
-            {error ? String(error).split('\n')[0] : stageLabel || statusMsg || 'Working...'}
-          </span>
-        )}
-      </div>
+      <ImageGenActionBar form={form} generation={generation} />
 
       <MusicVideoFilingSelect id="image-gen-music-video" />
 
@@ -251,17 +155,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             onModelDownloadCancel={modelDownload.cancel}
             runtimeStatus={isLocalMode ? backend.status : null}
             onRuntimeRemedy={backend.openRuntimeInstall}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isHiggsfieldMode ? HIGGSFIELD_IMAGE_MODEL_OPTIONS : isGoogleMode ? GOOGLE_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
-            cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : isHiggsfieldMode ? effectiveHiggsfieldModel : isGoogleMode ? effectiveGoogleModel : effectiveAgyModel}
-            onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : isHiggsfieldMode ? fields.setHiggsfieldModel : isGoogleMode ? fields.setGoogleModel : fields.setAgyModel}
-            cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : isHiggsfieldMode ? 'Higgsfield model' : isGoogleMode ? 'Google model' : 'Agent model'}
-            cloudModelDefaultLabel={isRunwayMode ? settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL : isFalMode
-              ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
-              : isHiggsfieldMode
-              ? higgsfieldImageFamily(settings.savedHiggsfieldModel || HIGGSFIELD_IMAGE_DEFAULT_MODEL)?.label || HIGGSFIELD_IMAGE_DEFAULT_MODEL
-              : isGoogleMode
-              ? googleImageFamily(settings.savedGoogleModel || GOOGLE_IMAGE_DEFAULT_MODEL)?.label || GOOGLE_IMAGE_DEFAULT_MODEL
-              : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
+            {...cloudModelPicker.controlProps}
           />
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">
@@ -269,149 +163,254 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             </p>
           )}
 
-          {isLocalMode && catalogs.lorasState === 'error' && (
-            <ListLoadError what="the LoRA library" error={catalogs.lorasError} onRetry={catalogs.retryLoras} />
-          )}
-          {isLocalMode && (derived.remoteTargetActive || derived.currentModel?.supportsLoras !== false) && (
-            <LoraPicker
-              availableLoras={catalogs.availableLoras}
-              selected={fields.selectedLoras}
-              onChange={fields.setSelectedLoras}
-              currentRunnerFamily={derived.currentRunnerFamily}
-              currentCompatKey={derived.currentCompatKey}
-              onAppendTrigger={(words) => fields.setPrompt((prompt) => appendTriggerWords(prompt, words, derived.styledPrompt))}
-              prompt={derived.styledPrompt}
-            />
-          )}
-          {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsLoras === false && fields.selectedLoras.length > 0 && (
-            <Banner tone="warning" size="sm">
-              This model cannot use the selected LoRAs. Remove them before rendering.
-              <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={() => fields.setSelectedLoras([])}>Remove selected LoRAs</button>
-            </Banner>
-          )}
-          {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsImg2Img === false && images.initImage.source != null && (
-            <Banner tone="warning" size="sm">
-              This model cannot use the selected input image.
-              <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.handleClearInitImage}>Remove input image</button>
-            </Banner>
-          )}
-
-          {derived.i2iCapable && (
-            <InitImagePicker
-              initImage={images.initImage}
-              initImageStrength={images.initImageStrength}
-              onStrengthChange={images.setInitImageStrength}
-              onPick={images.handlePickInitImage}
-              onClear={images.handleClearInitImage}
-              onBrowse={() => images.setGalleryPicker({ kind: 'init' })}
-              editOnly={derived.isEditOnlyModel}
-              backend={effectiveMode}
-            />
-          )}
-
-          {derived.referenceSlotCount > 0 && (
-            <ReferenceImagePicker
-              referenceImages={images.activeReferenceImages}
-              showStrength={derived.showReferenceStrength}
-              caption={isLocalMode
-                ? `up to ${derived.referenceSlotCount} images for ${derived.isQwen21Model ? 'Qwen Image 2.1' : 'FLUX.2'} multi-reference edit`
-                : `up to ${derived.referenceSlotCount} more image${derived.referenceSlotCount === 1 ? '' : 's'} ${backend.cloudModeLabel} will use as visual references`}
-              onPick={images.handlePickReferenceImage}
-              onClear={images.handleClearReferenceImage}
-              onStrengthChange={images.handleReferenceStrengthChange}
-              onBrowse={(slot) => images.setGalleryPicker({ kind: 'reference', slot })}
-            />
-          )}
-
-          {derived.droppedRefCount > 0 && (
-            <p className="text-xs text-amber-400" role="status">
-              {derived.droppedRefCount} reference image{derived.droppedRefCount === 1 ? '' : 's'} you picked
-              {derived.droppedRefCount === 1 ? " won't" : " won't"} be sent — {isLocalMode ? 'this model' : backend.cloudModeLabel} takes {derived.referenceSlotCount}
-              {derived.referenceSlotCount === 1 ? ' reference' : ' references'} here
-              {images.initImage.source != null && derived.referenceSlotCount > 0 ? ', and the init image already uses a slot' : ''}.
-              {' '}They stay selected if you clear the init image or switch backends.
-              {!derived.remoteTargetActive && derived.currentModel?.runner === 'moss-swift' && (
-                <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.clearReferenceImages}>Remove reference images</button>
-              )}
-            </p>
-          )}
-
-          <div className="flex flex-col gap-1 text-xs text-gray-400">
-            <label
-              className="flex items-center gap-2 cursor-pointer select-none"
-              title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Settings → Image Gen default for this render only."
-            >
-              <input
-                type="checkbox"
-                checked={fields.cleanC2PA}
-                onChange={(event) => fields.setCleanC2PA(event.target.checked)}
-                className="rounded"
-              />
-              <span>
-                Clean C2PA
-                {settings.savedCleanC2PAByMode[effectiveMode] !== undefined && fields.cleanC2PA !== settings.savedCleanC2PAByMode[effectiveMode] && (
-                  <span className="ml-1 text-port-warning">(overrides saved default)</span>
-                )}
-              </span>
-            </label>
-            <label
-              className="flex items-center gap-2 cursor-pointer select-none"
-              title="Median + sharpen pass for AI-artifact reduction. WARNING: blurs annotation text and small details. Skip for sheets, infographics, comic panels."
-            >
-              <input
-                type="checkbox"
-                checked={fields.denoise}
-                onChange={(event) => fields.setDenoise(event.target.checked)}
-                className="rounded"
-              />
-              <span>
-                Denoise <span className="text-port-warning">(blurs text)</span>
-                {settings.savedDenoiseByMode[effectiveMode] !== undefined && fields.denoise !== settings.savedDenoiseByMode[effectiveMode] && (
-                  <span className="ml-1 text-port-warning">(overrides saved default)</span>
-                )}
-              </span>
-            </label>
-            <label
-              className="flex items-center gap-2 cursor-pointer select-none"
-              title="Automated visual quality inspection: verifies hand/finger count, detects spurious limbs, and checks composition before admitting to gallery."
-            >
-              <input
-                type="checkbox"
-                checked={Boolean(fields.verifyImage)}
-                onChange={(event) => fields.setVerifyImage(event.target.checked)}
-                className="rounded"
-              />
-              <span className="text-port-accent">
-                Verify Quality & Anatomy
-              </span>
-            </label>
-          </div>
+          <ImageGenModelInputs form={form} backend={backend} />
+          <ImageGenPostProcessOptions fields={fields} settings={settings} mode={effectiveMode} />
         </div>
       </details>
 
-      {error && (
-        <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
-          <div className="font-semibold text-sm">
-            {ERROR_HEADINGS[errorMeta?.kind] || 'Generation failed'}
-          </div>
-          <div className="whitespace-pre-wrap break-words text-port-warning/90">
-            {String(error)}
-          </div>
-          {errorMeta?.kind === 'gated_repo' && errorMeta?.repo && (
-            <a
-              href={`https://huggingface.co/${errorMeta.repo}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
-            >
-              Request access to {errorMeta.repo} ↗
-            </a>
+      <ImageGenErrorBanner error={generation.error} errorMeta={generation.errorMeta} />
+    </div>
+  );
+}
+
+function resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable }) {
+  const backendBlocked = derived.remoteTargetActive
+    ? derived.remoteBlocked !== null
+    : derived.localBackendPending || derived.notConnected || derived.editImageMissing || derived.cloudNeedsPrompt;
+  const disabled = Boolean(modelUnavailable || derived.loraHandoffBlocked || derived.unsupportedLocalInputs || remix.pending || backendBlocked);
+
+  if (derived.unsupportedLocalInputs) return { disabled, title: 'Remove unsupported LoRAs and input images in Options before rendering.' };
+  if (loraTest.pending) return { disabled, title: 'Preparing this LoRA test…' };
+  if (loraTest.error) return { disabled, title: loraTest.error };
+  if (remix.pending) return { disabled, title: 'Restoring this image’s settings…' };
+  if (derived.localBackendPending) return { disabled, title: 'Checking the image backend…' };
+  if (derived.remoteBlocked) return { disabled, title: derived.remoteBlocked };
+  if (derived.editImageMissing) return { disabled, title: 'This image-edit model needs a source image — open Options and upload one first' };
+  if (derived.cloudNeedsPrompt) return { disabled, title: derived.cloudPromptHint };
+  if (modelUnavailable) return { disabled, title: 'Select an available Runway model in Options or update your Settings default.' };
+  return { disabled };
+}
+
+function ImageGenActionBar({ form, generation }) {
+  const { fields, derived, loraTest, remix, cloudModelPicker } = form;
+  const { generating, statusMsg, progressPct, pendingQueued, stageLabel, error } = generation;
+  const submitGuard = resolveSubmitGuard({ derived, loraTest, remix, modelUnavailable: cloudModelPicker.unavailable });
+  return (
+    <div
+      className="sticky top-0 z-10 -mx-3 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
+      data-testid="image-primary-actions"
+    >
+      <button
+        type="submit"
+        disabled={submitGuard.disabled}
+        title={submitGuard.title}
+        className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
+        {derived.isAsyncMode && fields.batchCount > 1 && <span className="text-xs opacity-80">× {fields.batchCount}</span>}
+      </button>
+      {derived.editImageMissing && (
+        <span className="text-xs text-port-warning">Open Options to upload a source image for this edit model</span>
+      )}
+      {derived.cloudNeedsPrompt && (
+        <span className="text-xs text-port-warning">{derived.cloudPromptHint}</span>
+      )}
+      {derived.isAsyncMode && (
+        <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
+          <span className="select-none">×</span>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={fields.batchCount}
+            onChange={(event) => fields.setBatchCount(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+            className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+          />
+        </label>
+      )}
+      {generating && (
+        <button
+          type="button"
+          onClick={generation.handleCancel}
+          className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-error px-3 py-2 text-sm font-medium text-white hover:bg-port-error/80"
+        >
+          <X className="w-4 h-4" /> Cancel current
+        </button>
+      )}
+      {pendingQueued > 0 && (
+        <span className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
+          +{pendingQueued} queued
+        </span>
+      )}
+      {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
+      {(generating || error) && (
+        <span role="status" className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
+          {error ? String(error).split('\n')[0] : stageLabel || statusMsg || 'Working...'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ImageGenModelInputs({ form, backend }) {
+  const { fields, catalogs, images, derived } = form;
+  const { isLocalMode, effectiveMode, cloudModeLabel } = backend;
+  return (
+    <>
+      {isLocalMode && catalogs.lorasState === 'error' && (
+        <ListLoadError what="the LoRA library" error={catalogs.lorasError} onRetry={catalogs.retryLoras} />
+      )}
+      {isLocalMode && (derived.remoteTargetActive || derived.currentModel?.supportsLoras !== false) && (
+        <LoraPicker
+          availableLoras={catalogs.availableLoras}
+          selected={fields.selectedLoras}
+          onChange={fields.setSelectedLoras}
+          currentRunnerFamily={derived.currentRunnerFamily}
+          currentCompatKey={derived.currentCompatKey}
+          onAppendTrigger={(words) => fields.setPrompt((prompt) => appendTriggerWords(prompt, words, derived.styledPrompt))}
+          prompt={derived.styledPrompt}
+        />
+      )}
+      {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsLoras === false && fields.selectedLoras.length > 0 && (
+        <Banner tone="warning" size="sm">
+          This model cannot use the selected LoRAs. Remove them before rendering.
+          <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={() => fields.setSelectedLoras([])}>Remove selected LoRAs</button>
+        </Banner>
+      )}
+      {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsImg2Img === false && images.initImage.source != null && (
+        <Banner tone="warning" size="sm">
+          This model cannot use the selected input image.
+          <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.handleClearInitImage}>Remove input image</button>
+        </Banner>
+      )}
+
+      {derived.i2iCapable && (
+        <InitImagePicker
+          initImage={images.initImage}
+          initImageStrength={images.initImageStrength}
+          onStrengthChange={images.setInitImageStrength}
+          onPick={images.handlePickInitImage}
+          onClear={images.handleClearInitImage}
+          onBrowse={() => images.setGalleryPicker({ kind: 'init' })}
+          editOnly={derived.isEditOnlyModel}
+          backend={effectiveMode}
+        />
+      )}
+
+      {derived.referenceSlotCount > 0 && (
+        <ReferenceImagePicker
+          referenceImages={images.activeReferenceImages}
+          showStrength={derived.showReferenceStrength}
+          caption={isLocalMode
+            ? `up to ${derived.referenceSlotCount} images for ${derived.currentModel?.name || 'this model'} multi-reference edit`
+            : `up to ${derived.referenceSlotCount} more image${derived.referenceSlotCount === 1 ? '' : 's'} ${cloudModeLabel} will use as visual references`}
+          onPick={images.handlePickReferenceImage}
+          onClear={images.handleClearReferenceImage}
+          onStrengthChange={images.handleReferenceStrengthChange}
+          onBrowse={(slot) => images.setGalleryPicker({ kind: 'reference', slot })}
+        />
+      )}
+
+      {derived.droppedRefCount > 0 && (
+        <p className="text-xs text-amber-400" role="status">
+          {derived.droppedRefCount} reference image{derived.droppedRefCount === 1 ? '' : 's'} you picked
+          {' '}won't be sent — {isLocalMode ? 'this model' : cloudModeLabel} takes {derived.referenceSlotCount}
+          {derived.referenceSlotCount === 1 ? ' reference' : ' references'} here
+          {images.initImage.source != null && derived.referenceSlotCount > 0 ? ', and the init image already uses a slot' : ''}.
+          {' '}They stay selected if you clear the init image or switch backends.
+          {!derived.remoteTargetActive && derived.currentModel?.runner === 'moss-swift' && (
+            <button type="button" className="ml-2 min-h-[44px] text-port-accent" onClick={images.clearReferenceImages}>Remove reference images</button>
           )}
-          {errorMeta?.kind === 'hf_unauthorized' && (
-            <div className="text-port-warning/80">
-              Paste a fresh token in the HF token banner above (it appears when the model needs one).
-            </div>
+        </p>
+      )}
+    </>
+  );
+}
+
+function ImageGenPostProcessOptions({ fields, settings, mode }) {
+  return (
+    <div className="flex flex-col gap-1 text-xs text-gray-400">
+      <label
+        className="flex items-center gap-2 cursor-pointer select-none"
+        title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Settings → Image Gen default for this render only."
+      >
+        <input
+          type="checkbox"
+          checked={fields.cleanC2PA}
+          onChange={(event) => fields.setCleanC2PA(event.target.checked)}
+          className="rounded"
+        />
+        <span>
+          Clean C2PA
+          {settings.savedCleanC2PAByMode[mode] !== undefined && fields.cleanC2PA !== settings.savedCleanC2PAByMode[mode] && (
+            <span className="ml-1 text-port-warning">(overrides saved default)</span>
           )}
+        </span>
+      </label>
+      <label
+        className="flex items-center gap-2 cursor-pointer select-none"
+        title="Median + sharpen pass for AI-artifact reduction. WARNING: blurs annotation text and small details. Skip for sheets, infographics, comic panels."
+      >
+        <input
+          type="checkbox"
+          checked={fields.denoise}
+          onChange={(event) => fields.setDenoise(event.target.checked)}
+          className="rounded"
+        />
+        <span>
+          Denoise <span className="text-port-warning">(blurs text)</span>
+          {settings.savedDenoiseByMode[mode] !== undefined && fields.denoise !== settings.savedDenoiseByMode[mode] && (
+            <span className="ml-1 text-port-warning">(overrides saved default)</span>
+          )}
+        </span>
+      </label>
+      <label
+        className="flex items-center gap-2 cursor-pointer select-none"
+        title="Automated visual quality inspection: verifies hand/finger count, detects spurious limbs, and checks composition before admitting to gallery."
+      >
+        <input
+          type="checkbox"
+          checked={Boolean(fields.verifyImage)}
+          onChange={(event) => fields.setVerifyImage(event.target.checked)}
+          className="rounded"
+        />
+        <span className="text-port-accent">
+          Verify Quality & Anatomy
+        </span>
+      </label>
+    </div>
+  );
+}
+
+const ERROR_HEADINGS = {
+  gated_repo: 'Model access required',
+  hf_unauthorized: 'HuggingFace token rejected',
+  repo_not_found: 'Model repo not found',
+};
+
+function ImageGenErrorBanner({ error, errorMeta }) {
+  if (!error) return null;
+  return (
+    <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
+      <div className="font-semibold text-sm">
+        {ERROR_HEADINGS[errorMeta?.kind] || 'Generation failed'}
+      </div>
+      <div className="whitespace-pre-wrap break-words text-port-warning/90">
+        {String(error)}
+      </div>
+      {errorMeta?.kind === 'gated_repo' && errorMeta?.repo && (
+        <a
+          href={`https://huggingface.co/${errorMeta.repo}`}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+        >
+          Request access to {errorMeta.repo} ↗
+        </a>
+      )}
+      {errorMeta?.kind === 'hf_unauthorized' && (
+        <div className="text-port-warning/80">
+          Paste a fresh token in the HF token banner above (it appears when the model needs one).
         </div>
       )}
     </div>
