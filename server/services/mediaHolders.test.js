@@ -23,7 +23,7 @@ vi.mock('../lib/peerHttpClient.js', async () => ({
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
-const { makeMediaPrimary, recordPeerInventory } = await import('./mediaHolders.js');
+const { listMediaHolders, makeMediaPrimary, recordPeerInventory } = await import('./mediaHolders.js');
 const { hostFileOn, listHostedEntries } = await import('./peerHostedMedia.js');
 
 const STORE = join(PATHS.data, 'media-holders.json');
@@ -40,6 +40,39 @@ beforeEach(async () => {
 });
 
 afterAll(cleanup);
+
+describe('listMediaHolders', () => {
+  it('reports primary designations from current and legacy image sidecars', async () => {
+    mkdirSync(PATHS.images, { recursive: true });
+    writeFileSync(join(PATHS.images, 'no-sidecar.png'), 'bytes');
+    await atomicWrite(join(PATHS.images, 'current.metadata.json'), { primaryInstanceId: 'inst-a' });
+    await atomicWrite(join(PATHS.images, 'legacy.png.metadata.json'), { primaryInstanceId: 'inst-a' });
+    await atomicWrite(STORE, {
+      version: 1,
+      holdings: { 'inst-a': { image: { 'current.png': true, 'legacy.png': true, 'no-sidecar.png': true } } },
+      releases: [],
+    });
+
+    const { self, items } = await listMediaHolders();
+
+    const peer = { instanceId: 'inst-a', name: 'Machine A', self: false, primary: true, releasePending: false };
+    expect(self).toBe('local-inst');
+    expect(items).toEqual({
+      'image:current.png': { kind: 'image', filename: 'current.png', cardKeys: ['image:current.png'], primaryInstanceId: 'inst-a', holders: [peer] },
+      'image:legacy.png': { kind: 'image', filename: 'legacy.png', cardKeys: ['image:legacy.png'], primaryInstanceId: 'inst-a', holders: [peer] },
+      'image:no-sidecar.png': {
+        kind: 'image',
+        filename: 'no-sidecar.png',
+        cardKeys: ['image:no-sidecar.png'],
+        primaryInstanceId: null,
+        holders: [
+          { instanceId: 'local-inst', name: 'This machine', self: true, primary: false, releasePending: false },
+          { ...peer, primary: false },
+        ],
+      },
+    });
+  });
+});
 
 describe('makeMediaPrimary', () => {
   it('queues the release when the holder cannot reach the primary yet', async () => {
