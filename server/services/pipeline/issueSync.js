@@ -3,8 +3,8 @@
  *
  * mergeIssuesFromSync (LWW merge of a remote peer's issues) and
  * pruneTombstonedIssues (tombstone GC). Split out of the former monolithic
- * `issues.js`. Both serialize on the store's single type-index write tail
- * (`store().queueTypeIndexWrite`) for one consistent merge/prune snapshot.
+ * `issues.js`. Merge shares series write queues with local edits and issue id
+ * queues with imports and tombstone GC.
  */
 
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -13,14 +13,12 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord,
   flushBaseHashes, deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
-import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue, STAGE_IDS } from './issuesShared.js';
-import { isStr } from '../../lib/textUtils.js';
+import { store, queueInboundIssueWrites, queueIssueIdsWrite, saveIssuesNow, renumberInline, sanitizeIssue, STAGE_IDS } from './issuesShared.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
 /**
  * Sync-orchestrator entry point. Merges a remote peer's issues array into
- * local state through the collection store's type-index queue for one
- * consistent merge snapshot. Each incoming record passes through
+ * local state under the affected series and issue id queues. Each incoming record passes through
  * `sanitizeIssue` for shape enforcement (stage statuses, trimmed fields,
  * valid id format). LWW by `updatedAt`; returns `{ applied, count }` where
  * `count` is the number of issues actually changed/added.
@@ -41,35 +39,21 @@ export async function mergeIssuesFromSync(remoteIssues, {
   // Stage 2 per-record peer-sync push owns sync-time edit emits). Delete-
   // transitions DO emit per series so subscribers know to drop the issue.
   const seriesNeedingRenumber = new Set();
-  // Build the set of locally-ephemeral series ids BEFORE the queue. The
-  // per-record push pipeline (applyIncomingPush) already gates the bundled
-  // issues batch by parent-ephemeral, but the snapshot pipeline path
-  // (applyPipelineRemote → mergeIssuesFromSync) bypasses that check. Without
-  // this filter, a peer with `pipeline` sync enabled can create/update/
-  // tombstone issues under a locally-private series and overwrite the
-  // user's private fork.
-  const ephemeralSeriesIds = new Set(
-    (await seriesSvc.listSeries({ includeDeleted: true }).catch(() => []))
-      .filter((s) => s?.ephemeral === true)
-      .map((s) => s.id),
-  );
-  return store().queueTypeIndexWrite(async () => {
-    const state = await readState();
+  const incomingIssues = remoteIssues.map(sanitizeIssue).filter(Boolean);
+  if (!incomingIssues.length) return { applied: false, count: 0 };
+  return queueInboundIssueWrites(incomingIssues, async (state) => {
+    // Both the snapshot and per-record push paths must respect private parents,
+    // including the current source of an inbound cross-series move.
+    const ephemeralSeriesIds = new Set((await seriesSvc.listSeries({ includeDeleted: true }))
+      .filter((series) => series.ephemeral === true).map((series) => series.id));
     const localById = new Map(state.issues.map((i) => [i.id, i]));
     let changed = 0;
     // Track only the issue IDs that were inserted or overwritten so we persist
     // the changed subset rather than every issue in the store (avoids unbounded
     // Promise.all / EMFILE on large catalogs).
     const changedIds = new Set();
-    for (const remote of remoteIssues) {
-      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
-      // Drop issues whose parent series is locally ephemeral, BEFORE any
-      // mutation. This covers create/update/tombstone uniformly — the
-      // sanitized.seriesId may be either the existing local series or a
-      // remote-only target; reject either way.
-      if (ephemeralSeriesIds.has(remote.seriesId)) continue;
-      let sanitized = sanitizeIssue(remote);
-      if (!sanitized) continue;
+    for (let sanitized of incomingIssues) {
+      if (ephemeralSeriesIds.has(sanitized.seriesId)) continue;
       // Strip inbound `ephemeral` — see mergeUniversesFromSync.
       if ('ephemeral' in sanitized) delete sanitized.ephemeral;
       const local = localById.get(sanitized.id);
@@ -188,7 +172,7 @@ export async function pruneTombstonedIssues(beforeMs) {
   const s = store();
   const candidates = await s.listTombstoneIdsBefore(beforeMs);
   if (!candidates.length) return { pruned: 0 };
-  return s.queueTypeIndexWrite(async () => {
+  return queueIssueIdsWrite(candidates, async () => {
     const pruned = await s.deleteTombstonesBefore(candidates, beforeMs);
     // Evict each pruned issue's conflict-journal base hash. Issues seed an
     // `issue:<id>` base hash when their parent series is pushed (peerSync's

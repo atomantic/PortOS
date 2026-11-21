@@ -23,6 +23,20 @@ const svc = await import('./issues.js');
 const cj = await import('../../lib/conflictJournal.js');
 const { recordEvents } = await import('../sharing/recordEvents.js');
 
+// Keep the real journal/store operation, but let a second public mutation
+// start while the first one is suspended at a known persistence boundary.
+function pauseNextCall(target, method) {
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  const original = target[method];
+  vi.spyOn(target, method).mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await released.promise;
+    return original(...args);
+  });
+  return { entered: entered.promise, release: released.resolve };
+}
+
 describe('pipeline issues service', () => {
   beforeEach(() => {
     h.resetFixtures(cj);
@@ -329,6 +343,87 @@ describe('pipeline issues service', () => {
     });
 
     describe('mergeIssuesFromSync — changed-only persistence and multi-series correctness', () => {
+      it('keeps a newer local stage and its undo entry when sync waits behind that save', async () => {
+        const original = { id: 'iss-overlap', seriesId: 'ser-1', title: 'Draft', updatedAt: '2020-01-01T00:00:00Z',
+          stages: { prose: { output: 'original', lastRunId: 'run-original' } } };
+        await svc.mergeIssuesFromSync([original]);
+        const writing = pauseNextCall(svc.issueStore(), 'saveOneNow');
+        const local = svc.updateStage(original.id, 'prose', { output: 'local draft', lastRunId: 'run-local' });
+        await writing.entered;
+        const merge = svc.mergeIssuesFromSync([{ ...original, updatedAt: '2020-01-02T00:00:00Z',
+          stages: { prose: { output: 'peer draft' } } }]);
+        try {
+          // A different inbound batch can finish while this series' write is held.
+          await svc.mergeIssuesFromSync([{ ...original, id: 'iss-independent', seriesId: 'ser-other' }]);
+        } finally {
+          writing.release();
+        }
+        await local;
+        expect(await merge).toEqual({ applied: false, count: 0 });
+        expect((await svc.getIssue(original.id)).stages.prose).toMatchObject({
+          output: 'local draft', runHistory: [{ runId: 'run-original', output: 'original' }],
+        });
+      });
+
+      it('leaves the issue untouched when private parent membership cannot be read', async () => {
+        const original = await svc.createIssue({ seriesId: 'ser-1', title: 'Original' });
+        const series = await import('./series.js');
+        vi.spyOn(series, 'listSeries').mockRejectedValueOnce(new Error('Series unavailable'));
+        await expect(svc.mergeIssuesFromSync([{ ...original, title: 'Peer', updatedAt: '2099-01-01T00:00:00Z' }]))
+          .rejects.toThrow('Series unavailable');
+        expect((await svc.getIssue(original.id)).title).toBe('Original');
+      });
+
+      it('follows a peer move to the destination queue and snapshots the winning peer draft', async () => {
+        const original = await svc.createIssue({ seriesId: 'ser-z', title: 'Original' });
+        const neighbor = await svc.createIssue({ seriesId: 'ser-a', title: 'Destination' });
+        const unrelated = await svc.createIssue({ seriesId: 'ser-other', title: 'Independent' });
+        const journal = pauseNextCall(cj, 'maybeJournalBeforeOverwrite');
+        const move = svc.mergeIssuesFromSync([{ ...original, seriesId: neighbor.seriesId,
+          updatedAt: '2099-01-01T00:00:00Z', stages: { prose: { output: 'peer draft', lastRunId: 'run-peer' } } }]);
+        await journal.entered;
+        const order = [];
+        const destinationWrite = svc.updateIssue(neighbor.id, async () => {
+          await svc.updateStage(unrelated.id, 'idea', { output: 'independent edit' });
+          order.push('destination');
+          return { title: 'Updated neighbor' };
+        });
+        const local = svc.updateStageWithLatest(original.id, 'prose', () => {
+          order.push('stage');
+          return { output: 'local draft', lastRunId: 'run-local' };
+        });
+        try {
+          await svc.updateStage(unrelated.id, 'prose', { output: 'independent' });
+        } finally {
+          journal.release();
+        }
+        const [merged, , saved] = await Promise.all([move, destinationWrite, local]);
+        expect(merged).toEqual({ applied: true, count: 1 });
+        expect(saved.issue.seriesId).toBe(neighbor.seriesId);
+        expect(order).toEqual(['destination', 'stage']);
+        expect((await svc.getIssue(original.id)).stages.prose).toMatchObject({
+          output: 'local draft', runHistory: [{ runId: 'run-peer', output: 'peer draft' }],
+        });
+      });
+
+      it('serializes a sibling stage save with a peer tombstone and its renumber', async () => {
+        const removed = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+        const sibling = await svc.createIssue({ seriesId: 'ser-1', title: 'Second' });
+        await svc.updateStage(sibling.id, 'prose', { output: 'original', lastRunId: 'run-original' });
+        const journal = pauseNextCall(cj, 'maybeJournalBeforeOverwrite');
+        const tombstone = svc.mergeIssuesFromSync([{ ...removed, deleted: true,
+          deletedAt: '2099-01-01T00:00:00Z', updatedAt: '2099-01-01T00:00:00Z' }]);
+        await journal.entered;
+        const local = svc.updateStage(sibling.id, 'prose', { output: 'local draft', lastRunId: 'run-local' });
+        journal.release();
+        await Promise.all([tombstone, local]);
+        expect(await svc.listIssues({ seriesId: sibling.seriesId })).toMatchObject([{
+          id: sibling.id, number: 1, stages: { prose: {
+            output: 'local draft', runHistory: [{ runId: 'run-original', output: 'original' }],
+          } },
+        }]);
+      });
+
       it('merges issues from two different series correctly', async () => {
         const a = await svc.createIssue({ seriesId: 'ser-multi-1', title: 'A1' });
         const b = await svc.createIssue({ seriesId: 'ser-multi-2', title: 'B1' });

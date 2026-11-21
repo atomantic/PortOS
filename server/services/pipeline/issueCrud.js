@@ -10,13 +10,12 @@
  */
 
 import { randomUUID } from 'crypto';
-import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as seriesSvc from './series.js';
 import {
-  store, queueSeriesIssuesWrite, readState, readStateForSeries,
+  store, queueSeriesIssuesWrite, queueIssueSeriesWrites, queueIssueInsert, readState, readStateForSeries,
   saveIssueNow, saveIssuesNow, renumberInline, sanitizeIssue,
   snapshotRunHistory, ISSUE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED, ERR_ARC_POSITION_CONFLICT,
@@ -24,11 +23,6 @@ import {
 } from './issuesShared.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
-
-// Caller-supplied ids are globally unique even when two imports target different series.
-const queueIssueId = createKeyCachedQueue();
-const queueIssueInsert = (seriesId, id, fn) =>
-  queueSeriesIssuesWrite(seriesId, () => queueIssueId(id, fn));
 
 export async function listIssues({
   seriesId = null,
@@ -147,6 +141,25 @@ export async function getIssue(id, { includeDeleted = false } = {}) {
   if (!found) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
   if (found.deleted && !includeDeleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
   return found;
+}
+
+// A queued single-row edit can wake up after a sync or a local series move.
+// Rejoin the new parent's queue before exposing the record to its writer.
+export async function withLiveIssueWrite(id, work, { withSiblings = false } = {}) {
+  let issue = await getIssue(id, { includeDeleted: true });
+  const moved = Symbol('issue moved');
+  while (true) {
+    const seriesId = issue.seriesId;
+    const result = await queueSeriesIssuesWrite(seriesId, async () => {
+      const state = withSiblings ? await readStateForSeries(seriesId) : null;
+      const index = state?.issues.findIndex((row) => row.id === id);
+      issue = index >= 0 ? state.issues[index] : await getIssue(id);
+      if (issue.seriesId !== seriesId) return moved;
+      if (issue.deleted || index === -1) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
+      return work(issue, state, index);
+    });
+    if (result !== moved) return result;
+  }
 }
 
 export function createIssue(input = {}, { preloadedSeries = null } = {}) {
@@ -339,7 +352,6 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap =
   // just the destination — otherwise a concurrent edit/renumber on the source
   // (e.g. a peer-sync merge landing on the loser mid-merge) could interleave and
   // be lost. Acquire in sorted order so a future two-series caller can't deadlock.
-  const [first, second] = [fromSeriesId, toSeriesId].sort();
   const body = async () => {
     const state = { issues: await store().loadAllForSeriesIds([fromSeriesId, toSeriesId]) };
     const now = new Date().toISOString();
@@ -361,7 +373,7 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap =
     emitRecordUpdated('series', fromSeriesId);
     return { reassigned: moved.length };
   };
-  return queueSeriesIssuesWrite(first, () => queueSeriesIssuesWrite(second, body));
+  return queueIssueSeriesWrites([fromSeriesId, toSeriesId], body);
 }
 
 /**
@@ -509,57 +521,41 @@ export function updateIssue(id, patchOrMutator = {}, { skipRenumber = false, upd
   const needsRenumber = !skipRenumber
     && (isMutator || 'seasonId' in patchOrMutator || 'arcPosition' in patchOrMutator);
   if (!needsRenumber) {
-    // Route through the SERIES tail (see updateStageWithLatest) so a plain
-    // field update can't race a concurrent series-wide renumber rewriting this
-    // issue. seriesId is immutable, so read it outside the lock to pick the
-    // queue, then re-read the issue inside.
-    return getIssue(id, { includeDeleted: true }).then((existing) =>
-      queueSeriesIssuesWrite(existing.seriesId, async () => {
-        const cur = await store().loadOne(id);
-        if (!cur) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-        if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-        const patch = await resolvePatch(cur);
-        if (!patch) return skippedResult(cur);
-        const merged = mergeIssuePatch(cur, patch, updatedAt);
-        await saveIssueNow(merged);
-        emitRecordUpdated('series', merged.seriesId);
-        return {
-          issue: merged,
-          frontCoverChanged: frontCoverFilename(cur) !== frontCoverFilename(merged),
-        };
-      }),
-    ).then(returnIssueAfterCoverRefresh);
-  }
-
-  return getIssue(id, { includeDeleted: true }).then((existing) =>
-    queueSeriesIssuesWrite(existing.seriesId, async () => {
-      const state = await readStateForSeries(existing.seriesId);
-      const idx = state.issues.findIndex((i) => i.id === id);
-      if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-      const cur = state.issues[idx];
-      if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    return withLiveIssueWrite(id, async (cur) => {
       const patch = await resolvePatch(cur);
       if (!patch) return skippedResult(cur);
       const merged = mergeIssuePatch(cur, patch, updatedAt);
-      state.issues[idx] = merged;
-      // A seasonId move affects both source and destination volumes, so full
-      // renumber. An arcPosition change only reorders within the current volume.
-      if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
-        await renumberAndSave(state, merged.seriesId, [merged]);
-      } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
-        await renumberAndSave(state, merged.seriesId, [merged], merged.seasonId || UNSCOPED_ANCHOR);
-      } else {
-        await saveIssueNow(merged);
-      }
-      // Issues are exported as part of their parent series — re-export the
-      // series so any active subscription picks up the issue change.
+      await saveIssueNow(merged);
       emitRecordUpdated('series', merged.seriesId);
       return {
         issue: merged,
         frontCoverChanged: frontCoverFilename(cur) !== frontCoverFilename(merged),
       };
-    })
-  ).then(returnIssueAfterCoverRefresh);
+    }).then(returnIssueAfterCoverRefresh);
+  }
+
+  return withLiveIssueWrite(id, async (cur, state, index) => {
+    const patch = await resolvePatch(cur);
+    if (!patch) return skippedResult(cur);
+    const merged = mergeIssuePatch(cur, patch, updatedAt);
+    state.issues[index] = merged;
+    // A seasonId move affects both source and destination volumes, so full
+    // renumber. An arcPosition change only reorders within the current volume.
+    if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
+      await renumberAndSave(state, merged.seriesId, [merged]);
+    } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
+      await renumberAndSave(state, merged.seriesId, [merged], merged.seasonId || UNSCOPED_ANCHOR);
+    } else {
+      await saveIssueNow(merged);
+    }
+    // Issues are exported as part of their parent series — re-export the
+    // series so any active subscription picks up the issue change.
+    emitRecordUpdated('series', merged.seriesId);
+    return {
+      issue: merged,
+      frontCoverChanged: frontCoverFilename(cur) !== frontCoverFilename(merged),
+    };
+  }, { withSiblings: true }).then(returnIssueAfterCoverRefresh);
 }
 
 export function deleteIssue(id) {
@@ -567,31 +563,25 @@ export function deleteIssue(id) {
   // record stays on disk with `deleted: true` so the next sync propagates the
   // delete to peers; the orchestrator's GC sweep prunes it once all peers ack.
   // `renumberInline` filters tombstones, so surviving issues stay contiguous.
-  return getIssue(id, { includeDeleted: true }).then((existing) =>
-    queueSeriesIssuesWrite(existing.seriesId, async () => {
-      const state = await readStateForSeries(existing.seriesId);
-      const idx = state.issues.findIndex((i) => i.id === id);
-      if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-      const cur = state.issues[idx];
-      if (cur.deleted) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
-      const seriesId = cur.seriesId;
-      const now = new Date().toISOString();
-      state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-      await renumberAndSave(state, seriesId, [state.issues[idx]], cur.seasonId || UNSCOPED_ANCHOR);
-      // Series export bundles every issue, so a deletion is an update on the
-      // parent series for any active share-bucket subscription.
-      emitRecordUpdated('series', seriesId);
-      return { id, seriesId };
-    }).then(async (result) => {
-      // The deleted issue may have owned the series' list thumbnail
-      // (`series.coverImage`). Recompute outside the queue (it reads fresh
-      // post-delete state) so the Pipeline list falls back to the next eligible
-      // cover instead of pointing at a tombstone. Dynamic import dodges the
-      // static cycle (seriesCoverImage → issues). Best-effort — a cosmetic
-      // thumbnail must never fail the delete.
-      const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
-      await refreshSeriesCoverImage(result.seriesId).catch(() => {});
-      return { id: result.id };
-    })
-  );
+  return withLiveIssueWrite(id, async (cur, state, index) => {
+    const seriesId = cur.seriesId;
+    const now = new Date().toISOString();
+    const tombstone = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
+    state.issues[index] = tombstone;
+    await renumberAndSave(state, seriesId, [tombstone], cur.seasonId || UNSCOPED_ANCHOR);
+    // Series export bundles every issue, so a deletion is an update on the
+    // parent series for any active share-bucket subscription.
+    emitRecordUpdated('series', seriesId);
+    return { id, seriesId };
+  }, { withSiblings: true }).then(async (result) => {
+    // The deleted issue may have owned the series' list thumbnail
+    // (`series.coverImage`). Recompute outside the queue (it reads fresh
+    // post-delete state) so the Pipeline list falls back to the next eligible
+    // cover instead of pointing at a tombstone. Dynamic import dodges the
+    // static cycle (seriesCoverImage → issues). Best-effort — a cosmetic
+    // thumbnail must never fail the delete.
+    const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+    await refreshSeriesCoverImage(result.seriesId).catch(() => {});
+    return { id: result.id };
+  });
 }

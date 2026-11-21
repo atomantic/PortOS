@@ -14,11 +14,6 @@
  * Federation invisibility: every record write/delete bumps the shared pipeline
  * MUTATION EPOCH (../syncEpoch.js) — see seriesStore/store.js for the rationale.
  *
- * `queueTypeIndexWrite` keeps the single-tail "one consistent merge snapshot"
- * semantics issues.js relies on for mergeIssuesFromSync / pruneTombstonedIssues
- * (those read the whole issue set, mutate, and write back; they must serialize
- * against themselves). It's a process-local promise tail — backend-agnostic.
- *
  * The first PG-backed call runs a one-time, marker-gated import of the legacy
  * data/pipeline-issues file store into the table (migrateIssuesToDB).
  */
@@ -78,6 +73,14 @@ function makeFileBackend(dir, sanitizeRecord) {
       const record = await cs.loadOneRaw(id);
       return record ? record.deleted === true : null;
     },
+    listSeriesIdsForIssues: async (ids) => {
+      const parents = new Set();
+      for (const id of ids) {
+        const issue = await cs.loadOneRaw(id);
+        if (issue) parents.add(issue.seriesId);
+      }
+      return [...parents];
+    },
     listLiveIssueSeriesIds: async () => [...new Set((await cs.loadAll()).filter((r) => !r.deleted).map((r) => r.seriesId))],
     listTombstoneIdsBefore: async (beforeMs) => (await cs.loadAll()).filter((r) => isOldTombstone(r, beforeMs)).map((r) => r.id),
     deleteTombstonesBefore: async (ids, beforeMs) => {
@@ -128,6 +131,7 @@ function makePgBackend(db, sanitizeRecord) {
     listIds: db.listIds,
     getDeletionStatus: db.getDeletionStatus,
     listLiveIssueSeriesIds: db.listLiveIssueSeriesIds,
+    listSeriesIdsForIssues: db.listSeriesIdsForIssues,
     listTombstoneIdsBefore: db.listTombstoneIdsBefore,
     deleteTombstonesBefore: db.deleteTombstonesBefore,
     listRaw: db.listRaw,
@@ -160,9 +164,8 @@ function createFacade({ dir, sanitizeRecord }) {
   });
 
   // Single-tail type-index queue — mirrors collectionStore.queueTypeIndexWrite.
-  // mergeIssuesFromSync / pruneTombstonedIssues load the whole issue set, mutate,
-  // and write back; they must serialize against themselves for one consistent
-  // merge snapshot.
+  // Retained for collection-store callers. Issue service mutations share the
+  // per-series and per-id tails in issuesShared.
   const queueTypeIndexWrite = createFileWriteQueue();
 
   const saveOneNow = async (id, record) => {
@@ -187,6 +190,7 @@ function createFacade({ dir, sanitizeRecord }) {
     type: 'pipelineIssues',
     getBackendName,
 
+    listSeriesIdsForIssues: async (ids) => (await getBackend()).listSeriesIdsForIssues(ids),
     listIds: async (opts) => (await getBackend()).listIds(opts),
     getDeletionStatus: async (id) => (await getBackend()).getDeletionStatus(id),
     listLiveIssueSeriesIds: async () => (await getBackend()).listLiveIssueSeriesIds(),

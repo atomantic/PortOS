@@ -103,6 +103,7 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     await db.writeRaw('iss-live', I('iss-live', { seriesId: 'ser-other' }));
     const queries = vi.spyOn(dbConnection, 'query');
     expect(await db.listLiveIssueSeriesIds()).toEqual(['ser-other']);
+    expect((await db.listSeriesIdsForIssues(['iss-expired', 'iss-live', 'iss-missing'])).sort()).toEqual(['ser-1', 'ser-other']);
     expect(await db.getDeletionStatus('iss-live')).toBe(false);
     expect(await db.getDeletionStatus('iss-expired')).toBe(true);
     expect(await db.getDeletionStatus('iss-missing')).toBeNull();
