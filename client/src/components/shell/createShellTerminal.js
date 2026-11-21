@@ -1,8 +1,8 @@
 import { Terminal } from '@xterm/xterm';
-import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { buildTerminalTheme, parseCssColorToHex } from '../../lib/terminalTheme';
 import { isFocusEscapeKey } from '../../lib/a11yKeyboard';
+import { registerTerminalWebLinks } from './terminalWebLinks';
 
 export const TERMINAL_SCROLLBACK_LINES = 5000;
 
@@ -51,7 +51,7 @@ export const createShellTerminal = (container, options = {}) => {
     ...options,
   });
 
-  term.loadAddon(new WebLinksAddon());
+  registerTerminalWebLinks(term);
   term.open(container);
 
   // WCAG 2.1.2 (no keyboard trap): xterm's helper textarea is in the tab
