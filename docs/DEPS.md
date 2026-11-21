@@ -87,7 +87,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `playwright-core` | 1 | KEEP | browser test tooling | Drives the separately provisioned browser for client verification |
-| `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
+| `rollup-plugin-visualizer` | — | REMOVED | bundle-size analysis | `npm run build:analyze --prefix client` publishes `client/dist/bundle-report.json` with raw, gzip, and Brotli byte counts for each emitted file (#17212) |
 | **Browser dependencies** | | | | |
 | _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus in-repo imports from `server/lib/` and `scripts/lib/`. No Dependabot entry, and its lockfile is gitignored |
 

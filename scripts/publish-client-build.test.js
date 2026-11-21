@@ -64,6 +64,7 @@ describe('staged client build publication', () => {
       distDir,
       runBuild: async (stageDir) => {
         writeBuild(stageDir, 'new');
+        writeFileSync(join(stageDir, 'bundle-report.json'), '[]\n');
         writeFileSync(join(stageDir, 'assets', 'old.js'), "window.BUILD = 'old';");
         expect(await fetch(baseUrl).then((response) => response.text())).toContain('/assets/old.js');
         expect(await fetch(`${baseUrl}/assets/old.js`).then((response) => response.text())).toContain("'old'");
@@ -78,6 +79,7 @@ describe('staged client build publication', () => {
     expect(await fetch(baseUrl).then((response) => response.text())).toContain('/assets/new.js');
     expect(await fetch(`${baseUrl}/assets/new.js`).then((response) => response.text())).toContain("'new'");
     expect(await fetch(`${baseUrl}/assets/old.js`).then((response) => response.text())).toContain("'old'");
+    expect(await fetch(`${baseUrl}/bundle-report.json`).then((response) => response.json())).toEqual([]);
   });
 
   it('keeps a shared old chunk intact when publication fails before the index switch', async () => {
