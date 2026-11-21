@@ -184,22 +184,18 @@ export async function mergeIssuesFromSync(remoteIssues, {
  */
 export async function pruneTombstonedIssues(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
-  return store().queueTypeIndexWrite(async () => {
-    const { issues } = await readState();
-    const prunable = issues.filter((i) => {
-      if (!i?.deleted) return false;
-      const t = Date.parse(i.deletedAt || '');
-      if (!Number.isFinite(t)) return false;
-      return t < beforeMs;
-    });
-    await Promise.all(prunable.map((i) => store().deleteOne(i.id)));
+  const s = store();
+  const candidates = await s.listTombstoneIdsBefore(beforeMs);
+  if (!candidates.length) return { pruned: 0 };
+  return s.queueTypeIndexWrite(async () => {
+    const pruned = await s.deleteTombstonesBefore(candidates, beforeMs);
     // Evict each pruned issue's conflict-journal base hash. Issues seed an
     // `issue:<id>` base hash when their parent series is pushed (peerSync's
     // pushRecordToPeer), but no eviction existed — so a pruned issue's key
     // would linger in sync_base_hashes.json forever. Mirrors the universe /
     // series / collection prune paths.
     await withBaseHashFlushBatch(() =>
-      Promise.all(prunable.map((i) => deleteSyncBaseHash('issue', i.id))));
-    return { pruned: prunable.length };
+      Promise.all(pruned.map((id) => deleteSyncBaseHash('issue', id))));
+    return { pruned: pruned.length };
   });
 }

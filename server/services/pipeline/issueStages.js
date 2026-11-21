@@ -14,7 +14,7 @@ import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { getIssue } from './issueCrud.js';
 import {
-  store, queueSeriesIssuesWrite, readState, saveIssueNow, saveIssuesNow,
+  store, queueSeriesIssuesWrite, saveIssueNow, saveIssuesNow,
   sanitizeIssue, sanitizeTextStage, sanitizeVisualStage, sanitizeAudioStage,
   snapshotRunHistory,
   ERR_NOT_FOUND, ERR_VALIDATION,
@@ -71,20 +71,14 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
   }
 
   return queueSeriesIssuesWrite(seriesId, async () => {
-    const state = await readState();
+    const latestById = new Map();
+    const changed = new Map();
     const results = [];
-    let changed = false;
     let frontCoverChanged = false;
-    // Index once: `state.issues` is the INSTALL-wide list, and a bulk caller can
-    // pass one update per (issue, stage) — a per-update findIndex would make the
-    // write O(updates × issues in the install). Rebuilt in step with the
-    // in-place `state.issues[idx] = …` writes below (index positions are stable).
-    const indexById = new Map(state.issues.map((i, idx) => [i.id, idx]));
     for (const update of updates) {
-      const idx = indexById.get(update.issueId) ?? -1;
-      if (idx < 0) throw codedError(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
-      const cur = state.issues[idx];
-      if (cur.deleted || cur.seriesId !== seriesId) throw codedError(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      const cur = latestById.get(update.issueId) ?? await store().loadOne(update.issueId);
+      if (!cur || cur.deleted || cur.seriesId !== seriesId) throw codedError(`Issue not found: ${update.issueId}`, ERR_NOT_FOUND);
+      latestById.set(cur.id, cur);
       const currentStage = cur.stages[update.stageId];
       const patch = update.computeFn(currentStage);
       if (isPlainObject(patch) && Object.keys(patch).length === 0) {
@@ -102,12 +96,12 @@ export function updateStagesWithLatest(seriesId, updates = [], { snapshotPrior =
         updatedAt: new Date().toISOString(),
       });
       if (!mergedIssue) throw codedError('Invalid issue payload', ERR_VALIDATION);
-      state.issues[idx] = mergedIssue;
+      latestById.set(cur.id, mergedIssue);
+      changed.set(cur.id, mergedIssue);
       results.push({ issue: mergedIssue, stage: mergedIssue.stages[update.stageId] });
-      changed = true;
     }
-    if (changed) {
-      await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+    if (changed.size) {
+      await saveIssuesNow([...changed.values()]);
       emitRecordUpdated('series', seriesId);
     }
     return { results, frontCoverChanged };

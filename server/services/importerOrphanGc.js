@@ -32,7 +32,7 @@
 
 import { listUniverses, deleteUniverse } from './universeBuilder.js';
 import { listSeries, deleteSeries } from './pipeline/series.js';
-import { listAllIssues } from './pipeline/issues.js';
+import { issueStore } from './pipeline/issues.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 // Grace window before an abandoned, never-committed shell is eligible for GC.
@@ -86,25 +86,14 @@ export async function sweepOrphanShells({ now = Date.now(), maxAgeMs = ORPHAN_SH
     survivingSeriesByUniverse.set(key, (survivingSeriesByUniverse.get(key) || 0) + 1);
   };
 
-  // Pre-load ALL issues once and group by seriesId to avoid an N+1 pattern
-  // (one listIssues call per candidate series). listAllIssues is UNCAPPED —
-  // listIssues({}) slices at 1000 total, and a series whose issues fall past
-  // that cap would count as zero here and get DELETED while it still has
-  // live issues.
-  const allIssues = await listAllIssues();
-  const issueCountBySeries = new Map();
-  for (const issue of allIssues) {
-    if (!issue.seriesId) continue;
-    issueCountBySeries.set(issue.seriesId, (issueCountBySeries.get(issue.seriesId) || 0) + 1);
-  }
-
-  // True only for an import-draft, story-work-free, aged-out, zero-issue shell.
-  // Each gate runs cheapest-first; the issue count lookup is now O(1) from the map.
+  // An uncapped projection keeps shells with any live issue, including issues
+  // beyond the public list's pagination limit.
+  const seriesWithIssues = new Set(await issueStore().listLiveIssueSeriesIds());
   const seriesIsSweepable = (s) => {
     if (s.importDraft !== true || seriesHasStoryWork(s)) return false;
     const age = ageMs(s, now);
     if (!Number.isFinite(age) || age < maxAgeMs) return false;
-    return (issueCountBySeries.get(s.id) || 0) === 0;
+    return !seriesWithIssues.has(s.id);
   };
 
   for (const s of allSeries) {

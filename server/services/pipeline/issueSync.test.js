@@ -430,6 +430,22 @@ describe('pipeline issues service', () => {
         expect(await cj.getSyncBaseHash('issue', live.id)).toBe('hash-live');
       });
 
+      it('rechecks stale candidates before deleting or evicting their base hashes', async () => {
+        const restored = await svc.createIssue({ seriesId: 'ser-first', title: 'Restored' });
+        const tomb = await svc.createIssue({ seriesId: 'ser-second', title: 'Fresh tombstone' });
+        const cutoff = Date.now() - 60_000;
+        await svc.deleteIssue(tomb.id);
+        await cj.setSyncBaseHash('issue', restored.id, 'restored-hash');
+        const store = svc.issueStore();
+        vi.spyOn(store, 'listTombstoneIdsBefore').mockResolvedValueOnce([restored.id, tomb.id]);
+        const all = vi.spyOn(store, 'loadAll');
+        expect(await svc.pruneTombstonedIssues(cutoff)).toEqual({ pruned: 0 });
+        expect(all).not.toHaveBeenCalled();
+        expect((await svc.getIssue(restored.id)).deleted).toBe(false);
+        expect((await svc.getIssue(tomb.id, { includeDeleted: true })).deleted).toBe(true);
+        expect(await cj.getSyncBaseHash('issue', restored.id)).toBe('restored-hash');
+      });
+
       it('keeps tombstones with unparseable deletedAt (conservative — never silently delete)', async () => {
         const issue = await svc.createIssue({ seriesId: 'ser-corrupt', title: 'C' });
         await svc.deleteIssue(issue.id);

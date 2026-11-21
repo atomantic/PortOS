@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -23,6 +24,11 @@ import {
 } from './issuesShared.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
+
+// Caller-supplied ids are globally unique even when two imports target different series.
+const queueIssueId = createKeyCachedQueue();
+const queueIssueInsert = (seriesId, id, fn) =>
+  queueSeriesIssuesWrite(seriesId, () => queueIssueId(id, fn));
 
 export async function listIssues({
   seriesId = null,
@@ -80,11 +86,7 @@ export async function listIssueIds({ includeDeleted = false } = {}) {
  *
  * Same rationale as `listIssueIds`: `listIssues` slices at
  * `ISSUES_PER_RESPONSE_MAX` (1000) even unpaginated, so it cannot back
- * whole-library scans. Callers that group/count issues across ALL series
- * (canon-usage tallies, the orphan-shell sweep's "does this series still have
- * issues?" gate) must use this — with `listIssues({})` an install holding
- * >1000 issues would silently miss the tail, and the orphan sweep could
- * delete a series that still has issues past the cap.
+ * whole-library scans such as canon-usage tallies.
  *
  * @param {object} [options]
  * @param {boolean} [options.includeDeleted=false]
@@ -175,21 +177,34 @@ export function ensureIssueWithId(id, input = {}) {
   return queueNewIssue(id, input, { reuseExisting: true });
 }
 
+// Renumber mutates full issue records in place. Compare only their derived
+// numbers and retain the rows the caller already changed for another reason.
+async function renumberAndSave(state, seriesId, edited, fromSeasonId = null, preloadedSeries = null) {
+  const before = state.issues.map((issue) => issue.number);
+  await renumberInline(state, seriesId, fromSeasonId, preloadedSeries);
+  const changed = new Set(edited);
+  state.issues.forEach((issue, i) => {
+    if (issue.number !== before[i]) changed.add(issue);
+  });
+  await saveIssuesNow([...changed]);
+  return changed.size > 0;
+}
+
 // Shared by createIssue (fresh random id) and ensureIssueWithId (planned id).
 function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = false } = {}) {
   const seriesId = trimTo(input.seriesId, SERIES_ID_MAX);
   if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueSeriesIssuesWrite(seriesId, async () => {
-    const state = await readState();
+  return queueIssueInsert(seriesId, id, async () => {
+    const state = await readStateForSeries(seriesId);
     if (reuseExisting) {
       const existing = state.issues.find((i) => i.id === id);
-      if (existing && !existing.deleted && existing.seriesId === seriesId) return { issue: existing, created: false };
-      if (existing) throw codedError(`Issue id already used: ${id}`, ERR_DUPLICATE);
+      if (existing && !existing.deleted) return { issue: existing, created: false };
+      if (existing || await store().getDeletionStatus(id) !== null) throw codedError(`Issue id already used: ${id}`, ERR_DUPLICATE);
       const pos = input.arcPosition;
       if (Number.isInteger(pos) && pos >= 1
-          && state.issues.some((i) => i.seriesId === seriesId && !i.deleted && i.arcPosition === pos)) {
+          && state.issues.some((i) => !i.deleted && i.arcPosition === pos)) {
         throw codedError(`arcPosition ${pos} is already held by another issue in this series`, ERR_ARC_POSITION_CONFLICT);
       }
     }
@@ -215,8 +230,7 @@ function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = fals
     });
     if (!next) throw codedError('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
-    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR, preloadedSeries);
-    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+    await renumberAndSave(state, seriesId, [next], next.seasonId || UNSCOPED_ANCHOR, preloadedSeries);
     // New issue = series-level change for any active share subscription.
     emitRecordUpdated('series', next.seriesId);
     return { issue: next, created: true };
@@ -225,10 +239,9 @@ function queueNewIssue(id, input, { preloadedSeries = null, reuseExisting = fals
 
 export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
   return queueSeriesIssuesWrite(seriesId, async () => {
-    const state = await readState();
-    const changed = await renumberInline(state, seriesId, fromSeasonId);
+    const state = await readStateForSeries(seriesId);
+    const changed = await renumberAndSave(state, seriesId, [], fromSeasonId);
     if (!changed) return { changed: false };
-    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
     emitRecordUpdated('series', seriesId);
     return { changed: true };
   });
@@ -268,12 +281,12 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
         );
       }
     }
-    const state = await readState();
-    let reassigned = 0;
+    if ((fromSeasonId || null) === (toSeasonId || null)) return { reassigned: 0, fromSeasonId, toSeasonId };
+    const state = await readStateForSeries(seriesId);
+    const moved = [];
     const now = new Date().toISOString();
     for (let i = 0; i < state.issues.length; i += 1) {
       const iss = state.issues[i];
-      if (iss.seriesId !== seriesId) continue;
       // Skip tombstones — moving a soft-deleted issue would bump its
       // `updatedAt`, which then loses LWW races with the originator's
       // tombstone and can resurrect the record on every peer.
@@ -288,15 +301,14 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
       });
       if (!merged) continue;
       state.issues[i] = merged;
-      reassigned += 1;
+      moved.push(merged);
     }
-    if (reassigned === 0) return { reassigned: 0, fromSeasonId, toSeasonId };
+    if (moved.length === 0) return { reassigned: 0, fromSeasonId, toSeasonId };
     // One renumber pass after the bulk move — the source AND destination
     // volume both reshuffled, so use the series-wide form (fromSeasonId=null).
-    await renumberInline(state, seriesId, null);
-    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+    await renumberAndSave(state, seriesId, moved);
     emitRecordUpdated('series', seriesId);
-    return { reassigned, fromSeasonId, toSeasonId };
+    return { reassigned: moved.length, fromSeasonId, toSeasonId };
   });
 }
 
@@ -329,7 +341,7 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap =
   // be lost. Acquire in sorted order so a future two-series caller can't deadlock.
   const [first, second] = [fromSeriesId, toSeriesId].sort();
   const body = async () => {
-    const state = await readState();
+    const state = { issues: await store().loadAllForSeriesIds([fromSeriesId, toSeriesId]) };
     const now = new Date().toISOString();
     const moved = [];
     for (let i = 0; i < state.issues.length; i += 1) {
@@ -344,10 +356,7 @@ export function reassignIssuesToSeries(fromSeriesId, toSeriesId, { seasonIdMap =
       moved.push(merged);
     }
     if (moved.length === 0) return { reassigned: 0 };
-    await renumberInline(state, toSeriesId, null);
-    // Persist every issue now tagged to the survivor (the moved ones + any the
-    // survivor already had, whose numbers may have shifted in the renumber).
-    await saveIssuesNow(state.issues.filter((i) => i.seriesId === toSeriesId));
+    await renumberAndSave(state, toSeriesId, moved);
     emitRecordUpdated('series', toSeriesId);
     emitRecordUpdated('series', fromSeriesId);
     return { reassigned: moved.length };
@@ -368,26 +377,28 @@ export function insertIssueWithId(input = {}) {
   if (!seriesId) return Promise.reject(codedError('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(codedError(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueSeriesIssuesWrite(seriesId, async () => {
-    const state = await readState();
+  return queueIssueInsert(seriesId, input.id, async () => {
+    const state = await readStateForSeries(seriesId);
     // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId.
     const existingIdx = state.issues.findIndex((i) => i.id === input.id);
-    if (existingIdx >= 0 && !state.issues[existingIdx].deleted) {
+    const deleted = existingIdx >= 0 ? state.issues[existingIdx].deleted : await store().getDeletionStatus(input.id);
+    if (deleted === false) {
       throw codedError(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
     }
-    const wasResurrection = existingIdx >= 0;
+    const wasResurrection = deleted === true;
     const next = sanitizeIssue({ ...input, seriesId, title });
     if (!next) throw codedError('Invalid issue payload', ERR_VALIDATION);
     if (wasResurrection) {
-      console.warn(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
+      console.log(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
+    }
+    if (existingIdx >= 0) {
       state.issues[existingIdx] = next;
     } else {
       state.issues.push(next);
     }
     // Imported `number` is a starting hint — local canonical numbering still
     // comes from (volume order, arcPosition) of the local state.
-    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
-    await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+    await renumberAndSave(state, seriesId, [next], next.seasonId || UNSCOPED_ANCHOR);
     // Mirror createIssue's federation side-effect on tombstone-overwrite:
     // issues ride series-level events, so notify peers via the parent series.
     if (wasResurrection) emitRecordUpdated('series', next.seriesId);
@@ -522,7 +533,7 @@ export function updateIssue(id, patchOrMutator = {}, { skipRenumber = false, upd
 
   return getIssue(id, { includeDeleted: true }).then((existing) =>
     queueSeriesIssuesWrite(existing.seriesId, async () => {
-      const state = await readState();
+      const state = await readStateForSeries(existing.seriesId);
       const idx = state.issues.findIndex((i) => i.id === id);
       if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
@@ -534,11 +545,12 @@ export function updateIssue(id, patchOrMutator = {}, { skipRenumber = false, upd
       // A seasonId move affects both source and destination volumes, so full
       // renumber. An arcPosition change only reorders within the current volume.
       if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
-        await renumberInline(state, merged.seriesId, null);
+        await renumberAndSave(state, merged.seriesId, [merged]);
       } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
-        await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+        await renumberAndSave(state, merged.seriesId, [merged], merged.seasonId || UNSCOPED_ANCHOR);
+      } else {
+        await saveIssueNow(merged);
       }
-      await saveIssuesNow(state.issues.filter((i) => i.seriesId === merged.seriesId));
       // Issues are exported as part of their parent series — re-export the
       // series so any active subscription picks up the issue change.
       emitRecordUpdated('series', merged.seriesId);
@@ -557,7 +569,7 @@ export function deleteIssue(id) {
   // `renumberInline` filters tombstones, so surviving issues stay contiguous.
   return getIssue(id, { includeDeleted: true }).then((existing) =>
     queueSeriesIssuesWrite(existing.seriesId, async () => {
-      const state = await readState();
+      const state = await readStateForSeries(existing.seriesId);
       const idx = state.issues.findIndex((i) => i.id === id);
       if (idx < 0) throw codedError(`Issue not found: ${id}`, ERR_NOT_FOUND);
       const cur = state.issues[idx];
@@ -565,8 +577,7 @@ export function deleteIssue(id) {
       const seriesId = cur.seriesId;
       const now = new Date().toISOString();
       state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-      await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
-      await saveIssuesNow(state.issues.filter((i) => i.seriesId === seriesId));
+      await renumberAndSave(state, seriesId, [state.issues[idx]], cur.seasonId || UNSCOPED_ANCHOR);
       // Series export bundles every issue, so a deletion is an update on the
       // parent series for any active share-bucket subscription.
       emitRecordUpdated('series', seriesId);
