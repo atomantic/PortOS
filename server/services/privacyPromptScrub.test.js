@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fenceBlock } from '../lib/promptFencing.js';
-import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../lib/privacyPrompt.js';
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
 import { PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 import { encryptValue } from '../lib/vaultCrypto.js';
 import { deleteVaultRecord, updateVaultRecord } from './privacyVault.js';
+import { createRunnerService } from '../lib/aiToolkit/runner.js';
+import { trackPrivateRunOutput } from './privacyPromptScrub.js';
 import { deleteSubject } from './privacySubjects.js';
 
 const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn() }));
@@ -70,6 +72,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   if (root) await rm(root, { recursive: true, force: true });
 });
@@ -97,6 +100,46 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     expect(await readFile(join(paths.cosRun, 'prompt.txt'), 'utf8')).toBe(survivor);
     expect(await readFile(join(paths.unrelated, 'output.txt'), 'utf8')).toBe(output);
     expect(await readFile(join(paths.backup, 'prompt.txt'), 'utf8')).toBe(prompt);
+    expect([log, warn, error].flatMap(spy => spy.mock.calls.flat()).join('\n')).not.toContain(fact);
+  });
+});
+
+describe('vault revocation and API run publication', () => {
+  it.each([
+    ['before the response', true, prompt],
+    ['after the response', false, prompt],
+    ['during an unrelated run', true, survivor],
+  ])('preserves the correct stored output when revocation happens %s', async (_label, revokeFirst, request) => {
+    const runner = createRunnerService({
+      dataDir: root, providerService: {}, redactStoredPrompt: redactStoredPrivacyPrompt,
+      hooks: { trackRunOutput: trackPrivateRunOutput },
+    });
+    const provider = { id: 'example', type: 'api', endpoint: 'https://api.example.com/v1', defaultModel: 'example-model' };
+    const { runId, runDir } = await runner.createRun({ providerId: provider.id, provider, prompt: request });
+    const stream = new TransformStream();
+    const fetch = vi.fn(async () => new Response(stream.readable));
+    vi.stubGlobal('fetch', fetch);
+    const settled = Promise.withResolvers();
+    await runner.executeApiRun({ runId, provider, prompt: request, onSettled: settled.resolve });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).messages[0].content).toBe(request);
+    expect(await runner.getRunPrompt(runId)).not.toContain(fact);
+    if (revokeFirst) await deleteVaultRecord('record-example');
+
+    const writer = stream.writable.getWriter();
+    const echo = `${fact} — ${survivor}`;
+    const frame = { choices: [{ delta: { content: echo } }] };
+    await writer.write(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n`));
+    await writer.close();
+    await settled.promise;
+    if (!revokeFirst) {
+      expect(await runner.getRunOutput(runId)).toBe(echo);
+      await deleteVaultRecord('record-example');
+    }
+
+    const expected = request === prompt ? `[redacted] — ${survivor}` : echo;
+    expect(await runner.getRunOutput(runId)).toBe(expected);
+    expect(await runner.getRun(runId)).toMatchObject({ success: true, outputSize: Buffer.byteLength(expected) });
+    expect((await readdir(runDir)).sort()).toEqual(['metadata.json', 'output.txt', 'prompt.txt']);
     expect([log, warn, error].flatMap(spy => spy.mock.calls.flat()).join('\n')).not.toContain(fact);
   });
 });

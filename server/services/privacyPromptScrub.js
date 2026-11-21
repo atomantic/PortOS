@@ -14,6 +14,25 @@ import { ServerError } from '../lib/errorHandler.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 
 const scrubQueue = createFileWriteQueue();
+const activePrivateOutputs = new Map();
+
+// A provider can echo an authorized fact after the on-disk sweep. Keep each
+// pending recording reachable until its final write has taken the same turn.
+export function trackPrivateRunOutput(outputPath, prompt) {
+  if (!hasStoredPrivacyFacts(prompt)) return null;
+  const redactions = [];
+  activePrivateOutputs.set(outputPath, redactions);
+  return {
+    redact: text => redactions.reduce((result, scrub) => scrub(result), text),
+    async publish(work) {
+      try {
+        return await withRuntimeFileTurn(outputPath, work);
+      } finally {
+        activePrivateOutputs.delete(outputPath);
+      }
+    },
+  };
+}
 
 async function missingAsNull(work) {
   return work.catch(error => {
@@ -53,20 +72,26 @@ async function scrubDirectory(directory, scrubValue, privateAgentIds, isAgent) {
   const metadata = isAgent ? null : safeJSONParse(await readArtifact(metadataPath), null);
   const preview = typeof metadata?.prompt === 'string' ? metadata.prompt : null;
   const previewHasFacts = preview !== null && hasStoredPrivacyFacts(preview);
-  if (!promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
+  const outputPath = join(directory, 'output.txt');
+  const activeRedactions = activePrivateOutputs.get(outputPath);
+  if (!activeRedactions && !promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
+  activeRedactions?.push(scrubValue);
 
   if (isAgent) privateAgentIds.add(basename(directory));
   const stored = promptHasFacts ? redactStoredPrivacyPrompt(prompt) : prompt;
-  const outputPath = join(directory, 'output.txt');
   const output = await readArtifact(outputPath);
+  const metadataPatch = {};
   if (output !== null) {
     const cleaned = scrubValue(output);
     if (cleaned !== output) await atomicWrite(outputPath, cleaned);
+    const size = Buffer.byteLength(cleaned);
+    if (typeof metadata?.outputSize === 'number' && size !== metadata.outputSize) metadataPatch.outputSize = size;
   }
   if (previewHasFacts || (promptHasFacts && preview !== null)) {
     const storedPreview = (promptHasFacts ? stored : redactStoredPrivacyPrompt(preview)).slice(0, 500);
-    if (storedPreview !== preview) await atomicWrite(metadataPath, { ...metadata, prompt: storedPreview });
+    if (storedPreview !== preview) metadataPatch.prompt = storedPreview;
   }
+  if (Object.keys(metadataPatch).length) await atomicWrite(metadataPath, { ...metadata, ...metadataPatch });
   // Preserve the provenance marker after the rewrite so later vault
   // revocations can still find outputs from the same historical request.
   if (stored !== prompt) await atomicWrite(promptPath, stored);

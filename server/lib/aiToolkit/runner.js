@@ -736,8 +736,10 @@ export function createRunnerService(config = {}) {
         absoluteTimeout,
         onTimeout: bound => finalizer.finalize({ type: 'timeout', bound }),
       });
+      const recording = hooks.trackRunOutput?.(outputPath, prompt);
       finalizer = createRunFinalizer({
         withAssetPublication,
+        recording,
         runId,
         provider,
         startTime,
@@ -748,8 +750,8 @@ export function createRunnerService(config = {}) {
         callerRuntimeBudget: absoluteTimeout < apiRunAbsoluteTimeoutMs(stallTimeout),
         outputPath,
         metadataPath,
-        getOutput: () => output,
-        getReasoning: () => reasoning,
+        getOutput: () => recording ? recording.redact(output) : output,
+        getReasoning: () => recording ? recording.redact(reasoning) : reasoning,
         providerStatusService,
         hooks,
         onComplete,

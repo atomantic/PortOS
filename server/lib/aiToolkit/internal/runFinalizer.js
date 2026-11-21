@@ -25,8 +25,10 @@ export function createRunFinalizer({
   safeJsonParse,
   consumeActiveStop,
   onPersistenceFailure,
-  withAssetPublication = work => work(),
+  withAssetPublication: defaultPublication = work => work(),
+  recording,
 }) {
+  const withAssetPublication = recording?.publish ?? defaultPublication;
   const pendingHooks = [];
   const failed = () => onPersistenceFailure?.();
   // Invoke host callbacks only after releasing the recording lease. Hooks can
