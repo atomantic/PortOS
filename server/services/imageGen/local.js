@@ -1,4 +1,3 @@
-import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Image Gen — Local provider (mflux, diffusers, and platform-specific runners).
  *
@@ -13,53 +12,50 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * raw status text mflux prints to stderr.
  */
 
-import { spawn } from '../../lib/childProcess.js';
-import { readFile, readdir, stat, mkdtemp, open, rename } from 'fs/promises';
+import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
-import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { trashFiles } from '../../lib/trashFiles.js';
-import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
-import { detectImageFormat } from '../../lib/mimeTypes.js';
-import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { spawn } from '../../lib/childProcess.js';
+import { atomicWrite, ensureDir, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
-import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
-import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent } from '../../lib/sseUtils.js';
+import { FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
 import { usesTorchVenv, usesMossSwift, usesFlux3, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
-import { mossRenderArgs, mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
+import { mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
 import { hfChildEnv } from '../hfToken.js';
-import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
-import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../videoGen/generateVideoHelpers.js';
-
-
-import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
+import { bufferChildExit } from '../videoGen/generateVideoHelpers.js';
+import { getImageModels } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
-import { flux3RenderArgs, assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
+import { assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
 import {
-  minimaxH3ImageRenderArgs, assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
+  assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
 } from './minimaxH3ImageRuntime.js';
-import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
-import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
-import { provenanceForRender } from '../../lib/assetProvenance.js';
-import { GALLERY_IMAGE_EXTENSIONS } from '../../lib/pathSafety.js';
-import { registerGallerySha256Writer, sidecarPathForImage } from '../../lib/assetHash.js';
-import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
-import { withLocalImageOrigin } from './imageRecords.js';
-import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
-import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
+import { rejectDegenerateFrame } from './frameGuard.js';
+import { buildArgs } from './localArgs.js';
+import { classifyLocalRenderFailure, createLocalOutputParser } from './localOutputParser.js';
+import { buildSidecarMeta, resolveOutputPlacement } from './localRenderMeta.js';
+
+export { buildArgs } from './localArgs.js';
+export { parseImageExecutionMarker } from './localOutputParser.js';
+export { buildSidecarMeta, localSentPrompt, resolveOutputPlacement } from './localRenderMeta.js';
+export {
+  assertGalleryFilename, cacheImageSha256, deleteImage, fillImageSidecarFields, listGallery, listLoraFilenames,
+  readImageSidecar, saveUploadedGalleryImage, setImageHidden, setImagePendingDelete, setImagePrimary, updateImagePrompt,
+} from './localGallery.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -100,544 +96,7 @@ export const cancel = () => {
   return true;
 };
 
-const diffusersRenderArgs = ({ model, prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [] }) => {
-  const modelId = model?.id;
-  const runnerLabel = isErnie(model) ? 'ERNIE' : isHiDream(model) ? 'HiDream' : isQwen(model) ? 'Qwen' : 'Z-Image';
-  const errCode = isErnie(model)
-    ? 'IMAGE_GEN_ERNIE_MISCONFIGURED'
-    : isHiDream(model)
-      ? 'IMAGE_GEN_HIDREAM_MISCONFIGURED'
-      : isQwen(model)
-        ? 'IMAGE_GEN_QWEN_MISCONFIGURED'
-        : 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED';
-  if (!model.repo) {
-    throw new ServerError(
-      `${runnerLabel} model "${modelId}" is missing the 'repo' field in data/media-models.json`,
-      { status: 500, code: errCode },
-    );
-  }
-  // Z-Image / ERNIE / HiDream / Qwen all reuse the FLUX.2 venv (same
-  // diffusers + torch stack, no extra setup). Same not-installed error code
-  // so the UI's existing "run setup" CTA fires for any of these runners.
-  const torchPython = resolveFlux2Python();
-  if (!torchPython) {
-    throw new ServerError(
-      `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). FLUX.2, Z-Image, ERNIE, HiDream, and Qwen share this venv.`,
-      { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
-    );
-  }
-  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'z_image_turbo.py');
-  const args = [
-    scriptPath,
-    '--model', modelId,
-    '--repo', model.repo,
-    '--prompt', prompt,
-    '--height', String(height),
-    '--width', String(width),
-    '--steps', String(steps),
-    '--guidance', String(guidance ?? 1.0),
-    '--seed', String(seed),
-    '--output', outputPath,
-  ];
-  if (model.pipelineClass === 'QwenImage21Pipeline') {
-    if (referenceImagePaths.length + (initImagePath ? 1 : 0) > 10) {
-      throw new ServerError('Qwen Image 2.1 accepts at most 10 input images', { status: 400, code: 'TOO_MANY_INPUT_IMAGES' });
-    }
-    if (referenceImagePaths.length) args.push('--reference-images', ...referenceImagePaths);
-  }
-  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-  if (initImagePath) args.push('--image-path', initImagePath);
-  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-  if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-  if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
-  if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-  if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
-  if (model.usePromptEnhancer) args.push('--use-pe');
-  // HiDream needs a 4th text encoder loaded separately (Llama-3.1-8B) —
-  // the Diffusers HiDreamImagePipeline expects `text_encoder_4` /
-  // `tokenizer_4` kwargs at from_pretrained() time. The runner script
-  // branches on these flags; Z-Image / ERNIE / Qwen leave them unset.
-  if (model.textEncoderRepo) args.push('--text-encoder-repo', String(model.textEncoderRepo));
-  if (model.textEncoderClass) args.push('--text-encoder-class', String(model.textEncoderClass));
-  if (model.tokenizerClass) args.push('--tokenizer-class', String(model.tokenizerClass));
-  return { bin: torchPython, args, providerInputs: {
-    initImagePath: initImagePath || null,
-    referenceImagePaths: model.pipelineClass === 'QwenImage21Pipeline' ? referenceImagePaths : [],
-  } };
-};
-
-// Resolves the repo / quantization / sibling repos / reference images FLUX.2
-// actually renders with. A LoRA reroutes a quantized base onto bf16.
-const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageStrengths }) => {
-  const modelId = model?.id;
-  let repo = model.repo;
-  let quantization = model.quantization || 'sdnq';
-  let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
-  const refImagePaths = referenceImagePaths;
-  const refImageStrengths = referenceImageStrengths;
-  // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
-  // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
-  // into a base render (lora_utils.apply_loras), so the LoRA silently does
-  // nothing. The adapter was trained against the bf16 base anyway — route the
-  // render onto it.
-  if (loraPaths?.length && quantization !== 'none') {
-    const bf16 = flux2Bf16BaseRepo(model);
-    if (!bf16) {
-      throw new ServerError(
-        `Can't render a LoRA on "${modelId}" — a LoRA needs a bf16 FLUX.2 base and the size variant couldn't be resolved`,
-        { status: 400, code: 'IMAGE_GEN_LORA_NEEDS_BF16' },
-      );
-    }
-    console.log(`🎚️  flux2 LoRA render → routing ${modelId} (${quantization}) onto bf16 base ${bf16}`);
-    repo = bf16;
-    quantization = 'none';
-    tokenizerRepo = null;
-    basePipelineRepo = null;
-    // The rerouted base has no KV sibling; references were refused up front.
-    kvRepo = null;
-  }
-  return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths };
-};
-
-const flux2RenderArgs = (model, inputs) => {
-  const { prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength } = inputs;
-  const modelId = model?.id;
-  assertFlux2InputsCompatible(model, {
-    hasInitImage: Boolean(initImagePath), referenceCount: inputs.referenceImagePaths?.length || 0,
-    loraCount: loraPaths.length,
-  });
-  if (!model.repo) {
-    throw new ServerError(
-      `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
-      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-    );
-  }
-  const { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths } = flux2LoraRoute(model, inputs);
-  if (quantization !== 'sdnq' && quantization !== 'int8' && quantization !== 'none') {
-    throw new ServerError(
-      `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8, none)`,
-      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-    );
-  }
-  if (quantization === 'sdnq' && !tokenizerRepo) {
-    throw new ServerError(
-      `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
-      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-    );
-  }
-  if (quantization === 'int8' && !basePipelineRepo) {
-    throw new ServerError(
-      `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
-      { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
-    );
-  }
-  // quantization=none uses model.repo directly (gated base repo). No
-  // sibling-repo flag required, but the repo must be the gated base.
-  const flux2Python = resolveFlux2Python();
-  if (!flux2Python) {
-    throw new ServerError(
-      `FLUX.2 venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}).`,
-      { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
-    );
-  }
-  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'flux2_macos.py');
-  // No --metadata flag: local.js's proc.on('close') already writes the
-  // canonical sidecar at <jobId>.metadata.json after a successful exit.
-  // Letting the runner write its own would duplicate work and the JS
-  // sidecar would clobber any flux2-specific fields anyway.
-  const args = [
-    scriptPath,
-    '--model', modelId,
-    '--quantization', quantization,
-    '--repo', repo,
-    '--prompt', prompt,
-    '--height', String(height),
-    '--width', String(width),
-    '--steps', String(steps),
-    '--guidance', String(guidance ?? 0),
-    '--seed', String(seed),
-    '--output', outputPath,
-  ];
-  if (tokenizerRepo) args.push('--tokenizer-repo', tokenizerRepo);
-  if (basePipelineRepo) args.push('--base-pipeline-repo', basePipelineRepo);
-  // bf16 multi-reference editing loads the `-kv` sibling repo (whose
-  // transformer is tuned for reference editing) instead of `repo`.
-  // The runner only uses --kv-repo when --reference-images is also present;
-  // the plain text/i2i bf16 path stays on the base repo.
-  if (kvRepo) args.push('--kv-repo', kvRepo);
-  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-  if (initImagePath) args.push('--image-path', initImagePath);
-  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-  // Multi-reference editing for FLUX.2. When the path list is non-empty,
-  // scripts/ml/flux2_macos.py loads Flux2KleinKVPipeline (instead of the
-  // single-image Flux2KleinPipeline) and passes the refs as image=[PIL...].
-  // The route always emits parallel referenceImageStrengths (defaulting to
-  // 1.0 per ref); the runner honors them per-reference via a runtime patch
-  // on Flux2KVLayerCache.store + _flux2_kv_causal_attention.
-  if (refImagePaths?.length) {
-    args.push('--reference-images', ...refImagePaths);
-    if (refImageStrengths?.length) {
-      args.push('--reference-strengths', ...refImageStrengths.map(String));
-    }
-  }
-  if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-  if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
-  if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-  return { bin: flux2Python, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: refImagePaths } };
-};
-
-// imagine_win.py does not implement i2i — silently drop the init-image
-// args so the request still produces a normal txt2img result rather
-// than failing argparse with "unrecognized arguments".
-const mfluxWindowsArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [] }) => {
-  const scriptPath = join(PATHS.root, 'scripts', 'ml', 'imagine_win.py');
-  return {
-    bin: pythonPath,
-    providerInputs: { initImagePath: null, referenceImagePaths: [] },
-    args: [scriptPath, '--model', model?.id, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata',
-      ...(guidance > 0 ? ['--guidance', String(guidance)] : []),
-      ...(negativePrompt ? ['--negative-prompt', negativePrompt] : []),
-      ...(loraPaths.length ? ['--lora-paths', ...loraPaths] : []),
-      ...(loraScales.length ? ['--lora-scales', ...loraScales.map(String)] : []),
-    ],
-  };
-};
-
-const mfluxArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
-  const bin = join(dirname(pythonPath), 'mflux-generate');
-  const args = ['--model', model?.id, '--prompt', prompt, '--height', String(height), '--width', String(width), '--steps', String(steps), '--seed', String(seed), '--quantize', String(quantize), '--output', outputPath, '--metadata'];
-  if (guidance > 0) args.push('--guidance', String(guidance));
-  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-  if (loraPaths.length) args.push('--lora-paths', ...loraPaths);
-  if (loraScales.length) args.push('--lora-scales', ...loraScales.map(String));
-  if (initImagePath) args.push('--image-path', initImagePath);
-  if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
-  // mflux writes one PNG per step here as it diffuses; we watch the dir and
-  // stream the latest frame back to the client as `currentImage` for the
-  // live-preview area.
-  if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
-  return { bin, args, providerInputs: { initImagePath: initImagePath || null, referenceImagePaths: [] } };
-};
-
-export const buildArgs = ({ loraPaths = [], loraScales = [], referenceImagePaths = [], referenceImageStrengths = [], platform = process.platform, ...rest }) => {
-  const inputs = { ...rest, loraPaths, loraScales, referenceImagePaths, referenceImageStrengths };
-  const { model } = inputs;
-  if (usesFlux3(model)) return flux3RenderArgs(inputs);
-  if (usesMinimaxH3Image(model)) return minimaxH3ImageRenderArgs(inputs);
-  if (usesMossSwift(model)) return mossRenderArgs(inputs);
-  if (usesDiffusersRunner(model)) return diffusersRenderArgs(inputs);
-  if (isFlux2(model)) return flux2RenderArgs(model, inputs);
-  if (platform === 'win32') return mfluxWindowsArgs(inputs);
-  return mfluxArgs(inputs);
-};
-
-// Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
-// corrupt sidecar value like Number('bad') would slip through and end up
-// serialized into metadata / the CLI flag. `null` here means "no strength
-// sent" (init-image), which the args builder already gates on; for refs
-// we fall back to 1.0 (full influence).
-const clampStrength01 = (raw, fallback) => {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(0, Math.min(1, n));
-};
-
-/**
- * Build the resolved/validated render parameters + sidecar `meta` object for a
- * generation job. Factored out of `generateImage` so the resolution rules
- * (seed/steps/guidance defaults, LoRA prefix-check, init/reference path
- * re-anchoring, strength clamping) are unit-testable without spawning Python
- * or touching the gallery filesystem.
- *
- * Filesystem touch-points are injected so the function stays pure:
- * - `resolveInputPath(rawPath)` — re-anchors an init/reference path against the
- *   approved image roots; returns the validated absolute path or `null`
- *   (production passes `resolveImageInputPath`).
- * - `loraExists(absPath)` — whether a prefix-checked LoRA path exists on disk
- *   (production passes `existsSync`).
- * - `loraTriggerWords` — `{ [loraBasename]: string[] }` read from the LoRA
- *   sidecars by `generateImage`, so the trigger-word weave (#4665) needs no I/O
- *   of its own.
- *
- * `meta` is the exact object `generateImage` persists as the `<jobId>.metadata.json`
- * sidecar AND spreads into the in-memory job + activeJob snapshots, so the
- * shape returned here is the contract the gallery/Remix flow reads back.
- */
-export function buildSidecarMeta({
-  jobId,
-  model,
-  prompt,
-  negativePrompt = '',
-  modelId,
-  width,
-  height,
-  steps,
-  guidance,
-  seed,
-  quantize,
-  loraFilenames = [],
-  loraPaths = [],
-  loraScales = [],
-  // LoRA trigger-word weaving (#4665). `loraTriggerWords` maps a LoRA basename
-  // to its sidecar `triggerWords` array; `generateImage` reads the sidecars and
-  // passes the map so this stays pure. Keyed rather than positional because the
-  // valid-LoRA order is only known after the prefix-check below.
-  loraTriggerWords = null,
-  // License map keyed by LoRA basename, read from sidecars by generateImage
-  // so this stays pure. Missing entries stamp license: null (unknown).
-  loraLicenses = null,
-  // The labeled additions the composer put around the user's text (lib/modelInput.js).
-  promptAdditions = [],
-  initImagePath = null,
-  initImageStrength = null,
-  referenceImagePaths = [],
-  referenceImageStrengths = [],
-  visualConditioning = null,
-  // SynthID-defeat regen lineage. When `regenOf` is set, this render is a
-  // post-hoc round-trip of an existing gallery image through local FLUX
-  // img2img (issue #912) — stamp the source filename as `cleanedFrom` (so the
-  // lightbox variant toggle groups the regen under its source the same way a
-  // cleaned copy is) plus explicit `regenerated`/`regenSteps`/`regenStrength`/
-  // `regenModelId` so the sidecar lineage stays honest about how it was made.
-  regenOf = null,
-  resolveInputPath,
-  loraExists,
-  now = () => new Date().toISOString(),
-}) {
-  const filename = `${jobId}.png`;
-  const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
-  const actualSteps = steps ? Number(steps) : model.steps;
-  // Step-wise distilled models (Schnell / FLUX.2 Klein / Z-Image-Turbo) ignore
-  // any guidance scale > 1.0 internally; passing a real value just produces a
-  // "Guidance scale X is ignored for step-wise distilled models." warning on
-  // every render. Clamp to ≤1.0 (rather than hard-pin to 1.0) so registry
-  // entries that intentionally use 0.0 — e.g. Flux.1 Schnell, where the mflux
-  // runner historically *omits* --guidance entirely on 0 — keep their existing
-  // behavior. The clamp keeps FLUX.2 / Z-Image / ERNIE quiet while leaving
-  // sub-1.0 values (including 0.0) untouched.
-  const requestedGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
-  const actualGuidance = model.cfgDisabled
-    ? Math.min(1.0, Number.isFinite(requestedGuidance) ? requestedGuidance : 1.0)
-    : requestedGuidance;
-  // The new client-side surface sends `loraFilenames` (basenames only); the
-  // server resolves them against PATHS.loras. `loraPaths` is kept as a
-  // back-compat input for old gallery sidecars that stored absolute paths
-  // pre-refactor — both go through the same resolve+prefix-check.
-  const lorasRoot = resolvePath(PATHS.loras) + PATH_SEP;
-  const candidates = [
-    ...loraFilenames.map((f) => (typeof f === 'string' ? join(PATHS.loras, basename(f)) : null)),
-    ...loraPaths,
-  ];
-  const validLoras = candidates.filter((p) => {
-    if (!p || typeof p !== 'string') return false;
-    const resolved = resolvePath(p);
-    if (!resolved.startsWith(lorasRoot)) return false;
-    return loraExists(resolved);
-  });
-
-  // Store loraFilenames (basenames) in the sidecar going forward — that's
-  // what the new client API uses for remix. Keep `loraPaths` populated too
-  // so older code paths reading the sidecar don't break.
-  const validLoraFilenames = validLoras.map((p) => basename(p));
-  // i2i: defense in depth — the route already validated a fresh request,
-  // but an old sidecar replay can carry a stale absolute path outside the
-  // approved image roots. resolveInputPath accepts gallery + image-refs
-  // + visual templates — the latter so the universe-builder reference-sheet
-  // renderer can use a shipped layout template as the init-image anchor.
-  const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
-    ? resolveInputPath(initImagePath)
-    : null;
-  const validInitImageStrength = validInitImagePath && initImageStrength != null
-    ? clampStrength01(initImageStrength, null)
-    : null;
-  // Multi-reference: re-anchor each path through resolveInputPath so a
-  // sidecar replay can't sneak a path outside the approved image roots into
-  // the runner. Accepts gallery + image-refs + visual templates — the gallery
-  // path lets a canon portrait (e.g. character.primaryImageRef) flow in as a
-  // multi-ref input. Pair each path with its strength BEFORE filtering so a
-  // rejected entry doesn't shift the strength array — otherwise the surviving
-  // path would inherit the wrong slot's strength.
-  const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
-  const validReferences = rawRefPaths
-    .map((p, i) => {
-      const resolved = typeof p === 'string' ? resolveInputPath(p) : null;
-      if (!resolved) return null;
-      const rawStrength = referenceImageStrengths?.[i];
-      const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;
-      return { path: resolved, strength };
-    })
-    .filter(Boolean);
-  const validReferenceImagePaths = validReferences.map((r) => r.path);
-  const validReferenceImageStrengths = validReferences.map((r) => r.strength);
-  // `referenceImageStrengths` is honored end-to-end: the FLUX.2 runner installs
-  // a Flux2KVLayerCache.store + _flux2_kv_causal_attention patch that scales
-  // each reference's V slice by the corresponding strength (1.0 = upstream
-  // baseline, 0.0 = ignored). Mirrors the Python sidecar's `referenceStrengths`.
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, ...(visualConditioning ? { visualConditioning } : {}), createdAt: now() };
-  // Regen lineage (issue #912). `regenOf` is the source gallery filename this
-  // render was generated from. We reuse the existing `cleanedFrom` field so the
-  // lightbox's `computeImageVariantGroup` groups the regen under its source with
-  // zero changes to the grouping key, and add explicit regen* fields so the
-  // sidecar honestly records that the per-pixel watermark was overwritten by a
-  // fresh sampling pass rather than stripped. `regenStrength`/`regenSteps`/
-  // `regenModelId` mirror the resolved render params (not the raw inputs) so a
-  // replayed/clamped value is what's recorded.
-  // Only stamp the lineage when the init image actually resolved — if the
-  // source path was rejected/missing, this render degraded to txt2img and is
-  // NOT a regen of anything, so claiming `regenerated: true` would be a lie.
-  if (typeof regenOf === 'string' && regenOf && validInitImagePath) {
-    meta.cleanedFrom = regenOf;
-    meta.regenerated = true;
-    // Explicit method so consumers never infer it by absence — the CPU path
-    // stamps 'light-spatial', this GPU round-trip stamps 'flux'.
-    meta.regenMethod = 'flux';
-    meta.regenStrength = validInitImageStrength;
-    meta.regenSteps = actualSteps;
-    meta.regenModelId = modelId;
-  }
-  // Weave each selected LoRA's activation token into the prompt that actually
-  // reaches the runner (#4665). Provenance stays honest: `meta.prompt` remains
-  // the user's own text, so a Remix re-derives triggers from whatever LoRAs are
-  // selected at THAT time instead of compounding this render's clause. The
-  // render-time text and what was added are recorded alongside it, and only when
-  // something was actually appended — an un-woven render's sidecar stays
-  // byte-identical to every sidecar written before this feature.
-  const { prompt: wovenPrompt, added: addedTriggerWords } = weaveLoraTriggers(
-    prompt,
-    validLoraFilenames.map((f) => loraTriggerWords?.[f]),
-  );
-  const renderPrompt = addedTriggerWords.length ? wovenPrompt : prompt;
-  if (addedTriggerWords.length) {
-    meta.renderPrompt = renderPrompt;
-    meta.addedTriggerWords = addedTriggerWords;
-  }
-  Object.assign(meta, sentPromptRecord({
-    sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
-    added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))],
-  }));
-  // Stamp the licenses known at THIS render. A later re-read of the LoRA
-  // sidecar or model card must not rewrite what was true when the pixels
-  // were made (#5638). Unknown stays null.
-  meta.provenance = provenanceForRender({
-    model: {
-      id: modelId,
-      name: model?.name || modelId,
-      license: usesMossSwift(model) ? 'apache-2.0' : model?.license,
-      repo: usesMossSwift(model) ? MOSS_MANIFEST.repo : model?.repo,
-      disclosure: model?.disclosure,
-    },
-    loras: validLoraFilenames.map((filename) => ({
-      filename,
-      ...(loraLicenses?.[filename] || {}),
-    })),
-    capturedAt: meta.createdAt,
-  });
-  return {
-    meta,
-    renderPrompt,
-    addedTriggerWords,
-    actualSeed,
-    actualSteps,
-    actualGuidance,
-    validLoras,
-    validInitImagePath,
-    validInitImageStrength,
-    validReferenceImagePaths,
-    validReferenceImageStrengths,
-  };
-}
-
-/**
- * Resolve where a render's PNG + sidecar go (issue #2264). Pure so the
- * gallery-vs-temp branch is unit-testable without spawning a render.
- *
- * - No `outputTarget` (the default, every existing caller) → the gallery dir
- *   with a sidecar written — the lightbox/regenerate/gen behavior, untouched.
- * - `outputTarget.dir` (the Image Cleaner's temp render) → that dir, and
- *   `skipSidecar` (defaulting true for a non-gallery dir) suppresses the
- *   `<jobId>.metadata.json` write + the gallery `completed` index/federate hooks.
- *
- * A gallery-dir target always keeps its sidecar even if `skipSidecar` was
- * passed — a gallery citizen without a sidecar would be an un-remixable orphan.
- */
-export function resolveOutputPlacement(outputTarget) {
-  const target = outputTarget && typeof outputTarget === 'object' ? outputTarget : null;
-  const outputDir = target?.dir && typeof target.dir === 'string' ? target.dir : PATHS.images;
-  const isGallery = outputDir === PATHS.images;
-  // Non-gallery renders default to no sidecar; a gallery render always writes one.
-  const skipSidecar = isGallery ? false : (target?.skipSidecar !== false);
-  return { outputDir, skipSidecar, isGallery };
-}
-
-const IMAGE_EXECUTION_MARKER = 'IMAGE_EXECUTION:';
-const IMAGE_EXECUTION_DEVICES = new Set(['auto', 'mps', 'cuda', 'cpu']);
-const IMAGE_EXECUTION_EFFECTIVE_DEVICES = new Set(['mps', 'cuda', 'cpu']);
-const IMAGE_EXECUTION_PLACEMENTS = new Set(['mps', 'cuda', 'cuda+offload', 'cpu']);
-const IMAGE_EXECUTION_RUNTIMES = new Set(['flux2', 'diffusers-image']);
-const IMAGE_EXECUTION_PACKAGES = new Set(['torch', 'diffusers', 'transformers', 'accelerate']);
-
-const boundedString = (value, max = 80) => (typeof value === 'string' && value.length > 0 && value.length <= max ? value : null);
-
-// A malformed marker is evidence of neither GPU nor CPU execution. Keep it
-// distinct from an older runner that emitted no marker at all, while refusing
-// to persist arbitrary subprocess JSON into a gallery sidecar.
-export function parseImageExecutionMarker(line) {
-  if (typeof line !== 'string' || !line.startsWith(IMAGE_EXECUTION_MARKER)) return null;
-  let value;
-  try {
-    value = JSON.parse(line.slice(IMAGE_EXECUTION_MARKER.length));
-  } catch {
-    return { state: 'malformed' };
-  }
-  if (!value || value.version !== 1
-    || !IMAGE_EXECUTION_DEVICES.has(value.requestedDevice)
-    || !IMAGE_EXECUTION_EFFECTIVE_DEVICES.has(value.effectiveDevice)
-    || !IMAGE_EXECUTION_PLACEMENTS.has(value.placement)
-    || !IMAGE_EXECUTION_RUNTIMES.has(value.runtime?.runtime)
-    || typeof value.cpuFallback !== 'boolean') return { state: 'malformed' };
-  const expectedState = value.effectiveDevice === 'cpu' ? 'degraded' : 'confirmed';
-  if (value.state !== expectedState || value.cpuFallback !== (expectedState === 'degraded')) return { state: 'malformed' };
-  const versions = Object.fromEntries(Object.entries(value.runtime.versions || {})
-    .filter(([name, version]) => IMAGE_EXECUTION_PACKAGES.has(name) && boundedString(version))
-    .map(([name, version]) => [name, version]));
-  return {
-    version: 1,
-    state: expectedState,
-    requestedDevice: value.requestedDevice,
-    effectiveDevice: value.effectiveDevice,
-    placement: value.placement,
-    cpuFallback: value.cpuFallback,
-    runtime: { runtime: value.runtime.runtime, versions },
-  };
-}
-
-/**
- * What the local runner would receive for this prompt — the LoRA trigger weave
- * included — as the compose preview's record (#11317). Same buildSidecarMeta
- * the render calls.
- */
-export async function localSentPrompt({ model, modelId, prompt = '', negativePrompt = '', loraFilenames = [], loraPaths = [], promptAdditions = [] }) {
-  const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
-  const { meta } = buildSidecarMeta({
-    jobId: 'preview', model: model || { id: modelId }, prompt, negativePrompt, modelId,
-    loraFilenames, loraPaths, loraTriggerWords, promptAdditions,
-    resolveInputPath: resolveImageInputPath, loraExists: existsSync,
-  });
-  return sentPromptRecord({ sentPrompt: meta.sentPrompt, sentNegativePrompt: meta.sentNegativePrompt, carried: meta.promptAdditions || [] });
-}
-
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
-  // The ingestion instant `renderTimingFields` measures from — the queue calls
-  // generateImage the moment it picks this job up. See lib/renderTiming.js.
-  const renderStartedAtMs = Date.now();
-  // Empty prompt is allowed: img2img / edit / unconditional renders are driven
-  // by the init image (or run unconditionally), so text isn't required. The
-  // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
-  // has always relied on this for minimal-mutation, watermark-overwriting img2img.
-  // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
-  // callers that bypass the queue must not run two concurrent renders — the
-  // activeProcess handle below would be clobbered and cancel() would orphan
-  // the first child.
+async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width, height, steps, initImagePath, referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames }) {
   // loadMediaModels memoizes — on-disk edits to data/media-models.json still
   // need a server restart to apply. Don't re-check model.broken here:
   // getImageModels() already filtered current-platform entries; an extra
@@ -651,20 +110,21 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
+  const assertRuntimeReady = async (code) => {
+    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
+    const runtime = await diagnoseLocalRuntime({ modelId });
+    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code });
+  };
   if (usesFlux3(model)) {
     assertFlux3Inputs({ negativePrompt, width: Number(width), height: Number(height), initImagePath, referenceImagePaths, referenceImageStrengths,
       loraPaths: [...loraPaths, ...loraFilenames] });
-    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
-    const runtime = await diagnoseLocalRuntime({ modelId });
-    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'FLUX3_NOT_READY' });
+    await assertRuntimeReady('FLUX3_NOT_READY');
   }
   let minimaxRuntime = null;
   if (usesMinimaxH3Image(model)) {
     assertMinimaxH3ImageInputs({ negativePrompt, width: Number(width), height: Number(height), steps: steps || null, hasInitImage: Boolean(initImagePath),
       referenceCount: referenceImagePaths.length, referenceImageStrengths, loraCount: loraPaths.length + loraFilenames.length });
-    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
-    const runtime = await diagnoseLocalRuntime({ modelId });
-    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MINIMAX_H3_IMAGE_NOT_READY' });
+    await assertRuntimeReady('MINIMAX_H3_IMAGE_NOT_READY');
     if (!await minimaxH3ImageWeightsCached(model)) {
       throw new ServerError('MiniMax H3-Image weights are not downloaded. Use Download beside the model in Image Gen, then retry.',
         { status: 400, code: 'MINIMAX_H3_IMAGE_WEIGHTS_NOT_CACHED' });
@@ -683,9 +143,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     if (loraFilenames.length || loraPaths.length || initImagePath || referenceImagePaths.length) {
       throw new ServerError('MOSS SFT supports text-to-image only; remove LoRAs and input images.', { status: 400, code: 'MOSS_INPUT_UNSUPPORTED' });
     }
-    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
-    const runtime = await diagnoseLocalRuntime({ modelId });
-    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MOSS_NOT_READY' });
+    await assertRuntimeReady('MOSS_NOT_READY');
   }
   if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
@@ -697,7 +155,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Decks page rendered that as an unexplained "Failed" badge. Refuse up front
   // with the same reason and one-button remedy the status probe reports.
   if (usesTorchVenv(model)) {
-    const healthy = await isFlux2VenvHealthy(model.pipelineClass).then((v) => v).catch(() => null);
+    const healthy = await isFlux2VenvHealthy(model.pipelineClass).catch(() => null);
     if (healthy === false) {
       throw new ServerError(
         `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
@@ -708,29 +166,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       );
     }
   }
-  // FLUX.2 and Z-Image runners now load LoRAs via diffusers'
-  // pipe.load_lora_weights — but only LoRAs trained against the matching
-  // base model will produce sensible output. The LoRA picker UI uses the
-  // sidecar's `runnerFamily` field to filter; we don't enforce here so a
-  // user can deliberately experiment with off-family weights and see what
-  // happens (the runner will surface a shape-mismatch error from diffusers).
+  return { model, minimaxRuntime };
+}
 
-  // Non-gallery render target (issue #2264): the Image Cleaner's GPU FLUX
-  // round-trip renders to a temp dir with NO sidecar, so a clean pass never
-  // pollutes the gallery by default. See `resolveOutputPlacement` for the exact
-  // branch logic (unit-tested in local.test.js).
-  const { outputDir, skipSidecar } = resolveOutputPlacement(outputTarget);
-
-  await ensureDir(outputDir);
-  await ensureDir(PATHS.loras);
-
-  const jobId = providedJobId || randomUUID();
-  const filename = `${jobId}.png`;
-  const outputPath = join(outputDir, filename);
-  // The public path a gallery render mounts at (`/data/images/<f>`). A
-  // non-gallery render has no static mount, so the queue reads the finished
-  // bytes off `outputPath` directly (surfaced as `outputPath` in the result).
-  const publicPath = outputDir === PATHS.images ? `/data/images/${filename}` : null;
+async function prepareLocalRenderMeta(inputs) {
+  const { model, jobId, loraFilenames, loraPaths, initImagePath, referenceImagePaths } = inputs;
   // Trigger words for the selected LoRAs (#4665). Read against the RAW request
   // (a superset of what survives the prefix-check inside buildSidecarMeta) so
   // the map is available before validation runs; an absent or legacy sidecar
@@ -738,45 +178,10 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // short-circuits inside the helper, so the common case does zero extra I/O.
   const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
   const loraLicenses = await readLoraLicensesByFilename([...loraFilenames, ...loraPaths]);
-  const {
-    meta,
-    renderPrompt,
-    addedTriggerWords,
-    actualSeed,
-    actualSteps,
-    actualGuidance,
-    validLoras,
-    validInitImagePath,
-    validInitImageStrength,
-    validReferenceImagePaths,
-    validReferenceImageStrengths,
-  } = buildSidecarMeta({
-    jobId,
-    model,
-    prompt,
-    negativePrompt,
-    modelId,
-    width,
-    height,
-    steps,
-    guidance,
-    seed,
-    quantize,
-    loraFilenames,
-    loraPaths,
-    loraScales,
-    initImagePath,
-    initImageStrength,
-    referenceImagePaths,
-    referenceImageStrengths,
-    visualConditioning,
-    regenOf,
-    loraTriggerWords,
-    loraLicenses,
-    promptAdditions,
-    resolveInputPath: resolveImageInputPath,
-    loraExists: existsSync,
+  const render = buildSidecarMeta({
+    ...inputs, loraTriggerWords, loraLicenses, resolveInputPath: resolveImageInputPath, loraExists: existsSync,
   });
+  const { meta, validInitImagePath, validReferenceImagePaths, addedTriggerWords } = render;
   if ((initImagePath && !validInitImagePath)
     || (Array.isArray(referenceImagePaths) && referenceImagePaths.length !== validReferenceImagePaths.length)) {
     throw new ServerError('A requested input image is unavailable or outside the allowed image roots', {
@@ -806,12 +211,67 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   if (addedTriggerWords.length) {
     console.log(`🔤 LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
   }
-  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
-  jobs.set(jobId, job);
+  return render;
+}
 
-  // Per-job stepwise output dir under the OS temp dir. mflux writes one PNG
-  // per inference step here; we watch and stream the latest as `currentImage`.
-  const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
+function recordProviderInputs({ meta, job, reviewedReferenceSnapshot, validInitImagePath, validReferenceImagePaths, validReferenceImageStrengths }, providerInputs) {
+  // Record only inputs the selected runner actually receives. Unsupported
+  // references and Windows mflux init images remain explicit request evidence.
+  const requestedInputs = [
+    ...(meta.initImageFilename ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+    ...meta.referenceImageFilenames.map(filename => ({ role: 'referenceImages', filename })),
+  ];
+  const omittedInputs = [
+    ...(validInitImagePath && !providerInputs.initImagePath ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
+    ...validReferenceImagePaths.filter(path => !providerInputs.referenceImagePaths.includes(path))
+      .map(path => ({ role: 'referenceImages', filename: basename(path) })),
+  ];
+  if (omittedInputs.length) {
+    meta.requestedInputImages = requestedInputs;
+    meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
+  }
+  meta.inputProvenance = 'provider-inputs';
+  if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== validReferenceImagePaths.length || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
+    throw new ServerError('The selected local render path cannot apply every reference of this edit', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
+  }
+  meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
+  meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
+  if (!providerInputs.initImagePath) {
+    meta.initImageFilename = null;
+    meta.initImageStrength = null;
+    for (const key of ['cleanedFrom', 'regenerated', 'regenMethod', 'regenStrength', 'regenSteps', 'regenModelId']) {
+      delete meta[key];
+      delete job[key];
+    }
+  }
+  Object.assign(job, meta);
+}
+
+async function prepareLocalGpu(jobId) {
+  const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
+  const memoryReport = await prepareLocalMemory();
+  // Something the unload above cannot evict already owns the GPU (today: the
+  // vLLM Qwen container). Refuse here rather than let mflux die inside its
+  // model load with an OOM that names neither the tenant nor the fix (#4766).
+  if (memoryReport.blockers.length) {
+    throw new ServerError(gpuBlockersMessage(memoryReport.blockers), { status: 409, code: 'GPU_BLOCKED', context: { blockers: memoryReport.blockers } });
+  }
+  if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
+}
+
+function assertRenderNotCanceled(preparation) {
+  if (preparation.cancelRequested) {
+    throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
+  }
+}
+
+async function launchLocalChild(render, stepwiseDir) {
+  const {
+    jobId, model, modelId, meta, actualSteps, actualGuidance, actualSeed, width, height,
+    pythonPath, renderPrompt, negativePrompt, quantize, outputPath, validLoras, loraScales,
+    validInitImagePath, validInitImageStrength, validReferenceImagePaths, validReferenceImageStrengths,
+    minimaxRuntime, reviewedReferenceSnapshot,
+  } = render;
   const preparation = { cancelRequested: false };
   preparing = preparation;
 
@@ -830,66 +290,27 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     maintenance.markCurrentUnsettled();
     console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
   });
-  let bin, args, providerInputs;
   let proc;
-  let claimHandedOff = false;
-  let takeEarlyExit = null;
   let startedEmitted = false;
   try {
-    // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
-    // missing (#4665). Identical to `prompt` when nothing was woven.
-    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime }));
-    // Record only inputs the selected runner actually receives. Unsupported
-    // references and Windows mflux init images remain explicit request evidence.
-    const requestedInputs = [
-      ...(meta.initImageFilename ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
-      ...meta.referenceImageFilenames.map(filename => ({ role: 'referenceImages', filename })),
-    ];
-    const omittedInputs = [
-      ...(validInitImagePath && !providerInputs.initImagePath ? [{ role: 'initImage', filename: meta.initImageFilename }] : []),
-      ...validReferenceImagePaths.filter(path => !providerInputs.referenceImagePaths.includes(path))
-        .map(path => ({ role: 'referenceImages', filename: basename(path) })),
-    ];
-    if (omittedInputs.length) {
-      meta.requestedInputImages = requestedInputs;
-      meta.omittedInputImages = omittedInputs.map(input => ({ ...input, reason: 'unsupported-render-path' }));
-    }
-    meta.inputProvenance = 'provider-inputs';
-    if (reviewedReferenceSnapshot && (providerInputs.referenceImagePaths.length !== validReferenceImagePaths.length || providerInputs.referenceImagePaths[0] !== validReferenceImagePaths[0])) {
-      throw new ServerError('The selected local render path cannot apply every reference of this edit', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
-    }
-    meta.referenceImageFilenames = providerInputs.referenceImagePaths.map(path => basename(path));
-    meta.referenceImageStrengths = validReferenceImageStrengths.filter((_, index) => providerInputs.referenceImagePaths.includes(validReferenceImagePaths[index]));
-    if (!providerInputs.initImagePath) {
-      meta.initImageFilename = null;
-      meta.initImageStrength = null;
-      for (const key of ['cleanedFrom', 'regenerated', 'regenMethod', 'regenStrength', 'regenSteps', 'regenModelId']) {
-        delete meta[key];
-        delete job[key];
-      }
-    }
-    Object.assign(job, meta);
+    const { bin, args, providerInputs } = buildArgs({
+      pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height),
+      steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras,
+      loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength,
+      referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime,
+    });
+    recordProviderInputs(render, providerInputs);
     heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
     if (!heavyClaim.ok) {
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
     }
-    const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
-    const memoryReport = await prepareLocalMemory();
-    // Something the unload above cannot evict already owns the GPU (today: the
-    // vLLM Qwen container). Refuse here rather than let mflux die inside its
-    // model load with an OOM that names neither the tenant nor the fix (#4766).
-    if (memoryReport.blockers.length) {
-      throw new ServerError(gpuBlockersMessage(memoryReport.blockers), { status: 409, code: 'GPU_BLOCKED', context: { blockers: memoryReport.blockers } });
-    }
-    if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
+    await prepareLocalGpu(jobId);
 
     const tokenEnv = usesMossSwift(model) || usesMinimaxH3Image(model) ? null : await hfChildEnv();
     const childEnv = usesMossSwift(model) ? mossChildEnv() : usesFlux3(model) ? flux3Env(tokenEnv)
       : usesMinimaxH3Image(model) ? minimaxH3ImageEnv() : tokenEnv;
-    // Last spawn gate: a cancel() during the awaits above found no child to signal.
-    if (preparation.cancelRequested) {
-      throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
-    }
+    // A cancel() during GPU preparation found no child to signal.
+    assertRenderNotCanceled(preparation);
 
     console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${meta.referenceImageFilenames.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
@@ -899,13 +320,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     if (reviewedReferenceSnapshot || [validInitImagePath, ...validReferenceImagePaths].some(path => path?.startsWith(join(PATHS.imageRefs, 'snapshot-')))) {
       const { assertSnapshotForAdapter } = await import('./reviewedReference.js');
       await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, validInitImagePath, validReferenceImagePaths);
-      if (preparation.cancelRequested) throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
+      assertRenderNotCanceled(preparation);
     }
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
     // Same tick as the spawn, before the claim handoff below awaits file I/O: a
     // child that dies inside that window would otherwise emit 'close' with no
     // listener, leaving the job running and the GPU lane held forever (#11761).
-    takeEarlyExit = bufferChildExit(proc, { bufferOutput: true });
+    const takeEarlyExit = bufferChildExit(proc, { bufferOutput: true });
     // Hold off idle/system sleep for the child's lifetime: a laptop that idles
     // to sleep mid-render (or mid first-run model download) wakes to an idle
     // watchdog kill. `-is` without `-d` lets the display sleep, as in video and
@@ -917,64 +338,32 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     activeProcess = proc;
     preparing = null;
     await heavyClaim.handoffTo?.(proc.pid);
-    claimHandedOff = true;
+    return { proc, bin, takeEarlyExit, releaseHeavyClaim, removeStepwise };
   } catch (err) {
     if (preparing === preparation) preparing = null;
-    // Nothing is wired to this job yet, so it can never report its own terminal
-    // event — unwind it exactly the way the busy branch above does, or a refusal
-    // strands a `running` entry and its stepwise dir every time.
-    if (!claimHandedOff) {
-      if (proc?.pid) {
-        maintenance.markCurrentUnsettled();
-        // No close handler is wired yet, so nothing else will ever reap this child.
-        try {
-          killWithEscalation(proc, { label: 'abandoned image child', stillRunning: () => true });
-        } catch (killErr) {
-          console.error(`❌ Abandoned image child would not stop [${jobId.slice(0, 8)}]: ${killErr.message}`);
-        }
+    // An unwired render cannot settle itself.
+    if (proc?.pid) {
+      maintenance.markCurrentUnsettled();
+      // No close handler is wired yet, so nothing else will ever reap this child.
+      try {
+        killWithEscalation(proc, { label: 'abandoned image child', stillRunning: () => true });
+      } catch (killErr) {
+        console.error(`❌ Abandoned image child would not stop [${jobId.slice(0, 8)}]: ${killErr.message}`);
       }
-      if (activeProcess === proc) activeProcess = null;
-      if (activeJob?.generationId === jobId) activeJob = null;
-      if (startedEmitted) {
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message, inputProcessSettled: !proc?.pid });
-      }
-      await releaseHeavyClaim();
-      jobs.delete(jobId);
-      await removeStepwise();
     }
+    if (activeProcess === proc) activeProcess = null;
+    if (activeJob?.generationId === jobId) activeJob = null;
+    if (startedEmitted) {
+      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message, inputProcessSettled: !proc?.pid });
+    }
+    await releaseHeavyClaim();
+    jobs.delete(jobId);
+    await removeStepwise();
     throw err;
   }
-  // Spawn ENOENT (missing/non-executable pythonPath) fires BOTH 'error' and
-  // 'close' on Node — without this guard, a typo'd pythonPath emits two
-  // 'failed' events to imageGenEvents and two SSE error frames to the
-  // client. The mediaJobQueue's terminate() is idempotent on the first, but
-  // the duplicate noise still confuses anything else listening. Track
-  // whether we've finalized so the close handler can detect "already
-  // handled" and skip the second emit.
-  let finalized = false;
-  let processError;
-  proc.on('error', (err) => {
-    processError = err;
-    if (finalized || proc.pid) return;
-    finalized = true;
-    job.status = 'error';
-    const reason = `Failed to spawn ${bin}: ${err.message}`;
-    console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-    void releaseHeavyClaim();
-    // The close handler skips its own watcher.close() once finalized.
-    if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
-    void removeStepwise();
-    dispatchTerminalEvent(
-      jobId,
-      () => broadcastSse(job, { type: 'error', error: reason }),
-      () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
-    );
-    activeProcess = null;
-    activeJob = null;
+}
 
-    closeJobAfterDelay(jobs, jobId);
-  });
-
+function startStepwiseWatcher(stepwiseDir, jobId) {
   // Watch the stepwise output dir for new PNGs. When a new file appears,
   // base64-encode the latest one and emit it as `currentImage`. fs.watch
   // fires multiple times per write — keep a single in-flight read and a
@@ -1011,11 +400,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       console.log(`⚠️ Frame read error [${jobId.slice(0, 8)}]: ${err?.message}`);
     }
     reading = false;
-    if (pendingFrame) { pendingFrame = false; processLatestFrame(); }
+    if (pendingFrame) { pendingFrame = false; void processLatestFrame(); }
   };
   try {
     watcher = fsWatch(stepwiseDir, (event) => {
-      if (event === 'rename') processLatestFrame();
+      if (event === 'rename') void processLatestFrame();
     });
     // Windows raises EPERM here when the watched dir is deleted; with no listener
     // that is an uncaught exception and the server exits.
@@ -1023,404 +412,265 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       console.warn(`⚠️ Stepwise watcher error [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
   } catch { /* if watch fails, we still get final image — degrade gracefully */ }
+  return () => { try { watcher?.close(); } catch { /* already closed */ } };
+}
 
-  // Bounded tail of recent stderr — only the last ~64KB is kept, since the
-  // failure path only uses the trailing 10 lines for context. Without this
-  // bound a noisy backend (HF download progress, deprecation warnings)
-  // would grow this buffer for the full duration of a long render.
-  const STDERR_TAIL_BYTES = 64 * 1024;
+function wireLocalOutput(proc, { jobId, job, meta }) {
+  // Keep only the recent stderr tail needed by the failure classifier.
+  const stderrTailLimit = 64 * 1024;
   let stderrBuffer = '';
-  // Returns true when the line drove a progress event (so the pm2-log echo
-  // below skips it — progress bars are spammy and already visible in the UI).
-  // Status / debug / error lines fall through to console.log so a stuck render
-  // (model download, HF auth probe, weight load) shows up in pm2 logs instead
-  // of vanishing into the SSE channel only the browser ever sees.
-  // Phase tracking. Lifecycle events from the runner (STAGE:download-pipeline,
-  // STAGE:inference, etc.) flip the phase so the UI can show "Downloading
-  // model weights" instead of misleading "step 0/8" while HF pulls multi-GB
-  // shards. Inference progress events also tag themselves with the current
-  // phase so the client knows whether `step/total` reflects download chunks
-  // (out of N safetensors files) or actual generation steps.
-  let currentPhase = 'starting';
-  let isDownloading = false;
-  const handleLine = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return true;
-    // Heartbeat — any non-noise line resets the queue's idle watchdog so
-    // first-run multi-GB HF downloads don't trip the timeout when
-    // tqdm is slow to update during connection-establishment.
-    imageGenEvents.emit('activity', { generationId: jobId });
-
-    const execution = parseImageExecutionMarker(trimmed);
-    if (execution) {
+  const handleLine = createLocalOutputParser({
+    onActivity: () => imageGenEvents.emit('activity', { generationId: jobId }),
+    onExecution: (execution) => {
       meta.executionProvenance = execution;
       job.executionProvenance = execution;
       if (activeJob?.generationId === jobId) activeJob.executionProvenance = execution;
-      return true;
-    }
-
-    if (trimmed.startsWith('STAGE:')) {
-      const rest = trimmed.slice(6); // strip 'STAGE:'
-      const colon = rest.indexOf(':');
-      const stage = colon === -1 ? rest : rest.slice(0, colon);
-      const detail = colon === -1 ? '' : rest.slice(colon + 1);
-      currentPhase = stage;
-      // Track download phase for tqdm bar formatting
-      isDownloading = stage.startsWith('download');
-      broadcastSse(job, { type: 'stage', stage, detail });
-      return true;
-    }
-
-    // DOWNLOAD: marker — parse byte values and emit formatted progress
-    if (trimmed.startsWith('DOWNLOAD:')) {
-      isDownloading = true;
-      currentPhase = 'download';
-      const rawText = trimmed.slice(9);
-      const byteInfo = parseByteProgress(rawText);
-      const message = formatDownloadMessage(rawText, byteInfo);
-      const frame = { type: 'status', message, phase: currentPhase };
-      if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
-      if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
-      broadcastSse(job, frame);
-      return true;
-    }
-
-    const m = trimmed.match(/(\d+)%\|.*?(\d+)\/(\d+)/);
-    if (m) {
-      const pct = parseInt(m[1], 10) / 100;
-      const step = parseInt(m[2], 10);
-      const total = parseInt(m[3], 10);
-      // Check for byte sizes in tqdm bars during downloads
-      const byteInfo = parseByteProgress(trimmed);
-      let displayMessage = trimmed;
-      const frame = { type: 'progress', progress: pct, phase: currentPhase };
-      if (isDownloading && (byteInfo.downloaded != null || byteInfo.total != null)) {
-        displayMessage = formatDownloadMessage(trimmed, byteInfo);
-        if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
-        if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
-      }
-      frame.message = displayMessage;
-      broadcastSse(job, frame);
-      // Only forward to imageGenEvents (which drives the UI step counter)
-      // when we're actually in the inference phase — download tqdm bars
-      // count safetensors files, not diffusion steps.
-      if (currentPhase === 'inference') {
-        imageGenEvents.emit('progress', { generationId: jobId, progress: pct, step, totalSteps: total });
-        if (activeJob && activeJob.generationId === jobId) {
-          activeJob.progress = pct; activeJob.step = step; activeJob.totalSteps = total;
-        }
-      }
-      return true;
-    }
-    broadcastSse(job, { type: 'status', message: trimmed });
-    return false;
-  };
-
+    },
+    onFrame: (frame) => broadcastSse(job, frame),
+    onInferenceProgress: (progress) => {
+      imageGenEvents.emit('progress', { generationId: jobId, ...progress });
+      if (activeJob?.generationId === jobId) Object.assign(activeJob, progress);
+    },
+  });
   const shortId = jobId.slice(0, 8);
   // Route marker parsing through per-stream line readers so a STAGE:/STATUS:/
   // DOWNLOAD: marker (or a multibyte char) split across a pipe chunk boundary
   // can't tear a progress event. Each reader carries the partial trailing line
   // across chunks and is flushed on 'close'.
-  const stderrReader = createLineReader((line) => {
+  const runnerLineReader = (prefix) => createLineReader((line) => {
     const trimmed = line.trim();
-    if (!handleLine(line) && trimmed) console.log(`🐍 [${shortId}] ${trimmed}`);
+    try {
+      if (!handleLine(trimmed)) console.log(`${prefix} [${shortId}] ${trimmed}`);
+    } catch (err) {
+      // A progress subscriber must not interrupt stream draining or exit cleanup.
+      console.error(`❌ Image generation output dispatch failed [${shortId}]: ${err?.message || err}`);
+    }
   }, { splitRe: /[\n\r]+/ });
-  const stdoutReader = createLineReader((line) => {
-    const trimmed = line.trim();
-    if (!handleLine(line) && trimmed) console.log(`🐍-out [${shortId}] ${trimmed}`);
-  }, { splitRe: /[\n\r]+/ });
+  const stderrReader = runnerLineReader('🐍');
+  const stdoutReader = runnerLineReader('🐍-out');
   proc.stderr.on('data', (chunk) => {
-    // The bounded error-tail stays on the raw chunk text — the failure path
-    // slices its last N bytes for context independently of line parsing.
+    // Keep the raw diagnostics independently of which lines drive progress.
     const text = chunk.toString();
     stderrBuffer += text;
-    if (stderrBuffer.length > STDERR_TAIL_BYTES) {
-      stderrBuffer = stderrBuffer.slice(-STDERR_TAIL_BYTES);
+    if (stderrBuffer.length > stderrTailLimit) {
+      stderrBuffer = stderrBuffer.slice(-stderrTailLimit);
     }
     stderrReader.push(chunk);
   });
   proc.stdout.on('data', (chunk) => {
     stdoutReader.push(chunk);
   });
-
-  proc.on('close', async (code, signal) => {
-    await withBackupAssetPublication(async () => {
-      // Guard against the spawn-ENOENT path where 'error' already finalized
-      // the job. Node fires 'error' THEN 'close' (with code -2/null signal)
-      // for a missing binary, and re-running the failure path here would
-      // emit a second 'failed' event + second SSE error frame.
-      if (finalized) return;
-      finalized = true;
-      // Emit any final unterminated marker line each stream wrote without a
-      // trailing newline (a SIGKILL mid-write, or a progress bar whose last
-      // redraw never terminated) BEFORE nulling activeJob — handleLine's
-      // inference-progress branch mutates activeJob, so flushing first keeps a
-      // final progress line able to update it (mirrors videoGen's ordering).
+  return {
+    flush() {
       stderrReader.flush();
       stdoutReader.flush();
+    },
+    failureLines: () => stderrBuffer.split('\n').map((line) => line.trim()).filter(Boolean),
+  };
+}
+
+function finalizeLocalFailure({ jobId, job, model }, { code, signal, processError, lines }) {
+  job.status = 'error';
+  const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
+  const { userMessage, userKind, userRepo, invalidateTorchHealth } = classifyLocalRenderFailure({
+    lines, usesTorchVenv: usesTorchVenv(model),
+  });
+  // The preflight's cached health verdict can be stale after a broken import.
+  if (invalidateTorchHealth) invalidateFlux2Health();
+  const tail = lines.slice(-10).join('\n');
+  const errorText = userMessage
+    ? `${userMessage}\n\n(diagnostic) ${reason}`
+    : `Generation failed: ${reason}\n${tail}`;
+  console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
+  job.error = userMessage || errorText;
+  job.errorKind = userKind;
+  job.errorRepo = userRepo;
+  // Propagate the friendly message (not the raw "Exit code 1") to the
+  // job queue so its `failed` log line and future SSE replays carry it.
+  dispatchTerminalEvent(
+    jobId,
+    () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
+    () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: job.error }),
+  );
+}
+
+async function finalizeLocalSuccess(render) {
+  const { job, jobId, meta, upscaleTo, filename, outputPath, regenOf, validInitImagePath,
+    outputDir, skipSidecar, cleanC2PA, denoise, actualSeed, publicPath } = render;
+  job.status = 'complete';
+  // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
+  // resolution. Upscale the result back to the requested delivery size so
+  // the watermark-free copy matches the original's resolution. `meta.width/
+  // height` currently hold the render dims; record those as render* and
+  // promote the delivered dims so the gallery shows the real file size.
+  const targetW = Math.round(Number(upscaleTo?.width));
+  const targetH = Math.round(Number(upscaleTo?.height));
+  if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
+    const { default: sharp } = await import('sharp');
+    const resized = await sharp(outputPath)
+      .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
+      // compressionLevel 6 (sharp default) — near-identical size to 9 but
+      // markedly faster, and this re-encode is on the render-completion path.
+      .png({ compressionLevel: 6 })
+      .toBuffer()
+      .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
+    if (resized) {
+      await atomicWrite(outputPath, resized);
+      meta.renderWidth = meta.width;
+      meta.renderHeight = meta.height;
+      meta.width = targetW;
+      meta.height = targetH;
+      console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
+    }
+  }
+  // Regen fidelity (issue #912): for a regen pass, measure how much the
+  // delivered image actually changed vs. the source so the sidecar records
+  // the *realized* delta, not just the requested strength. Catches the
+  // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
+  // Best-effort — a decode failure just skips the stamp.
+  if (regenOf && validInitImagePath) {
+    const delta = await import('./regen.js')
+      .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
+      .catch(() => null);
+    if (delta) {
+      meta.regenPixelDeltaPct = delta.pixelDeltaPct;
+      meta.regenPsnr = delta.psnr;
+      console.log(`📐 Regen fidelity [${jobId.slice(0, 8)}]: ${delta.pixelDeltaPct}% changed, PSNR ${delta.psnr}dB`);
+    }
+  }
+  // Sidecar: persist a metadata record next to the PNG so the gallery
+  // and Remix flow can recover prompt/seed/steps even if mflux's own
+  // --metadata sidecar lives at a slightly different filename shape.
+  // A non-gallery target (issue #2264, the Image Cleaner's temp render)
+  // skips this write entirely — the temp bytes are consumed by an explicit
+  // result-fetch, so there's no gallery record to hydrate.
+  const sidecar = join(outputDir, `${jobId}.metadata.json`);
+  if (!skipSidecar) {
+    // Render timing is stamped onto `meta` (not spread at the write) so the
+    // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
+    Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
+    await atomicWrite(sidecar, meta);
+    // Cleaners run BEFORE the SSE complete + completed events so subscribers
+    // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
+    // cleanC2PA is a no-op on local — denoise is the only mode that does
+    // anything here.
+    await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
+  }
+  console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}${skipSidecar ? ' (temp, no sidecar)' : ''}`);
+  // A non-gallery render has no `/data/images` mount — carry the absolute
+  // `outputPath` so the queue/route can read the finished bytes; `path`
+  // stays null so nothing treats it as a gallery URL.
+  const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
+  // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
+  // (mflux generates a random one if the client didn't pass one). Emit the
+  // gallery `completed` (which drives the media-asset index + peer-sync
+  // hooks) ONLY for a gallery target — a temp render must not be indexed or
+  // federated. The queue's own `completed` handler still fires off the
+  // return value below, so the job settles either way.
+  dispatchTerminalEvent(
+    jobId,
+    () => broadcastSse(job, { type: 'complete', result }),
+    () => {
+      if (!skipSidecar) {
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+      } else {
+        // `temp: true` tells the media-asset-index + peer-sync hooks to
+        // ignore this render — there's no gallery file or sidecar to
+        // index/federate.
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+      }
+    },
+  );
+}
+
+function reportLocalError({ job, jobId }, reason, lifecycleFields = {}) {
+  job.status = 'error';
+  job.error = reason;
+  dispatchTerminalEvent(
+    jobId,
+    () => broadcastSse(job, { type: 'error', error: reason }),
+    () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, ...lifecycleFields, error: reason }),
+  );
+}
+
+async function finalizeLocalExit(render, exit) {
+  const { jobId, outputPath, outputDir } = render;
+  try {
+    // A successful exit can still leave an empty frame. Reject it before publishing.
+    const emptyFrame = exit.code === 0 ? await rejectDegenerateFrame(outputPath) : null;
+    if (emptyFrame) {
+      console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
+      reportLocalError(render, emptyFrame, { inputProcessSettled: true });
+    } else if (exit.code !== 0 || exit.processError) {
+      finalizeLocalFailure(render, { ...exit, lines: exit.readFailureLines() });
+    } else {
+      await finalizeLocalSuccess(render);
+    }
+  } catch (err) {
+    const reason = err?.message || String(err);
+    console.error(`❌ Image generation post-exit handler failed [${jobId.slice(0, 8)}]: ${reason}`);
+    await Promise.all([outputPath, join(outputDir, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
+    reportLocalError(render, reason, { inputProcessSettled: true });
+  } finally {
+    closeJobAfterDelay(jobs, jobId);
+  }
+}
+
+function wireLocalChild(render, child, stepwiseDir) {
+  const { jobId, job } = render;
+  const { proc, bin, takeEarlyExit, releaseHeavyClaim, removeStepwise } = child;
+  // Node can emit both 'error' and 'close' for a spawn ENOENT.
+  let finalized = false;
+  let processError;
+  proc.on('error', (err) => {
+    processError = err;
+    if (finalized || proc.pid) return;
+    finalized = true;
+    job.status = 'error';
+    const reason = `Failed to spawn ${bin}: ${err.message}`;
+    console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    void releaseHeavyClaim();
+    stopWatching();
+    void removeStepwise();
+    dispatchTerminalEvent(
+      jobId,
+      () => broadcastSse(job, { type: 'error', error: reason }),
+      () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+    );
+    activeProcess = null;
+    activeJob = null;
+    closeJobAfterDelay(jobs, jobId);
+  });
+
+  const stopWatching = startStepwiseWatcher(stepwiseDir, jobId);
+  const output = wireLocalOutput(proc, render);
+  proc.on('close', (code, signal) => {
+    void withBackupAssetPublication(async () => {
+      if (finalized) return;
+      finalized = true;
+      // An unterminated final line can still update the active job.
+      output.flush();
       activeProcess = null;
       activeJob = null;
       void releaseHeavyClaim();
-      if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
+      stopWatching();
       void removeStepwise();
-      // EventEmitter doesn't await async listeners — without this try/catch, a
-      // throw from any of the post-exit work below (rejectDegenerateFrame,
-      // sharp, atomicWrite, autoCleanGeneratedImage) would surface as an
-      // unhandled rejection (process-killing on Node >= 15), leave the job
-      // stuck in 'running' forever, and hang any connected SSE client with no
-      // terminal frame. Mirrors codex.js / grok.js's finalizeJobFailure.
-      // `terminalEmitted` is set right before each branch's `broadcastSse` call
-      // — i.e. once we've committed to a terminal outcome and are about to tell
-      // consumers about it, not after. That ordering matters: it's set BEFORE
-      // the SSE frame goes out, not after imageGenEvents.emit(), so a listener
-      // that itself throws while handling one of these events can't cause the
-      // catch below to retry the very emit that just threw. It's also checked
-      // in the catch so a throw AFTER a terminal event was already dispatched
-      // (e.g. autoCleanGeneratedImage failing once job.status is already
-      // 'complete') logs the secondary failure without re-emitting a
-      // contradictory terminal frame or downgrading a delivered 'complete'.
-      let terminalEmitted = false;
-      try {
-        // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
-        // that decodes fine and holds no content (a solid-black frame from a run
-        // that produced nothing). Fail the job instead of saving a black tile —
-        // the file is removed so no gallery scan can pick it up. An unmeasurable
-        // frame yields no reason and falls through to the normal success path.
-        const emptyFrame = code === 0 ? await rejectDegenerateFrame(outputPath) : null;
-        if (emptyFrame) {
-          job.status = 'error';
-          job.error = emptyFrame;
-          console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
-          terminalEmitted = true;
-          dispatchTerminalEvent(
-            jobId,
-            () => broadcastSse(job, { type: 'error', error: emptyFrame }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: emptyFrame }),
-          );
-          return;
-        }
-        if (code !== 0 || processError) {
-          job.status = 'error';
-          const reason = processError?.message || (signal ? `Killed by signal ${signal}` : `Exit code ${code}`);
-          // Extract a structured user-error if the runner emitted one
-          // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
-          // the matching `❌ …` prose line that follows it. Fall back to the last
-          // 10 stderr lines if no structured error was emitted (unknown crash).
-          const lines = stderrBuffer.split('\n').map((l) => l.trim()).filter(Boolean);
-          const structIdx = lines.findIndex((l) => l.startsWith('USER_ERROR:'));
-          let userMessage = null;
-          let userKind = null;
-          let userRepo = null;
-          if (structIdx >= 0) {
-            // Split with limit=2 so a kind containing colons can't shred the repo.
-            const [kind, ...rest] = lines[structIdx].slice('USER_ERROR:'.length).split(':');
-            userKind = kind;
-            userRepo = rest.join(':') || null;
-            const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
-            userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
-          }
-          // Heuristic detection for non-USER_ERROR failures we can still
-          // surface actionably. mflux's entry-point shim breaks when a partial
-          // package upgrade leaves user-site at the right version number but
-          // with stale file layout — Python imports the wrong `mflux/` first.
-          // Easier to spot at the source than to teach the user to read pip diffs.
-          if (!userMessage) {
-            const mfluxBroken = lines.some((l) => /ModuleNotFoundError: No module named 'mflux\.models\.flux\.cli'/.test(l));
-            if (mfluxBroken) {
-              userKind = 'mflux_install_corrupted';
-              userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
-            }
-          }
-          // The precheck passed (or its memoized "healthy" answer is now stale) and
-          // the runtime still failed to import. Bust the health cache so the next
-          // status poll reports the truth instead of the cached pass, and name the
-          // same one-button remedy rather than leaving the caller with "Exit code 1".
-          if (userKind === 'torch_runtime_broken') invalidateFlux2Health();
-          if (!userMessage && usesTorchVenv(model)) {
-            const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
-            if (importBroken) {
-              invalidateFlux2Health();
-              userKind = 'torch_runtime_broken';
-              userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Settings › Image Gen › Local, then retry this render.`;
-            }
-          }
-          // Legacy mflux-generate is a pre-built binary, so it doesn't emit the
-          // structured USER_ERROR markers the flux2/z-image Python runners use.
-          // Match the raw huggingface_hub stack instead — `GatedRepoError` or the
-          // "Cannot access gated repo for url …/<owner>/<name>/…" prose. Extract
-          // the repo so the UI banner can link the user straight to the license
-          // page (and we set kind=gated_repo so the client knows to surface the
-          // token-entry form).
-          if (!userMessage) {
-            const gatedText = lines.join('\n');
-            // Classify as gated ONLY on a gated-specific signal — extractGatedRepo
-            // matches any huggingface.co/<owner>/<repo> URL, so a non-gated failure
-            // (404, network error) that merely prints a HF URL must NOT be turned
-            // into a misleading license-request flow. Extract the repo for the link
-            // only after the gated signal is confirmed.
-            const hasGatedError = isGatedRepoError(gatedText);
-            if (hasGatedError) {
-              userKind = 'gated_repo';
-              userRepo = extractGatedRepo(gatedText);
-              const repoText = userRepo || 'the model';
-              userMessage = `Access to ${repoText} is gated. Accept the license at https://huggingface.co/${userRepo || '<repo>'} and paste your HuggingFace token into Image Gen settings, then retry.`;
-            }
-          }
-          const tail = lines.slice(-10).join('\n');
-          const errorText = userMessage
-            ? `${userMessage}\n\n(diagnostic) ${reason}`
-            : `Generation failed: ${reason}\n${tail}`;
-          console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
-          job.error = userMessage || errorText;
-          job.errorKind = userKind;
-          job.errorRepo = userRepo;
-          terminalEmitted = true;
-          // Propagate the friendly message (not the raw "Exit code 1") to the
-          // job queue so its `failed` log line and future SSE replays carry it.
-          dispatchTerminalEvent(
-            jobId,
-            () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: job.error }),
-          );
-        } else {
-          job.status = 'complete';
-          // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
-          // resolution. Upscale the result back to the requested delivery size so
-          // the watermark-free copy matches the original's resolution. `meta.width/
-          // height` currently hold the render dims; record those as render* and
-          // promote the delivered dims so the gallery shows the real file size.
-          const targetW = Math.round(Number(upscaleTo?.width));
-          const targetH = Math.round(Number(upscaleTo?.height));
-          if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
-            const { default: sharp } = await import('sharp');
-            const resized = await sharp(outputPath)
-              .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
-              // compressionLevel 6 (sharp default) — near-identical size to 9 but
-              // markedly faster, and this re-encode is on the render-completion path.
-              .png({ compressionLevel: 6 })
-              .toBuffer()
-              .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
-            if (resized) {
-              await atomicWrite(outputPath, resized);
-              meta.renderWidth = meta.width;
-              meta.renderHeight = meta.height;
-              meta.width = targetW;
-              meta.height = targetH;
-              console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
-            }
-          }
-          // Regen fidelity (issue #912): for a regen pass, measure how much the
-          // delivered image actually changed vs. the source so the sidecar records
-          // the *realized* delta, not just the requested strength. Catches the
-          // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
-          // Best-effort — a decode failure just skips the stamp.
-          if (regenOf && validInitImagePath) {
-            const delta = await import('./regen.js')
-              .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
-              .catch(() => null);
-            if (delta) {
-              meta.regenPixelDeltaPct = delta.pixelDeltaPct;
-              meta.regenPsnr = delta.psnr;
-              console.log(`📐 Regen fidelity [${jobId.slice(0, 8)}]: ${delta.pixelDeltaPct}% changed, PSNR ${delta.psnr}dB`);
-            }
-          }
-          // Sidecar: persist a metadata record next to the PNG so the gallery
-          // and Remix flow can recover prompt/seed/steps even if mflux's own
-          // --metadata sidecar lives at a slightly different filename shape.
-          // A non-gallery target (issue #2264, the Image Cleaner's temp render)
-          // skips this write entirely — the temp bytes are consumed by an explicit
-          // result-fetch, so there's no gallery record to hydrate.
-          const sidecar = join(outputDir, `${jobId}.metadata.json`);
-          if (!skipSidecar) {
-            // Render timing is stamped onto `meta` (not spread at the write) so the
-            // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
-            Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
-            await atomicWrite(sidecar, meta);
-            // Cleaners run BEFORE the SSE complete + completed events so subscribers
-            // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
-            // cleanC2PA is a no-op on local — denoise is the only mode that does
-            // anything here. A throw here (or from the rest of this branch) is
-            // caught below, before any terminal event has gone out for this job.
-            await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
-          }
-          console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}${skipSidecar ? ' (temp, no sidecar)' : ''}`);
-          // A non-gallery render has no `/data/images` mount — carry the absolute
-          // `outputPath` so the queue/route can read the finished bytes; `path`
-          // stays null so nothing treats it as a gallery URL.
-          const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
-          terminalEmitted = true;
-          // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
-          // (mflux generates a random one if the client didn't pass one). Emit the
-          // gallery `completed` (which drives the media-asset index + peer-sync
-          // hooks) ONLY for a gallery target — a temp render must not be indexed or
-          // federated. The queue's own `completed` handler still fires off the
-          // return value below, so the job settles either way.
-          dispatchTerminalEvent(
-            jobId,
-            () => broadcastSse(job, { type: 'complete', result }),
-            () => {
-              if (!skipSidecar) {
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
-              } else {
-                // `temp: true` tells the media-asset-index + peer-sync hooks to
-                // ignore this render — there's no gallery file or sidecar to
-                // index/federate.
-                imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
-              }
-            },
-          );
-        }
-      } catch (err) {
-        const reason = err?.message || String(err);
-        console.error(`❌ Image generation post-exit handler failed [${jobId.slice(0, 8)}]: ${reason}`);
-        // `terminalEmitted` is already true here only when the throw came from
-        // dispatching a terminal event itself (a downstream broadcastSse/
-        // imageGenEvents listener throwing) — that event already reached
-        // consumers, so don't downgrade a delivered outcome (e.g. a 'complete'
-        // frame the client already saw) to 'error', and don't retry the same
-        // emit that just threw.
-        if (!terminalEmitted) {
-          await Promise.all([outputPath, join(outputDir, `${jobId}.metadata.json`)].map(path => unlinkGuarded(path).catch(() => {})));
-          job.status = 'error';
-          job.error = reason;
-          // `dispatchTerminalEvent` guards each call independently — a throwing
-          // SSE writer (a dead client's `res.write`) can't suppress the
-          // `imageGenEvents.emit` (or vice versa), and neither can re-throw out
-          // of this catch, which would escape the close handler as an
-          // unhandled rejection. job.status/job.error above are already correct
-          // even if delivery fails partway, and `finally` below still runs the
-          // job cleanup.
-          dispatchTerminalEvent(
-            jobId,
-            () => broadcastSse(job, { type: 'error', error: reason }),
-            () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
-          );
-        }
-      } finally {
-        closeJobAfterDelay(jobs, jobId);
-      }
-    }).catch(async err => {
-      // Admission failure happens before the inner finalizer can clear the
-      // process slot or release its heavy-job claim. Settle without publishing
-      // or deleting gallery bytes outside the refused boundary.
+      await finalizeLocalExit(render, { code, signal, processError, readFailureLines: output.failureLines });
+    }).catch(async (err) => {
+      // Admission refused before the finalizer ran. Settle without touching
+      // gallery bytes outside the backup publication boundary.
       if (finalized) return;
       finalized = true;
       activeProcess = null;
       activeJob = null;
-      if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
+      stopWatching();
       await Promise.all([releaseHeavyClaim(), removeStepwise()]);
-      const reason = err?.message || String(err);
-      job.status = 'error';
-      job.error = reason;
-      dispatchTerminalEvent(
-        jobId,
-        () => broadcastSse(job, { type: 'error', error: reason }),
-        () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, inputProcessSettled: true, error: reason }),
-      );
+      reportLocalError(render, err?.message || String(err), { inputProcessSettled: true });
       closeJobAfterDelay(jobs, jobId);
     });
   });
 
+  const shortId = jobId.slice(0, 8);
   // Every real listener is on and nothing has awaited since: hand over whatever
   // the child emitted during the claim handoff so a fast-dying render still
   // reaches its terminal handlers and releases the claim.
@@ -1431,252 +681,57 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     if (earlyExit.type === 'error') proc.emit('error', earlyExit.error);
     else if (earlyExit.type === 'close') proc.emit('close', earlyExit.code, earlyExit.signal);
   }
+}
+
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, reviewedReferenceSnapshot = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
+  // The ingestion instant `renderTimingFields` measures from — the queue calls
+  // generateImage the moment it picks this job up. See lib/renderTiming.js.
+  const renderStartedAtMs = Date.now();
+  // Empty prompt is allowed: img2img / edit / unconditional renders are driven
+  // by the init image (or run unconditionally), so text isn't required. The
+  // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
+  // has always relied on this for minimal-mutation, watermark-overwriting img2img.
+  // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
+  // callers that bypass the queue must not run two concurrent renders — the
+  // activeProcess handle below would be clobbered and cancel() would orphan
+  // the first child.
+  const { model, minimaxRuntime } = await preflightLocalModel({
+    modelId, pythonPath, negativePrompt, width, height, steps, initImagePath,
+    referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames,
+  });
+  // Non-gallery render target (issue #2264): the Image Cleaner's GPU FLUX
+  // round-trip renders to a temp dir with NO sidecar, so a clean pass never
+  // pollutes the gallery by default. See `resolveOutputPlacement` for the exact
+  // branch logic (unit-tested in local.test.js).
+  const { outputDir, skipSidecar } = resolveOutputPlacement(outputTarget);
+
+  await ensureDir(outputDir);
+  await ensureDir(PATHS.loras);
+
+  const jobId = providedJobId || randomUUID();
+  const filename = `${jobId}.png`;
+  const outputPath = join(outputDir, filename);
+  // The public path a gallery render mounts at (`/data/images/<f>`). A
+  // non-gallery render has no static mount, so the queue reads the finished
+  // bytes off `outputPath` directly (surfaced as `outputPath` in the result).
+  const publicPath = outputDir === PATHS.images ? `/data/images/${filename}` : null;
+  const metadata = await prepareLocalRenderMeta({
+    jobId, model, modelId, prompt, negativePrompt, width, height, steps, guidance, seed, quantize,
+    loraFilenames, loraPaths, loraScales, initImagePath, initImageStrength, referenceImagePaths,
+    referenceImageStrengths, visualConditioning, regenOf, promptAdditions,
+  });
+  const { meta, actualSeed } = metadata;
+  // Publish the running entry once its stepwise scratch directory exists.
+  const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
+  jobs.set(jobId, job);
+  const render = {
+    ...metadata, job, jobId, model, modelId, pythonPath, negativePrompt, width, height, quantize, loraScales,
+    outputPath, filename, outputDir, publicPath, skipSidecar, cleanC2PA, denoise, regenOf,
+    upscaleTo, reviewedReferenceSnapshot, minimaxRuntime,
+  };
+  const child = await launchLocalChild(render, stepwiseDir);
+  wireLocalChild(render, child, stepwiseDir);
 
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: IMAGE_GEN_MODE.LOCAL, model: modelId, seed: actualSeed };
-}
-
-// Validate a gallery filename: PNG-only, basename only, no path separators.
-// Delegates to the shared `assertSafeFilename` helper in fileUtils.js.
-// Substring `..` is allowed (e.g. `my..render.png` is fine) because the
-// helper only rejects the exact-string traversal cases.
-// `requiredMessage` preserves the original "Invalid filename" wording for
-// the missing-input case so existing client error-message expectations
-// (and the previously-shipped error-middleware contract) don't shift.
-export function assertGalleryFilename(filename, { pngOnly = false } = {}) {
-  assertSafeFilename(filename, {
-    extensions: pngOnly ? ['.png'] : GALLERY_IMAGE_EXTENSIONS,
-    subject: 'filename',
-    requiredMessage: 'Invalid filename',
-  });
-}
-
-export { readImageSidecar };
-
-// Decoder safety is independent of the upload file-size policy.
-const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
-
-/**
- * Persist user-uploaded image bytes (base64) into the gallery dir under
- * `data/images/` so the file rides the existing `image` peer-sync asset path
- * (a record pointing at `/data/images/<f>` ships its bytes to peers; a
- * `/api/uploads/<f>` path does not). The payload is sniffed by magic bytes —
- * the client-supplied name/extension is not trusted — and a non-image is
- * rejected with a 400, then re-encoded to **PNG** so the saved file is a
- * first-class gallery citizen: it lists in `/image-gen/gallery` and deletes via
- * `deleteImage`. Returns the bare gallery
- * filename and its `/data/images/` mount path for the caller to store.
- *
- * @param {string|null} base64Data - Legacy raw base64 image bytes
- * @param {string} [tempPath] - Server-staged multipart file, preferred over base64
- * @returns {Promise<{ filename: string, path: string, metadata: object }>}
- */
-export async function saveUploadedGalleryImage(base64Data, tempPath) {
-  const input = tempPath || Buffer.from(base64Data, 'base64');
-  let header = input;
-  if (tempPath) {
-    const file = await open(tempPath, 'r');
-    header = Buffer.alloc(12);
-    await file.read(header, 0, header.length, 0).finally(() => file.close());
-  }
-  if (!tempPath && input.length === 0) {
-    throw new ServerError('Empty image upload', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const detected = detectImageFormat(header);
-  if (!detected) {
-    throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
-  }
-  // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
-  // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
-  // An upload is made here, so this machine owns it (its sidecar records that).
-  const metadata = await withLocalImageOrigin(tempPath
-    ? await extractPngGenerationMetadataFile(tempPath)
-    : extractPngGenerationMetadata(input));
-  // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
-  // `.rotate()` with no args bakes in EXIF orientation before the metadata is
-  // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
-  const filename = `upload-${randomUUID().slice(0, 8)}.png`;
-  await ensureDir(PATHS.images);
-  const output = join(PATHS.images, filename);
-  const staging = `${output}.tmp`;
-  try {
-    const { default: sharp } = await import('sharp');
-    await sharp(input, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toFile(staging);
-    // Encoding stays outside admission. Publish the final file, metadata, and
-    // derived database row together so a backup cannot split those writes.
-    return await withBackupAssetPublication(async () => {
-      await rename(staging, output);
-      // PNG normalization strips source text chunks; keep their bounded
-      // projection in the gallery sidecar for listings and later attachments.
-      if (Object.keys(metadata).length > 0) {
-        await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
-      }
-      await refreshImageIndex(filename);
-      import('../imageVerifier.js').then(async ({ getVerifierSettings, verifyImageAsync }) => {
-        const vs = await getVerifierSettings().catch(() => null);
-        if (vs?.enabledForImport || metadata?.verify === true) {
-          verifyImageAsync(filename, { isImport: true, prompt: metadata?.prompt || '' });
-        }
-      }).catch(() => {});
-      console.log(`📥 Saved uploaded gallery image: ${filename} (PNG from ${detected.mime})`);
-      return { filename, path: `/data/images/${filename}`, metadata };
-    });
-  } finally {
-    await unlinkGuarded(staging).catch(() => {});
-  }
-}
-
-export async function listGallery() {
-  if (!existsSync(PATHS.images)) return [];
-  // requireRegularFile:false preserves the original gallery behavior — it
-  // never checked isFile(), only dropped on stat failure. listLoras /
-  // listMusicLibrary do filter directories; mirroring that here would be a
-  // behavior change.
-  const items = await listDirectoryByExtension(PATHS.images, {
-    extensions: GALLERY_IMAGE_EXTENSIONS,
-    requireRegularFile: false,
-    mapEntry: async (f, _fullPath, s) => {
-      const { metadata } = await readImageSidecar(f);
-      return {
-        filename: f,
-        path: `/data/images/${f}`,
-        createdAt: metadata.createdAt || s.birthtime.toISOString(),
-        ...metadata,
-        fileSizeBytes: s.size,
-      };
-    },
-  });
-  return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-}
-
-// `fromRemoteTombstone`: the owner's tombstone, already merged, deleted it, so
-// it is neither re-recorded (that would restamp deletedAt) nor re-announced.
-export async function deleteImage(filename, { fromRemoteTombstone = false } = {}) {
-  assertGalleryFilename(filename);
-  let record = null;
-  let tombstone = null;
-  const result = await withBackupAssetPublication(() => sidecarEditQueue(filename, async () => {
-    const { metadata } = await readImageSidecar(filename);
-    record = { filename, originInstanceId: metadata.originInstanceId };
-    // Record BEFORE trashing: a crash between the two must never leave a
-    // deleted image without its tombstone. It stays in flight (unexported)
-    // until the trash commits, and is withdrawn if the trash fails (#14088).
-    if (!fromRemoteTombstone) tombstone = await beginMediaTombstone('image', filename);
-    try {
-      await trashFiles([
-        join(PATHS.images, filename),
-        sidecarPathForImage(filename),
-        join(PATHS.images, `${filename}.metadata.json`),
-        ...(/\.png$/i.test(filename) ? [join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))] : []),
-      ]);
-    } catch (err) {
-      if (tombstone) await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });
-      throw err;
-    }
-    if (tombstone) await commitLocalDeleteTombstone('image', tombstone);
-    // trashFiles verifies removal before derived records can be retired.
-    await import('../mediaAssetIndex/index.js')
-      .then((m) => m.unindexImage(filename))
-      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
-    console.log(`🗑️ Trashed image: ${filename}`);
-    return { ok: true };
-  }));
-  // The one emitter of an image delete: views refresh, and the owner's own
-  // delete goes to peers (a remote-tombstone delete was announced by its owner).
-  void import('../peerSyncEventBus.js')
-    .then(async (m) => {
-      m.emitMediaHistoryChanged({ kind: 'image', op: 'delete', ids: [filename] });
-      if (!fromRemoteTombstone) await m.announceLocalImageDelete(record, tombstone);
-    })
-    .catch((err) => console.error(`❌ Image delete announce failed: ${err.message}`));
-  return result;
-}
-
-export async function setImageHidden(filename, hidden) {
-  assertGalleryFilename(filename);
-  return editImageSidecar(filename, (metadata) => {
-    metadata.hidden = !!hidden;
-    return { ok: true, hidden: metadata.hidden };
-  });
-}
-
-// Machine-local, like `hidden`: a delete this machine queued for the image's
-// owner (`{ peerId, queuedAt }`), or null to clear it. Resolves true when changed.
-export async function setImagePendingDelete(filename, pending) {
-  assertGalleryFilename(filename);
-  return editImageSidecar(filename, (metadata) => {
-    if (!pending && !('pendingDelete' in metadata)) return null;
-    if (pending) metadata.pendingDelete = pending;
-    else delete metadata.pendingDelete;
-    return true;
-  });
-}
-
-// Make primary (services/mediaHolders.js): the holder chosen to keep this
-// image's bytes. Only an image with a sidecar records it. Resolves true when changed.
-export async function setImagePrimary(filename, { instanceId, at }) {
-  assertGalleryFilename(filename);
-  return editImageSidecar(filename, (metadata) => {
-    if (!metadata || Object.keys(metadata).length === 0) return null;
-    // Field LWW on primaryAt, as on video rows: an older designation never replaces a newer one.
-    if (Date.parse(metadata.primaryAt) >= Date.parse(at)) return null;
-    Object.assign(metadata, { primaryInstanceId: instanceId, primaryAt: at });
-    return true;
-  });
-}
-
-export async function updateImagePrompt(filename, prompt) {
-  assertGalleryFilename(filename);
-  const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
-  return editImageSidecar(filename, (metadata) => {
-    if (trimmedPrompt) metadata.prompt = trimmedPrompt;
-    else delete metadata.prompt;
-    return { filename, prompt: trimmedPrompt };
-  });
-}
-
-// Fill only keys the sidecar lacks, through the same edit queue as prompt and
-// visibility edits so neither write drops the other. An image without a sidecar
-// is left alone: a stub holding only these fields would carry no prompt, seed
-// or model. Resolves true when the sidecar changed, null otherwise.
-export function fillImageSidecarFields(filename, fields) {
-  return editImageSidecar(filename, (metadata) => {
-    if (!metadata || Object.keys(metadata).length === 0) return null;
-    const missing = Object.entries(fields).filter(([key, value]) => value != null && metadata[key] == null);
-    if (missing.length === 0) return null;
-    Object.assign(metadata, Object.fromEntries(missing));
-    return true;
-  });
-}
-
-// Persist the byte-hash cache (`lib/assetHash.js`) through the edit queue so it
-// re-reads the CURRENT sidecar and cannot drop a concurrent edit (hidden flag,
-// supplying peer, ...). An image without a sidecar gets none created for the
-// cache. Not indexed: the hash cache is not a searchable field. Resolves to the
-// merged sidecar, or null when nothing was written.
-export function cacheImageSha256(filename, entry) {
-  assertGalleryFilename(filename);
-  return editImageSidecar(filename, (metadata) => {
-    if (!metadata || Object.keys(metadata).length === 0) return null;
-    metadata.sha256 = entry;
-    return { ...metadata };
-  }, { reindex: false });
-}
-registerGallerySha256Writer(cacheImageSha256);
-
-// Returns just `{ filename, name }` — clients send `filename` back in the
-// generate payload's `loraFilenames` and the server resolves it against
-// PATHS.loras. Avoids leaking absolute server paths into the API surface.
-//
-// Distinct from `services/loras.js#listLoras` which returns the rich
-// Civitai-aware shape (civitai, runnerFamily, triggerWords, etc.) for the
-// `/api/loras` manager UI. The two used to share the name `listLoras`;
-// rename here makes the shape distinction explicit so a future caller
-// can't import the wrong one and silently lose `civitai`/`runnerFamily`.
-export async function listLoraFilenames() {
-  await ensureDir(PATHS.loras);
-  const files = await readdir(PATHS.loras).catch(() => []);
-  return files.filter((f) => f.endsWith('.safetensors')).map((f) => ({
-    filename: f,
-    name: f.replace(/^lora-/, '').replace(/\.safetensors$/, ''),
-  }));
 }

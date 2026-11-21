@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { blenderFilmState } from '../../test/blenderFilmFixture.js';
 
@@ -78,12 +78,18 @@ it('sends the selected track without analysis and links to the new Music Video w
   render(<MemoryRouter initialEntries={[`/code-animation/production/films/${id}/shots`]}><Routes>
     <Route path="/code-animation/production/films/:filmId/:tab?" element={<ProductionFilm />} />
   </Routes></MemoryRouter>);
-  fireEvent.click(await screen.findByRole('button', { name: 'Send to Music Video' }));
-  fireEvent.click(await screen.findByRole('radio', { name: 'Select Example song' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Select track' }));
-  const link = await screen.findByRole('link', { name: 'Open Song version in Music Video' });
-  expect(link.getAttribute('href')).toBe('/music-video/mv-copy');
+  const send = await screen.findByRole('button', { name: 'Send to Music Video' });
+  await act(async () => { fireEvent.click(send); });
+  const picker = within(screen.getByRole('dialog', { name: 'Send to Music Video' }));
+  const track = picker.getByRole('radio', { name: 'Select Example song' });
+  fireEvent.click(track);
+  expect(track.checked).toBe(true);
+  const select = picker.getByRole('button', { name: 'Select track' });
+  // Flush the mocked async promotion before querying the full film UI.
+  await act(async () => { fireEvent.click(select); });
   expect(filmApi.promoteFilm).toHaveBeenCalledWith(id, { trackId: 'track' }, { silent: true });
+  const link = screen.getByRole('link', { name: 'Open Song version in Music Video' });
+  expect(link.getAttribute('href')).toBe('/music-video/mv-copy');
   expect(screen.getByText('No shot covers the song after 12 s.')).toBeTruthy();
   expect(screen.getByText('The copy needs song analysis and a shot sync. Sending starts no jobs.')).toBeTruthy();
   expect(screen.getAllByRole('heading', { name: 'Silent example' })).toHaveLength(1);
