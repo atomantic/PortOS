@@ -112,6 +112,10 @@ export const installLocalLlmModel = (backend, modelId, options = {}) => {
   });
 };
 
+// Stops a download `installLocalLlmModel` started; that request then resolves `{ canceled: true }`.
+export const cancelLocalLlmInstall = (backend, modelId, options = {}) =>
+  request('/local-llm/install/cancel', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
+
 export const deleteLocalLlmModel = (backend, modelId, options = {}) =>
   request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
 

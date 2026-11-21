@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  catalogSizeBytes,
   BACKENDS, isBackend, LOCAL_LLM_CATALOG, LOCAL_LLM_CATEGORIES, getCatalog, searchCatalog,
   mapModelToBackend, getOllamaImportSpec
 } from './localLlmCatalog.js';
@@ -187,17 +188,32 @@ describe('localLlmCatalog', () => {
       expect(LOCAL_LLM_CATALOG.every((e) => !/(?:^|:)cloud$/.test(e.ollama || ''))).toBe(true);
     });
 
-    it('offers Inkling 2 Mini on both GGUF runtimes without featuring it', () => {
-      const ollama = getCatalog('ollama').find((m) => m.key === 'inkling-2-mini');
-      expect(ollama).toMatchObject({
-        id: 'hf.co/bartowski/thinkingmachines_Inkling-2-Mini-GGUF:Q4_K_M',
+    it('offers the Inkling 2 Mini GGUF through LM Studio only, without featuring it', () => {
+      const lmstudio = getCatalog('lmstudio').find((m) => m.key === 'inkling-2-mini');
+      expect(lmstudio).toMatchObject({
+        id: 'lmstudio-community/Inkling-2-Mini-GGUF',
         category: 'general',
         contextLength: 1048576,
         capabilities: expect.arrayContaining(['tools', 'vision', 'reasoning']),
         publisherReview: 'established-publisher',
       });
-      expect(ollama.featured).toBeFalsy();
-      expect(getCatalog('lmstudio').find((m) => m.key === 'inkling-2-mini')?.id).toBe('lmstudio-community/Inkling-2-Mini-GGUF');
+      expect(lmstudio.featured).toBeFalsy();
+      // Ollama's GGUF path can't load this architecture, so it gets no GGUF entry.
+      expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.family === 'inkling')).toBe(false);
+    });
+
+    it('offers the Inkling 2 Mini MLX build through Ollama on Apple Silicon only', () => {
+      const key = 'inkling-2-mini-mlx';
+      expect(getCatalog('ollama', [], { appleSilicon: true }).find((m) => m.key === key))
+        .toMatchObject({ format: 'mlx', id: 'inkling-2-mini:26b-a5b-nvfp4' });
+      // Every library tag is the same manifest, so a pull of any of them reads as installed.
+      for (const tag of ['inkling-2-mini', 'inkling-2-mini:latest', 'inkling-2-mini:26b-a5b']) {
+        expect(getCatalog('ollama', [tag], { appleSilicon: true }).find((m) => m.key === key)?.installed).toBe(true);
+        // ...and the download preflight knows its size.
+        expect(catalogSizeBytes('ollama', tag)).toBeGreaterThan(0);
+      }
+      expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.key === key)).toBe(false);
+      expect(getCatalog('lmstudio', [], { appleSilicon: true }).some((m) => m.key === key)).toBe(false);
     });
 
     it('ships the refreshed local models for reasoning, coding, and multilingual categories', () => {

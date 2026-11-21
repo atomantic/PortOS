@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router';
-import { Download, RefreshCw, Search, Plus, ExternalLink, Star, Play, AlertTriangle } from 'lucide-react';
+import { Download, RefreshCw, Search, Plus, ExternalLink, Star, Play, AlertTriangle, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
@@ -13,6 +13,7 @@ import {
   getLocalLlmCatalog,
   getLocalLlmHuggingFaceSearch,
   installLocalLlmModel,
+  cancelLocalLlmInstall,
   deleteLocalLlmModel,
   upgradeLocalLlmBackend,
   controlOllamaService,
@@ -243,10 +244,18 @@ export default function LocalLlmLibraryView() {
   // queued, not finished — so don't claim "installed" in that case. Install is
   // silent so an OLLAMA_OUTDATED failure can take over the UI with the upgrade
   // banner instead of stacking a useless toast with the auto-upgrade flow.
-  const startInstall = (modelId, { force = false } = {}) => runAction(
+  // The download this tab started, for the progress banner. Audio installs
+  // share the action-key prefix but are not cancelable here, so they are not set.
+  const [startedDownload, setStartedDownload] = useState(null);
+  const startInstall = (modelId, opts = {}) => {
+    const download = { backend: selected, modelId };
+    setStartedDownload(download);
+    return runInstall(modelId, opts).finally(() => setStartedDownload((cur) => (cur === download ? null : cur)));
+  };
+  const runInstall = (modelId, { force = false } = {}) => runAction(
     `install-${modelId}`,
     () => installLocalLlmModel(selected, modelId, { silent: true, force }),
-    (r) => r?.pending ? `${modelId} download started` : `${modelId} ${force ? 'redownloaded' : 'installed'}`,
+    (r) => r?.canceled ? `${modelId} download canceled` : r?.pending ? `${modelId} download started` : `${modelId} ${force ? 'redownloaded' : 'installed'}`,
     {
       onError: (err) => {
         if (err?.code === 'OLLAMA_OUTDATED' && selected === 'ollama') {
@@ -348,8 +357,64 @@ export default function LocalLlmLibraryView() {
     });
   };
 
+  // Downloads in flight: the one this tab started (its action key) plus any the
+  // server reports, so a download survives a reload with its Cancel button.
+  const [cancelling, setCancelling] = useState(() => new Set());
+  const downloads = useMemo(() => {
+    const rows = new Map();
+    for (const install of status?.installs || []) rows.set(`${install.backend}:${install.modelId}`, install);
+    if (startedDownload) {
+      const key = `${startedDownload.backend}:${startedDownload.modelId}`;
+      if (!rows.has(key)) rows.set(key, startedDownload);
+    }
+    return [...rows.values()];
+  }, [status?.installs, startedDownload]);
+  const cancelDownload = ({ backend, modelId }) => {
+    const key = `${backend}:${modelId}`;
+    setCancelling((prev) => new Set(prev).add(key));
+    // Not through runAction: that would replace the install's own action key.
+    cancelLocalLlmInstall(backend, modelId)
+      .catch(() => {})
+      .finally(() => setCancelling((prev) => { const next = new Set(prev); next.delete(key); return next; }));
+  };
+
   return (
     <section id="llm-management-panel-library" role="tabpanel" aria-labelledby="llm-library-heading" className="space-y-4">
+      {downloads.length > 0 && (
+        <div className="space-y-2" aria-label="Model downloads">
+          {downloads.map((download) => {
+            const key = `${download.backend}:${download.modelId}`;
+            const detail = progressMsg && progressMsg.includes(download.modelId) ? progressMsg : null;
+            const percent = Number(/(\d{1,3})%\s*$/.exec(detail || '')?.[1]);
+            return (
+              <div key={key} role="status" className="bg-port-card border border-port-accent/40 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="min-w-0 flex-1 text-sm text-white flex items-center gap-2">
+                    <BrailleSpinner />
+                    <span className="break-all">Downloading {download.modelId} on {labelFor(download.backend)}</span>
+                  </div>
+                  {download.cancelable !== false && <button
+                    type="button"
+                    onClick={() => cancelDownload(download)}
+                    disabled={cancelling.has(key)}
+                    className={`${btnClass} min-h-[44px] bg-port-error/20 hover:bg-port-error/30 text-port-error`}
+                    title="Stop this download and delete what it had downloaded so far"
+                  >
+                    {cancelling.has(key) ? <BrailleSpinner /> : <X size={12} />}
+                    Cancel
+                  </button>}
+                </div>
+                {Number.isFinite(percent) && (
+                  <div className="h-1.5 rounded bg-port-border overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`${download.modelId} download progress`}>
+                    <div className="h-full bg-port-accent transition-all" style={{ width: `${percent}%` }} />
+                  </div>
+                )}
+                {detail && <p className="text-xs text-gray-400 break-all">{detail}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {upgradeFlow && (
         <div className="bg-port-warning/10 border-2 border-port-warning/60 rounded-lg p-4 space-y-2" role="alert">
           <div className="flex items-start gap-3">

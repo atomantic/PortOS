@@ -82,6 +82,39 @@ describe('huggingFaceCatalog', () => {
     expect(results[0].installable).toBe(true)
   })
 
+  it('answers a full repo id with that repo\'s quantized GGUF builds first', async () => {
+    const quant = {
+      id: 'example-quants/example-org_Example-Model-GGUF',
+      downloads: 5,
+      likes: 1,
+      tags: ['gguf', 'base_model:quantized:example-org/Example-Model'],
+      siblings: [{ rfilename: 'example-org_Example-Model-Q4_K_M.gguf', size: 9_000_000_000 }]
+    }
+    const unrelated = {
+      id: 'popular/Other-Model-GGUF',
+      downloads: 900000,
+      likes: 900,
+      tags: ['gguf'],
+      siblings: [{ rfilename: 'Other-Model-Q4_K_M.gguf', size: 4_000_000_000 }]
+    }
+    fetch.mockImplementation(async (url) => (
+      String(url).includes('base_model%3Aquantized%3Aexample-org%2FExample-Model') ? response([quant]) : response([unrelated])
+    ))
+
+    const results = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-org/Example-Model' })
+
+    const quantCall = fetch.mock.calls.map(([u]) => String(u)).find((u) => u.includes('base_model'))
+    expect(quantCall).toContain('filter=gguf')
+    expect(quantCall).not.toContain('search=')
+    expect(results.map((r) => r.repository)).toEqual(['example-quants/example-org_Example-Model-GGUF', 'popular/Other-Model-GGUF'])
+  })
+
+  it('does not ask for quantized derivatives of a plain keyword search', async () => {
+    fetch.mockResolvedValue(response([]))
+    await searchHuggingFaceModels({ backend: 'ollama', query: 'llama' })
+    expect(fetch.mock.calls.some(([u]) => String(u).includes('base_model'))).toBe(false)
+  })
+
   it('returns LM Studio repo ids and marks installed repos', async () => {
     fetch.mockResolvedValue(response([
       {

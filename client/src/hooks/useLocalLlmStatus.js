@@ -86,6 +86,9 @@ export default function useLocalLlmStatus({ onRefresh, onReload } = {}) {
       }
       if (data.event === 'error') {
         progressTimer.current = setTimeout(() => setProgressMsg(''), 5000);
+        // A canceled or failed install ends here, not on `complete`; the server has
+        // already dropped it from `installs`, so reload or its banner lingers.
+        loadStatus();
       }
     };
     socket.on('localLlm:progress', handleProgress);
