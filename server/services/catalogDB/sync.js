@@ -83,7 +83,8 @@ export async function upsertRelationFromPeer(rel) {
     await query(
       `INSERT INTO catalog_ingredient_relations
          (from_id, to_id, kind, created_at, deleted, deleted_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       SELECT catalog_resolve_ingredient_id($1), catalog_resolve_ingredient_id($2), $3, $4, $5, $6, $7
+        WHERE catalog_resolve_ingredient_id($1) <> catalog_resolve_ingredient_id($2)
        ON CONFLICT (from_id, to_id, kind) DO UPDATE
          SET deleted = EXCLUDED.deleted,
              deleted_at = EXCLUDED.deleted_at,
@@ -94,7 +95,8 @@ export async function upsertRelationFromPeer(rel) {
   } else {
     await query(
       `INSERT INTO catalog_ingredient_relations (from_id, to_id, kind, created_at)
-       VALUES ($1, $2, $3, $4)
+       SELECT catalog_resolve_ingredient_id($1), catalog_resolve_ingredient_id($2), $3, $4
+        WHERE catalog_resolve_ingredient_id($1) <> catalog_resolve_ingredient_id($2)
        ON CONFLICT (from_id, to_id, kind) DO NOTHING`,
       [rel.fromId, rel.toId, rel.kind, rel.createdAt],
     );
@@ -104,6 +106,11 @@ export async function upsertRelationFromPeer(rel) {
 
 export const getMediaChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_ingredient_media', rowToMedia, since, limit);
+
+// Notify local listeners using the identity that actually received the peer's write.
+function assetApplyResult([row]) {
+  return row ? { applied: true, ingredientId: row.ingredient_id } : { applied: false };
+}
 
 export async function upsertMediaFromPeer(media) {
   return withPeerIdentityWrite([media.ingredientId], async (query) => {
@@ -142,17 +149,18 @@ export async function upsertMediaFromPeer(media) {
     // media trigger watches those too), so the same guard additionally
     // protects a live edit from a stale peer resend, not just a tombstone.
     const updatedAtClock = media.updatedAt || media.deletedAt || media.createdAt;
-    const { rowCount } = await query(
+    const { rows } = await query(
       `INSERT INTO catalog_ingredient_media
          (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn}${libraryColumn})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder}${libraryPlaceholder})
+       VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder}${libraryPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
          SET role = EXCLUDED.role,
              caption = EXCLUDED.caption,
              deleted = EXCLUDED.deleted,
              deleted_at = EXCLUDED.deleted_at,
              updated_at = EXCLUDED.updated_at${metadataUpdate}${libraryUpdate}
-       WHERE EXCLUDED.updated_at > catalog_ingredient_media.updated_at`,
+       WHERE EXCLUDED.updated_at > catalog_ingredient_media.updated_at
+       RETURNING ingredient_id`,
       [
         media.ingredientId, media.mediaKey, media.kind,
         media.role ?? null, media.caption ?? null, media.createdAt,
@@ -160,22 +168,23 @@ export async function upsertMediaFromPeer(media) {
         ...metadataParam, ...libraryParam,
       ],
     );
-    return { applied: rowCount > 0 };
+    return assetApplyResult(rows);
   }
   const changed = ['role', 'caption'];
   if (hasMetadata) changed.push('metadata');
   if (hasLibrary) changed.push('library');
   const differs = changed.map(column => `catalog_ingredient_media.${column} IS DISTINCT FROM EXCLUDED.${column}`).join(' OR ');
-  const { rowCount } = await query(
+  const { rows } = await query(
     `INSERT INTO catalog_ingredient_media
        (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn}${libraryColumn})
-     VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder}${libraryPlaceholder})
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5, $6${metadataPlaceholder}${libraryPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
        SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}
-     WHERE ${differs}`,
+     WHERE ${differs}
+     RETURNING ingredient_id`,
     [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam, ...libraryParam],
   );
-  return { applied: rowCount > 0 };
+  return assetApplyResult(rows);
   });
 }
 
@@ -388,15 +397,16 @@ export async function upsertRefFromPeer(ref) {
     Object.prototype.hasOwnProperty.call(ref, 'deletedAt');
   if (hasTombstoneFields) {
     const updatedAtClock = ref.updatedAt || ref.deletedAt || ref.createdAt;
-    const { rowCount } = await query(
+    const { rows } = await query(
       `INSERT INTO catalog_ingredient_refs
          (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
          SET deleted = EXCLUDED.deleted,
              deleted_at = EXCLUDED.deleted_at,
              updated_at = EXCLUDED.updated_at
-       WHERE EXCLUDED.updated_at > catalog_ingredient_refs.updated_at`,
+       WHERE EXCLUDED.updated_at > catalog_ingredient_refs.updated_at
+       RETURNING ingredient_id`,
       [
         ref.ingredientId,
         ref.refKind,
@@ -408,18 +418,19 @@ export async function upsertRefFromPeer(ref) {
         updatedAtClock,
       ],
     );
-    return { applied: rowCount > 0 };
+    return assetApplyResult(rows);
   }
   // v1-shape payload: insert when missing, leave local tombstone state alone
   // on conflict. Matches the original v1 `ON CONFLICT DO NOTHING` semantics.
-  const { rowCount } = await query(
+  const { rows } = await query(
     `INSERT INTO catalog_ingredient_refs
        (ingredient_id, ref_kind, ref_id, role, created_at)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO NOTHING`,
+     VALUES (catalog_resolve_ingredient_id($1), $2, $3, $4, $5)
+     ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO NOTHING
+     RETURNING ingredient_id`,
     [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
   );
-  return { applied: rowCount > 0 };
+  return assetApplyResult(rows);
   });
 }
 

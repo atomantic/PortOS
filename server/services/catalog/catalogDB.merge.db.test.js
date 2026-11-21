@@ -6,8 +6,11 @@ import { mergeIngredients, recoverIngredientMerge, getIngredientMergeHistory, ge
 import { getIngredient, getIngredientTimestamps, listIngredients, resolveIngredientsByIds, listIngredientRevisions, updateIngredient } from '../catalogDB/ingredients.js';
 import { attachMedia, listMediaForIngredient } from '../catalogDB/media.js';
 import { linkIngredientRelation, listRelationsForIngredient, listRefsForIngredient, listSourcesForIngredient } from '../catalogDB/refs.js';
-import { exportSliceForRef, getCatalogStats } from '../catalogDB/facets.js';
+import { exportSliceForRef, getCatalogFacets, getCatalogStats } from '../catalogDB/facets.js';
 import { projectToCanon, projectToCatalog } from './catalogCanonProjection.js';
+import { applyRemoteChanges } from './catalogSync.js';
+import { catalogEvents } from './catalogEvents.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { upsertIngredientFromPeer } from '../catalogDB/sync.js';
 
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-local-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
@@ -93,6 +96,50 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     await expect(recoverIngredientMerge(result.id)).rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
   });
 
+  it.each([true, false])('applies peer associations to the survivor (tombstone fields present: %s)', async hasTombstones => {
+    const input = await pair();
+    const { sourceId, survivorId } = input;
+    const { sourceId: otherId } = await pair();
+    const universeId = `universe-${randomUUID()}`;
+    const clock = { createdAt: new Date().toISOString(), ...(hasTombstones && { deleted: false }) };
+    await attachMedia(sourceId, 'original.png', 'reference');
+    const merge = await apply(input);
+    const sourceRows = async () => (await Promise.all([
+      query('SELECT * FROM catalog_ingredient_refs WHERE ingredient_id = $1', [sourceId]),
+      query('SELECT * FROM catalog_ingredient_media WHERE ingredient_id = $1', [sourceId]),
+      query('SELECT * FROM catalog_ingredient_relations WHERE from_id = $1 OR to_id = $1', [sourceId]),
+    ])).map(result => result.rows);
+    const before = await sourceRows();
+    const onAssets = vi.fn();
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [universeId, 'Example world']);
+    catalogEvents.on('assets-changed', onAssets);
+    try {
+      const stats = await applyRemoteChanges({
+        portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
+        refs: [{ ingredientId: sourceId, refKind: 'universe', refId: universeId, role: 'cast', ...clock }],
+        media: [{ ingredientId: sourceId, mediaKey: 'peer.png', kind: 'reference', ...clock }],
+        relations: [
+          { fromId: sourceId, toId: survivorId, kind: 'related-to', ...clock },
+          { fromId: sourceId, toId: otherId, kind: 'related-to', ...clock },
+          { fromId: otherId, toId: sourceId, kind: 'related-to', ...clock },
+        ],
+      });
+      expect(stats.errors).toEqual([]);
+      expect(onAssets.mock.calls).toEqual([[{ ingredientId: survivorId }]]);
+      expect((await listRefsForIngredient(survivorId)).map(ref => ref.refId)).toEqual([universeId]);
+      expect((await listMediaForIngredient(survivorId)).map(media => media.mediaKey).sort()).toEqual(['cast.png', 'original.png', 'peer.png']);
+      const relations = await listRelationsForIngredient(survivorId);
+      expect(relations.inbound.map(rel => rel.other.id)).toEqual([otherId]);
+      expect(relations.outbound.map(rel => rel.other.id)).toEqual([otherId]);
+      expect((await getCatalogFacets()).universes).toContainEqual({ refId: universeId, name: 'Example world', count: 1 });
+      expect(await sourceRows()).toEqual(before);
+      await expect(recoverIngredientMerge(merge.id)).rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
+    } finally {
+      catalogEvents.off('assets-changed', onAssets);
+      await query('DELETE FROM universes WHERE id = $1', [universeId]);
+    }
+  });
+
   it('previews conflicts without writes and rejects ownership, locks, stale previews and alias chains', async () => {
     const input = await pair();
     const unresolved = await mergeIngredients({ sourceId: input.sourceId, survivorId: input.survivorId });
@@ -161,7 +208,7 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     const input = await pair();
     const first = await apply(input);
     const second = await apply({ ...await pair(), survivorId: input.survivorId });
-    // Raw synchronized/source associations can change without going through alias resolution.
+    // A direct storage write can bypass alias resolution.
     await query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
       VALUES ($1, 'music-video', 'example-later-source-ref', 'cast')`, [input.sourceId]);
     await recoverIngredientMerge(second.id);

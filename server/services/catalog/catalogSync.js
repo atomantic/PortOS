@@ -212,7 +212,7 @@ export async function applyRemoteChanges(envelope = {}) {
         recordFailure(errLabel, idFor(item), err);
         continue;
       }
-      if (res?.applied) onApplied?.(item);
+      if (res?.applied) onApplied?.(item, res);
     }
   };
 
@@ -330,7 +330,7 @@ export async function applyRemoteChanges(envelope = {}) {
   await applyKind({
     items: envelope.refs, upsertFn: upsertRefFromPeer, tally: stats.refs, lww: false,
     errLabel: 'ref', idFor: (r) => `${r?.ingredientId}/${r?.refKind}/${r?.refId}`,
-    onApplied: markAssetsChanged,
+    onApplied: (_ref, result) => markAssetsChanged(result),
   });
 
   // Relations FK BOTH ids to catalog_ingredients, so they land after the
@@ -349,8 +349,8 @@ export async function applyRemoteChanges(envelope = {}) {
   await applyKind({
     items: envelope.media, upsertFn: upsertMediaFromPeer, tally: stats.media, lww: false,
     errLabel: 'media', idFor: (m) => `${m?.ingredientId}/${m?.kind}/${m?.mediaKey}`,
-    onApplied: (media) => {
-      if (media.kind === 'portrait' || media.kind === 'reference') markAssetsChanged(media);
+    onApplied: (media, result) => {
+      if (media.kind === 'portrait' || media.kind === 'reference') markAssetsChanged(result);
     },
   });
 
