@@ -328,12 +328,12 @@ export default function MediaAnnotate() {
           <span className="text-xs text-gray-400 w-5 tabular-nums">{size}</span>
         </div>
 
-        <div className="flex items-center gap-1 ml-auto">
+        <div className="flex flex-wrap items-center gap-1 ml-auto">
           <button
             type="button"
             onClick={handleUndo}
             disabled={!loaded || strokes.length === 0}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Undo last stroke"
           >
             <Undo2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Undo</span>
@@ -342,7 +342,7 @@ export default function MediaAnnotate() {
             type="button"
             onClick={handleClear}
             disabled={!loaded || strokes.length === 0}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Clear all strokes"
           >
             <Trash2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Clear</span>
@@ -351,7 +351,7 @@ export default function MediaAnnotate() {
             type="button"
             onClick={handleExport}
             disabled={!dims}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Download flattened PNG"
           >
             <Download className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Export</span>
@@ -372,7 +372,7 @@ export default function MediaAnnotate() {
               type="button"
               onClick={openRerender}
               disabled={!dims || !loaded || strokes.length === 0}
-              className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+              className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
               title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
             >
               <Wand2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Re-render</span>
