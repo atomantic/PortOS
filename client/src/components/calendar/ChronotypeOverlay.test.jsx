@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 
 vi.mock('../ThemeContext', () => ({
   useThemeContext: () => ({ theme: { mode: 'day' } }),
