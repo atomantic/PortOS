@@ -35,8 +35,8 @@ import {
   generateMusic,
   ENGINES,
   DEFAULT_ENGINE_ID,
-  isEngineHealthy,
 } from '../../services/pipeline/musicGen.js';
+import { listMusicEngineCapabilities, musicEngineReadinessReason } from '../../services/musicEngineCapabilities.js';
 import { deriveAudioCues, preserveRenderedCues } from '../../services/pipeline/audioCues.js';
 import { uploadSingle } from '../../lib/multipart.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -363,31 +363,48 @@ router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
 }));
 
-// Local-OSS music generators available to the audio stage (Phase 4c.2).
-// Returns every selectable backend under `engines` (each carrying its models,
-// duration window and a `ready` flag for the opt-in venv) plus a `defaultEngine`
-// id. The top-level `models`/`ready`/duration fields mirror the default engine
-// for backward compatibility with pre-multi-engine clients.
+// Preserve the flattened duration, models and readiness fields for single-engine clients.
 router.get('/audio/music/generators', asyncHandler(async (_req, res) => {
-  const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => ({
-    id: engine.id,
-    name: engine.name,
-    models: engine.models.map(({ id, name }) => ({ id, name })),
-    defaultModelId: engine.defaultModelId,
-    defaultDurationSec: engine.defaultDurationSec,
-    minDurationSec: engine.minDurationSec,
-    maxDurationSec: engine.maxDurationSec,
-    // The authoritative install-hint env var (e.g. INSTALL_AUDIOLDM2) so the UI
-    // renders the exact command instead of re-deriving it from the engine id.
-    installEnv: engine.installEnv,
-    // Health, not path-existence: a half-built venv would report ready here and
-    // then fail inside the sidecar. Matches /api/music/engines.
-    ready: await isEngineHealthy(engine.id),
-  })));
-  const fallback = engines.find((e) => e.id === DEFAULT_ENGINE_ID) ?? engines[0];
+  const capabilities = await listMusicEngineCapabilities();
+  const engines = capabilities.engines.map((engine) => {
+    // The pipeline render routes accept shipped IDs; the Music studio also
+    // offers user models through its separate generation workflow.
+    const models = engine.models.filter((model) => !model.userAdded).map(({ id, name }) => ({ id, name }));
+    const reasonForModel = (modelId) => musicEngineReadinessReason(
+      engine, !engine.fixedModelInstall || engine.modelReadyById?.[modelId] === true,
+    );
+    const unavailableReason = reasonForModel(engine.defaultModelId);
+    return {
+      id: engine.id,
+      name: engine.name,
+      models,
+      defaultModelId: engine.defaultModelId,
+      defaultDurationSec: engine.defaultDurationSec,
+      minDurationSec: engine.minDurationSec,
+      maxDurationSec: engine.maxDurationSec,
+      installEnv: engine.installEnv,
+      platformSupported: engine.platformSupported,
+      platformLabel: engine.platformLabel,
+      runtimeReady: engine.runtimeReady,
+      cudaRequired: engine.cudaRequired,
+      cudaState: engine.cudaState,
+      executionProfile: engine.executionProfile,
+      vramState: engine.vramState,
+      vramProfileLabel: engine.vramProfileLabel,
+      minVramGb: engine.minVramGb,
+      recommendedVramGb: engine.recommendedVramGb,
+      maxVramGb: engine.maxVramGb,
+      ready: unavailableReason === null,
+      unavailableReason,
+      ...(engine.fixedModelInstall ? {
+        unavailableReasonByModelId: Object.fromEntries(models.map(({ id }) => [id, reasonForModel(id)])),
+      } : {}),
+    };
+  });
+  const fallback = engines.find((engine) => engine.id === capabilities.defaultEngine) ?? engines[0];
   res.json({
     engines,
-    defaultEngine: DEFAULT_ENGINE_ID,
+    defaultEngine: capabilities.defaultEngine,
     // Back-compat: flatten the default engine's fields to the top level.
     models: fallback.models,
     defaultModelId: fallback.defaultModelId,
@@ -410,7 +427,7 @@ const MAX_ENGINE_DURATION = Math.max(...Object.values(ENGINES).map((e) => e.maxD
 // the issue as a `source: 'gen'` track. The generated WAV lands in the shared
 // music library, so it's reusable across issues exactly like an upload.
 const musicGenerateSchema = z.object({
-  prompt: z.string().trim().min(1).max(800),
+  prompt: z.string().max(800).refine((value) => value.trim().length > 0, 'prompt is required'),
   engine: z.enum(Object.keys(ENGINES)).optional(),
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),

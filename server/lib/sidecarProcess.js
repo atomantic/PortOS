@@ -6,7 +6,7 @@
  * per-STAGE-line callback, abort/SIGTERM → `canceled`, non-zero exit → stderr-tail reason). Used by
  * `pipeline/musicGen.js` (all music backends) and `audioMidiTranscription.js` (MuScriptor).
  *
- * Every media sidecar (scripts/generate_musicgen.py, generate_audioldm2.py,
+ * Every media sidecar (scripts/ml/generate_musicgen.py, generate_audioldm2.py,
  * generate_acestep.py, transcribe_muscriptor.py, …) speaks the same contract:
  * `STAGE:<name>[:detail]` lines on stderr drive the JS-side phase/progress
  * display, and a final `RESULT:<json>` line on stdout reports what was

@@ -93,8 +93,18 @@ export const AGENT_RULE_KINDS = [
   { value: 'pull-request', label: 'Other pull requests', hint: 'Subscribed pull-request activity. Run Do:Review or the screened Untrusted:Review task used by your apps.' },
   { value: 'mention', label: 'Mentions', hint: 'You or your team were mentioned. An agent takes it only when everyone in the thread is you or trusted.' },
   { value: 'release', label: 'Releases', hint: 'A new release in a repo you watch.' },
-  { value: 'other', label: 'Everything else', hint: 'Any other notification: comments, discussions, commits and subscriptions. An agent takes it only when everyone in the thread is you or trusted.' },
+  { value: 'other', label: 'Everything else', hint: 'Any notification no other kind names: discussions, commits and the like. An agent takes it only when everyone in the thread is you or trusted.' },
+  // By GitHub's own reason, on any issue, pull request or discussion. They only
+  // mark done, mute or leave, and a matching one wins over the kinds above.
+  { value: 'reason-comment', label: 'Comments on threads you follow', hint: 'GitHub reason "comment": someone commented on a thread you follow. Wins over Issue activity and Other pull requests for these threads, and never starts an agent.' },
+  { value: 'reason-subscribed', label: 'Threads and repos you watch', hint: 'GitHub reasons "subscribed" and "manual": you watch the repository or subscribed to the thread. Wins over the kinds above and never starts an agent.' },
+  { value: 'reason-state-change', label: 'Opened, closed or merged', hint: 'GitHub reason "state_change": a thread you follow was opened, closed or merged. Wins over the kinds above and never starts an agent.' },
+  { value: 'reason-assign', label: 'Assigned to you', hint: 'GitHub reason "assign": an issue or pull request was assigned to you. Wins over the kinds above and never starts an agent.' },
+  { value: 'reason-author', label: 'Activity on your own threads', hint: 'GitHub reason "author": new activity on something you opened. Wins over Your pull requests and Issue activity and never starts an agent.' },
 ];
+
+// Kinds named by GitHub's notification reason (REASON_RULE_KINDS on the server).
+export const REASON_RULE_KIND_VALUES = AGENT_RULE_KINDS.filter(({ value }) => value.startsWith('reason-')).map(({ value }) => value);
 
 // What an automation rule does (GITHUB_AGENT_RULE_ACTIONS on the server).
 export const RULE_ACTIONS = [
@@ -108,6 +118,7 @@ export const RULE_ACTIONS = [
 // Security alerts are never marked done or muted by a rule.
 export const actionsForKind = kind => RULE_ACTIONS.filter(({ value }) => {
   if (kind === 'security-alert') return value === 'agent' || value === 'leave';
+  if (REASON_RULE_KIND_VALUES.includes(kind)) return value === 'done' || value === 'mute' || value === 'leave';
   if (value === 'merge') return kind === 'dependabot-pr';
   return !['do-review', 'untrusted-review'].includes(value) || PULL_REQUEST_RULE_KINDS.includes(kind);
 });

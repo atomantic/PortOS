@@ -50,6 +50,40 @@ export async function listIds({ includeDeleted = true } = {}) {
   return rows.map((r) => r.id);
 }
 
+/** Global id conflict check for imports. A missing row has no deletion status. */
+export async function getDeletionStatus(id) {
+  const { rows } = await query('SELECT deleted FROM pipeline_issues WHERE id = $1', [id]);
+  return rows[0]?.deleted ?? null;
+}
+
+// Include tombstones: a winning remote revision may resurrect one in another series.
+export async function listSeriesIdsForIssues(ids) {
+  const { rows } = await query('SELECT DISTINCT series_id FROM pipeline_issues WHERE id = ANY($1::text[])', [ids]);
+  return rows.map((row) => row.series_id);
+}
+
+export async function listLiveIssueSeriesIds() {
+  const { rows } = await query('SELECT DISTINCT series_id FROM pipeline_issues WHERE deleted = FALSE');
+  return rows.map((r) => r.series_id);
+}
+
+const OLD_TOMBSTONE = 'deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1';
+
+export async function listTombstoneIdsBefore(beforeMs) {
+  const { rows } = await query(`SELECT id FROM pipeline_issues WHERE ${OLD_TOMBSTONE}`, [new Date(beforeMs)]);
+  return rows.map((r) => r.id);
+}
+
+// Check the mirrored columns again in the delete itself so resurrection or a
+// newer tombstone between the candidate scan and the queued prune wins.
+export async function deleteTombstonesBefore(ids, beforeMs) {
+  const { rows } = await query(
+    `DELETE FROM pipeline_issues WHERE ${OLD_TOMBSTONE} AND id = ANY($2::text[]) RETURNING id`,
+    [new Date(beforeMs), ids],
+  );
+  return rows.map((r) => r.id);
+}
+
 /** Every record's raw `data` JSONB in one query (live/ephemeral/tombstones). */
 export async function listRaw({ withHistory = true } = {}) {
   const { rows } = await query(`SELECT ${withHistory ? 'data' : LEAN_DATA} AS data FROM pipeline_issues`);

@@ -110,6 +110,7 @@ export const state = {
   getImageGenStatus: vi.fn(defaultStatus),
   /** `generateImage`; a spy so a suite can assert payloads or reject. */
   generateImage: vi.fn(async () => ({ jobId: 'job-1' })),
+  generateImageMultipart: vi.fn(async () => ({})),
   /** `previewImagePrompt` (#11317); a spy so a suite can assert the preview body and answer. */
   previewImagePrompt: vi.fn(async () => ({ sentPrompt: '' })),
   /** `getActiveImageJob`'s payload. */
@@ -161,6 +162,7 @@ export function resetImageGenMockState() {
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
   state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
+  state.generateImageMultipart.mockReset().mockResolvedValue({});
   state.previewImagePrompt.mockReset().mockResolvedValue({ sentPrompt: '' });
   // The real media-run hook opens this for a started/resumed render; a silent
   // stream keeps the job open mid-render without leaking timers, and a test
@@ -184,11 +186,20 @@ export function resetImageGenMockState() {
   state.mediaPreviewFactory = null;
 }
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: state.peers })),
   getImageGenStatus: (...args) => state.getImageGenStatus(...args),
   generateImage: (...args) => state.generateImage(...args),
-  generateImageMultipart: vi.fn(async () => ({})),
+  getSettings: (...args) => state.getSettings(...args),
+}));
+vi.mock('../services/apiMediaJobs.js', () => ({
+  listMediaJobs: (...args) => state.listMediaJobs(...args),
+}));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
+
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
+  generateImageMultipart: state.generateImageMultipart,
   previewImagePrompt: (...args) => state.previewImagePrompt(...args),
   listImageModels: (...args) => state.listImageModels(...args),
   getGalleryImages: (...args) => state.getGalleryImages(...args),
@@ -200,17 +211,11 @@ vi.mock('../services/api', () => ({
   setImageHidden: vi.fn(async () => ({})),
   cleanGalleryImage: vi.fn(async () => ({})),
   getActiveImageJob: vi.fn(async () => ({ activeJob: state.activeJob })),
-  getSettings: (...args) => state.getSettings(...args),
   buildFormData: vi.fn(() => new FormData()),
-  listMediaJobs: (...args) => state.listMediaJobs(...args),
   regenerateGalleryImage: vi.fn(async () => ({})),
   getRegenAvailability: vi.fn(async () => ({ available: false })),
   removeImageWatermark: vi.fn(async () => ({})),
   getFlux2Status: vi.fn(async () => state.flux2Status),
-}));
-
-vi.mock('../services/apiImageVideo', () => ({
-  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
 }));
 
 vi.mock('../hooks/useImageGenProgress', () => ({

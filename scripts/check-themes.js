@@ -176,12 +176,6 @@ async function main() {
   }
 
   const css = await readFile(join(repoRoot, 'client/src/index.css'), 'utf8');
-  for (const id of THEME_IDS) {
-    assert(
-      id === DEFAULT_THEME_ID || css.includes(`data-port-theme="${id}"`),
-      `index.css is missing a theme-specific selector for ${id}`,
-    );
-  }
   assert(css.includes('data-port-theme'), 'index.css must include the theme runtime layer');
   for (const effect of THEME_EFFECTS) {
     assert(css.includes(`data-port-theme-effects~="${effect}"`), `index.css has no shared block for effect ${effect}`);

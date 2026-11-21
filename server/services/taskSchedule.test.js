@@ -134,7 +134,7 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
 import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
-import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
+import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_EXECUTION_TASK_TYPES, isAuditTaskType } from '../lib/auditCatalog.js'
 import { NO_CHANGE_SCHEDULED_TYPES } from '../lib/noChangeCompletion.js'
 
 import { loadState } from './cos/cosState.js'
@@ -213,6 +213,23 @@ describe('taskSchedule', () => {
       }
     })
 
+  })
+
+  it('keeps two legacy profiles independent when the Quality catalog groups them into one domain', async () => {
+    const tasks = {
+      simplify: { type: 'cron', cronExpression: '0 5 * * 2', prompt: 'Custom simplify mission', model: 'fixture-one' },
+      'better-complexity': { type: 'cron', cronExpression: '0 9 * * 4', prompt: 'Custom complexity mission', model: 'fixture-two' },
+    }
+    const requests = [{ id: 'fixture-a', taskType: 'simplify' }, { id: 'fixture-b', taskType: 'better-complexity' }]
+    mockSchedule({ tasks, onDemandRequests: requests, executions: {
+      'task:simplify': { count: 3, perApp: {} }, 'task:better-complexity': { count: 5, perApp: {} },
+    } })
+    const schedule = await loadSchedule()
+    for (const [id, config] of Object.entries(tasks)) expect(schedule.tasks[id]).toMatchObject(config)
+    expect(schedule.onDemandRequests).toEqual(requests)
+    expect(schedule.executions['task:simplify'].count).toBe(3)
+    expect(schedule.executions['task:better-complexity'].count).toBe(5)
+    expect(schedule.tasks['code-simplification']).toMatchObject({ type: 'on-demand', taskMetadata: { fileIssues: true } })
   })
 
   describe('feature-gated shipped tasks', () => {
@@ -1927,7 +1944,7 @@ describe('taskSchedule', () => {
       ['module-hygiene', DEDUP_PRELOAD],
       ['upgrade-rehearsal', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
-      ...[...AUDIT_TASK_TYPES]
+      ...[...AUDIT_EXECUTION_TASK_TYPES]
         .filter((taskType) => taskType.startsWith('better-'))
         .map((taskType) => [taskType, DEDUP_PRELOAD]),
     ]
@@ -1946,7 +1963,7 @@ describe('taskSchedule', () => {
     })
 
     it('ships open issues, the slice rotation record and lane health for every scheduled quality audit', () => {
-      for (const taskType of AUDIT_TASK_TYPES) {
+      for (const taskType of AUDIT_EXECUTION_TASK_TYPES) {
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('audit-slice-history')
         expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('lane-health')
@@ -1970,7 +1987,7 @@ describe('taskSchedule', () => {
     })
 
     it('requires worktree isolation for the lanes whose remediation restructures code', () => {
-      const isolated = [...AUDIT_TASK_TYPES]
+      const isolated = [...AUDIT_EXECUTION_TASK_TYPES]
         .filter((t) => t.startsWith('better-') && auditDoWorkRequiresWorktree(t))
       expect(isolated).toEqual([
         'better-complexity',
@@ -2480,6 +2497,14 @@ describe('taskSchedule', () => {
       expect(status.tasks.security).not.toHaveProperty('adjustedIntervalMs')
     })
 
+    it('shows a legacy global execution with no per-app history and accepts its first app run', async () => {
+      mockSchedule({ executions: { 'task:security': { lastRun: null, count: 3 } } })
+      const status = await getScheduleStatus()
+      expect(status.tasks.security).toMatchObject({ globalRunCount: 3, perAppCount: 0 })
+      const execution = await recordExecution('security', 'app-1')
+      expect(execution).toMatchObject({ count: 4, perApp: { 'app-1': { count: 1 } } })
+    })
+
     it('refreshes missing inventory in the schedule response and persists current rows', async () => {
       const row = { branch: 'fix/example', path: '/example/gone', head: 'a'.repeat(40), reason: 'checkout-retained' };
       mockSchedule({ executions: { 'task:branch-reconcile': { perApp: { 'app-1': { branchReconcileOutcome: { status: 'incomplete', remaining: [row] } } } } } });
@@ -2526,6 +2551,28 @@ describe('taskSchedule', () => {
       expect(status.tasks['claim-issue']).toMatchObject({ displayName: 'claim-issue', defaultLabels: [] })
       expect(status.tasks['music-video-autopilot']).toMatchObject({ displayName: 'Autonomous run' })
     })
+
+    it('distinguishes task-local settings from the task’s shipped defaults', async () => {
+      mockSchedule({ tasks: {
+        'claim-issue': {
+          type: 'on-demand',
+          enabled: true,
+          taskMetadata: { issueAuthorFilter: 'self', issueExcludeLabels: ['manual-review'], simplify: false },
+        },
+        'module-hygiene': {
+          type: 'on-demand',
+          enabled: true,
+          suggestedAfter: [],
+        },
+      } });
+
+      const { tasks } = await getScheduleStatus();
+      expect(tasks['claim-issue'].globalOverrideFields).toEqual(expect.arrayContaining([
+        'taskMetadata.issueExcludeLabels', 'taskMetadata.simplify',
+      ]));
+      expect(tasks['claim-issue'].globalOverrideFields).not.toContain('taskMetadata.issueAuthorFilter');
+      expect(tasks['module-hygiene'].globalOverrideFields).toContain('suggestedAfter');
+    });
 
     it('projects task summaries and explains hook-owned prompts', async () => {
       mockSchedule()
@@ -3006,6 +3053,7 @@ describe('taskSchedule', () => {
         mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
         const status = await getScheduleStatus()
+        expect(getAppTaskTypeOverrides).toHaveBeenCalledTimes(1)
         expect(status.tasks['do-release'].appSchedules).toEqual([{
           appId: 'app-1',
           appName: 'Acme',

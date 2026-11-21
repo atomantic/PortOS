@@ -23,6 +23,20 @@ const svc = await import('./issues.js');
 const cj = await import('../../lib/conflictJournal.js');
 const { recordEvents } = await import('../sharing/recordEvents.js');
 
+// Keep the real journal/store operation, but let a second public mutation
+// start while the first one is suspended at a known persistence boundary.
+function pauseNextCall(target, method) {
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  const original = target[method];
+  vi.spyOn(target, method).mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await released.promise;
+    return original(...args);
+  });
+  return { entered: entered.promise, release: released.resolve };
+}
+
 describe('pipeline issues service', () => {
   beforeEach(() => {
     h.resetFixtures(cj);
@@ -126,6 +140,28 @@ describe('pipeline issues service', () => {
 
         expect(result).toEqual({ applied: remoteWins, count: remoteWins ? 1 : 0 });
         expect(await svc.getIssue(local.id)).toMatchObject({ title: remoteWins ? 'Remote' : 'Local', updatedAt: remoteWins ? remoteTs : localTs });
+      });
+
+      it.each([
+        { name: 'a lean stage', senderVersion: 7, history: undefined, expectedRunId: 'local-old', expectedOutput: 'local earlier draft' },
+        { name: 'empty legacy history', senderVersion: 6, history: [], expectedRunId: 'local-old', expectedOutput: 'local earlier draft' },
+        { name: 'legacy history entries', senderVersion: 6, history: [{ runId: 'remote-old', output: 'remote earlier draft' }], expectedRunId: 'remote-old', expectedOutput: 'remote earlier draft' },
+      ])('merges current stage text and keeps the correct undo trail with $name', async ({ senderVersion, history, expectedRunId, expectedOutput }) => {
+        const local = {
+          id: 'iss-history', seriesId: 'ser-1', title: 'History', updatedAt: '2026-05-17T10:00:00Z',
+          stages: { prose: { output: 'local draft', runHistory: [{ runId: 'local-old', output: 'local earlier draft' }] } },
+        };
+        await svc.mergeIssuesFromSync([local]);
+        const stage = { status: 'edited', input: 'remote input', output: 'remote draft' };
+        if (history !== undefined) stage.runHistory = history;
+        const result = await svc.mergeIssuesFromSync([{
+          ...local, updatedAt: '2026-05-17T11:00:00Z', stages: { prose: stage },
+        }], { senderSchemaVersions: { pipelineIssues: senderVersion } });
+
+        expect(result).toEqual({ applied: true, count: 1 });
+        const saved = (await svc.getIssue(local.id)).stages.prose;
+        expect(saved).toMatchObject({ status: 'edited', input: 'remote input', output: 'remote draft' });
+        expect(saved.runHistory).toEqual([{ runId: expectedRunId, createdAt: null, input: '', output: expectedOutput }]);
       });
 
       it('applies an inbound soft-delete from a peer', async () => {
@@ -307,6 +343,87 @@ describe('pipeline issues service', () => {
     });
 
     describe('mergeIssuesFromSync — changed-only persistence and multi-series correctness', () => {
+      it('keeps a newer local stage and its undo entry when sync waits behind that save', async () => {
+        const original = { id: 'iss-overlap', seriesId: 'ser-1', title: 'Draft', updatedAt: '2020-01-01T00:00:00Z',
+          stages: { prose: { output: 'original', lastRunId: 'run-original' } } };
+        await svc.mergeIssuesFromSync([original]);
+        const writing = pauseNextCall(svc.issueStore(), 'saveOneNow');
+        const local = svc.updateStage(original.id, 'prose', { output: 'local draft', lastRunId: 'run-local' });
+        await writing.entered;
+        const merge = svc.mergeIssuesFromSync([{ ...original, updatedAt: '2020-01-02T00:00:00Z',
+          stages: { prose: { output: 'peer draft' } } }]);
+        try {
+          // A different inbound batch can finish while this series' write is held.
+          await svc.mergeIssuesFromSync([{ ...original, id: 'iss-independent', seriesId: 'ser-other' }]);
+        } finally {
+          writing.release();
+        }
+        await local;
+        expect(await merge).toEqual({ applied: false, count: 0 });
+        expect((await svc.getIssue(original.id)).stages.prose).toMatchObject({
+          output: 'local draft', runHistory: [{ runId: 'run-original', output: 'original' }],
+        });
+      });
+
+      it('leaves the issue untouched when private parent membership cannot be read', async () => {
+        const original = await svc.createIssue({ seriesId: 'ser-1', title: 'Original' });
+        const series = await import('./series.js');
+        vi.spyOn(series, 'listSeries').mockRejectedValueOnce(new Error('Series unavailable'));
+        await expect(svc.mergeIssuesFromSync([{ ...original, title: 'Peer', updatedAt: '2099-01-01T00:00:00Z' }]))
+          .rejects.toThrow('Series unavailable');
+        expect((await svc.getIssue(original.id)).title).toBe('Original');
+      });
+
+      it('follows a peer move to the destination queue and snapshots the winning peer draft', async () => {
+        const original = await svc.createIssue({ seriesId: 'ser-z', title: 'Original' });
+        const neighbor = await svc.createIssue({ seriesId: 'ser-a', title: 'Destination' });
+        const unrelated = await svc.createIssue({ seriesId: 'ser-other', title: 'Independent' });
+        const journal = pauseNextCall(cj, 'maybeJournalBeforeOverwrite');
+        const move = svc.mergeIssuesFromSync([{ ...original, seriesId: neighbor.seriesId,
+          updatedAt: '2099-01-01T00:00:00Z', stages: { prose: { output: 'peer draft', lastRunId: 'run-peer' } } }]);
+        await journal.entered;
+        const order = [];
+        const destinationWrite = svc.updateIssue(neighbor.id, async () => {
+          await svc.updateStage(unrelated.id, 'idea', { output: 'independent edit' });
+          order.push('destination');
+          return { title: 'Updated neighbor' };
+        });
+        const local = svc.updateStageWithLatest(original.id, 'prose', () => {
+          order.push('stage');
+          return { output: 'local draft', lastRunId: 'run-local' };
+        });
+        try {
+          await svc.updateStage(unrelated.id, 'prose', { output: 'independent' });
+        } finally {
+          journal.release();
+        }
+        const [merged, , saved] = await Promise.all([move, destinationWrite, local]);
+        expect(merged).toEqual({ applied: true, count: 1 });
+        expect(saved.issue.seriesId).toBe(neighbor.seriesId);
+        expect(order).toEqual(['destination', 'stage']);
+        expect((await svc.getIssue(original.id)).stages.prose).toMatchObject({
+          output: 'local draft', runHistory: [{ runId: 'run-peer', output: 'peer draft' }],
+        });
+      });
+
+      it('serializes a sibling stage save with a peer tombstone and its renumber', async () => {
+        const removed = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+        const sibling = await svc.createIssue({ seriesId: 'ser-1', title: 'Second' });
+        await svc.updateStage(sibling.id, 'prose', { output: 'original', lastRunId: 'run-original' });
+        const journal = pauseNextCall(cj, 'maybeJournalBeforeOverwrite');
+        const tombstone = svc.mergeIssuesFromSync([{ ...removed, deleted: true,
+          deletedAt: '2099-01-01T00:00:00Z', updatedAt: '2099-01-01T00:00:00Z' }]);
+        await journal.entered;
+        const local = svc.updateStage(sibling.id, 'prose', { output: 'local draft', lastRunId: 'run-local' });
+        journal.release();
+        await Promise.all([tombstone, local]);
+        expect(await svc.listIssues({ seriesId: sibling.seriesId })).toMatchObject([{
+          id: sibling.id, number: 1, stages: { prose: {
+            output: 'local draft', runHistory: [{ runId: 'run-original', output: 'original' }],
+          } },
+        }]);
+      });
+
       it('merges issues from two different series correctly', async () => {
         const a = await svc.createIssue({ seriesId: 'ser-multi-1', title: 'A1' });
         const b = await svc.createIssue({ seriesId: 'ser-multi-2', title: 'B1' });
@@ -428,6 +545,22 @@ describe('pipeline issues service', () => {
         expect(await cj.getSyncBaseHash('issue', oldT.id)).toBeNull();
         expect(await cj.getSyncBaseHash('issue', oldT2.id)).toBeNull();
         expect(await cj.getSyncBaseHash('issue', live.id)).toBe('hash-live');
+      });
+
+      it('rechecks stale candidates before deleting or evicting their base hashes', async () => {
+        const restored = await svc.createIssue({ seriesId: 'ser-first', title: 'Restored' });
+        const tomb = await svc.createIssue({ seriesId: 'ser-second', title: 'Fresh tombstone' });
+        const cutoff = Date.now() - 60_000;
+        await svc.deleteIssue(tomb.id);
+        await cj.setSyncBaseHash('issue', restored.id, 'restored-hash');
+        const store = svc.issueStore();
+        vi.spyOn(store, 'listTombstoneIdsBefore').mockResolvedValueOnce([restored.id, tomb.id]);
+        const all = vi.spyOn(store, 'loadAll');
+        expect(await svc.pruneTombstonedIssues(cutoff)).toEqual({ pruned: 0 });
+        expect(all).not.toHaveBeenCalled();
+        expect((await svc.getIssue(restored.id)).deleted).toBe(false);
+        expect((await svc.getIssue(tomb.id, { includeDeleted: true })).deleted).toBe(true);
+        expect(await cj.getSyncBaseHash('issue', restored.id)).toBe('restored-hash');
       });
 
       it('keeps tombstones with unparseable deletedAt (conservative — never silently delete)', async () => {

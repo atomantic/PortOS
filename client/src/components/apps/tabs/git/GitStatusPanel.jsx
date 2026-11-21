@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { GitBranch, Plus, Minus, FileText } from 'lucide-react';
 import Modal from '../../../ui/Modal';
-import * as api from '../../../../services/api';
+import { getGitDiff, stageFiles, unstageFiles } from '../../../../services/apiGit.js';
 
 function StatusIcon({ file }) {
   if (file.added) return <Plus size={14} className="text-port-success" />;
@@ -17,18 +17,18 @@ export default function GitStatusPanel({ repoPath, gitInfo, loadGitInfo }) {
 
   const loadDiff = async () => {
     if (!repoPath) return;
-    const result = await api.getGitDiff(repoPath).catch(() => ({ diff: '' }));
+    const result = await getGitDiff(repoPath).catch(() => ({ diff: '' }));
     setDiff(result.diff || '');
     setShowDiff(true);
   };
 
   const handleStage = async (file) => {
-    await api.stageFiles(repoPath, [file]);
+    await stageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 
   const handleUnstage = async (file) => {
-    await api.unstageFiles(repoPath, [file]);
+    await unstageFiles(repoPath, [file]);
     await loadGitInfo();
   };
 

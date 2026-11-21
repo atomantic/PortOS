@@ -7,7 +7,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import { INPUT_CLASS } from '../apps/constants';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
-import * as api from '../../services/api';
+import { getProviderBootstraps, saveProviderBootstraps } from '../../services/apiProviders.js';
 import { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
 import { pluralize } from '../../lib/textUtils';
 import { formatCount } from '../../utils/formatters';
@@ -144,7 +144,7 @@ export default function ProviderCredentialBootstraps({ harnesses = [], presets =
 
   useEffect(() => {
     let active = true;
-    api.getProviderBootstraps({ silent: true })
+    getProviderBootstraps({ silent: true })
       .then((data) => {
         if (!active) return;
         const table = data?.bootstraps && typeof data.bootstraps === 'object' ? data.bootstraps : {};
@@ -169,7 +169,7 @@ export default function ProviderCredentialBootstraps({ harnesses = [], presets =
 
   const save = async (next, successMessage) => {
     setBusy(true);
-    const result = await api.saveProviderBootstraps(next, { silent: true }).catch((err) => ({ error: err?.message }));
+    const result = await saveProviderBootstraps(next, { silent: true }).catch((err) => ({ error: err?.message }));
     setBusy(false);
     if (!result || result.error || !result.bootstraps) {
       toast.error(result?.error || 'Could not save the credential bootstraps');

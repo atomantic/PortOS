@@ -114,7 +114,37 @@ describe('probeCodexModelsViaAppServer', () => {
   it('rejects when the child cannot be spawned at all', async () => {
     spawn.mockImplementation(() => { throw new Error('ENOENT'); });
 
-    await expect(probeCodexModelsViaAppServer('codex', ['app-server'], null)).rejects.toThrow(/failed to spawn/);
+    await expect(probeCodexModelsViaAppServer('codex', ['app-server'], null)).rejects.toMatchObject({ probeFailure: 'launch', message: expect.stringContaining('failed to spawn') });
+  });
+
+  it('classifies an asynchronous spawn failure', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null);
+    child.emit('error', new Error('synthetic launch failure'));
+    await expect(promise).rejects.toMatchObject({ probeFailure: 'launch' });
+  });
+
+  it('classifies a probe that exceeds its deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      spawn.mockReturnValue(fakeChild());
+      const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null, { timeoutMs: 50 });
+      const rejected = expect(promise).rejects.toMatchObject({ probeFailure: 'timeout' });
+      await vi.advanceTimersByTimeAsync(50);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('classifies a missing capability RPC', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const promise = probeCodexModelsViaAppServer('codex', ['app-server'], null, { includeDetails: true });
+    child.stdout.emit('data', JSON.stringify({ id: 1, result: {} }) + '\n');
+    child.stdout.emit('data', JSON.stringify({ id: 3, error: { code: -32601, message: 'synthetic RPC detail' } }) + '\n');
+    await expect(promise).rejects.toMatchObject({ probeFailure: 'required_rpc' });
   });
 
   it('settles only once even if exit and a late message both arrive', async () => {

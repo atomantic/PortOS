@@ -34,7 +34,7 @@ export const RIGGING_MODULE_REQUIREMENT = `${RIGGING_RUNTIME.module}==${RIGGING_
 /**
  * The one command that provisions the env, printed verbatim in Settings so the UI remedy cannot drift.
  */
-export const RIGGING_INSTALL_COMMAND = 'python3 scripts/setup-rigging.py';
+export const RIGGING_INSTALL_COMMAND = 'python3 scripts/ml/setup-rigging.py';
 
 /**
  * Can this host run the rigging runtime? macOS on Apple Silicon and Linux; not Intel Mac or

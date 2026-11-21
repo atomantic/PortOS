@@ -8,7 +8,12 @@ const api = vi.hoisted(() => ({
   getModelPersonalitySettings: vi.fn(),
   updateModelPersonalitySettings: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../../services/apiModelPersonality.js', () => ({
+  getModelPersonalityHistory: api.getModelPersonalityHistory,
+  getModelPersonalitySettings: api.getModelPersonalitySettings,
+  updateModelPersonalitySettings: api.updateModelPersonalitySettings,
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../../../hooks/useChartColors.js', () => ({ default: () => ({}) }));
 

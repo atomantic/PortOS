@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import RetiredTrainingData from './RetiredTrainingData';
-import { getRetiredDataInventory, deleteRetiredData } from '../../services/api';
+import { getRetiredDataInventory, deleteRetiredData } from '../../services/apiLoraTraining.js';
 
-vi.mock('../../services/api', () => ({ getRetiredDataInventory: vi.fn(), deleteRetiredData: vi.fn() }));
+vi.mock('../../services/apiLoraTraining.js', () => ({
+  getRetiredDataInventory: vi.fn(),
+  deleteRetiredData: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const row = (id, directory, status = 'retained') => ({

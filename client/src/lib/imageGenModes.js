@@ -19,16 +19,15 @@
  * alphabet is how fal.ai and Reactor video renders came to be filed under
  * "Local machine" (#6292), and the shipped defaults were free to drift
  * silently until the capability leaf existed. What stays local to this module
- * is only what the CLIENT owns: display labels and the form's own slot/strength
- * predicates.
+ * is only what the CLIENT owns: the form's own slot/strength predicates.
  */
 
 import {
   CLOUD_IMAGE_GEN_MODES,
   CLOUD_VIDEO_GEN_MODES,
+  GENERATION_MODE_LABELS as MODE_LABELS,
   IMAGE_GEN_MODE,
   MEDIA_JOB_EXECUTION_LANES,
-  VIDEO_GEN_MODE,
   VIDEO_GEN_MODES,
   mediaJobExecutionLane,
 } from '../../../server/lib/generationModes.js';
@@ -164,30 +163,14 @@ export {
   renderTargetDefaults,
 };
 
+export { MODE_LABELS };
+
 // The Settings → Image Gen → Defaults rows are `RENDER_TARGET_OPTIONS`, declared beside the alphabet in `server/lib/renderTargets.js`.
 export { RENDER_TARGET_OPTIONS } from '../../../server/lib/renderTargets.js';
 
 // True when a video backend renders in a provider's cloud rather than on the
 // local accelerator.
 export const isCloudVideoMode = (mode) => CLOUD_VIDEO_GEN_MODES.includes(mode);
-
-// Human-facing backend names — the pure half of imageGenBackends' per-mode
-// metadata (its icon half stays there with the lucide import). 'fal' is one
-// entry for both media kinds: IMAGE_GEN_MODE.FAL and VIDEO_GEN_MODE.FAL are the
-// same literal.
-export const MODE_LABELS = Object.freeze({
-  [IMAGE_GEN_MODE.LOCAL]: 'Local',
-  [IMAGE_GEN_MODE.CODEX]: 'Codex',
-  [IMAGE_GEN_MODE.GROK]: 'Grok',
-  [IMAGE_GEN_MODE.AGY]: 'Agy',
-  [IMAGE_GEN_MODE.EXTERNAL]: 'External',
-  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
-  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
-  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
-  [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
-  [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
-  [VIDEO_GEN_MODE.GOOGLE]: 'Google',
-});
 
 // Backends a record pin or a one-shot frame render can name. External is an
 // install route, not a choice on those pickers.
@@ -386,12 +369,12 @@ export function referenceSlotsFor(mode, {
 } = {}) {
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     if (!localSupportsReferences) return 0;
-    return Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0));
+    return Math.max(0, Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0)));
   }
   if (!isCloudCliMode(mode)) return 0;
-  // `cloudModelId` refines the cap for a backend whose limit is per model (fal.ai).
+  // `cloudModelId` refines the cap for backends whose limits vary by model.
   const cap = maxInputImages(mode, cloudModelId) ?? Infinity;
-  return Math.min(maxSlots, cap - (hasInitImage ? 1 : 0));
+  return Math.max(0, Math.min(maxSlots, cap - (hasInitImage ? 1 : 0)));
 }
 
 // Backends that honor a NUMERIC per-reference strength. Only the local FLUX.2

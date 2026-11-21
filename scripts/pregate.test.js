@@ -19,7 +19,7 @@ import {
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
-  collectPregateChangedFiles,
+  collectPregateInputs,
   resolvePlanStages,
   describeBrowserSelection,
   describeStageCommand,
@@ -35,9 +35,8 @@ import {
   uncoveredSuites,
   workflowLintSelected,
   UNCOVERED_SUITES,
-  unmergedIndexPaths,
 } from './pregate.js';
-import { buildPregateReport, PREGATE_REPORT_PATH, validatedTreeHash } from './lib/pregateReport.js';
+import { buildPregateReport, createWorkingTreeHasher, PREGATE_REPORT_PATH } from './lib/pregateReport.js';
 import { probeTestDatabase, TEST_DATABASE, uncreatableExtensions, testDatabaseStageEnv } from './lib/pregateResources.js';
 
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -64,7 +63,7 @@ const planWith = (overrides = {}) => ({
 });
 
 const DEFAULT_OPTIONS = {
-  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false, mergedWith: null,
+  base: null, full: false, skipLint: false, planOnly: false, help: false, guardsOnly: false,
   skipDb: false, skipBrowser: false, skipBuild: false, skipSmoke: false,
 };
 
@@ -135,7 +134,6 @@ describe('resolvePlanStages', () => {
       CI_TEST_MODE: 'related',
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
-      PORTOS_PREGATE_GUARDS: '',
       PORTOS_PREGATE_BASE_REF: '',
     });
   });
@@ -246,7 +244,7 @@ describe('pregate hidden-content invocation', () => {
     for (const path of [
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
       'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
@@ -261,7 +259,7 @@ describe('pregate hidden-content invocation', () => {
     copyFileSync(join(REPO_ROOT, 'exec.cmd'), join(root, 'exec.cmd'));
     // The receipt lands under /.cache/, which the real repository ignores too.
     write('.gitignore', 'node_modules\n/.cache/\n');
-    for (const workspace of ['', 'client', 'server', 'autofixer']) {
+    for (const workspace of ['', 'client', 'server']) {
       mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       write(join(workspace, 'package-lock.json'), JSON.stringify({ packages: { '': {} } }));
     }
@@ -327,10 +325,9 @@ describe('pregate hidden-content invocation', () => {
       if (process.env.PORTOS_PREGATE_DURATIONS_PATH && existsSync('.cache/guard-ms')) {
         writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify({ 'server/lib/moduleSummaries.test.js': Number(readFileSync('.cache/guard-ms', 'utf8')) }));
       }
-      const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
-      appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
-      if (files.includes('server/lib/moduleSummaries.test.js') && !excluded.includes('server/lib/moduleSummaries.test.js')) {
+      appendFileSync('.cache/events', JSON.stringify({ broad }) + '\\n');
+      if (files.includes('server/lib/moduleSummaries.test.js')) {
         await import(pathToFileURL(resolve('server/lib/moduleSummaries.test.js')));
       }
     `);
@@ -432,309 +429,111 @@ describe('pregate hidden-content invocation', () => {
       ]));
   });
 
-  // Unlike the persistent module memo, this reuse includes tree scanners. A
-  // modification between stages invalidates it even when the test file is stable.
-  it.each([false, true])('rechecks guard inputs before broad dispatch (changed: %s)', (changed) => {
+  it.each([false, true])('verifies tree stability after all full-plan stages (changed: %s)', (changed) => {
     prepareGuardFixture();
     write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
     if (changed) write('.cache/mutate', 'mutate during lint');
     const result = run('--full');
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(changed ? 1 : 0);
+    if (changed) expect(result.stderr).toContain('The working tree changed while pregate ran');
     const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
-    expect(events.filter(event => event === 'catalog')).toHaveLength(changed ? 2 : 1);
     expect(events.indexOf('catalog')).toBeLessThan(events.indexOf('lint'));
     expect(events.at(-1)).toBe('smoke');
-    const broad = events.filter(event => event.startsWith('{')).map(event => JSON.parse(event)).find(event => event.broad);
-    expect(broad.excluded).toEqual(changed ? [] : ['server/lib/moduleSummaries.test.js']);
+    expect(events).toContain('{"broad":true}');
     const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
     expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
     expect(report.treeStable).toBe(!changed);
-    expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
-      .toEqual(changed ? undefined : ['server/lib/moduleSummaries.test.js']);
-    // A stage that rewrote its own inputs leaves no cross-run pass behind.
-    expect(typeof report.stages.find(stage => stage.suite === 'lint').reuseKey).toBe(changed ? 'undefined' : 'string');
+    expect(report.passed).toBe(!changed);
   });
 
-  describe('cross-run guard reuse', () => {
-    const events = () => readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n').filter(Boolean);
-    const receipt = () => JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
-    // Children start without the runner's PORTOS_TEST_MEMO, which would otherwise disable reuse in every case.
-    const runWith = ({ nodeArgs = [], env = {} }, ...args) => {
-      const childEnv = { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` };
-      delete childEnv.PORTOS_TEST_MEMO;
-      return spawnSync(process.execPath, [...nodeArgs, 'scripts/pregate.js', '--base', base, ...args], { cwd: root, encoding: 'utf8', env: { ...childEnv, ...env } });
-    };
-    const runReuse = (...args) => runWith({}, ...args);
-    const prepare = () => {
-      prepareGuardFixture();
-      write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
-    };
-    const firstRun = () => {
-      const result = runReuse();
+  it('invalidates a dirty receipt when a file changes during focused selection', () => {
+    prepareGuardFixture();
+    write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    const preload = `
+      import fsPromises from 'node:fs/promises';
+      import { writeFileSync } from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const original = fsPromises.readFile;
+      let edited = false;
+      fsPromises.readFile = (path, ...args) => {
+        if (!edited && path.endsWith('moduleSummaries.test.js')) {
+          writeFileSync('server/lib/helper.js', '// Helper.\\nexport const helper = 2;\\n');
+          edited = true;
+        }
+        return original(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--base', base,
+    ], { cwd: root, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain('The working tree changed while pregate ran');
+    const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    expect(report).toMatchObject({ passed: false, treeStable: false });
+    expect(report.stages.every(stage => stage.status === 'passed')).toBe(true);
+  });
+
+  it('runs focused guard and lint stages each time and reports slow guard passes', () => {
+    prepareGuardFixture();
+    write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    write('.cache/guard-ms', '9000');
+    for (let runNumber = 1; runNumber <= 2; runNumber += 1) {
+      const result = run();
       expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
-      write('.cache/events', '');
-    };
-
-    it('reuses guard and lint passes on an unchanged tree, also after committing it', () => {
-      prepare();
-      // Tracked before the run: committing a new path is `git add` of a new file, which must rerun.
-      git('add', 'server/lib/helper.js');
-      git('commit', '-qm', 'helper');
-      write('server/lib/helper.js', '// Helper.\nexport const helper = 2;\n');
-      firstRun();
-      const first = receipt().stages.filter(stage => stage.guard || stage.suite === 'lint');
-      expect(first.map(stage => stage.name)).toEqual(['server structural guards', 'client/server lint']);
-      expect(first.every(stage => typeof stage.reuseKey === 'string' && typeof stage.passedAt === 'string')).toBe(true);
-
-      git('add', '--all');
-      git('commit', '-qm', 'commit the validated tree');
-      const second = runReuse();
-      expect(second.status, second.stderr).toBe(0);
-      expect(second.stdout).toContain('⏭️ server structural guards reused from');
-      expect(events()).toEqual([]);
-      const reused = receipt();
-      expect(reused.passed).toBe(true);
-      expect(reused.stages.filter(stage => stage.reusedFrom).map(stage => [stage.name, stage.reusedFrom]))
-        .toEqual(first.map(stage => [stage.name, stage.passedAt]));
-
-      // The original pass time carries forward through a reuse of a reuse.
-      expect(runReuse().status).toBe(0);
-      expect(receipt().stages.filter(stage => stage.reusedFrom).map(stage => stage.reusedFrom))
-        .toEqual(first.map(stage => stage.passedAt));
-    });
-
-    it('passes a guard over the time budget, reports it, and still reuses that pass (#16551)', () => {
-      prepare();
-      write('.cache/guard-ms', '9000');
-      const slow = runReuse();
-      expect(slow.status, slow.stderr).toBe(0);
-      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard target: server/lib/moduleSummaries.test.js 9.0s (the scheduled hosted run fails a guard over 6.0s; PR and push runs only warn).');
-      expect(slow.stdout).toContain('✔️ server structural guards passed');
-      expect(receipt().stages.find(stage => stage.guard)).toMatchObject({
-        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 }, reuseKey: expect.any(String), passedAt: expect.any(String),
+      expect(result.stdout).toContain('server structural guards over the 2.5s per-guard target');
+      const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+      expect(report.stages.find(stage => stage.guard)).toMatchObject({
+        status: 'passed', guardDurations: { 'server/lib/moduleSummaries.test.js': 9000 },
       });
-
-      const reused = runReuse();
-      expect(reused.status, reused.stderr).toBe(0);
-      expect(reused.stdout).toContain('⏭️ server structural guards reused from');
-    });
-
-    it.each([
-      ['an edited tracked file', () => { write('docs/tracked note.md', '# Edited\n'); }],
-      ['git add of a new file', () => { git('add', 'docs/new.md'); }],
-      ['a changed ignored file outside caches', () => { write('local.secret', 'two\n'); }],
-      // Git normalizes CRLF away, so only the raw bytes a guard reads change.
-      ['a line-ending-only edit', () => { write('docs/tracked note.md', '# Example\r\n'); }],
-    ])('reruns every guard and lint stage after %s', (_label, mutate) => {
-      prepare();
-      write('docs/new.md', 'new\n');
-      writeFileSync(join(root, '.git', 'info', 'exclude'), 'local.secret\n');
-      write('local.secret', 'one\n');
-      writeFileSync(join(root, '.git', 'info', 'attributes'), '* text=auto eol=lf\n');
-      firstRun();
-      mutate();
-      const result = runReuse();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-      expect(receipt().stages.some(stage => stage.reusedFrom)).toBe(false);
-    });
-
-    it('reruns them against a moved base', () => {
-      prepare();
-      write('docs/extra.md', 'extra\n');
-      git('add', 'docs/extra.md');
-      git('commit', '-qm', 'docs-only commit');
-      firstRun();
-      base = git('rev-parse', 'HEAD');
-      const result = runReuse();
-      expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
-
-    it('reruns them under a different Node version', () => {
-      prepare();
-      firstRun();
-      const preload = "Object.defineProperty(process, 'version', { value: 'v99.0.0' });";
-      const result = runWith({ nodeArgs: ['--import', `data:text/javascript,${encodeURIComponent(preload)}`] });
-      expect(result.status, result.stderr).toBe(0);
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
-
-    it('never reuses under --full, while recording its passes for a later focused run', () => {
-      prepare();
-      firstRun();
-      const full = runReuse('--full');
-      expect(full.status, full.stderr).toBe(0);
-      expect(full.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
-      expect(receipt().stages.find(stage => stage.guard).reuseKey).toEqual(expect.any(String));
-    });
-
-    it('never reuses under PORTOS_TEST_MEMO=off, even from a pass recorded with the same setting', () => {
-      prepare();
-      const off = () => runWith({ env: { PORTOS_TEST_MEMO: 'off' } });
-      expect(off().status).toBe(0);
-      write('.cache/events', '');
-      const result = off();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).not.toContain('⏭️');
-      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
-    });
+      const events = readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n');
+      expect(events.filter(event => event === 'catalog')).toHaveLength(runNumber);
+      expect(events.filter(event => event === 'lint')).toHaveLength(runNumber);
+    }
   });
 
-  // A branch and base can each be green while their combined route inventory fails.
-  it('runs guards against the checked base on the exact merged tree, propagates failure, and preserves caller state and receipt', () => {
-    git('config', 'core.autocrlf', 'true');
-    mkdirSync(join(root, 'server/routes'), { recursive: true });
-    write('server/routes/universe-builder.js', 'export const mutation = false;\n');
-    write('server/lib/strict.js', 'export const strict = false;\n');
-    write('server/lib/hostControlRoutes.test.js', `
-      import { readFileSync } from 'fs';
-      import { strict } from './strict.js';
-      if (strict && readFileSync('server/routes/universe-builder.js', 'utf8').includes('mutation = true')) {
-        throw new Error('hostControlRoutes.test.js: unclassified Universe Builder mutation');
+  it.each([false, true])('keeps focused Git work bounded and reserves the planner subprocess for full mode (dirty: %s)', (dirty) => {
+    git('update-ref', 'refs/remotes/origin/development', base);
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/development');
+    mkdirSync(join(root, 'client/src'), { recursive: true });
+    write('client/src/example.js', 'export const example = true;\n');
+    git('add', 'client/src/example.js');
+    git('commit', '-qm', 'focused source change');
+    if (dirty) {
+      write(trackedPath, `${clean}worktree change\n`);
+      write('docs/untracked note.md', '# Untracked\n');
+    }
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      for (const name of ['execFileSync', 'spawnSync']) {
+        const original = childProcess[name];
+        childProcess[name] = (command, args, options) => {
+          if (command === 'git') console.log('fixture-git ' + args[0]);
+          if (command === process.execPath && args[0]?.endsWith('ci-test-plan.js')) console.log('fixture-planner');
+          return original(command, args, options);
+        };
       }
-    `);
-    write('scripts/run-ci-tests.js', `
-      import { resolve } from 'path';
-      import { pathToFileURL } from 'url';
-      if (process.env.PORTOS_TEST_MEMO !== 'off') throw new Error('merged guards reused memo');
-      if (process.env.CI_BASE_SHA !== process.env.PREGATE_FIXTURE_BASE) {
-        throw new Error('guard stages received a different base from the checked merge target');
-      }
-      for (const file of JSON.parse(process.env.CI_TEST_FILES)) {
-        if (file.endsWith('hostControlRoutes.test.js')) await import(pathToFileURL(resolve(file)));
-      }
-    `);
-    git('add', '--all');
-    git('commit', '-qm', 'green common guard');
-    const common = git('rev-parse', 'HEAD');
-    git('checkout', '-qb', 'new-base');
-    write('docs/tracked note.md', '# Unrelated base move\n');
-    git('add', '--all'); git('commit', '-qm', 'base move');
-    const movedBase = git('rev-parse', 'HEAD');
-    git('checkout', '-qb', 'feature', common);
-    const invoke = (...flags) => spawnSync(process.execPath, ['scripts/pregate.js', ...flags], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, PORTOS_TEST_MEMO: 'on', PREGATE_FIXTURE_BASE: flags.at(-1) },
+      syncBuiltinESMExports();
+    `;
+    const invoke = (...args) => spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--skip-lint', ...args,
+    ], { cwd: root, encoding: 'utf8' });
+    const focused = invoke();
+    expect(focused.status, focused.stderr).toBe(0);
+    expect(focused.stdout).toContain('Planning against origin/development');
+    expect(focused.stdout).not.toContain('fixture-planner');
+    const gitCommands = focused.stdout.split('\n').filter(line => line.startsWith('fixture-git '));
+    expect(gitCommands).toHaveLength(dirty ? 6 : 4);
+    expect(gitCommands).not.toContain('fixture-git check-attr');
+    expect(gitCommands.filter(cmd => cmd === 'fixture-git write-tree')).toHaveLength(dirty ? 1 : 0);
+    git('add', '-A');
+    expect(JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'))).toMatchObject({
+      passed: true, treeStable: true, tree: git('write-tree'),
     });
-    mkdirSync(join(root, '.cache/pregate'), { recursive: true });
-    write(PREGATE_REPORT_PATH, 'original attestation receipt');
-    const original = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
-    const green = invoke('--guards-only', '--merged-with', movedBase);
-    expect(green.status, green.stderr).toBe(0);
-    expect(green.stdout).toContain('Merged-tree guards: HEAD');
-    expect(green.stdout).not.toContain('hidden-content scan');
-    expect(green.stdout).not.toContain('client/server lint');
-    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(original);
-    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
-
-    // The base tightens its guard independently; feature remains green in its own tree.
-    write('server/routes/universe-builder.js', 'export const mutation = true;\n');
-    git('add', '--all'); git('commit', '-qm', 'feature mutation before stricter guard');
-    const branchOnly = invoke('--guards-only', '--base', common);
-    expect(branchOnly.status, branchOnly.stderr).toBe(0);
-    // The stricter base policy and feature route change do not conflict textually.
-    git('checkout', 'new-base');
-    write('server/lib/strict.js', 'export const strict = true;\n');
-    git('add', '--all'); git('commit', '-qm', 'strict inventory');
-    const strictBase = git('rev-parse', 'HEAD');
-    git('checkout', 'feature');
-    const before = { ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') };
-    const failed = invoke('--guards-only', '--merged-with', strictBase);
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain('hostControlRoutes.test.js: unclassified Universe Builder mutation');
-    expect(failed.stdout).not.toContain('Pregate passed');
-    expect({ ...snapshot(), refs: git('show-ref'), worktrees: git('worktree', 'list', '--porcelain') }).toEqual(before);
-    expect(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8')).toBe('original attestation receipt');
-
-    const originalDocBytes = readFileSync(join(root, 'docs/tracked note.md'));
-    write('docs/tracked note.md', '# Pending local work\n');
-    const dirty = snapshot();
-    const refused = invoke('--guards-only', '--merged-with', strictBase);
-    expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain('requires a clean committed checkout');
-    expect(snapshot()).toEqual(dirty);
-    writeFileSync(join(root, 'docs/tracked note.md'), originalDocBytes);
-
-    git('checkout', 'new-base');
-    write('server/routes/universe-builder.js', 'export const mutation = "conflicting";\n');
-    git('add', '--all'); git('commit', '-qm', 'conflicting mutation');
-    const conflictBase = git('rev-parse', 'HEAD');
-    git('checkout', 'feature');
-    const preConflict = snapshot();
-    const conflict = invoke('--guards-only', '--merged-with', conflictBase);
-    expect(conflict.status).not.toBe(0);
-    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
-    expect(conflict.stdout).not.toContain('Pregate passed');
-    expect(snapshot()).toEqual(preConflict);
-  });
-
-  it.each(['shallow', 'partial'])('merges a remote-only base from a %s source and still reports real conflicts', (kind) => {
-    write('scripts/run-ci-tests.js', `
-      import { readFileSync } from 'fs';
-      if (readFileSync('docs/tracked note.md', 'utf8').trim() !== '# Base update'
-        || readFileSync('docs/feature.md', 'utf8').trim() !== '# Independent feature') {
-        throw new Error('guard did not receive both merge inputs');
-      }
-    `);
-    git('add', '--all'); git('commit', '-qm', 'merged guard fixture');
-    const upstream = root;
-    const shallow = join(scratch, 'shallow');
-    git('config', 'uploadpack.allowFilter', 'true');
-    git('clone', '--quiet', '--no-local', ...(kind === 'shallow' ? ['--depth', '1'] : ['--filter=blob:none']), '--', upstream, shallow);
-    write(trackedPath, '# Base update\n');
-    git('add', '--all'); git('commit', '-qm', 'base update');
-    const movedBase = git('rev-parse', 'HEAD');
-
-    root = shallow;
-    for (const workspace of ['', 'client', 'server', 'autofixer']) {
-      mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
-    }
-    git('config', 'user.name', 'Example Agent');
-    git('config', 'user.email', 'agent@example.com');
-    git('config', 'commit.gpgsign', 'false');
-    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
-    git('checkout', '-qb', 'feature');
-    write('docs/feature.md', '# Independent feature\n');
-    git('add', '--all'); git('commit', '-qm', 'feature update');
-    git('fetch', '--quiet', 'origin', 'main:refs/remotes/origin/main');
-    expect(git('rev-parse', '--is-shallow-repository')).toBe(String(kind === 'shallow'));
-    expect(git('rev-parse', 'origin/main')).toBe(movedBase);
-    expect(git('for-each-ref', '--format=%(refname)', '--points-at', movedBase, 'refs/heads')).toBe('');
-    if (kind === 'partial') {
-      expect(git('config', '--get', 'remote.origin.promisor')).toBe('true');
-      expect(git('rev-list', '--objects', '--no-object-names', '--missing=print', movedBase)).toMatch(/^\?/m);
-    }
-    const tree = git('merge-tree', '--write-tree', 'HEAD', 'origin/main').split('\n')[0];
-    const invoke = () => spawnSync(process.execPath, ['scripts/pregate.js', '--guards-only', '--merged-with', 'origin/main'], {
-      cwd: root, encoding: 'utf8',
-    });
-    const sourceState = () => ({ ...snapshot(), refs: git('show-ref'), ...(kind === 'shallow' ? { shallow: readFileSync(join(root, '.git/shallow')) } : {}) });
-    const before = sourceState();
-    if (kind === 'partial') {
-      git('remote', 'set-url', 'origin', join(scratch, 'unavailable-promisor'));
-      const unavailable = invoke();
-      expect(unavailable.status).not.toBe(0);
-      expect(unavailable.stdout).not.toContain('▶️ server tests');
-      expect(sourceState()).toEqual(before);
-      git('remote', 'set-url', 'origin', upstream);
-    }
-    const merged = invoke();
-    expect(merged.status, merged.stderr).toBe(0);
-    expect(merged.stdout).toContain(`= tree ${tree.slice(0, 12)}.`);
-    expect(sourceState()).toEqual(before);
-
-    write(trackedPath, '# Conflicting feature update\n');
-    git('add', '--all'); git('commit', '-qm', 'conflicting feature update');
-    const preConflict = sourceState();
-    const conflict = invoke();
-    expect(conflict.status).not.toBe(0);
-    expect(conflict.stderr).toContain('Cannot construct merged guard tree');
-    expect(conflict.stderr).toContain('CONFLICT (content)');
-    expect(conflict.stdout).not.toContain('Pregate passed');
-    expect(sourceState()).toEqual(preConflict);
+    const full = invoke('--full', '--plan-only');
+    expect(full.status, full.stderr).toBe(0);
+    expect(full.stdout).toContain('fixture-planner');
   });
 
   // This regression catches stale inherited packages before any lint/test child
@@ -749,7 +548,7 @@ describe('pregate hidden-content invocation', () => {
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
-      for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
+      for (const workspace of ['', 'client', 'server']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       const shared = join(scratch, 'primary', 'server', 'node_modules');
       const autoLinks = ['missing-link', 'unlinked'].includes(state);
       // The linker only visits workspaces that have a manifest.
@@ -785,14 +584,16 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       // Changing scripts selects full lint; any accidental stage run leaves a
       // durable marker. Startup/package-manager repair is a separate trap.
       for (const name of ['run-ci-lint.js', 'run-actionlint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
-        write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
+        write(`scripts/${name}`, `import { mkdirSync, writeFileSync } from 'fs';
+          mkdirSync('.cache', { recursive: true });
+          writeFileSync('.cache/unexpected-stage', '${name}');`);
       }
       const result = run();
       if (state === 'matching' || autoLinks) {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain('Dependency consistency preflight passed');
         expect(result.stdout.includes('Linked worktree dependencies from the primary checkout')).toBe(autoLinks);
-        expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
+        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
         const needsLink = state === 'dangling';
@@ -812,7 +613,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
           dangling: 'linked target unavailable',
         }[state];
         expect(result.stderr).toContain(diagnostic);
-        expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
+        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(false);
       }
       expect(lstatSync(modules).isSymbolicLink()).toBe(true);
       expect(sourceSnapshot()).toEqual(before);
@@ -821,6 +622,49 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       if (state === 'dangling') expect(existsSync(target)).toBe(false);
     },
   );
+
+  it('falls back to origin/main when the remote default ref is unset', () => {
+    git('update-ref', 'refs/remotes/origin/main', base);
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const original = childProcess.spawnSync;
+      childProcess.spawnSync = (command, args, options) => {
+        if (command !== 'git' || !args.includes('refs/remotes/origin/HEAD')) return original(command, args, options);
+        const result = original(command, args.slice(0, 8), options);
+        return { ...result, status: 128 };
+      };
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`, 'scripts/pregate.js', '--plan-only',
+    ], { cwd: root, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Planning against origin/main');
+  });
+
+  it('combines committed and worktree changes while keeping staged path membership', () => {
+    const committed = 'docs/committed.md';
+    const staged = 'docs/staged add.md';
+    const intent = 'docs/intent.md';
+    const untracked = 'docs/untracked.md';
+    write(committed, '# Committed\n');
+    git('add', committed);
+    git('commit', '-qm', 'branch change');
+    git('rm', trackedPath);
+    write(trackedPath, clean); // A staged deletion can have untracked content at the same path.
+    write(staged, '# Staged\n');
+    git('add', staged);
+    write(intent, '# Intent to add\n');
+    git('add', '-N', intent);
+    write(untracked, '# Untracked\n');
+
+    const inputs = collectPregateInputs(base, git('rev-parse', 'HEAD^{tree}'), { cwd: root });
+    expect(inputs.changedFiles.filter(path => path.startsWith('docs/'))).toEqual(
+      [committed, staged, intent, untracked, trackedPath].sort(),
+    );
+    expect(inputs.trackedFiles.filter(path => path.startsWith('docs/'))).toEqual([committed, staged, intent].sort());
+  });
 
   it('does not link or check dependencies for --plan-only, even in a bare worktree', () => {
     const worktree = join(scratch, 'plan-only-worktree');
@@ -847,12 +691,12 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
 
   it('refuses missing and unreadable lock evidence rather than calling it a match', () => {
     rmSync(join(root, 'client', 'package-lock.json'));
-    write('autofixer/package-lock.json', '{invalid');
+    write('server/package-lock.json', '{invalid');
     const result = run();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('client (owned node_modules)');
     expect(result.stderr).toContain('package-lock.json missing (ENOENT)');
-    expect(result.stderr).toContain('autofixer (owned node_modules)');
+    expect(result.stderr).toContain('server (owned node_modules)');
     expect(result.stderr).toContain('package-lock.json unreadable (invalid JSON)');
   });
 
@@ -1137,7 +981,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
     write('server/routes/decks.db.test.js', "import { it } from 'vitest';\nit('db contract', () => {});\n");
     const focused = run('--plan-only');
     expect(focused.status, focused.stderr).toBe(0);
-    expect(focused.stdout).toContain('CI will also run: db');
+    expect(focused.stdout).toContain('Hosted CI may also run: db');
     expect(focused.stdout).not.toContain('• DB suite');
     const result = run('--plan-only', '--full');
     expect(result.status, result.stderr).toBe(0);
@@ -1148,7 +992,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
 
     const skipped = run('--plan-only', '--skip-db');
     expect(skipped.status, skipped.stderr).toBe(0);
-    expect(skipped.stdout).toContain('CI will also run: db — not run here (skipped by --skip-db)');
+    expect(skipped.stdout).toContain('Hosted CI may also run: db — not run here (skipped by --skip-db)');
     expect(skipped.stdout).not.toContain('DB suite (portos_test)');
   });
 
@@ -1224,14 +1068,14 @@ describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
     const serverGuards = getAlwaysRunTests().slice(0, 3);
     const clientGuards = [
-      'client/src/asyncEffectDisposalConventions.guard.test.js',
       'client/src/components/ui/fooPanel.guard.test.jsx',
-      'client/src/hooks/mountedRefConventions.guard.test.js',
+      'client/src/test/guards/a11y.guard.test.js',
+      'client/src/test/guards/ui.guard.test.js',
     ];
-    // Neither a convention-sounding name without the suffix nor a server guard is a client guard.
+    // A convention-sounding name without the suffix is not a tree guard.
     const tracked = [...serverGuards, ...clientGuards,
       'client/src/App.test.jsx', 'client/src/fooConventions.js', 'client/src/fooConventions.test.js',
-      'server/fooConventions.guard.test.js',
+      'server/fooConventions.test.js',
     ];
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked);
     expect(downgraded.full).toBe(false);
@@ -1267,13 +1111,11 @@ describe('parseArgs', () => {
     });
   });
 
-  it('accepts guard-only merged validation and rejects combinations that can skip it', () => {
-    expect(parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toMatchObject({ guardsOnly: true, mergedWith: 'origin/main' });
-    expect(() => parseArgs(['--merged-with', 'origin/main'])).toThrow('requires --guards-only');
-    expect(() => parseArgs(['--guards-only', '--merged-with'])).toThrow('requires a value');
+  it('accepts guard-only validation and refuses conflicting or retired flags', () => {
+    expect(parseArgs(['--guards-only', '--base', 'origin/main'])).toMatchObject({ guardsOnly: true, base: 'origin/main' });
     expect(() => parseArgs(['--guards-only', '--full'])).toThrow('cannot be combined');
     expect(() => parseArgs(['--guards-only', '--skip-lint'])).toThrow('cannot be combined');
-    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main', '--base', 'HEAD'])).toThrow('cannot be combined');
+    expect(() => parseArgs(['--guards-only', '--merged-with', 'origin/main'])).toThrow('Unknown option: --merged-with');
   });
 
   it('accepts one skip flag per resource suite', () => {
@@ -1296,18 +1138,6 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--unexpected'])).toThrow('Unknown option: --unexpected.');
     expect(() => parseArgs(['--base'])).toThrow('--base requires a value.');
     expect(() => parseArgs(['--base', '--full'])).toThrow('--base requires a value.');
-  });
-});
-
-describe('unmergedIndexPaths', () => {
-  it('returns each repo-relative path from NUL-delimited index stages', () => {
-    expect(unmergedIndexPaths([
-      '100644 abc 1\tconflict name.md',
-      '100644 def 2\tconflict name.md',
-      '100644 ghi 3\tother.md',
-      '',
-    ].join('\0')))
-      .toEqual(['conflict name.md', 'other.md']);
   });
 });
 
@@ -1392,32 +1222,6 @@ describe('the gate end to end', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('refuses unsupported Git before planning or writing a receipt', () => {
-    const receipt = join(REPO_ROOT, PREGATE_REPORT_PATH);
-    const before = existsSync(receipt) ? readFileSync(receipt) : null;
-    const preload = `
-      import childProcess from 'node:child_process';
-      import { syncBuiltinESMExports } from 'node:module';
-      childProcess.spawnSync = (command, args) => {
-        if (command === 'git' && args.join(' ') === 'merge-tree -h') {
-          return { status: 129, stdout: '--write-tree', stderr: 'private subprocess output' };
-        }
-        throw new Error('Unexpected subprocess after capability refusal');
-      };
-      syncBuiltinESMExports();
-    `;
-    const result = spawnSync(process.execPath, [
-      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
-      join(REPO_ROOT, 'scripts', 'pregate.js'),
-    ], { cwd: REPO_ROOT, encoding: 'utf8' });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Install Git 2.43 or newer');
-    expect(result.stderr).not.toContain('private subprocess output');
-    expect(result.stderr).not.toContain('Unexpected subprocess');
-    expect(result.stdout).not.toContain('Planning against');
-    expect(existsSync(receipt) ? readFileSync(receipt) : null).toEqual(before);
-  });
-
   it('passes an uncommitted new test through the planner override', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-pregate-'));
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -1433,7 +1237,7 @@ describe('the gate end to end', () => {
       mkdirSync(dirname(join(root, test)), { recursive: true });
       writeFileSync(join(root, test), "import { it } from 'vitest';\nit('works', () => {});\n");
 
-      const { changedFiles, workingTreeFiles } = collectPregateChangedFiles(base, { cwd: root });
+      const { changedFiles, workingTreeFiles } = collectPregateInputs(base, git('rev-parse', 'HEAD^{tree}'), { cwd: root });
       const inputs = collectPlanInputs({ baseSha: base, changedFiles, cwd: root });
       const plan = buildCiTestPlan(inputs.changedFiles, {
         trackedFiles: inputs.trackedFiles,
@@ -1474,7 +1278,7 @@ describe('the gate end to end', () => {
       for (const path of [
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/lib-catalog.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/moduleGraph.js', 'scripts/lib/ciPlanRules.js', 'scripts/lib/ciPlanDependencies.js', 'scripts/lib/ciPlanOutput.js', 'scripts/lib/ciPlanInputs.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/guardScanners.js', 'scripts/lib/trackedFiles.js',
         'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/guardBudget.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js', 'scripts/vitestCiPool.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
@@ -1659,8 +1463,8 @@ describe('uncoveredSuites', () => {
     const flagged = uncoveredSuites(selected, { options: { skipDb: true, skipBuild: true }, downgraded: true });
     expect(flagged.map(({ suite, reason }) => [suite, reason])).toEqual([
       ['build', 'skipped by --skip-build'],
-      ['smoke', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
-      ['browser', 'local focused mode; hosted CI runs it (opt in locally with --full)'],
+      ['smoke', 'local focused mode; hosted CI determines coverage (opt in locally with --full)'],
+      ['browser', 'local focused mode; hosted CI determines coverage (opt in locally with --full)'],
       ['db', 'skipped by --skip-db'],
       ['windows', 'a Windows runner has no local equivalent'],
     ]);
@@ -1840,7 +1644,7 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(4);
+    expect(report.version).toBe(5);
     expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);
@@ -1868,7 +1672,7 @@ describe('buildPregateReport', () => {
   });
 });
 
-describe('validatedTreeHash', () => {
+describe('working tree snapshots', () => {
   it('hashes the working tree — modified, deleted, untracked, not ignored — exactly as a commit of it would', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-pregate-tree-'));
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -1896,12 +1700,13 @@ describe('validatedTreeHash', () => {
       const indexBefore = readFileSync(join(root, '.git', 'index'));
       const statusBefore = git('status', '--porcelain=v1', '--untracked-files=all');
 
-      const hash = validatedTreeHash(root);
+      const hashWorkingTree = createWorkingTreeHasher(root);
+      const hash = hashWorkingTree();
 
       expect(hash).not.toBe(committedTree);
       expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
       expect(git('status', '--porcelain=v1', '--untracked-files=all')).toBe(statusBefore);
-      expect(validatedTreeHash(root)).toBe(hash);
+      expect(hashWorkingTree()).toBe(hash);
 
       git('add', '--all');
       git('commit', '-qm', 'validated state');
@@ -1936,7 +1741,7 @@ describe('validatedTreeHash', () => {
       writeFileSync(join(root, 'value.js'), 'export const value = 2;\n');
       utimesSync(join(root, 'value.js'), past, past);
 
-      const tree = validatedTreeHash(root);
+      const tree = createWorkingTreeHasher(root)();
 
       expect(git('rev-parse', `${tree}:value.js`)).toBe(git('hash-object', 'value.js'));
     } finally {
@@ -1946,10 +1751,10 @@ describe('validatedTreeHash', () => {
 });
 
 describe('focused local policy', () => {
-  it('runs direct behavior owners and edited unit tests without transitive or resource suites', () => {
+  it('runs direct behavior owners and edited unit tests without transitive or resource suites', async () => {
     const tracked = ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/unrelated.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'client/src/Card.jsx', 'client/src/Card.test.jsx', 'scripts/tool.test.js', 'server/services/htmlComposition/index.test.js'];
     const changed = ['server/lib/a.js', 'client/src/Card.jsx', 'scripts/tool.test.js', 'server/lib/a.db.test.js', 'server/lib/a.browser.test.js', 'docs/README.md', 'server/services/htmlComposition/index.test.js'];
-    const local = focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
+    const local = await focusedLocalPlan(planWith({ browser: { files: ['server/services/htmlComposition/index.test.js'] }, server: { mode: 'related', files: ['server/lib/unrelated.test.js'], sources: ['server/lib/a.js'] } }), tracked, changed);
     expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
     expect(local.client.files).toContain('client/src/Card.test.jsx');
     expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
@@ -1961,7 +1766,36 @@ describe('focused local policy: referencing suites within two import hops', () =
   const reader = files => path => files[path] ?? null;
   const plant = (files, extraTracked = []) => ({ tracked: [...new Set([...Object.keys(files), ...extraTracked])], read: reader(files) });
 
-  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', () => {
+  it('bounds concurrent reads and preserves selection when reads finish out of order', async () => {
+    const files = {
+      'server/lib/source.js': '',
+      'server/lib/mid.js': "import './source.js';",
+      'config.json': '{}',
+      ...Object.fromEntries(Array.from({ length: 70 }, (_, index) => [
+        `server/lib/reader-${String(index).padStart(2, '0')}.test.js`,
+        index % 3 === 0 ? "import './mid.js';" : "readFileSync('config.json');",
+      ])),
+    };
+    const { tracked, read } = plant(files);
+    const changed = ['server/lib/source.js', 'config.json'];
+    const ordered = await focusedLocalPlan(plan(), tracked, changed, read);
+    const reads = new Map();
+    let active = 0;
+    let peak = 0;
+    const unordered = await focusedLocalPlan(plan(), tracked, changed, async path => {
+      reads.set(path, (reads.get(path) ?? 0) + 1);
+      peak = Math.max(peak, ++active);
+      await new Promise(resolve => setTimeout(resolve, path.endsWith('0.test.js') ? 10 : 1));
+      active -= 1;
+      return read(path);
+    });
+
+    expect(peak).toBe(32);
+    expect([...reads.values()].every(count => count === 1)).toBe(true);
+    expect(unordered).toEqual(ordered);
+  });
+
+  it('selects a differently named suite that mocks or imports a changed source, but not an unresolved or lookalike one', async () => {
     const files = {
       'server/routes/x.test.js': "vi.mock('../services/x.js', () => ({}));",
       'server/routes/lazy.test.js': "const m = await import('../services/x');",
@@ -1970,24 +1804,38 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/routes/lookalike.test.js': "import { a } from '../other/x.js';",
     };
     const { tracked, read } = plant(files, ['server/services/x.js', 'server/other/x.js']);
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files.sort()).toEqual(['server/routes/direct.test.js', 'server/routes/lazy.test.js', 'server/routes/x.test.js']);
     expect(local.relatedOverflow).toEqual([]);
+  });
+
+  it('hands a structural guard check to its runner, never to Vitest directly (#16996)', async () => {
+    const runner = 'client/src/test/guards/a11y.guard.test.js';
+    const files = {
+      'client/src/lib/x.js': 'export const x = 1;',
+      'client/src/test/guards/a11y/reader.test.js': "import { x } from '../../../lib/x.js';",
+      'client/src/test/guards/a11y/edited.test.js': 'export {};',
+      [runner]: 'export {};',
+    };
+    const { tracked, read } = plant(files);
+    const local = await focusedLocalPlan(plan(), tracked, ['client/src/lib/x.js', 'client/src/test/guards/a11y/edited.test.js'], read);
+    expect(local.client.files).toContain(runner);
+    expect(local.client.files.filter(path => path.startsWith('client/src/test/guards/a11y/'))).toEqual([]);
   });
 
   // The two pre-fix heads from #16863 whose failing suite sits two imports from the edit.
   it.each([
     ['server/lib/dispatchLabels.js', 'server/lib/quotaBurnPresets.js', 'server/lib/quotaBurnPresets.test.js', "import { LABELS } from './dispatchLabels.js';", "import { presets } from './quotaBurnPresets.js';"],
     ['server/services/promptSections/prAttribution.js', 'server/services/agent/agentPromptBuilder.js', 'server/services/cos/cosTaskClaimWork.composition.test.js', "import { attribution } from '../promptSections/prAttribution.js';", "import { buildAgentPrompt } from '../agent/agentPromptBuilder.js';"],
-  ])('selects the suite two hops from %s through %s', (source, importer, test, importerText, testText) => {
+  ])('selects the suite two hops from %s through %s', async (source, importer, test, importerText, testText) => {
     const files = { [source]: 'export const x = 1;', [importer]: importerText, [test]: testText };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, [source], read);
+    const local = await focusedLocalPlan(plan(), tracked, [source], read);
     expect(local.server.files).toContain(test);
     expect(local.relatedOverflow).toEqual([]);
   });
 
-  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', () => {
+  it('follows a non-test helper that mocks or lazily imports the source, and stops at the second hop', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/viaLazy.js': "export const load = () => import('./a.js');",
@@ -1998,11 +1846,11 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/lib/deep.test.js': "import './hop3.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files.sort()).toEqual(['server/lib/lazy.test.js', 'server/lib/mock.test.js']);
   });
 
-  it('follows a directory import of a changed index module at both hops', () => {
+  it('follows a directory import of a changed index module at both hops', async () => {
     const files = {
       'client/src/components/micrographics/index.js': '',
       'client/src/components/Widget.jsx': "import { Spark } from './micrographics';",
@@ -2012,11 +1860,11 @@ describe('focused local policy: referencing suites within two import hops', () =
       'client/src/components/direct.test.jsx': "import { Spark } from './micrographics';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['client/src/components/micrographics/index.js'], read);
     expect(local.client.files.sort()).toEqual(['client/src/components/Widget.test.jsx', 'client/src/components/direct.test.jsx', 'client/src/components/micrographics/Sub.test.jsx']);
   });
 
-  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', () => {
+  it('leaves a heavy suite out of the second hop but keeps it when it references the source directly', async () => {
     const files = {
       'scripts/lib/tool.js': '',
       'scripts/lib/toolUser.js': "import './tool.js';",
@@ -2025,29 +1873,29 @@ describe('focused local policy: referencing suites within two import hops', () =
       'scripts/lib/toolUser.test.js': "import './toolUser.js';",
     };
     const { tracked, read } = plant(files);
-    expect(focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read).server.files).toEqual(['scripts/lib/toolUser.test.js']);
+    expect((await focusedLocalPlan(plan(), tracked, ['scripts/lib/tool.js'], read)).server.files).toEqual(['scripts/lib/toolUser.test.js']);
     const direct = { ...files, 'scripts/run-ci-tests.test.js': "import './lib/tool.js';" };
     const withDirect = plant(direct);
-    expect(focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read).server.files.sort())
+    expect((await focusedLocalPlan(plan(), withDirect.tracked, ['scripts/lib/tool.js'], withDirect.read)).server.files.sort())
       .toEqual(['scripts/lib/toolUser.test.js', 'scripts/run-ci-tests.test.js']);
   });
 
-  it('does not count a suite already selected for another reason against the second hop', () => {
+  it('does not count a suite already selected for another reason against the second hop', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/mid.js': "import './a.js';",
       'server/lib/both.test.js': "import './a.js'; import './mid.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files).toEqual(['server/lib/both.test.js']);
     expect(local.relatedOverflow).toEqual([]);
   });
 
-  it('caps suites per changed source and reports the overflow as skipped', () => {
+  it('caps suites per changed source and reports the overflow as skipped', async () => {
     const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 3 }, (_, i) => [`server/routes/s${String(i).padStart(2, '0')}.test.js`, "vi.mock('../services/x.js');"]));
     const { tracked, read } = plant(files, ['server/services/x.js']);
-    const local = focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/services/x.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
     expect(local.relatedOverflow).toEqual([{ source: 'server/services/x.js', count: 3, hop: 1 }]);
     const skipped = uncoveredSuites(local);
@@ -2056,7 +1904,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(skipped[0].reason).toContain('3 suite(s) referencing server/services/x.js');
   });
 
-  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', () => {
+  it('caps the second hop per source, ranks the importer\'s own suite first and reports the overflow', async () => {
     const files = {
       'server/lib/a.js': '',
       'server/lib/mid.js': "import './a.js';",
@@ -2064,7 +1912,7 @@ describe('focused local policy: referencing suites within two import hops', () =
       'server/lib/mid.test.js': "import './mid.js';",
     };
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
+    const local = await focusedLocalPlan(plan(), tracked, ['server/lib/a.js'], read);
     expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
     expect(local.server.files).toContain('server/lib/mid.test.js');
     expect(local.relatedOverflow).toEqual([{ source: 'server/lib/a.js', count: 3, hop: 2 }]);
@@ -2072,7 +1920,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     expect(skipped.reason).toContain('3 suite(s) two imports away from server/lib/a.js');
   });
 
-  it('caps the second hop per run across sources and never displaces a first-hop suite', () => {
+  it('caps the second hop per run across sources and never displaces a first-hop suite', async () => {
     const sources = Array.from({ length: 4 }, (_, i) => `server/lib/src${i}.js`);
     const files = {};
     for (const [i, source] of sources.entries()) {
@@ -2082,7 +1930,7 @@ describe('focused local policy: referencing suites within two import hops', () =
     }
     files['server/hop1/direct.test.js'] = "import '../lib/src3.js';";
     const { tracked, read } = plant(files);
-    const local = focusedLocalPlan(plan(), tracked, sources, read);
+    const local = await focusedLocalPlan(plan(), tracked, sources, read);
     const added = local.server.files.filter(file => file.startsWith('server/hop2/'));
     expect(local.server.files).toContain('server/hop1/direct.test.js');
     expect(added).toHaveLength(SECOND_HOP_RUN_CAP);
@@ -2092,7 +1940,7 @@ describe('focused local policy: referencing suites within two import hops', () =
   });
 
   describe('suites that read a changed non-module file as text', () => {
-    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', () => {
+    it('selects the suite reading package.json and setup.ps1 through a joined path, but not a lookalike or an import-only suite', async () => {
       const files = {
         'scripts/checkNpmVersion.test.js': "const readJson = rel => JSON.parse(readFileSync(join(REPO_ROOT, rel)));\nreadJson('package.json');\nreadFileSync(join(ROOT, \"setup.ps1\"));",
         'scripts/lookalike.test.js': "readFileSync(join(ROOT, 'package.json.bak')); // setup.ps1 in a comment, unquoted",
@@ -2100,23 +1948,23 @@ describe('focused local policy: referencing suites within two import hops', () =
         'server/lib/viaName.test.js': 'readFileSync(`package.json`);',
       };
       const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
-      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      const local = await focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
       expect(local.server.files.sort()).toEqual(['scripts/checkNpmVersion.test.js', 'server/lib/viaName.test.js']);
       expect(local.relatedOverflow).toEqual([]);
     });
 
-    it('ignores an untracked or deleted changed file and a heavy suite', () => {
+    it('ignores an untracked or deleted changed file and a heavy suite', async () => {
       const files = { 'scripts/gone.test.js': "readFileSync('gone.json')", 'scripts/pregate.test.js': "readFileSync('package.json')" };
       const { tracked, read } = plant(files, ['package.json']);
-      expect(focusedLocalPlan(plan(), tracked, ['gone.json'], read).server.files).toEqual([]);
-      expect(focusedLocalPlan(plan(), tracked, ['package.json'], read).server.files).not.toContain('scripts/pregate.test.js');
+      expect((await focusedLocalPlan(plan(), tracked, ['gone.json'], read)).server.files).toEqual([]);
+      expect((await focusedLocalPlan(plan(), tracked, ['package.json'], read)).server.files).not.toContain('scripts/pregate.test.js');
     });
 
-    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', () => {
+    it('caps readers per changed file, prefers suites spelling more changed files, and reports the overflow', async () => {
       const files = Object.fromEntries(Array.from({ length: RELATED_SUITE_CAP + 4 }, (_, i) => [`server/lib/a${String(i).padStart(2, '0')}.test.js`, "readFileSync('package.json')"]));
       files['server/lib/zz.test.js'] = "readFileSync('package.json'); readFileSync('setup.ps1');";
       const { tracked, read } = plant(files, ['package.json', 'setup.ps1']);
-      const local = focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
+      const local = await focusedLocalPlan(plan(), tracked, ['package.json', 'setup.ps1'], read);
       expect(local.server.files).toHaveLength(RELATED_SUITE_CAP);
       expect(local.server.files).toContain('server/lib/zz.test.js');
       expect(local.relatedOverflow).toEqual([{ source: 'package.json', count: 5, hop: 'text' }]);
@@ -2125,15 +1973,15 @@ describe('focused local policy: referencing suites within two import hops', () =
       expect(skipped.reason).toContain('5 suite(s) reading package.json as text');
     });
 
-    it('answers a nested file by its full path, and by base name only while the name is rare', () => {
+    it('answers a nested file by its full path, and by base name only while the name is rare', async () => {
       const nested = { 'client/package.json': '' };
       const rare = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')", 'scripts/name.test.js': "readFileSync(join(dir, 'package.json'))" };
       const { tracked, read } = plant(rare);
-      expect(focusedLocalPlan(plan(), tracked, ['client/package.json'], read).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
+      expect((await focusedLocalPlan(plan(), tracked, ['client/package.json'], read)).server.files.sort()).toEqual(['scripts/full.test.js', 'scripts/name.test.js']);
       const common = { ...nested, 'scripts/full.test.js': "readFileSync('client/package.json')" };
       for (let i = 0; i <= RELATED_SUITE_CAP; i += 1) common[`scripts/n${String(i).padStart(2, '0')}.test.js`] = "readFileSync('package.json')";
       const planted = plant(common);
-      expect(focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read).server.files).toEqual(['scripts/full.test.js']);
+      expect((await focusedLocalPlan(plan(), planted.tracked, ['client/package.json'], planted.read)).server.files).toEqual(['scripts/full.test.js']);
     });
   });
 });

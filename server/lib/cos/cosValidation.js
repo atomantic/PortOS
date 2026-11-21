@@ -1,42 +1,25 @@
 /**
- * Chief-of-Staff task/job/loop/learning schemas, the Code-Review settings slice, and the task-metadata
- * sanitizer.
+ * Chief-of-Staff (CoS) route-boundary Zod schemas (split out of the retired validation.js catch-all, issue #1831).
  *
  * `createCosTaskSchema`'s metadata-bound fields are carried onto the task by
- * `services/cos/cosTaskIntake.js` (parity-checked by its test). The Review-Loop reviewer vocabulary lives
- * in `reviewerConfig.js` (#5702) and is re-exported flat from here.
+ * `services/cos/cosTaskIntake.js` (parity-checked by its test). Task-metadata
+ * constants and `sanitizeTaskMetadata` / `reviewerConfigMetadata` live in `cosTaskMetadata.js`.
  */
 
+import { CODEX_SPEED_PROBE_FAILURES } from '../executionOptions.js';
 import { executionOptionsSchema } from '../aiToolkit/internal/executionOptionsValidation.js';
-import { auditWorkflow } from '../auditWorkflow.js';
 import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../../lib/issueContext.js';
-/**
- * Chief-of-Staff (CoS) Zod schemas (split out of the retired validation.js catch-all, issue #1831).
- *
- * Covers CoS tasks, the Code-Review settings slice, recurring jobs, loops,
- * learning insights, and the task-metadata sanitizer. The Review-Loop reviewer
- * vocabulary + helpers (`normalizeReviewers` / `buildReviewWithArgs`) moved to
- * `reviewerConfig.js` (issue #5702) and are re-exported flat from here, so
- * existing deep imports keep working. Also home to the CoS agent, task-spawn and
- * schedule route-body schemas.
- */
 import { z } from 'zod';
 import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from '../reviewerHealth.js';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from '../zodCompat.js';
-import { isPlainObject } from '../objects.js';
-import { isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors } from '../selfManagedPrAuthors.js';
 import { MIN_INTERVAL_MS, MAX_INTERVAL_MS, isValidLoopInterval } from '../loopInterval.js';
 import { EFFORT_LEVELS } from '../provider/providerModels.js';
-import { isValidSlashdoCommand } from '../slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from '../prDisposition.js';
-import { QUEUEABLE_IMAGE_MODES } from '../generationModes.js';
-import { normalizeAutopilotParams } from '../musicVideo/musicVideoAutonomous.js';
-import { PUBLIC_REVIEW_EXECUTION_PROFILES } from '../agent/agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from '../orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from '../agent/agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 import { recurrenceRuleSchema } from '../recurrenceValidation.js';
-import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from '../auditCatalog.js';
+import { AUDIT_EXECUTION_TASK_TYPES, DEPFREE_MODES } from '../auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from '../qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from '../autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from '../jobFormFields.js';
@@ -44,7 +27,6 @@ import { TASK_DATA_INPUT_IDS } from '../taskDataInputCatalog.js';
 import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from '../goalFidelityFollowUp.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
-  KEYED_REVIEWER_PINS,
   LOCAL_LLM_REVIEWERS,
   MAX_REVIEWER_MAX_ROUNDS,
   MAX_REVIEWER_MODEL_LENGTH,
@@ -63,12 +45,16 @@ import {
   normalizeReviewerModels,
 } from '../reviewerConfig.js';
 import { nullishString, nonEmptyString } from '../sharedSchemas.js';
+import {
+  CLAIM_OVERRIDE_CONTEXT_MAX_CHARS,
+  cosTaskTypeSchema,
+  slashdoCommandSchema,
+  slashdoCommandInputSchema,
+  slashdoArgsInputSchema,
+  ISSUE_AUTHOR_FILTERS,
+} from './cosTaskMetadata.js';
 
 export { scheduleExecutionFieldsSchema } from '../scheduleExecutionFieldsValidation.js';
-
-// Transitional shim: the reviewer vocabulary lives in reviewerConfig.js but is
-// still reachable from every existing `cosValidation.js` import.
-export * from '../reviewerConfig.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -107,6 +93,11 @@ const cosTaskDiagnosticsSchema = z.object({
 // deletes the pin (absent-vs-cleared, AGENTS.md) — emptyToUndefined would drop
 // the clear signal at the route's `!== undefined` gate and make a set effort
 // permanent through the API.
+// Form posts and legacy callers send booleans as 'true'/'false' strings.
+const optionalBoolInputSchema = z.preprocess(
+  v => v === 'true' ? true : v === 'false' ? false : v,
+  z.boolean().optional()
+);
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
 const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 // Federated instance this task is PINNED to (#4520) — only that instance's CoS
@@ -121,17 +112,6 @@ const targetInstanceIdUpdateSchema = z.preprocess(emptyToNull, z.string().trim()
 const taskTemperatureInputSchema = z.number().min(0).max(2).optional();
 const taskTemperatureUpdateSchema = z.number().min(0).max(2).nullable().optional();
 
-// A bare slashdo command name (`plan-task`, `pr-better`). Shared by the task
-// schema and the quick-template schemas. `isValidSlashdoCommand` is the single
-// definition of the shape — it also gates `loadSlashdoFile`'s path join.
-const slashdoCommandSchema = z.string().refine(isValidSlashdoCommand, {
-  message: 'must be a bare slashdo command name (lowercase, digits, hyphens)',
-});
-
-// The app Issues tab already fetched the selected forge issue while listing the
-// page. Keep that payload bounded when it is carried into a manual claim so the
-// prompt cannot be inflated by a hand-crafted request. Oversized requests are
-// rejected at the route boundary instead of silently truncating issue content.
 const prefetchedIssueContextSchema = z.object({
   number: z.number().int().positive(),
   title: z.string().max(PREFETCHED_ISSUE_CONTEXT_MAX_CHARS.title).optional(),
@@ -142,7 +122,6 @@ const prefetchedIssueContextSchema = z.object({
 // Optional guidance entered on the managed-app Issues tab. It is appended to
 // the selected claim prompt, not stored as the task's human note, so it reaches
 // the agent even though the claim prompt is assembled before queueing.
-export const CLAIM_OVERRIDE_CONTEXT_MAX_CHARS = 4_000;
 const claimOverrideContextSchema = z.preprocess(
   v => typeof v === 'string' ? (v.trim() || undefined) : v,
   z.string().max(CLAIM_OVERRIDE_CONTEXT_MAX_CHARS).optional()
@@ -213,7 +192,6 @@ export const cosDecisionsQuerySchema = z.object({ limit: z.string().optional(), 
 export const cosDigestCompareQuerySchema = z.object({ week1: z.string().optional(), week2: z.string().optional() });
 export const cosWorkflowQuerySchema = z.object({ hours: z.string().optional() });
 
-export const cosTaskTypeSchema = z.enum(['user', 'internal']);
 export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
 
 // The metadata-bound fields below are carried onto the task by
@@ -289,6 +267,9 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // Absent inherits the app's `autoApprovePR` / `adminMerge` (resolveAutoApprovePR / resolveAdminMerge).
+  autoApprovePR: optionalBoolInputSchema,
+  adminMerge: optionalBoolInputSchema,
   simplify: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
@@ -364,10 +345,10 @@ export const createCosTaskSchema = z.object({
   ),
   // Bundled slashdo workflow this task runs (#3089) — the BARE command name,
   // never a rendered `/do:x` string (see slashdoInvocation.js).
-  slashdoCommand: z.preprocess(emptyToUndefined, slashdoCommandSchema.optional()),
+  slashdoCommand: slashdoCommandInputSchema,
   // Explicit arguments for the workflow. Absent → the prompt builder falls back
   // to the task description, which is what the task form sends.
-  slashdoArgs: z.preprocess(emptyToUndefined, z.string().max(4000).optional()),
+  slashdoArgs: slashdoArgsInputSchema,
 });
 
 export const updateCosTaskSchema = z.object({
@@ -742,6 +723,7 @@ export const codeReviewSettingsSchema = z.object({
     pausedUntil: z.number().int().positive().optional(),
     reason: z.string().optional(),
     code: z.string().optional(),
+    probeFailure: z.enum(CODEX_SPEED_PROBE_FAILURES).optional(),
     message: z.string().optional(),
     failureCount: z.number().int().nonnegative().optional(),
     lastFailureAt: z.number().int().positive().optional(),
@@ -845,329 +827,6 @@ export const codeReviewSettingsSchema = z.object({
   }).strict().optional(),
 }).strict();
 
-// =============================================================================
-// TASK METADATA SANITIZATION
-// =============================================================================
-
-// Agent behavior flags that can be overridden per-pipeline-stage
-export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'prCompletion', 'simplify', 'reviewLoop'];
-
-// These two flags are dispatch/completion posture rather than ordinary
-// user-facing task switches, but a pipeline stage must carry them forward to
-// the child task. Keeping the list beside the generic behavior flags prevents
-// each hand-off path from silently dropping the throwaway-worktree contract.
-export const PIPELINE_STAGE_BEHAVIOR_FLAGS = [
-  ...PIPELINE_BEHAVIOR_FLAGS,
-  'discardWorktree',
-  'noCodeOutput',
-];
-
-// Pipeline stage roles are semantic contracts, not display labels. The
-// pr-reviewer stages use these values to decide which content may cross the
-// boundary and which provider posture is safe; generic pipelines may omit the
-// role and continue to use their existing promptKey-only behavior.
-export const PIPELINE_STAGE_ROLES = ['security', 'eligibility', 'actions'];
-// Re-exported, not restated: a new profile must be legal to persist the moment
-// it is declared, or the sanitizer silently rejects the stage that uses it.
-export const PIPELINE_EXECUTION_PROFILES = PUBLIC_REVIEW_EXECUTION_PROFILES;
-
-const PIPELINE_STAGE_BOOLEAN_FIELDS = [
-  'readOnly', 'managed', 'useWorktree', 'openPR', 'simplify', 'reviewLoop',
-  'discardWorktree', 'noCodeOutput',
-];
-const PIPELINE_STAGE_STRING_LIMITS = {
-  name: 120,
-  promptKey: 120,
-  providerId: 200,
-  model: 200,
-  guardId: 120,
-};
-
-function safePipelinePrecondition(raw) {
-  if (!isPlainObject(raw)) return null;
-  const keys = Object.keys(raw);
-  if (keys.length !== 1 || !['fileExists', 'fileNotExists'].includes(keys[0])) return null;
-  const value = raw[keys[0]];
-  if (typeof value !== 'string' || !value.trim() || value.length > 240) return null;
-  const path = value.trim();
-  if (path.startsWith('/') || path.startsWith('\\') || path.includes('\0')) return null;
-  if (path.split(/[\\/]/).some((part) => part === '..')) return null;
-  return { [keys[0]]: path };
-}
-
-const largeInputFallbackSchema = z.object({
-  providerId: z.string().trim().min(1).max(200).optional(),
-  model: z.string().trim().min(1).max(200).optional(),
-  effort: z.enum(EFFORT_LEVELS).optional(),
-  executionOptions: executionOptionsSchema.optional(),
-}).strict();
-
-function sanitizePipelineStage(raw) {
-  if (!isPlainObject(raw)) return null;
-  const clean = Object.create(null);
-  for (const [field, maxLength] of Object.entries(PIPELINE_STAGE_STRING_LIMITS)) {
-    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
-    if (raw[field] === null && ['providerId', 'model'].includes(field)) continue;
-    if (typeof raw[field] !== 'string') return null;
-    const value = raw[field].trim();
-    if (!value || value.length > maxLength) return null;
-    clean[field] = value;
-  }
-  if (Object.hasOwn(raw, 'largeInputFallback') && raw.largeInputFallback !== null) {
-    const fallback = largeInputFallbackSchema.safeParse(raw.largeInputFallback);
-    if (!fallback.success) return null;
-    clean.largeInputFallback = fallback.data;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'role')) {
-    if (!PIPELINE_STAGE_ROLES.includes(raw.role)) return null;
-    clean.role = raw.role;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'executionProfile')) {
-    if (!PIPELINE_EXECUTION_PROFILES.includes(raw.executionProfile)) return null;
-    clean.executionProfile = raw.executionProfile;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'effort')) {
-    if (raw.effort !== null && !EFFORT_LEVELS.includes(raw.effort)) return null;
-    if (raw.effort !== null) clean.effort = raw.effort;
-  }
-  for (const field of PIPELINE_STAGE_BOOLEAN_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
-    if (typeof raw[field] !== 'boolean') return null;
-    clean[field] = raw[field];
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'precondition')) {
-    const precondition = safePipelinePrecondition(raw.precondition);
-    if (!precondition) return null;
-    clean.precondition = precondition;
-  }
-  return { ...clean };
-}
-
-function sanitizePipeline(raw) {
-  if (!isPlainObject(raw) || !Array.isArray(raw.stages) || raw.stages.length > 10) return null;
-  const stages = raw.stages.map(sanitizePipelineStage);
-  if (stages.some((stage) => !stage)) return null;
-  return { stages };
-}
-
-// Absolute cap on total agent spawns per task (across all retry types)
-export const MAX_TOTAL_SPAWNS = 5;
-
-// `cleanupMerged` / `openPr` / `resolveConflicts` / `autoMerge` /
-// `finishAbandoned` are the per-app action toggles for the `branch-reconcile`
-// task type (`finishAbandoned` governs committing + shipping the uncommitted
-// work left in a dead agent's worktree; `reapSuperseded` governs backup-first
-// retirement of branches with a fresh SUPERSEDED verdict); `autoClose` is
-// the `issue-reconcile` toggle (ON unless explicitly false — OFF forbids the
-// coordinator from closing an issue or filing a follow-up, leaving it to only
-// comment + release the claim). Each lives in the shared task-metadata
-// allowlist — like `prAuthorFilter` / `issueAuthorFilter` — so a per-app
-// override can disable an individual rectification behavior and survive
-// sanitizeTaskMetadata.
-
-// repo-sync's per-app / per-schedule action toggles. Each is ON unless
-// explicitly `false` (branch-reconcile's opt-out convention), EXCEPT
-// `reapRemotes`, which mutates `origin` and is therefore opt-IN. Lives here so
-// the sanitizer's allowlist and services/repoSync.js read ONE list — the two
-// drifting would silently drop a toggle at the app-override boundary.
-export const REPO_SYNC_ACTION_KEYS = ['syncPush', 'syncPull', 'switchDefault', 'cleanupMerged', 'dropStashes', 'reapRemotes'];
-
-// do-release's per-app / per-schedule options, each ON unless explicitly `false`:
-// finish in-flight work no live agent owns, merge dependency-bot PRs, fix
-// release blockers (delegating to a sub-agent rather than stopping), and make
-// routine design/preference decisions for later operator review. One list read
-// by the sanitizer allowlist, the schedule defaults, and the {releaseOptions}
-// prompt block, so a toggle cannot be dropped at one boundary.
-export const RELEASE_OPTION_KEYS = ['finishInFlight', 'mergeDependencyUpdates', 'resolveBlockers', 'autoDecide'];
-
-// better-dependency-freedom's removal bar vocabulary is catalog-owned (see
-// DEPFREE_MODES in lib/auditCatalog.js, beside the prompt block that renders
-// it); re-exported here so this module stays the one import for
-// task-metadata vocabularies.
-
-const ALLOWED_TASK_METADATA_KEYS = [
-  ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
-  'cleanupMerged', 'reapSuperseded', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
-  // repo-sync's action toggles (REPO_SYNC_ACTION_KEYS above): publish branches
-  // strictly ahead of their upstream, fast-forward the default branch, return the
-  // checkout to it, delete merged branches, drop provably-redundant stashes, and
-  // (opt-IN, since it mutates origin) reap merged orphan remote branches.
-  // `cleanupMerged` deliberately reuses branch-reconcile's NAME because it means
-  // the same thing — but task metadata is stored per task type, so the two are
-  // independent settings. Turning it off on branch-reconcile does NOT turn it off
-  // here; each task type carries its own value.
-  ...REPO_SYNC_ACTION_KEYS,
-  ...RELEASE_OPTION_KEYS,
-  // repo-sync's per-app opt-OUT. The sweep is install-wide by design, so it
-  // needs a key of its own rather than reading the per-app `enabled` flag next
-  // to it: createApp SEEDS `{ enabled: false }` for every task type, so
-  // `enabled` cannot distinguish "leave this repo alone" from "never configured",
-  // and reading it would exclude every app on a fresh install. `enabled` still
-  // governs whether the app gets its own SCHEDULED repo-sync run; this governs
-  // whether the install-wide sweep visits its checkout.
-  'skipRepoSync',
-  // Throwaway-worktree posture for programmatic-I/O reasoning tasks (layered-
-  // intelligence): the worktree is discarded without a merge or PR so a reasoning
-  // agent can't land code. See agentWorktreeCleanup.js.
-  'discardWorktree',
-  // Whether a successful run is EXPECTED to leave file changes in the worktree
-  // (#3102). Default (absent) = true for code-shaped work. `false` marks a task
-  // type whose deliverable is outside the repo — e.g. a reference-watch run
-  // against a GitHub/GitLab/JIRA work tracker files its proposals as issues and,
-  // per the prompt, edits no application code, so a clean worktree is expected.
-  'worktreeChangesExpected',
-  // Allows a verified-empty-branch contract to survive app task-type override
-  // sanitization. The finalizer honors it only for the producers
-  // lib/noChangeCompletion.js admits (autonomous job, investigation, catalog
-  // audit, allow-listed scheduled type) and only with a live forge proof.
-  'noChangeSuccess',
-  // Audit-type toggle: file tracker issues (no code) vs implement the fix.
-  // Dispatch stamps `noCodeOutput` when this is true. See server/lib/auditCatalog.js.
-  'fileIssues',
-  // The user chose to run this audit although the repository scan says it
-  // cannot apply (a UI audit of a repo with no UI). Set by the quality schedule
-  // form and a single-check quality run; without it, the scheduled and batch
-  // lanes skip an inapplicable audit before spawning an agent.
-  'runInapplicableAudit',
-  // Dispatch gate: when true, the generated system task is always awaiting-
-  // approve — including an explicit Run Now. Absent/false keeps the default
-  // (Run Now consents; unattended runs follow confidence/safety-kind).
-  'requireApproval',
-  // `universe-bible-images`: hold canon entries that have no description yet
-  // out of the render batch, so image quota isn't spent on a name with nothing
-  // behind it. See services/scheduledHandlers/universeBibleImages.js.
-  'requireDescribed',
-  // Whether PortOS pastes its stall nudge into a TUI session that has sat quiet
-  // for STALL_NUDGE_IDLE_MS (lib/tuiHandshake.js). ON unless explicitly `false`.
-  // A task that legitimately waits a long time on work it started — do-release
-  // parking on its release PR's CI watch — turns it off, because the nudge lands
-  // mid-wait and reads as "wrap up now".
-  'stallNudge'
-];
-
-// The params bag for the PROGRAMMATIC scheduled handlers
-// (services/scheduledHandlers/) is stored as taskMetadata, so its non-boolean
-// keys need the same constrained treatment as `verifyMode` / `branchesPerAgent`
-// below — a hand-edited schedule must not smuggle an arbitrary string into a
-// value the handler feeds to a store lookup or a render backend.
-//
-// `scope` accepts the UNION of the two handlers' option lists: task metadata is
-// keyed by task type but sanitized by one type-agnostic function, and each
-// handler already normalizes a scope it doesn't recognize back to 'all'
-// (`SCOPE_KINDS[scope] || SCOPE_KINDS.all`, `wantsScope`). Widening here can
-// therefore only accept a value the wrong handler ignores, never run the wrong
-// work — which is why the enum stays explicit rather than becoming a free string.
-export const BIBLE_HANDLER_SCOPES = ['all', 'characters', 'places', 'objects', 'variations', 'canon', 'sheets'];
-export const BIBLE_HANDLER_DEPTHS = ['core', 'full'];
-// Mirrors QUOTA_BURN_BOUNDS.maxEntries in lib/quotaBurnConfig.js — the same
-// range the burn job form advertises. Both doors bound the same batch.
-export const BIBLE_HANDLER_MAX_ENTRIES = { min: 1, max: 50 };
-// `universeId` is a universe collection-store id, or the literal 'all'. Held to
-// the store's OWN id alphabet (createCollectionStore's `idPattern`) so a
-// hand-edited schedule can't put a path segment where a record id belongs.
-const UNIVERSE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-const isBibleUniverseId = (value) =>
-  value === 'all' || (typeof value === 'string' && UNIVERSE_ID_PATTERN.test(value));
-
-// pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
-// user (the PortOS operator / their automation); 'others' = everyone else;
-// 'any' = no gate. Kept here so both the sanitizer and the prWatcher service
-// agree on the vocabulary.
-export const PR_AUTHOR_FILTERS = ['trusted', 'any', 'self', 'others'];
-
-// claim-issue author-gate values. 'self' = only claim issues YOU filed (the
-// gh/glab-authenticated `@me` account — the slashdo `/do:next --self` security
-// boundary, and the default so a shared/multi-contributor tracker never
-// auto-feeds third-party issues into an agent); 'collaborators' = you PLUS every
-// account with repo/project access (a trusted-team widening of 'self' — the
-// people who could already push code are not a lower trust tier than the issues
-// they file); 'owner' = only claim issues filed by the repository
-// owner/creator; 'any' = claim any open issue regardless of who filed it. Kept
-// here so both the sanitizer and the claim-issue prompt-builder agree on the
-// vocabulary.
-export const ISSUE_AUTHOR_FILTERS = ['self', 'collaborators', 'owner', 'any'];
-
-// repo-sync verify-mode vocabulary — when the coordinator agent is dispatched
-// after the deterministic sweep. 'always' verifies every run; 'when-changed'
-// (the default) verifies only a run that actually mutated a checkout, so a sweep
-// over an already-clean machine makes no provider call at all; 'never' dispatches
-// only when the sweep left something unresolved. An ESCALATION dispatches under
-// every mode. Kept here so the sanitizer and services/repoSync.js agree on the
-// vocabulary — and so the static task registry can name the default without
-// importing the git-heavy service (it is deliberately dependency-light).
-export const REPO_SYNC_VERIFY_MODES = ['always', 'when-changed', 'never'];
-export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
-
-// `issueMinAgeMinutes` cap: one day. A longer hold is a label's job. The
-// shipped default and its use live in lib/issueClaimEvidence.js.
-export const MAX_ISSUE_MIN_AGE_MINUTES = 1440;
-
-// `issueExcludeLabels` — extra labels a user wants left for human contributors
-// (e.g. `good first issue`) rather than auto-claimed by claim-issue/claim-work.
-// Unioned with the fixed NON_ACTIONABLE_ISSUE_LABELS set at read time
-// (perpetualWork.js#isActionableIssue) — never replacing it. Capped well below
-// GitHub/GitLab's own per-issue label limits; this is a short curated list, not
-// an arbitrary label dump.
-export const MAX_ISSUE_EXCLUDE_LABELS = 20;
-
-
-// Per-entry length cap. GitHub caps a label name at 50 chars; GitLab allows up
-// to 255. Cap at GitLab's (larger) limit rather than GitHub's — a GitHub
-// label can never exceed 50 anyway, so the wider cap is a no-op there, while
-// capping at 50 would silently truncate a valid long GitLab label to a prefix
-// that never matches the real label, making the exclusion silently no-op.
-const MAX_ISSUE_EXCLUDE_LABEL_LENGTH = 255;
-
-/**
- * Normalize a raw `issueExcludeLabels` list: keep only non-empty strings,
- * trim, cap length per entry (GitLab's label name limit — the larger of the
- * two forges', see MAX_ISSUE_EXCLUDE_LABEL_LENGTH), case-insensitively
- * dedupe (labels are compared lowercased at read time), and cap the list at
- * MAX_ISSUE_EXCLUDE_LABELS. Unlike reviewer usernames, label text is
- * free-form ("good first issue") so no character-class restriction is
- * applied beyond trimming. Non-array input → [].
- */
-export function normalizeIssueExcludeLabels(list) {
-  if (!Array.isArray(list)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const raw of list) {
-    if (typeof raw !== 'string') continue;
-    const trimmed = raw.trim().slice(0, MAX_ISSUE_EXCLUDE_LABEL_LENGTH);
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-    if (out.length >= MAX_ISSUE_EXCLUDE_LABELS) break;
-  }
-  return out;
-}
-
-// Scheduled claim-issue swarm fan-out size. A swarmCount of
-// 0 (or absent) means swarm OFF (the default one-issue-per-run flow); a value
-// of 2..12 turns on swarm with that many parallel claim agents. 1 is collapsed
-// to off (a one-agent swarm is just the single-issue flow with overhead), so
-// the smallest meaningful swarm is 2. Kept here so the sanitizer and the
-// claim-issue prompt-builder agree on the vocabulary.
-export const SWARM_COUNT_MIN = 2;
-export const SWARM_COUNT_MAX = 12;
-
-// branch-reconcile coordinator batch size. Unlike claim-issue's swarm count,
-// this is the number of already-classified branches one coordinator receives
-// in a run. A one-branch batch is valid, and the scheduler supplies the default
-// when the key is absent so old task records remain compatible.
-export const BRANCHES_PER_AGENT_MIN = 1;
-export const BRANCHES_PER_AGENT_MAX = 6;
-
-// error-log-triage run caps (#12851): how many occurrences make a fault worth
-// an investigation agent, and how many investigations one pass may queue.
-// `0` investigations keeps the deterministic dedupe and parks investigation.
-export const ERROR_LOG_TRIAGE_LIMITS = Object.freeze({
-  triageMinOccurrences: Object.freeze({ min: 1, max: 100, default: 3 }),
-  triageMaxInvestigations: Object.freeze({ min: 0, max: 10, default: 2 }),
-});
-
 // POST /api/cos/tasks/slashdo — a `/do:*` button click from an app's Agent
 // Operations panel. The run-settings fields are PICKED from createCosTaskSchema
 // rather than restated, so the drawer's provider/model/effort/simplify/reviewer
@@ -1254,264 +913,6 @@ export const relaunchCosAgentSchema = resumeCosAgentSchema
   .omit({ description: true, screenshots: true })
   .extend({ reason: z.string().trim().max(500).optional() });
 
-/**
- * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
- * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`claimFlow`/
- * `reviewerApplies`)
- * are kept only when actually boolean; constrained values include `prCompletion`,
- * reviewers, reviewer usernames, and `reviewStopMode` — plus a validated pipeline
- * object. Prevents prototype pollution and reserved-field overrides.
- * Returns a clean plain object or null if input is empty/invalid.
- */
-export function sanitizeTaskMetadata(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const clean = Object.create(null);
-  let hasKeys = false;
-  for (const key of ALLOWED_TASK_METADATA_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(raw, key) && typeof raw[key] === 'boolean') {
-      clean[key] = raw[key];
-      hasKeys = true;
-    }
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'prCompletion') && PR_COMPLETION_VALUES.includes(raw.prCompletion)) {
-    clean.prCompletion = raw.prCompletion;
-    hasKeys = true;
-  }
-  if (raw.auditWorkflow != null) { auditWorkflow(raw); clean.auditWorkflow = raw.auditWorkflow; hasKeys = true; }
-  if (['quick', 'deep'].includes(raw.auditDepth)) { clean.auditDepth = raw.auditDepth; hasKeys = true; }
-  if (typeof raw.deepAuditId === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(raw.deepAuditId)) { clean.deepAuditId = raw.deepAuditId; hasKeys = true; }
-  // Schedule dispatch must preserve the workflow and its reviewer pin. Reuse
-  // the task-input schemas so command paths and argument bounds stay identical.
-  for (const key of ['slashdoCommand', 'slashdoArgs']) {
-    const parsed = createCosTaskSchema.shape[key].safeParse(raw[key]);
-    if (parsed.success && parsed.data !== undefined) {
-      clean[key] = parsed.data;
-      hasKeys = true;
-    }
-  }
-  // `reviewer` is a legacy single constrained string.
-  const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && isReviewer(normalizedReviewer)) {
-    clean.reviewer = normalizedReviewer;
-    hasKeys = true;
-  }
-  // `reviewers` is the ordered multi-reviewer list — filter to known values, dedupe, preserve order.
-  if (Array.isArray(raw.reviewers)) {
-    const seen = new Set();
-    const list = [];
-    for (const r of raw.reviewers) {
-      const normalized = REVIEWER_ALIASES[r] || r;
-      if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
-    }
-    // Explicitly empty survives only beside forge reviewers: that is the
-    // username-only roster (`usernameOnlyRoster`), not "inherit the defaults".
-    const usernameOnly = !list.length && Array.isArray(raw.usernames) && normalizeReviewUsernames(raw.usernames).length > 0;
-    if (list.length || usernameOnly) { clean.reviewers = list; hasKeys = true; }
-  }
-  // `usernames` is the arbitrary GitHub reviewer-username list — normalize to
-  // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries). Unlike
-  // `reviewers` above, an explicitly empty array is KEPT (not dropped): for
-  // usernames, `[]` is a meaningful "no external gate for this task/type" choice
-  // that must override the Code Review Defaults, matching resolveReviewUsernames'
-  // `Array.isArray` override contract and the task-form/global-panel surfaces.
-  if (Array.isArray(raw.usernames)) {
-    clean.usernames = normalizeReviewUsernames(raw.usernames);
-    hasKeys = true;
-  }
-  // `optionalReviewers` marks reviewers non-blocking (slashdo `~opt`). Like
-  // `usernames`, an explicitly empty array is KEPT so a task/type can override
-  // the Code Review Defaults' optional set back to "none optional."
-  if (Array.isArray(raw.optionalReviewers)) {
-    clean.optionalReviewers = normalizeOptionalReviewers(raw.optionalReviewers) || [];
-    hasKeys = true;
-  }
-  // The token-keyed per-reviewer pins (caps / model / effort). Like
-  // `optionalReviewers`, an explicitly empty MAP is KEPT so a task/type can
-  // override the Code Review Defaults back to "each reviewer's own default" —
-  // see KEYED_REVIEWER_PINS for the shared contract.
-  for (const [key, normalizeMap] of KEYED_REVIEWER_PINS) {
-    if (!isPlainObject(raw[key])) continue;
-    clean[key] = normalizeMap(raw[key]) || {};
-    hasKeys = true;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {
-    clean.reviewStopMode = raw.reviewStopMode;
-    hasKeys = true;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewerApplies') && typeof raw.reviewerApplies === 'boolean') {
-    clean.reviewerApplies = raw.reviewerApplies;
-    hasKeys = true;
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'whenDone') && ['commit-push', 'leave-uncommitted'].includes(raw.whenDone)) {
-    clean.whenDone = raw.whenDone;
-    hasKeys = true;
-  }
-  // `prAuthorFilter` gates pr-watcher dispatch on PR authorship — constrained
-  // to a known value so a hand-edited config can't smuggle in an arbitrary
-  // string the watcher would silently treat as "any".
-  if (Object.prototype.hasOwnProperty.call(raw, 'prAuthorFilter') && PR_AUTHOR_FILTERS.includes(raw.prAuthorFilter)) {
-    clean.prAuthorFilter = raw.prAuthorFilter;
-    hasKeys = true;
-  }
-  // An explicitly empty list is KEPT so a per-app override can clear the
-  // global exclusions back to "touch every trusted PR" — but only when the
-  // caller sent []: a list whose every entry is invalid must not become that
-  // clear and silently release the held authors.
-  if (Array.isArray(raw.selfManagedPrAuthors)) {
-    const authors = normalizeSelfManagedPrAuthors(raw.selfManagedPrAuthors);
-    if (authors.length || raw.selfManagedPrAuthors.length === 0) {
-      clean.selfManagedPrAuthors = authors;
-      hasKeys = true;
-    }
-  }
-  if (isValidSelfManagedPrStaleMinutes(raw.selfManagedPrStaleMinutes)) {
-    clean.selfManagedPrStaleMinutes = raw.selfManagedPrStaleMinutes;
-    hasKeys = true;
-  }
-  // `verifyMode` decides when repo-sync dispatches its coordinator agent after a
-  // clean deterministic pass — constrained, so an arbitrary string can't reach the
-  // dispatch gate (which would fall back to the default anyway, silently).
-  if (Object.prototype.hasOwnProperty.call(raw, 'verifyMode') && REPO_SYNC_VERIFY_MODES.includes(raw.verifyMode)) {
-    clean.verifyMode = raw.verifyMode;
-    hasKeys = true;
-  }
-  // `depfreeMode` sets the dependency-freedom audit's removal bar — constrained
-  // to DEPFREE_MODES so a hand-edited schedule cannot smuggle in a string the
-  // prompt block would silently render as the default bar.
-  if (Object.prototype.hasOwnProperty.call(raw, 'depfreeMode') && DEPFREE_MODES.includes(raw.depfreeMode)) {
-    clean.depfreeMode = raw.depfreeMode;
-    hasKeys = true;
-  }
-  // `issueAuthorFilter` gates claim-issue dispatch on issue authorship —
-  // constrained to a known value so a hand-edited config can't smuggle in an
-  // arbitrary string the claim flow would silently treat as "owner".
-  if (Object.prototype.hasOwnProperty.call(raw, 'issueAuthorFilter') && ISSUE_AUTHOR_FILTERS.includes(raw.issueAuthorFilter)) {
-    clean.issueAuthorFilter = raw.issueAuthorFilter;
-    hasKeys = true;
-  }
-  // `issueExcludeLabels` — like `usernames`/`optionalReviewers` above, an
-  // explicitly empty array is KEPT (not dropped): `[]` is a meaningful "no
-  // extra exclusions for this task/type" choice that must override a global
-  // default's non-empty list, not silently inherit it.
-  if (Array.isArray(raw.issueExcludeLabels)) {
-    clean.issueExcludeLabels = normalizeIssueExcludeLabels(raw.issueExcludeLabels);
-    hasKeys = true;
-  }
-  // `issueMinAgeMinutes` — 0 is kept as an explicit "no grace" override.
-  if (Object.prototype.hasOwnProperty.call(raw, 'issueMinAgeMinutes')
-      && Number.isInteger(raw.issueMinAgeMinutes)
-      && raw.issueMinAgeMinutes >= 0
-      && raw.issueMinAgeMinutes <= MAX_ISSUE_MIN_AGE_MINUTES) {
-    clean.issueMinAgeMinutes = raw.issueMinAgeMinutes;
-    hasKeys = true;
-  }
-  // `swarmCount` turns claim-issue `--swarm` fan-out on (2..12 parallel agents)
-  // or off. 0 is kept as an explicit "off" (so a per-app override can disable
-  // swarm even when the global default has it on — `0` = off, absent = inherit);
-  // 2..12 is the swarm size. 1/non-integer/out-of-range are dropped, so a
-  // hand-edited config can't smuggle in an unbounded swarm size. The prompt
-  // builder treats anything below SWARM_COUNT_MIN as off (resolveSwarmBlock).
-  if (Object.prototype.hasOwnProperty.call(raw, 'swarmCount')
-      && Number.isInteger(raw.swarmCount)
-      && (raw.swarmCount === 0
-        || (raw.swarmCount >= SWARM_COUNT_MIN && raw.swarmCount <= SWARM_COUNT_MAX))) {
-    clean.swarmCount = raw.swarmCount;
-    hasKeys = true;
-  }
-  // `branchesPerAgent` bounds the branch-reconcile prompt to a deterministic
-  // prefix of the prioritized in-flight set. It is separate from swarmCount:
-  // branch-reconcile runs one coordinator over a batch, while claim-issue fans
-  // out independent issue agents. Absent means inherit; there is no "off"
-  // value because the task default intentionally supplies a safe batch size.
-  if (Object.prototype.hasOwnProperty.call(raw, 'branchesPerAgent')
-      && Number.isInteger(raw.branchesPerAgent)
-      && raw.branchesPerAgent >= BRANCHES_PER_AGENT_MIN
-      && raw.branchesPerAgent <= BRANCHES_PER_AGENT_MAX) {
-    clean.branchesPerAgent = raw.branchesPerAgent;
-    hasKeys = true;
-  }
-  for (const [key, { min, max }] of Object.entries(ERROR_LOG_TRIAGE_LIMITS)) {
-    if (Number.isInteger(raw[key]) && raw[key] >= min && raw[key] <= max) {
-      clean[key] = raw[key];
-      hasKeys = true;
-    }
-  }
-  // The programmatic bible handlers' params bag (BIBLE_HANDLER_* above). Each
-  // key is dropped when it doesn't match, so a bad value falls back to the
-  // handler's own default instead of reaching a store lookup or a render
-  // backend. `mode` accepts only a QUEUEABLE image backend: `external` renders
-  // through a remote SD-API that batch rendering rejects downstream anyway, and
-  // storing it would advertise a setting that always fails at dispatch.
-  if (isBibleUniverseId(raw.universeId)) {
-    clean.universeId = raw.universeId;
-    hasKeys = true;
-  }
-  if (BIBLE_HANDLER_SCOPES.includes(raw.scope)) {
-    clean.scope = raw.scope;
-    hasKeys = true;
-  }
-  if (BIBLE_HANDLER_DEPTHS.includes(raw.depth)) {
-    clean.depth = raw.depth;
-    hasKeys = true;
-  }
-  if (Number.isInteger(raw.maxEntries)
-      && raw.maxEntries >= BIBLE_HANDLER_MAX_ENTRIES.min
-      && raw.maxEntries <= BIBLE_HANDLER_MAX_ENTRIES.max) {
-    clean.maxEntries = raw.maxEntries;
-    hasKeys = true;
-  }
-  if (QUEUEABLE_IMAGE_MODES.includes(raw.mode)) {
-    clean.mode = raw.mode;
-    hasKeys = true;
-  }
-  // The music-video-autopilot handler's params bag (lib/musicVideo/musicVideoAutonomous.js
-  // owns the shape): tools, per-tool models, budget, limits, checkpoints, LLM,
-  // and the Brain idea tags it may draw from. Re-normalized on every save.
-  if (Object.prototype.hasOwnProperty.call(raw, 'musicVideoAutopilot')) {
-    const params = normalizeAutopilotParams(raw.musicVideoAutopilot);
-    if (params) {
-      clean.musicVideoAutopilot = params;
-      hasKeys = true;
-    }
-  }
-  // Pipeline configuration is the other nested task-metadata shape. Keep only
-  // known stage fields and fail the whole update when a known field is malformed
-  // so a bad custom pipeline cannot silently lose its safety posture.
-  if (Object.prototype.hasOwnProperty.call(raw, 'pipeline')) {
-    const pipeline = sanitizePipeline(raw.pipeline);
-    if (!pipeline) return null;
-    clean.pipeline = pipeline;
-    hasKeys = true;
-  }
-  return hasKeys ? { ...clean } : null;
-}
-
-// `reviewerConfigMetadata` stays here rather than in reviewerConfig.js (#5702):
-// it is a thin wrapper over `sanitizeTaskMetadata` above, and reviewerConfig.js
-// must not import this module (that would close a cycle and drag Zod back into
-// the reviewer vocabulary). Re-exported to callers unchanged.
-/**
- * The reviewer fields a task must PERSIST so a later
- * `resolveReviewerConfig(task.metadata, …)` resolves the same list its prompt
- * names, instead of re-deriving the install-wide Code Review Defaults (#4770).
- *
- * All six travel together: resolving only `reviewers` still lets the usernames,
- * `~opt` set, and the three keyed pins fall back to the defaults, which is the
- * same disagreement one field down. Sanitized on the way out so a hand-crafted
- * request body can't smuggle an unrecognized key onto the task record, and every
- * value is re-validated rather than trusted.
- */
-export function reviewerConfigMetadata(config) {
-  return sanitizeTaskMetadata({
-    reviewers: config?.reviewers,
-    usernames: config?.usernames,
-    optionalReviewers: config?.optionalReviewers,
-    reviewerMaxRounds: config?.reviewerMaxRounds,
-    reviewerModels: config?.reviewerModels,
-    reviewerEfforts: config?.reviewerEfforts
-  }) || {};
-}
-
 // =============================================================================
 // CoS RUN EVENT LEDGER (read-only diagnostics, #4540)
 // =============================================================================
@@ -1561,10 +962,10 @@ export const runEventReconcileSchema = z.object({
 // that never showed it. `fileIssuesByType` is keyed the same way and read only
 // for the types actually scheduled.
 export const qualitySchedulePlanSchema = z.object({
-  taskTypes: z.array(z.enum(AUDIT_TASK_TYPE_LIST)).max(AUDIT_TASK_TYPE_LIST.length).optional(),
+  taskTypes: z.array(z.enum(AUDIT_EXECUTION_TASK_TYPES)).max(AUDIT_EXECUTION_TASK_TYPES.length).optional(),
   // partialRecord, not record: a Zod 4 enum-keyed record demands EVERY key, and
   // the form only sends the checks whose mode the user actually changed.
-  fileIssuesByType: z.partialRecord(z.enum(AUDIT_TASK_TYPE_LIST), z.boolean()).optional(),
+  fileIssuesByType: z.partialRecord(z.enum(AUDIT_EXECUTION_TASK_TYPES), z.boolean()).optional(),
   // null = spread the selection evenly over the week.
   checksPerDay: z.number().int().min(1).max(24).nullable().optional(),
   windowStartHour: z.number().int().min(0).max(23).optional(),

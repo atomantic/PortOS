@@ -46,14 +46,14 @@
  * can't fail the suite.
  *
  * The scanner behind these guards is split across `src/test/a11yScan*.js`; the rules
- * live one family per file in `src/a11y/*.conventions.test.js`.
+ * live one family per file in `src/test/guards/a11y/`.
  */
 
 import { join, dirname } from 'path';
-import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles as trackedJsx, trackedSourceFiles as trackedSources } from '../test/trackedFiles.js';
 import { maskComments, } from './a11yScanNames.js';
+import { readText } from '../../../scripts/lib/guardCorpus.js';
 
 export const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -90,7 +90,7 @@ export const virtualSources = new Map();
 export function maskedSourceOf(file) {
   let masked = maskedSourceByFile.get(file);
   if (masked === undefined) {
-    const raw = virtualSources.get(file) ?? readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    const raw = virtualSources.get(file) ?? rawSourceOf(file);
     masked = maskComments(raw);
     maskedSourceByFile.set(file, masked);
   }
@@ -110,7 +110,7 @@ export const rawSourceByFile = new Map();
 export function rawSourceOf(file) {
   let raw = rawSourceByFile.get(file);
   if (raw === undefined) {
-    raw = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+    raw = readText(join(CLIENT_ROOT, file));
     rawSourceByFile.set(file, raw);
   }
   return raw;
@@ -464,7 +464,8 @@ export const looksLikeJsxTagStart = (src, index, previous) => {
  * `from` and `mode` together are what the arbitrary-substring callers need: a
  * slice is not always a whole file, and the machine has to be told where it is.
  */
-export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
+// Comment masking still needs the same lexer state, but can skip allocating and yielding other tokens.
+export function* jsxScanner(src, { from = 0, mode: startMode = 'code', commentsOnly = false } = {}) {
   let mode = startMode;
   // The tag being read whenever `mode` is 'jsx-tag'; `parentMode` is where a
   // self-closing tag hands back to. A caller that starts mid-tag gets a stand-in
@@ -508,7 +509,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       }
       if (c === '"' || c === '\'' || c === '`') {
         const end = skipString(src, i);
-        yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
+        if (!commentsOnly) yield { kind: 'string', index: i, end: Math.min(end, src.length - 1), mode };
         i = end;
         previous = Math.min(end, src.length - 1);
         continue;
@@ -516,7 +517,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       if (mode === 'code' && c === '/') {
         const end = regexEnd(src, i, previous);
         if (end !== -1) {
-          yield { kind: 'regex', index: i, end, mode };
+          if (!commentsOnly) yield { kind: 'regex', index: i, end, mode };
           i = end;
           previous = end;
           continue;
@@ -528,7 +529,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
 
     // Braces nest the same way in all three contexts, so they are handled once.
     if (c === '{') {
-      yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      if (!commentsOnly) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
       braceFrames.push({ mode, tag });
       mode = 'code';
       tag = null;
@@ -538,7 +539,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       // A slice can begin inside an expression, so the pop may come back empty;
       // an unmatched `}` then simply sits at depth 0 and changes no context.
       const frame = braceFrames.pop();
-      yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
+      if (!commentsOnly) yield { kind: 'char', index: i, char: c, mode, depth: braceFrames.length };
       if (frame) ({ mode, tag } = frame);
       continue;
     }
@@ -550,7 +551,7 @@ export function* jsxScanner(src, { from = 0, mode: startMode = 'code' } = {}) {
       ? opensJsxTagInText(src, i)
       : mode === 'code' && looksLikeJsxTagStart(src, i, before));
 
-    yield {
+    if (!commentsOnly) yield {
       kind: 'char',
       index: i,
       char: c,

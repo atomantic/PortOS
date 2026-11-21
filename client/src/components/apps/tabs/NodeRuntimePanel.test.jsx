@@ -9,7 +9,12 @@ const api = vi.hoisted(() => ({
   updatePm2Runtime: vi.fn(),
   repairNodeStartup: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiSystem.js', () => ({
+  getNodeRuntimeStatus: api.getNodeRuntimeStatus,
+  updateNodeRuntime: api.updateNodeRuntime,
+  updatePm2Runtime: api.updatePm2Runtime,
+  repairNodeStartup: api.repairNodeStartup,
+}));
 const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../../lib/clipboard', () => clipboard);
 vi.mock('../../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));

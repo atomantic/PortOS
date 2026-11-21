@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getLocalPersistentMindSetup: vi.fn(),
   applyLocalPersistentMindSetup: vi.fn(),
   installLocalLlmBackend: vi.fn(),
@@ -15,10 +15,7 @@ vi.mock('../ui/Toast', () => ({
   }),
 }));
 
-import {
-  getLocalPersistentMindSetup,
-  applyLocalPersistentMindSetup,
-} from '../../services/api';
+import { getLocalPersistentMindSetup, applyLocalPersistentMindSetup } from '../../services/apiLocalLlm.js';
 import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 
 const applicableSetup = {

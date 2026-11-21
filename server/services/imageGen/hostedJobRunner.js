@@ -7,7 +7,6 @@
  */
 
 import { basename, join } from 'path';
-import sharp from 'sharp';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { atomicWrite, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
@@ -77,6 +76,7 @@ export function createHostedImageJobRunner({ mode, provider, logName = provider,
     try {
       const format = detectImageFormat(bytes)?.format;
       if (!format) return finalizeJobFailure(job, jobId, null, `${provider} returned a file that is not an image`);
+      const { default: sharp } = await import('sharp');
       await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
       wroteOutput = true;
       if (entry.aborted) {

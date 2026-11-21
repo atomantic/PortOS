@@ -34,9 +34,9 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
   body: JSON.stringify({ deep }),
   silent: true,
 });
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  for (const [key, value] of Object.entries({ hidden, starred, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
+  for (const [key, value] of Object.entries({ hidden, starred, localOnly, rating, summary, compact, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
     if (value !== undefined) params.set(key, value);
   }
   return request(`/image-gen/gallery?${params}`, options);
@@ -457,8 +457,18 @@ export const renderTimelineProject = (id, options = {}) => request(`/video-timel
 // Media collections — user-named buckets that can hold any mix of images
 // and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or
 // "video:<uuid>"); cover keys use the same format.
+export const autoOrganizeMediaCollections = (options = {}) => request('/media/collections/auto-organize', {
+  method: 'POST',
+  ...options,
+});
 export const listMediaCollections = ({ silent = false } = {}) => request('/media/collections', { silent });
 export const getMediaCollection = (id, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, options);
+export const getMediaCollectionPrimary = (id, options = {}) => request(`/media/collections/${encodeURIComponent(id)}/primary`, options);
+export const setMediaCollectionPrimary = (id, instanceId, options = {}) => request(`/media/collections/${encodeURIComponent(id)}/primary`, {
+  method: 'POST',
+  body: JSON.stringify({ instanceId }),
+  ...options,
+});
 // Copy a collection's peer-hosted items onto this machine (all, or just `keys`).
 // The pulls run server-side; each landed file arrives as `peerSync:asset-arrived`.
 export const localizeMediaCollection = (id, keys, options = {}) => request(`/media/collections/${encodeURIComponent(id)}/localize`, {
@@ -469,6 +479,12 @@ export const localizeMediaCollection = (id, keys, options = {}) => request(`/med
 export const createMediaCollection = ({ name, description = '' }, options = {}) => request('/media/collections', {
   method: 'POST',
   body: JSON.stringify({ name, description }),
+  ...options,
+});
+// Resolves the destination plus { removedCollectionIds, keptCollectionIds }.
+export const joinMediaCollections = ({ name, collectionIds, keepOriginals = false }, options = {}) => request('/media/collections/join', {
+  method: 'POST',
+  body: JSON.stringify({ name, collectionIds, keepOriginals }),
   ...options,
 });
 export const updateMediaCollection = (id, patch, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, {
@@ -483,6 +499,11 @@ export const deleteMediaCollection = (id, options = {}) => request(`/media/colle
 export const addMediaCollectionItem = (id, { kind, ref }, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
   method: 'POST',
   body: JSON.stringify({ kind, ref }),
+  silent,
+});
+export const removeMediaCollectionItems = (id, keys, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/bulk`, {
+  method: 'POST',
+  body: JSON.stringify({ remove: keys }),
   silent,
 });
 export const removeMediaCollectionItem = (id, key, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {

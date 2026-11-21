@@ -8,9 +8,9 @@ import {
   patchPipelineManuscriptComment,
   generatePipelineManuscriptFix,
   undoPipelineManuscriptFix,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
   generatePipelineManuscriptFix: vi.fn(),

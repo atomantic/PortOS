@@ -40,7 +40,7 @@ import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION,
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { findPullRequestForBranch } from '../github.js';
 import { readClaimOwnershipAgents } from '../cos/cosClaimOwnership.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
 import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from '../cos/cosClaimOwnershipState.js';
 
@@ -234,6 +234,7 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
   const held = (branch, reason) => `Claim cleanup ${branch} incomplete — ${reason}`;
   const repository = await realpath(sourceWorkspace).catch(() => null);
   if (!repository) return claimBranches.map(branch => held(branch, 'repository unavailable'));
+  let uncapturedInventory;
   for (const branch of claimBranches) {
     const captures = (agentState?.metadata?.completedCheckouts || []).filter(row => row.branch === branch
       && completedCheckoutReceiptValid(agentState, row) && typeof row.repoPath === 'string'
@@ -241,9 +242,18 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
       && resolve(row.repoPath) === resolve(repository));
     const capture = captures.length === 1 ? captures[0] : null;
     if (!capture) {
-      const [trees, refPresent] = await Promise.all([
+      // An observed holder or ref is enough to retain work without further
+      // probes. Only a fresh targeted read can establish clean absence, including
+      // malformed loose refs that Git omits from enumeration.
+      uncapturedInventory ??= import('../repoBranchSnapshot.js')
+        .then(({ readRepoBranchSnapshot }) => readRepoBranchSnapshot(sourceWorkspace))
+        .catch(() => null);
+      const snapshot = await uncapturedInventory;
+      const couldBeAbsent = snapshot && !snapshot.tips.has(branch)
+        && !snapshot.worktrees.some(tree => tree.branch === `refs/heads/${branch}`);
+      const [trees, refPresent] = couldBeAbsent ? await Promise.all([
         listWorktrees(sourceWorkspace).catch(() => null), readLocalBranchPresence(sourceWorkspace, branch),
-      ]);
+      ]) : [null, null];
       if (!trees || refPresent !== false || trees.some(tree => tree.branch === `refs/heads/${branch}`)) warnings.push(held(branch, 'checkout identity unavailable'));
       else {
         const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch, remoteOpts);
@@ -1572,9 +1582,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopFollowUp: true,
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
-      // A per-task auto-merge choice outlives the PR-opening run; unset re-reads the app.
-      ...(isTruthyMeta(originalTask?.metadata?.useAutoMerge) || isFalsyMeta(originalTask?.metadata?.useAutoMerge)
-        ? { useAutoMerge: isTruthyMeta(originalTask.metadata.useAutoMerge) } : {}),
+      // Per-task merge choices (auto-merge, auto-approve, admin merge) outlive the PR-opening run; unset re-reads the app.
+      ...Object.fromEntries(['useAutoMerge', 'autoApprovePR', 'adminMerge']
+        .filter((key) => isTruthyMeta(originalTask?.metadata?.[key]) || isFalsyMeta(originalTask?.metadata?.[key]))
+        .map((key) => [key, isTruthyMeta(originalTask.metadata[key])])),
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
       // …and, on that same path, whether the agent owes the change its OWN

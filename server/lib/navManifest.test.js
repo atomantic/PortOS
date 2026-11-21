@@ -764,8 +764,9 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     const socketSrc = fs.readFileSync(SOCKET_JS, 'utf8');
     expect(appSrc).toMatch(/useTimezoneBootstrap\(!isHostedAudienceRoute\)/);
     expect(appSrc).toMatch(/useDocumentTitle\(!isHostedAudienceRoute\)/);
-    expect(appSrc).toMatch(/isHostedAudienceRoute\s*\?\s*routeContent/);
-    expect(mainSrc).toContain('const isHostedAudienceRoute = isPublicGuestRoute(window.location.pathname)');
+    expect(mainSrc).toContain('const isHostedAudienceRoute = isPublicGuestRoute(pathname)');
+    expect(mainSrc).toMatch(/if\s*\(!isHostedAudienceRoute && !isChromeless\) startShellBootstrap\(/);
+    expect(mainSrc).toMatch(/const app = isHostedAudienceRoute\s*\?\s*<RouterProvider/);
     expect(appSrc).toContain('isPublicGuestRoute(pathname)');
     expect(socketSrc).toContain('isPublicGuestRoute(window.location.pathname)');
     expect(socketSrc).toMatch(/autoConnect: !isHostedAudienceRoute/);
@@ -881,7 +882,7 @@ describe('nav contract — POST Practice Library links are registered destinatio
     'client/src/components/meatspace/post/BrowseCatalogLink.jsx',
     // The sidebar's POST section — a link there that no command registers is
     // unreachable from ⌘K and voice.
-    'client/src/components/Layout.jsx',
+    'client/src/components/SidebarNav.jsx',
   ];
   const navPaths = new Set(NAV_COMMANDS.map((c) => c.path));
 
@@ -901,8 +902,10 @@ describe('nav contract — POST Practice Library links are registered destinatio
   }
 });
 
-it('keeps Video browsing separate from Creative Director production aliases', () => {
-  expect(resolveNavCommand('video').path).toBe('/video');
+it('routes video browsing and production aliases to Creative Director', () => {
+  expect(resolveNavCommand('video').path).toBe('/creative-director');
+  expect(resolveNavCommand('browse-video').path).toBe('/creative-director');
+  expect(resolveNavCommand('generate-video').path).toBe('/video/generate');
   expect(resolveNavCommand('create-video').path).toBe('/creative-director');
   expect(resolveNavCommand('video-production').path).toBe('/creative-director');
 });

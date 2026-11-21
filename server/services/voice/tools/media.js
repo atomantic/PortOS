@@ -4,7 +4,7 @@
 // imageGen waiter before kicking off the job.
 
 import { randomUUID } from 'crypto';
-import * as imageGen from '../../imageGen/index.js';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../../../lib/generationModes.js';
 import { createImageGenWaiter } from '../../imageGenWaiter.js';
 import { getSettings } from '../../settings.js';
 
@@ -30,7 +30,7 @@ export const MEDIA_TOOLS = [
         },
         provider: {
           type: 'string',
-          enum: ['auto', ...imageGen.IMAGE_GEN_MODES],
+          enum: ['auto', ...IMAGE_GEN_MODES],
           description: '"auto" (default) uses the user\'s saved backend. Override only when the user explicitly asks for a specific one or the task strongly favors it.',
         },
         negativePrompt: {
@@ -60,13 +60,13 @@ export const MEDIA_TOOLS = [
       // The dispatcher would also reject this, but catching it here lets us
       // return a friendlier summary to the voice agent / palette. The
       // settings key equals the mode string for both.
-      if (imageGen.CLOUD_IMAGE_GEN_MODES.includes(requestedMode)) {
+      if (CLOUD_IMAGE_GEN_MODES.includes(requestedMode)) {
         const s = await getSettings();
         if (!s?.imageGen?.[requestedMode]?.enabled) {
-          const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX
+          const label = requestedMode === IMAGE_GEN_MODE.CODEX
             ? 'Codex'
-            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok'
-              : requestedMode === imageGen.IMAGE_GEN_MODE.FAL ? 'fal.ai' : 'Agy';
+            : requestedMode === IMAGE_GEN_MODE.GROK ? 'Grok'
+              : requestedMode === IMAGE_GEN_MODE.FAL ? 'fal.ai' : 'Agy';
           return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }
@@ -107,7 +107,8 @@ export const MEDIA_TOOLS = [
 
       let result;
       try {
-        result = await imageGen.generateImage({
+        const { generateImage } = await import('../../imageGen/index.js');
+        result = await generateImage({
           jobId,
           prompt: prompt.trim(),
           negativePrompt: negativePrompt?.trim() || undefined,
@@ -121,7 +122,7 @@ export const MEDIA_TOOLS = [
       }
 
       const usedMode = result?.mode || requestedMode || 'default';
-      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || imageGen.CLOUD_IMAGE_GEN_MODES.includes(usedMode);
+      const isAsync = usedMode === IMAGE_GEN_MODE.LOCAL || CLOUD_IMAGE_GEN_MODES.includes(usedMode);
       // External resolves with the file already on disk — short-circuit.
       if (!isAsync) {
         waiter.cleanup();

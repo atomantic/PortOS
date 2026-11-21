@@ -19,7 +19,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 import { timeAgo } from '../../utils/formatters';
-import { createLoom, listLooms } from '../../services/api';
+import { createLoom, listLooms } from '../../services/apiFableLoom.js';
 import { fieldClass, labelClass } from '../fableloom/fieldStyles';
 
 // Mirrors LOOM_LIMITS.NAME_MAX (server/lib/fableLoomLimits.js) — the

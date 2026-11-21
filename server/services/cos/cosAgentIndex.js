@@ -13,9 +13,9 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { readFile, writeFile, rename, readdir, rm, stat, cp } from 'fs/promises';
 import { existsSync } from 'fs';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import { AGENTS_DIR, withStateLock } from './cosState.js';
-import { atomicWrite, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, tryReadFileStrict } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { repairCodexTaskSummary } from '../codexSummaryRepair.js';
 import {
@@ -31,25 +31,37 @@ const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 // and bucket date. Archive writers call invalidateArchivedRecord after each
 // metadata.json write so the next read sees it; the epoch stops a read that
 // started before a write from caching the superseded content.
+const MAX_ARCHIVED_RECORDS = 500;
 const archivedRecordCache = new Map();
 let archivedRecordEpoch = 0;
 
 export const archivedRecordCacheEpoch = () => archivedRecordEpoch;
 export const getCachedArchivedRecord = (id, date) => {
   const hit = archivedRecordCache.get(id);
-  return hit?.date === date ? hit : null;
+  if (!hit || hit.date !== date) return null;
+  archivedRecordCache.delete(id);
+  archivedRecordCache.set(id, hit);
+  return hit;
 };
 export function cacheArchivedRecord(id, date, agent, epoch) {
-  if (epoch === archivedRecordEpoch) archivedRecordCache.set(id, { date, agent });
+  if (epoch !== archivedRecordEpoch) return;
+  archivedRecordCache.delete(id);
+  archivedRecordCache.set(id, { date, agent });
+  if (archivedRecordCache.size > MAX_ARCHIVED_RECORDS) archivedRecordCache.delete(archivedRecordCache.keys().next().value);
 }
 export function pruneArchivedRecordCache(liveIds) {
-  for (const id of archivedRecordCache.keys()) if (!liveIds.has(id)) archivedRecordCache.delete(id);
+  for (const id of archivedRecordCache.keys()) {
+    if (!liveIds.has(id)) archivedRecordCache.delete(id);
+  }
 }
 /** Drop one record, or every record when called without an id (file restore). */
 export function invalidateArchivedRecord(agentId) {
   archivedRecordEpoch++;
-  if (agentId === undefined) archivedRecordCache.clear();
-  else archivedRecordCache.delete(agentId);
+  if (agentId === undefined) {
+    archivedRecordCache.clear();
+  } else {
+    archivedRecordCache.delete(agentId);
+  }
 }
 
 // Lightweight index mapping agentId → YYYY-MM-DD date bucket (~50KB vs 16MB full cache)
@@ -135,7 +147,8 @@ export async function reloadAgentIndexAfterRestore() {
 export async function saveAgentIndex() {
   if (!agentIndex) return;
   const obj = Object.fromEntries(agentIndex);
-  await atomicWrite(INDEX_FILE, obj).catch(err => {
+  const { publishArchivePolicyChange } = await import('./cosBranchPolicyArchive.js');
+  await publishArchivePolicyChange(AGENTS_DIR, () => atomicWrite(INDEX_FILE, obj), { index: obj }).catch(err => {
     console.error(`❌ Failed to save agent index: ${err.message}`);
     throw err;
   });
@@ -242,11 +255,25 @@ export function getAgentDir(agentId, dateString) {
  * intact. Callers guarantee `targetDir` did not exist before the call.
  */
 export async function moveAgentDir(flatDir, targetDir) {
-  try {
-    return await moveAgentDirUncached(flatDir, targetDir);
-  } finally {
-    invalidateArchivedRecord(basename(targetDir));
-  }
+  const { publishArchivePolicyChange } = await import('./cosBranchPolicyArchive.js');
+  const id = basename(targetDir);
+  return publishArchivePolicyChange(AGENTS_DIR, async () => {
+    try {
+      await moveAgentDirUncached(flatDir, targetDir);
+    } finally {
+      invalidateArchivedRecord(id);
+    }
+  }, { ids: [id] });
+}
+
+/** Replace an archive record and update its policy projection from the same bytes. */
+export async function writeArchivedAgentMetadata(agentDir, agent) {
+  const { publishArchivePolicyChange } = await import('./cosBranchPolicyArchive.js');
+  const id = basename(agentDir);
+  return publishArchivePolicyChange(dirname(dirname(agentDir)), async () => {
+    await atomicWrite(join(agentDir, 'metadata.json'), agent);
+    invalidateArchivedRecord(id);
+  }, { ids: [id] });
 }
 
 async function moveAgentDirUncached(flatDir, targetDir) {
@@ -334,7 +361,8 @@ async function migrateAgentsToDateBucketsLeased() {
 
     // Try to get date from metadata
     if (existsSync(metaPath)) {
-      const content = await tryReadFile(metaPath);
+      const { ok, value: content } = await tryReadFileStrict(metaPath);
+      if (!ok) throw new Error(`Cannot read legacy agent metadata for ${agentId}`);
       if (content) {
         const raw = safeJSONParse(content, null);
         if (raw?.completedAt) {
@@ -437,8 +465,8 @@ export async function getAgentIdsForDates(dates) {
 // written before `status` was persisted reads as completed.
 async function readArchivedAgentMetadata(date, agentDirName, { repairSummaries = true } = {}) {
   const agentDir = join(AGENTS_DIR, date, agentDirName);
-  const content = await tryReadFile(join(agentDir, 'metadata.json'));
-  if (!content) return null;
+  const { ok, value: content } = await tryReadFileStrict(join(agentDir, 'metadata.json'));
+  if (!ok || !content) return null;
   const raw = safeJSONParse(content, null);
   if (!raw) return null;
   const { output, ...rest } = raw;

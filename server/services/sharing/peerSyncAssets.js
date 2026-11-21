@@ -11,12 +11,13 @@
  */
 import { extname, join } from 'path';
 import { existsSync } from 'fs';
-import { stat } from 'fs/promises';
-import { createHash } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
+import { link, stat } from 'fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File, createWriteStreamGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { peerFetch, peerStreamRequest, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash, imageLiveStamp } from '../../lib/assetHash.js';
@@ -33,7 +34,7 @@ import { trackAudioFilename, getTrack } from '../tracks/index.js';
 import { startingImageFilename } from '../creativeDirector/local.js';
 import { imageUrlToAppAsset } from '../moodBoard/index.js';
 import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
-import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
+import { WORK_ID_RE, DRAFT_ID_RE } from '../writersRoom/_shared.js';
 import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
@@ -43,8 +44,10 @@ import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ASSET_PULL_MAX_BYTES } from './assetLimits.js';
 import { mediaTombstoneStamps } from '../mediaTombstones.js';
+import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { clearImageTombstoneSupersededByOwner } from '../imageGen/imageRecords.js';
+import { collectionVideoRefToFilename, loadCollectionVideoFilenames, resolveCollectionVideoFilename, VIDEO_FILE_EXTENSIONS } from '../collectionVideoFiles.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -110,52 +113,49 @@ function referenceAssetManifest(record) {
   return out;
 }
 
-/**
- * Map a collection's items array to the `{ directImageFilenames,
- * directImageRefFilenames, directVideoFilenames }` shape consumed by the
- * per-item manifest hashers. Collections store items as
- * `{ kind:'image'|'video', ref, addedAt }` and carry no image-ref kind.
- */
+export async function buildCollectionAssetManifest(collection) {
+  const history = await loadCollectionVideoFilenames(collection?.items);
+  return hashAssetReferences(referenceCollectionAssetManifest(collection, history));
+}
+
+/** Collection items have gallery image names and video refs, with no image-ref kind. */
 export function collectCollectionAssetReferences(collection) {
-  const items = Array.isArray(collection?.items) ? collection.items : [];
   const directImageFilenames = [];
   const directVideoFilenames = [];
-  for (const it of items) {
-    if (it?.kind === 'image' && typeof it.ref === 'string') directImageFilenames.push(it.ref);
-    else if (it?.kind === 'video' && typeof it.ref === 'string') directVideoFilenames.push(it.ref);
+  for (const item of Array.isArray(collection?.items) ? collection.items : []) {
+    if (typeof item?.ref !== 'string') continue;
+    if (item.kind === 'image') directImageFilenames.push(item.ref);
+    else if (item.kind === 'video') directVideoFilenames.push(item.ref);
   }
   return { directImageFilenames, directImageRefFilenames: [], directVideoFilenames };
 }
 
-// Video collection items store the BARE video id (e.g. a UUID), while the
-// on-disk file is `<id>.mp4` (today every PortOS-managed video is mp4 —
-// confirmed by inspecting video-history.json). The image side stores refs
-// WITH the extension already. Append `.mp4` unless the ref already carries an
-// extension (defensive — older state may have stamped a filename instead of an
-// id, and a future video format would land as `.webm` etc.). Shared by BOTH
-// collection manifest builders (`buildCollectionAssetManifest` for standalone
-// mediaCollection pushes, `buildAssetManifestForCollection` for the
-// linkedCollection bundle) so the two can't diverge on the extension rule.
-export function collectionVideoRefToFilename(ref) {
-  return /\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`;
+// The diagnostic pairs files across peer versions by the legacy reference
+// name, even when one peer knows the history filename and the other doesn't.
+export async function buildCollectionIntegrityAssets(collection) {
+  const items = Array.isArray(collection?.items) ? collection.items : [];
+  const history = await loadCollectionVideoFilenames(items);
+  const videoFilenames = Object.fromEntries(items.flatMap((item) => {
+    if (item?.kind !== 'video') return [];
+    const filename = resolveCollectionVideoFilename(item.ref, history);
+    if (!filename) return [];
+    const fallback = collectionVideoRefToFilename(item.ref);
+    return filename !== fallback ? [[fallback, filename]] : [];
+  }));
+  const assets = referenceCollectionAssetManifest(collection, history);
+  const [assetManifest, hostedBy] = await Promise.all([
+    hashAssetReferences(assets),
+    import('../peerHostedMedia.js').then((m) => m.hostedByForCollectionItems(items)),
+  ]);
+  return { assetManifest, videoFilenames, hostedBy };
 }
 
-export async function buildCollectionAssetManifest(collection) {
-  return hashAssetReferences(referenceCollectionAssetManifest(collection));
-}
-
-export function referenceCollectionAssetManifest(collection) {
-  const refs = collectCollectionAssetReferences(collection);
-  const out = [];
-  for (const filename of refs.directImageFilenames) {
-    const entry = imageAssetReference(filename);
-    if (entry) out.push(entry);
-  }
-  for (const ref of refs.directVideoFilenames) {
-    const entry = assetReference(collectionVideoRefToFilename(ref), 'video');
-    if (entry) out.push(entry);
-  }
-  return out;
+export function referenceCollectionAssetManifest(collection, videoFilenames) {
+  const { directImageFilenames, directVideoFilenames } = collectCollectionAssetReferences(collection);
+  return [
+    ...directImageFilenames.map(imageAssetReference),
+    ...directVideoFilenames.map((ref) => assetReference(resolveCollectionVideoFilename(ref, videoFilenames), 'video')),
+  ].filter(Boolean);
 }
 
 // assetIntegrityForRecord / assetShaListForRecord (per-kind integrity-hash
@@ -353,11 +353,15 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
 const ASSET_KIND_EXTENSIONS = {
   image: new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
   'image-ref': new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
-  video: new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']),
+  video: new Set(VIDEO_FILE_EXTENSIONS),
   music: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus']),
   model: new Set(['.glb']),
   audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
 };
+
+export function isTransferMediaFilename(kind, filename) {
+  return !filename.startsWith('.') && !/[\u0000-\u001f\u007f]/.test(filename) && ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase()) === true;
+}
 
 function hasAllowedAssetExtension(kind, filename) {
   if (ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase())) return true;
@@ -618,6 +622,10 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   // The optional vocal stem (#8977) conditions performance shots and lives
   // under PATHS.music beside the master, so it rides the same entries.
   if (isStr(project?.vocalStemFilename)) audioNames.push(project.vocalStemFilename);
+  // Timeline audio layers (musicVideo/audioLayers.js) are uploads under PATHS.music too.
+  for (const layer of Array.isArray(project?.audioLayers) ? project.audioLayers : []) {
+    if (isStr(layer?.filename)) audioNames.push(layer.filename);
+  }
   for (const revision of project?.audioTimingRevisions || []) {
     if (isStr(revision.before?.audioFilename)) audioNames.push(revision.before.audioFilename);
     if (isStr(revision.before?.vocalStemFilename)) audioNames.push(revision.before.vocalStemFilename);
@@ -733,7 +741,7 @@ export function referenceFableLoomAssetManifest(loom) {
  * character/canon reference sheet (`/data/image-refs/...`, the form
  * PinToMoodBoardMenu pins synthetic `canon-sheet:`/`noun:` sources under).
  * External URLs (http(s)/data/blob) resolve on the receiver itself → skipped.
- * Mirrors `buildAssetManifestForCollection`: path-traversal-guarded,
+ * Like a collection manifest, this is path-traversal-guarded,
  * missing-local-file skipped silently (including a null-hash entry would make
  * every receiver re-request bytes the sender can't fulfill),
  * dedup-by-`<kind>:<filename>` so a media-key and imageUrl pointing at the same
@@ -854,10 +862,11 @@ export function referenceStoryboardAssetManifest(board) {
 }
 
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
-  return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection));
+  const history = await loadCollectionVideoFilenames(linkedCollection?.items);
+  return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection, history));
 }
 
-export function referenceAssetManifestForSeries(series, issues, linkedCollection = null) {
+export function referenceAssetManifestForSeries(series, issues, linkedCollection, videoFilenames) {
   const seriesAssets = referenceAssetManifest(series);
   const dedup = new Map(seriesAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   for (const issue of issues) {
@@ -867,7 +876,7 @@ export function referenceAssetManifestForSeries(series, issues, linkedCollection
     }
   }
   if (linkedCollection) {
-    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceCollectionAssetManifest(linkedCollection, videoFilenames);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
@@ -882,67 +891,20 @@ export function referenceAssetManifestForSeries(series, issues, linkedCollection
  * `items[]` only ships once.
  */
 export async function buildAssetManifestWithCollection(record, linkedCollection) {
-  return hashAssetReferences(referenceAssetManifestWithCollection(record, linkedCollection));
+  const history = await loadCollectionVideoFilenames(linkedCollection?.items);
+  return hashAssetReferences(referenceAssetManifestWithCollection(record, linkedCollection, history));
 }
 
-export function referenceAssetManifestWithCollection(record, linkedCollection) {
+export function referenceAssetManifestWithCollection(record, linkedCollection, videoFilenames) {
   const recordAssets = referenceAssetManifest(record);
   const dedup = new Map(recordAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   if (linkedCollection) {
-    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceCollectionAssetManifest(linkedCollection, videoFilenames);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
   }
   return [...dedup.values()];
-}
-
-/**
- * Hash each item in a media collection so the receiver can pull missing
- * bytes from `/data/images/` (or `/data/videos/`) via the existing asset-pull
- * worker. Collections are append-mostly and items refer to filenames the
- * sender has on disk; an item whose file is missing (e.g. half-imported
- * from another peer) is skipped silently — including a null-hash entry
- * would make every receiver re-request bytes the sender can't fulfill.
- *
- * Items with `kind: 'video'` route through the video PATHS dir; other kinds
- * (today only 'image') route through the image PATHS dir. This mirrors
- * `collectAssetReferences` and the `directoryForAssetKind` map.
- */
-export async function buildAssetManifestForCollection(collection) {
-  return hashAssetReferences(referenceAssetManifestForCollection(collection));
-}
-
-function referenceAssetManifestForCollection(collection) {
-  const out = [];
-  for (const it of Array.isArray(collection?.items) ? collection.items : []) {
-    if (!it || typeof it.ref !== 'string') continue;
-    // Path-traversal guard: collection items can arrive from a peer (via
-    // `linkedCollection` push or the snapshot-sync mediaCollections
-    // category), and a malicious `ref` like `../etc/passwd` would otherwise
-    // let `join(PATHS, ref)` read arbitrary local files when THIS instance
-    // is the sender — leaking the hash of the targeted file to peers. Same
-    // posture as the receiver-side `diffAssetManifestAgainstLocal`.
-    // `sanitizeItem` in mediaCollections.js also rejects path-traversal
-    // refs on the inbound merge boundary; this is defense in depth.
-    const safeName = sanitizeAssetFilename(it.ref);
-    if (!safeName) continue;
-    if (it.kind === 'video') {
-      // Bare videoId → `<id>.mp4` via the shared helper (see
-      // collectionVideoRefToFilename). `sanitizeAssetFilename` already ran on
-      // `it.ref` above; the extension append is purely the on-disk naming rule.
-      const entry = assetReference(collectionVideoRefToFilename(safeName), 'video');
-      if (entry) out.push(entry);
-    } else {
-      // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
-      // image — the receiver's diff path will only accept entries whose kind
-      // maps to a known directory in `directoryForAssetKind`, so a junk kind
-      // gets filtered there without polluting disk.
-      const entry = imageAssetReference(safeName);
-      if (entry) out.push(entry);
-    }
-  }
-  return out;
 }
 
 // --- Receiver-side asset pull worker ------------------------------------
@@ -1034,6 +996,64 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets,
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
     });
   }
+}
+
+// Explicit collection moves can include long video renders. Stream them into
+// a sibling temp file so an authenticated copy is bounded without a RAM-sized
+// ceiling, and publish only after the complete payload verifies.
+export const VERIFIED_MEDIA_COPY_TIMEOUT_MS = 10 * 60_000;
+const VERIFIED_MEDIA_COPY_MAX_BYTES = 32 * 1024 ** 3;
+
+export async function pullVerifiedMediaCopy(peer, entry) {
+  const { kind, filename, sha256 } = entry;
+  if (!['image', 'video'].includes(kind) || sanitizeAssetFilename(filename) !== filename || !isTransferMediaFilename(kind, filename)) return;
+  if (blockedByImageTombstone(await deletedImageStamps([entry]), entry) || blockedByVideoTombstone(await deletedVideoIds([entry]), entry)) return;
+
+  const dir = directoryForAssetKind(kind);
+  const fullPath = join(dir, filename);
+  const base = peerBaseUrl(peer);
+  const url = `${base}${ASSET_KIND_TO_URL_PREFIX[kind]}/${encodeURIComponent(filename)}`;
+  await assetWriteQueue(assetDestinationKey(kind, filename), async () => {
+    if (existsSync(fullPath)) return;
+    await ensureDir(dir);
+    const temp = join(dir, `.media-copy-${randomUUID()}.tmp`);
+    try {
+      const size = await withAbortTimeout(VERIFIED_MEDIA_COPY_TIMEOUT_MS, async (signal) => {
+        const { status, headers, stream } = await peerStreamRequest(url, { signal }, peer);
+        try {
+          const size = Number(headers['content-length']);
+          if (status !== 200 || headers['x-portos-media-location'] === 'remote' ||
+              !Number.isSafeInteger(size) || size <= 0 || size > VERIFIED_MEDIA_COPY_MAX_BYTES) return null;
+          let received = 0;
+          await pipeline(stream, async function* (chunks) {
+            for await (const chunk of chunks) {
+              received += chunk.length;
+              if (received > size) throw new Error('Media copy exceeded its declared length');
+              yield chunk;
+            }
+          }, await createWriteStreamGuarded(temp, { flags: 'wx' }), { signal });
+          return received === size ? size : null;
+        } finally {
+          stream.destroy();
+        }
+      });
+      if (size === null || await sha256File(temp) !== sha256) return;
+      await assertFileNotMediaManifest(temp);
+      await withBackupAssetPublication(async () => {
+        // A hard link publishes atomically without replacing a file another
+        // writer created while this transfer was underway.
+        const published = await link(temp, fullPath).then(() => true).catch((err) => {
+          if (err.code === 'EEXIST') return false;
+          throw err;
+        });
+        if (published) await finishPulledAsset(peer, base, entry, fullPath, filename, size, true);
+      });
+    } finally {
+      await unlinkGuarded(temp).catch((err) => {
+        if (err.code !== 'ENOENT') throw err;
+      });
+    }
+  });
 }
 
 /**
@@ -1132,24 +1152,8 @@ async function pullOneWorkBody(peer, base, entry) {
       console.log(`⚠️ peerSync: draft body ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(entry.sha256).slice(0, 8)})`);
       return;
     }
-    // Compare-and-swap against a local save that landed DURING this slow pull:
-    // the draft's merged metadata `contentHash` equals entry.sha256 right after
-    // the merge, but a local saveDraftBody bumps it (+ updatedAt) to the newer
-    // prose. If it no longer matches, the local copy is newer/authoritative (and
-    // will re-push) — don't clobber it with the older peer bytes. A vanished
-    // draft/work (deleted mid-pull) also skips. (sha256File of the .md equals
-    // contentHash(text) since the body is the file verbatim.)
-    // The download above stays outside the backup lease; the compare-and-swap
-    // and the write that replaces the draft file share it, so a cut never copies
-    // the file between the check and the write.
-    const written = await withBackupAssetPublication(async () => {
-      const current = await getWorkForSync(workId).catch(() => null);
-      const draft = Array.isArray(current?.drafts) ? current.drafts.find((d) => d?.id === draftId) : null;
-      if (!draft || draft.contentHash !== entry.sha256) return false;
-      await ensureDir(join(wrWorkDir(workId), 'drafts'));
-      await atomicWrite(wrDraftPath(workId, draftId), buffer);
-      return true;
-    });
+    const { applyPulledDraftBody } = await import('../writersRoom/local.js');
+    const written = await applyPulledDraftBody(entry, buffer, { via: 'peer-sync', peerId: peer.instanceId });
     if (!written) {
       console.log(`⚠️ peerSync: draft body ${safeLabel} target moved since diff — skipping write`);
       return;
@@ -1259,12 +1263,16 @@ async function commitPulledAsset(peer, base, entry, localDir, fullPath, safeName
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.
   await atomicWrite(fullPath, buffer);
+  await finishPulledAsset(peer, base, entry, fullPath, safeName, buffer.length, isNewHere);
+}
+
+async function finishPulledAsset(peer, base, entry, fullPath, safeName, size, isNewHere) {
   peerSyncEvents.emit('asset-arrived', {
     filename: safeName,
     kind: entry.kind,
     peerId: peer.instanceId,
   });
-  console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+  console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${size} bytes)`);
   // After a successful image pull, also fetch the gen-params sidecar if present
   // on the sender. Best-effort: the image is already safely written above;
   // a missing sidecar just means the image lands in Unsorted without a prompt.

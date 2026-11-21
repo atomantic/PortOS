@@ -63,7 +63,7 @@ import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, get
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { handBackBlockedPrRemediation } from '../blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from '../healthCriticalNotifier.js';
 
@@ -104,7 +104,6 @@ import {
   isWithinProjectLimit,
   unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
-import { queueEligibleImprovementTasks } from './cosImprovementTasks.js';
 
 // Autonomous-job + improvement-check timer machinery (extracted to
 // cosJobScheduler.js). Imported for internal use by start()/stop()/init() and
@@ -517,6 +516,7 @@ async function bootDaemon(state) {
       // cos-improvement-check timer) — see canQueueImprovementTasks.
       if (!canQueueImprovementTasks(state)) return;
       const cosTaskData = await getCosTasks();
+      const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
       await queueEligibleImprovementTasks(state, cosTaskData);
       scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
@@ -1172,7 +1172,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  * other caller runs outside that window and correctly leaves it null.
  */
 export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
-  if (maintenance.held()) return;
+  if (maintenance.held() || maintenance.agentDiskPressure()) return;
   if (!isDaemonRunning()) return;
   // Same reason as the runner gate below: the tiers' side effects cannot be
   // taken back, and an agent registered after the shutdown marker snapshot is
@@ -1456,6 +1456,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   // regenerates an identical first-line per app) is rejected as a duplicate of
   // the completing task and the drain stalls until the next scheduler tick.
   const cosTaskData = await getCosTasks();
+  const { queueEligibleImprovementTasks } = await import('./cosImprovementTasks.js');
   await queueEligibleImprovementTasks(state, cosTaskData, {
     ignoreTaskId: agent?.taskId,
     wakeAfterRecord: false,

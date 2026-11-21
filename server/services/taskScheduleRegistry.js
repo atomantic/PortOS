@@ -6,7 +6,8 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cos/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cos/cosTaskMetadata.js';
+import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import { isAuditTaskType, } from '../lib/auditCatalog.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
@@ -87,7 +88,7 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
 /**
  * Target scope for a task type — which app (if any) a run must name. The vocabulary lives in
  * `lib/taskTargetScope.js` because `server/lib` may not import upward into `server/services`
- * (`lib/layering.guard.test.js`); re-exported here for registry readers.
+ * (`server/test/guards/modules/libLayering.test.js`); re-exported here for registry readers.
  */
 export {
   INSTALL_WIDE_TASK_TYPES,
@@ -153,6 +154,7 @@ const fileIssuesAuditInterval = () => ({
 });
 
 const TASK_INTERVAL_DEFAULTS = {
+  ...Object.fromEntries(Object.keys(CONSOLIDATED_AUDIT_DOMAINS).map(id => [id, fileIssuesAuditInterval()])),
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, worktreeChangesExpected: true } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -518,6 +520,7 @@ export function enforceBranchReconcileBatch(taskType, config) {
 // which reads as an orphaned/legacy task. A parity guard in taskSchedule.test.js
 // fails the suite if the two ever drift apart.
 export const TASK_TYPE_DESCRIPTIONS = {
+  ...Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, domain]) => [id, domain.mission])),
   'ui-bugs': 'Find UI bugs — file issues or implement fixes',
   'mobile-responsive': 'Mobile/responsive audit — file issues or implement fixes',
   [PRIVATE_SECURITY_TASK_TYPE]: 'Private security assessment — sandboxed local model, report and remediation only; no issues or PRs',

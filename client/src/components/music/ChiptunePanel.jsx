@@ -11,6 +11,7 @@
  * `settings.music.chiptune` so the next session starts where this one left off.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Wand2, Play, Square, Disc3, Gamepad2 } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
@@ -20,10 +21,9 @@ import useMounted from '../../hooks/useMounted';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { buildChiptuneSchedule, createChiptunePlayer } from '../../lib/chiptunePlayback.js';
 import { formatTimecode } from '../../utils/formatters';
-import {
-  generateTrackChiptune, renderTrackChiptune, publishTrackChiptune,
-  getApps, getSettings, patchSettingsSlice,
-} from '../../services/api';
+import { generateTrackChiptune, renderTrackChiptune, publishTrackChiptune } from '../../services/apiTracks.js';
+import { getApps } from '../../services/apiApps.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const DEFAULT_SUBDIR = 'game/assets/music';
@@ -401,7 +401,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
                         className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                       >
                         <option value="">— pick an app —</option>
-                        {apps.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        {sortByLabel(apps).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                       </select>
                     </label>
                     <label className="block">

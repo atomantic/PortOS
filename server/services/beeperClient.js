@@ -607,21 +607,6 @@ export async function deleteMessage(chatId, messageId, forEveryone, { baseUrl, t
   );
 }
 
-export async function addReaction(chatId, messageId, reactionKey, { baseUrl, token, timeoutMs } = {}) {
-  return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions`, {
-    method: 'POST',
-    body: { reactionKey },
-    baseUrl, token, timeoutMs,
-  });
-}
-
-export async function removeReaction(chatId, messageId, reactionKey, { baseUrl, token, timeoutMs } = {}) {
-  return beeperRequest(
-    `/v1/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(reactionKey)}`,
-    { method: 'DELETE', baseUrl, token, timeoutMs },
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Chat state (archive / read)
 // ---------------------------------------------------------------------------
@@ -659,14 +644,6 @@ export async function updateChat(chatId, patch = {}, { baseUrl, token, timeoutMs
 
 export async function markRead(chatId, { messageID } = {}, { baseUrl, token, timeoutMs } = {}) {
   return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}/read`, {
-    method: 'POST',
-    body: messageID ? { messageID } : {},
-    baseUrl, token, timeoutMs,
-  });
-}
-
-export async function markUnread(chatId, { messageID } = {}, { baseUrl, token, timeoutMs } = {}) {
-  return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}/unread`, {
     method: 'POST',
     body: messageID ? { messageID } : {},
     baseUrl, token, timeoutMs,

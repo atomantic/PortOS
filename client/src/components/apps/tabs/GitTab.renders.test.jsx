@@ -3,7 +3,7 @@ import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-libra
 
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiGit.js', () => ({
   getGitInfo: vi.fn(),
   getBranches: vi.fn(),
   getBranchComparison: vi.fn(),
@@ -29,7 +29,14 @@ vi.mock('./git/GitHistoryPanel', async () => {
   };
 });
 
-import * as api from '../../../services/api';
+import {
+  getGitInfo,
+  getBranches,
+  getBranchComparison,
+  getRemoteBranches,
+  stageFiles,
+  createCommit,
+} from '../../../services/apiGit.js';
 import GitTab from './GitTab';
 
 const GIT_INFO = {
@@ -49,12 +56,12 @@ const GIT_INFO = {
 
 beforeEach(() => {
   historyRenders.count = 0;
-  api.getGitInfo.mockResolvedValue(GIT_INFO);
-  api.getBranches.mockResolvedValue({ branches: [] });
-  api.getBranchComparison.mockResolvedValue(null);
-  api.getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
-  api.stageFiles.mockResolvedValue({ success: true });
-  api.createCommit.mockResolvedValue({ success: true });
+  getGitInfo.mockResolvedValue(GIT_INFO);
+  getBranches.mockResolvedValue({ branches: [] });
+  getBranchComparison.mockResolvedValue(null);
+  getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
+  stageFiles.mockResolvedValue({ success: true });
+  createCommit.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -84,14 +91,14 @@ describe('GitTab commit composer isolation', () => {
     // Staging reloads git info, which swaps every panel for the spinner and
     // remounts the composer. Hold the reload open so the spinner really commits.
     let finishReload;
-    api.getGitInfo.mockImplementationOnce(() => new Promise((resolve) => { finishReload = resolve; }));
+    getGitInfo.mockImplementationOnce(() => new Promise((resolve) => { finishReload = resolve; }));
     fireEvent.click(screen.getByRole('button', { name: 'Stage' }));
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Commit message' })).toBeNull());
     await act(async () => finishReload(GIT_INFO));
     expect(await screen.findByRole('textbox', { name: 'Commit message' })).toHaveValue('wip message');
 
     fireEvent.click(screen.getByRole('button', { name: 'Commit' }));
-    await waitFor(() => expect(api.createCommit).toHaveBeenCalledWith('/repo', 'wip message'));
+    await waitFor(() => expect(createCommit).toHaveBeenCalledWith('/repo', 'wip message'));
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Commit message' })).toHaveValue(''));
   });
 });

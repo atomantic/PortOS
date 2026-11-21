@@ -20,6 +20,8 @@ Index of plans other docs point at:
   table that replaced them (and the interim archive), and the migrations that
   bring existing installs to it.
 
+**Active vs archived.** A plan in this directory opens with `Status: Active`; once its feature ships, move it to [`archive/`](./archive/) (update any links) rather than leaving it here.
+
 **Retention rule.** A plan stays only while a living doc, ADR or source file links
 it (this index counts), and is deleted together with its feature. Unlinked plans
 are removed; git history keeps them. Specs and implementation plans from

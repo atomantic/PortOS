@@ -12,7 +12,12 @@ import {
   History,
   Activity
 } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  getCosQuickSummary,
+  getCosLearningSummary,
+  getCosRecentTasks,
+  getCosActivityCalendar,
+} from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { sameJsonShape } from '../lib/sameJsonShape';
@@ -55,10 +60,10 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     // sections off-screen on every blip.
     const silent = { silent: true };
     const [summary, learningSummary, recentTasks, activityCalendar] = await Promise.all([
-      api.getCosQuickSummary(silent),
-      api.getCosLearningSummary(silent),
-      api.getCosRecentTasks(5, silent),
-      api.getCosActivityCalendar(8, silent)
+      getCosQuickSummary(silent),
+      getCosLearningSummary(silent),
+      getCosRecentTasks(5, silent),
+      getCosActivityCalendar(8, silent)
     ]);
     return { summary, learningSummary, recentTasks, activityCalendar };
   }, {

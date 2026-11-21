@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { COMPLETION_MODES } from '../../lib/agent/agentCompletionMode.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
-import { buildTuiCompletionSection, buildClaimFlowCompletionSection } from './completion.js';
+import { buildTuiCompletionSection, buildClaimFlowCompletionSection, buildMergeAdmissionSection } from './completion.js';
 
 const render = (forgeCli = 'gh', reviewers = ['copilot'], extra = {}) => buildTuiCompletionSection({
   willOpenPR: true,
@@ -307,5 +307,35 @@ describe('publish_reviewed_branch tag scope', () => {
       expect(() => publish(work, 'origin', 'HEAD:refs/heads/feature')).toThrow();
       expect(git(remote, 'rev-parse', 'feature')).toBe(diverged);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('code-owner-blocked merge options', () => {
+  const base = buildMergeAdmissionSection('agent-1');
+
+  it('adds nothing unless the task or app opted in', () => {
+    expect(buildMergeAdmissionSection('agent-1', { autoApprove: false, adminMerge: false })).toBe(base);
+    expect(base).not.toContain('--admin');
+    expect(base).not.toContain('--approve');
+  });
+
+  it('auto-approve alone never mentions the admin override', () => {
+    const out = buildMergeAdmissionSection('agent-1', { autoApprove: true });
+    expect(out).toContain('gh pr review "<PR_URL>" --approve');
+    expect(out).not.toContain('--admin');
+  });
+
+  it('admin merge is gated on green CI for the pinned head and review being the only blocker', () => {
+    const out = buildMergeAdmissionSection('agent-1', { adminMerge: true });
+    expect(out).toContain('--admin --merge --match-head-commit <verified-head>');
+    expect(out).toContain('REVIEW_REQUIRED');
+    expect(out).toMatch(/never use it while any required check is failing or pending/i);
+    expect(out).not.toContain('--approve');
+  });
+
+  it('reaches the claim-flow merge section', () => {
+    const out = buildClaimFlowCompletionSection({ agentId: 'agent-1', adminMerge: true, autoApprove: true });
+    expect(out).toContain('--admin --merge');
+    expect(out).toContain('--approve');
   });
 });

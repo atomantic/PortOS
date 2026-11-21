@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
-import { cancelVideoGen, generateVideo, getActiveVideoJob } from '../services/api';
+import { cancelVideoGen, generateVideo, getActiveVideoJob } from '../services/apiImageVideo.js';
 import { useMediaJobSse } from './useMediaJobSse';
 
 /**

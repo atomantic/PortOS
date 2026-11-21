@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import BulkTargetPicker from './BulkTargetPicker.jsx';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn(),
   createMediaCollection: vi.fn(),
 }));
@@ -48,20 +48,27 @@ describe('BulkTargetPicker', () => {
     expect(screen.getByText('No collections yet — create one below.')).toBeInTheDocument();
   });
 
-  it('renders collection choices when collections are loaded', () => {
+  it('alphabetizes move destinations and excludes the current collection', () => {
+    const onPick = vi.fn();
     render(
       <BulkTargetPicker
         anchorRef={{ current: document.createElement('button') }}
         excludeId="col-1"
+        title="Move to…"
         collections={[
+          { id: 'col-1', name: 'Current', items: [] },
           { id: 'col-2', name: 'Landscapes', items: [{ kind: 'image', ref: 'a.jpg' }] },
+          { id: 'col-3', name: 'Universe: architecture', source: 'auto', items: [] },
         ]}
-        onPick={vi.fn()}
+        onPick={onPick}
         onClose={vi.fn()}
       />
     );
 
-    expect(screen.getByText('Landscapes')).toBeInTheDocument();
+    const rows = within(screen.getByRole('list')).getAllByRole('button');
+    expect(rows.map((row) => row.textContent)).toEqual(['Universearchitecture0', 'Landscapes1']);
+    fireEvent.click(rows[0]);
+    expect(onPick).toHaveBeenCalledWith('col-3', 'Universe: architecture');
     expect(screen.queryByText('No collections yet — create one below.')).not.toBeInTheDocument();
   });
 });

@@ -13,6 +13,10 @@ describe('MaintenanceBanner', () => {
     expect(fixture.options).toEqual({ mode: 'banner' });
     expect(screen.getByRole('status')).toHaveTextContent('3 recorded operation(s) awaiting completion verification');
   });
+  it('warns about paused agent starts before the journal enters maintenance', () => {
+    show({ state: 'normal', blockerCount: 0, agentDiskPressure: 'low' });
+    expect(screen.getByRole('status')).toHaveTextContent('Low disk space. New agents are paused');
+  });
   it('renders nothing for normal operation and a warning for unavailable state', () => {
     const { container, unmount } = show({ state: 'normal', blockerCount: 0 });
     expect(container).toBeEmptyDOMElement();

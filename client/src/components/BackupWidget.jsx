@@ -13,7 +13,7 @@ import {HardDrive,
   Clock} from 'lucide-react';
 import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
-import * as api from '../services/api';
+import { restoreBackup, getBackupSnapshots, downloadBackupSnapshot, getBackupStatus } from '../services/apiSystem.js';
 import { useBackupRun } from '../hooks/useBackupRun';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
@@ -118,7 +118,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     const request = restoreRequest(snapshot, filter, adoptIdentity);
     setPreviewing(true);
     setAcceptedPreview(null);
-    const outcome = await api.restoreBackup({
+    const outcome = await restoreBackup({
       ...request,
       dryRun: true,
     }, { silent: true }).then(
@@ -146,7 +146,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     if (!previewMatchesCurrentRequest || restoring) return;
 
     onRestoreStateChange(snapshotIdentity(snapshot));
-    const result = await api.restoreBackup({
+    const result = await restoreBackup({
       ...acceptedPreview.request,
       dryRun: false,
     }, { silent: true }).catch(err => {
@@ -348,7 +348,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
   // transient failures. A `.catch(() => null)` here would wipe the snapshot
   // list on every blip per the hook's documented gotcha.
   const { data: snapshots, loading, error, refetch } = useSocketResource(
-    () => api.getBackupSnapshots({ silent: true }),
+    () => getBackupSnapshots({ silent: true }),
     {
       events: RESOURCE_EVENTS,
       // Snapshots only change when a new backup lands or the rotation prunes
@@ -367,8 +367,8 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
     const identity = snapshotIdentity(snapshot);
     setDownloadingId(identity);
     const download = snapshot.source
-      ? api.downloadBackupSnapshot(snapshot.id, snapshot.source)
-      : api.downloadBackupSnapshot(snapshot.id);
+      ? downloadBackupSnapshot(snapshot.id, snapshot.source)
+      : downloadBackupSnapshot(snapshot.id);
     download
       .then(() => toast.success('Snapshot downloaded'))
       // Dismissing the browser's save dialog is a choice, not a failure.
@@ -467,7 +467,7 @@ const BackupWidget = memo(function BackupWidget() {
   // Let errors throw — `useSocketResource` preserves the last-good status on
   // transient failures so a blip doesn't drop the widget to its loading state.
   const { data: status, updateData: updateStatus } = useSocketResource(
-    () => api.getBackupStatus({ silent: true }),
+    () => getBackupStatus({ silent: true }),
     {
       events: RESOURCE_EVENTS,
       // Backup state only flips when a new run starts/finishes — comparing the

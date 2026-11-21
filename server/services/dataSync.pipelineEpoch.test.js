@@ -50,6 +50,7 @@ vi.mock('./pipeline/syncEpoch.js', async (importOriginal) => {
 });
 
 const dataSync = await import('./dataSync.js');
+const { listAllIssues } = await import('./pipeline/issues.js');
 
 afterAll(cleanup);
 
@@ -82,5 +83,18 @@ describe('dataSync — pipeline mutation-epoch fingerprint', () => {
     epoch += 1;
     const after = await dataSync.getChecksum('pipeline');
     expect(after.checksum).not.toBe(before.checksum);
+  });
+
+  it('snapshots request lean issues and keep current stage fields on the wire', async () => {
+    issuesContent = [{
+      id: 'iss-1', seriesId: 'ser-1',
+      stages: { idea: { input: 'prompt', output: 'current idea', status: 'edited', runHistory: [] } },
+    }];
+
+    const { data, portosMeta } = await dataSync.getSnapshot('pipeline');
+
+    expect(listAllIssues).toHaveBeenLastCalledWith({ includeDeleted: true, withHistory: false });
+    expect(data.issues[0].stages.idea).toEqual({ input: 'prompt', output: 'current idea', status: 'edited' });
+    expect(portosMeta.schemaVersions.pipelineIssues).toBeGreaterThan(6);
   });
 });

@@ -85,7 +85,7 @@ describe('mediaJobs routes', () => {
     expect(stubs.sanitizeJob).toHaveBeenCalledTimes(510);
   });
 
-  it('GET /:id exposes progress and statusMsg while sanitizing params', async () => {
+  it('GET /:id exposes progress, status and ETA while sanitizing params', async () => {
     jobStore.set('j-progress', {
       id: 'j-progress',
       kind: 'video',
@@ -96,6 +96,7 @@ describe('mediaJobs routes', () => {
       position: 1,
       progress: 0.37,
       statusMsg: 'Rendering step 37/100',
+      etaMs: 80_000,
       params: {
         prompt: 'visible prompt',
         pythonPath: '/private/python',
@@ -110,6 +111,7 @@ describe('mediaJobs routes', () => {
       status: 'running',
       progress: 0.37,
       statusMsg: 'Rendering step 37/100',
+      etaMs: 80_000,
       params: { prompt: 'visible prompt' },
     });
     expect(r.body.params.pythonPath).toBeUndefined();

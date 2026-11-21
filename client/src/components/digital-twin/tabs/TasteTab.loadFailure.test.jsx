@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiDigitalTwin.js', () => ({
   getTasteProfile: vi.fn(),
   getTasteNextQuestion: vi.fn(),
   getTasteSectionResponses: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 vi.mock('../../../services/socket', () => ({ default: { connected: false, on: vi.fn(), off: vi.fn() } }));
@@ -17,7 +19,8 @@ vi.mock('../TwinProviderPicker.jsx', () => ({
 }));
 
 import TasteTab from './TasteTab';
-import * as api from '../../../services/api';
+import { getTasteProfile, getTasteNextQuestion, getTasteSectionResponses } from '../../../services/apiDigitalTwin.js';
+import { getProviders } from '../../../services/apiProviders.js';
 
 const PROFILE = {
   completedCount: 0,
@@ -28,16 +31,16 @@ const API_PROVIDER = { id: 'p1', name: 'Example API', enabled: true, type: 'api'
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getTasteProfile.mockResolvedValue(PROFILE);
-  api.getTasteNextQuestion.mockResolvedValue(null);
-  api.getProviders.mockResolvedValue({ providers: [API_PROVIDER] });
-  api.getTasteSectionResponses.mockResolvedValue([{ questionText: 'Favorite film?', answer: 'Example Film' }]);
+  getTasteProfile.mockResolvedValue(PROFILE);
+  getTasteNextQuestion.mockResolvedValue(null);
+  getProviders.mockResolvedValue({ providers: [API_PROVIDER] });
+  getTasteSectionResponses.mockResolvedValue([{ questionText: 'Favorite film?', answer: 'Example Film' }]);
 });
 
 describe('TasteTab failed reads stay distinct from empty ones (#12783)', () => {
   it('shows a retryable error, not "0 responses", when the review read fails, and hides the actions that act on it', async () => {
     const user = userEvent.setup();
-    api.getTasteSectionResponses.mockRejectedValueOnce(new Error('responses offline'));
+    getTasteSectionResponses.mockRejectedValueOnce(new Error('responses offline'));
     render(<TasteTab />);
 
     await user.click(await screen.findByRole('button', { name: /Review/ }));
@@ -54,7 +57,7 @@ describe('TasteTab failed reads stay distinct from empty ones (#12783)', () => {
 
   it('shows a retryable error instead of the "no API provider" banner when providers fail to load', async () => {
     const user = userEvent.setup();
-    api.getProviders.mockRejectedValueOnce(new Error('providers offline'));
+    getProviders.mockRejectedValueOnce(new Error('providers offline'));
     render(<TasteTab />);
 
     await user.click(await screen.findByRole('button', { name: /Movies/ }));
@@ -70,7 +73,7 @@ describe('TasteTab failed reads stay distinct from empty ones (#12783)', () => {
 
   it('still explains a genuinely empty provider list with the banner', async () => {
     const user = userEvent.setup();
-    api.getProviders.mockResolvedValue({ providers: [] });
+    getProviders.mockResolvedValue({ providers: [] });
     render(<TasteTab />);
 
     await user.click(await screen.findByRole('button', { name: /Movies/ }));

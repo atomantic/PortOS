@@ -61,9 +61,17 @@ describe('planTestMemo and recordTestMemo', () => {
     const guard = 'server/lib/layering.guard.test.js';
     const source = 'server/lib/unrelated.js';
     // Keep the real scanner and assertions; this standalone Vitest fixture
-    // supplies globals instead of resolving its intentionally stubbed package.
-    const original = readFileSync(new URL('../../server/lib/layering.guard.test.js', import.meta.url), 'utf8');
-    writeRepo(root, { [guard]: original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, ''), [source]: 'export const unrelated = true;\n' });
+    // supplies globals instead of resolving its intentionally stubbed package,
+    // and roots the check at the fixture instead of at this repository.
+    const original = readFileSync(new URL('../../server/test/guards/modules/libLayering.test.js', import.meta.url), 'utf8');
+    const scanner = original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, '')
+      .replace(/^import \{[^}]*\} from '[^']*guardCorpus\.js';\n/m, [
+        "import { readFileSync as readFixtureText } from 'node:fs';",
+        `const REPO_ROOT = ${JSON.stringify(root)};`,
+        "const readText = (path) => readFixtureText(path, 'utf8');",
+        '',
+      ].join('\n'));
+    writeRepo(root, { [guard]: scanner, [source]: 'export const unrelated = true;\n' });
     const config = join(root, 'vitest.config.mjs');
     writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.guard.test.js"], maxWorkers: 1 } };\n');
     const planned = () => {
@@ -371,16 +379,23 @@ describe('planTestMemo and recordTestMemo', () => {
     const c = 'server/lib/c.test.js';
     const files = [a, c, dynamic, guard, marked];
     const cold = plan({ repoFiles: files });
-    // Vitest recorded a.test.js only; c.test.js is edited while the run is in flight.
-    const dependencies = new Map([[a, ['server/lib/a.js', a]]]);
+    // Vitest recorded modules for a.test.js and marked; c is edited during the run.
+    const dependencies = new Map([[a, ['server/lib/a.js', a]], [marked, [marked, 'server/lib/markedMember.js']]]);
+    const refreshed = [];
+    const freshAnalyze = cold.freshAnalyze;
+    cold.freshAnalyze = (test, modules) => {
+      refreshed.push(test);
+      return freshAnalyze(test, modules);
+    };
     writeFileSync(join(root, c), `${FILES[c]}// edited mid-run\n`);
     const { written, unrecorded } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed: files, dependencies, source: 'ci', commit: 'abc' });
     expect(written).toBe(2);
+    expect(refreshed).toEqual([a, c]);
     expect(unrecorded).toEqual([
       { test: c, declared: false, reason: 'floor key: an input changed while the run was in flight; recorded key: Vitest recorded no modules for this file' },
       { test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: Vitest recorded no modules for this file` },
       { test: guard, declared: true, reason: 'never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker)' },
-      { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: Vitest recorded no modules for this file' },
+      { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: test-memo: never marker' },
     ]);
     // No depfile at all (a Vitest that stopped writing one) is a different cause from a file missing in it.
     const none = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: plan({ repoFiles: [dynamic] }), passed: [dynamic], dependencies: null, source: 'ci' });

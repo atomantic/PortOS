@@ -122,13 +122,15 @@ describe('deleteSubject', () => {
   });
 
   it('hard-deletes a household member (records cascade — no tombstone)', async () => {
-    queryMock.mockResolvedValue({ rows: [{ id: 's2' }] });
+    const client = { query: vi.fn(async sql => ({ rows: sql.includes('SELECT id') ? [{ id: 's2' }] : [] })) };
+    withTransactionMock.mockImplementation(fn => fn(client));
     expect(await deleteSubject('s2')).toEqual({ ok: true });
-    expect(queryMock.mock.calls[0][0]).toMatch(/DELETE FROM privacy_subjects/);
+    expect(client.query).toHaveBeenLastCalledWith(expect.stringMatching(/DELETE FROM privacy_subjects/), ['s2']);
   });
 
   it('404s an unknown subject', async () => {
-    queryMock.mockResolvedValue({ rows: [] });
+    const client = { query: vi.fn(async () => ({ rows: [] })) };
+    withTransactionMock.mockImplementation(fn => fn(client));
     await expect(deleteSubject('s2')).rejects.toMatchObject({ status: 404 });
   });
 });

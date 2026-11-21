@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalog/catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
+import { MEDIA_COLLECTION_ITEMS_MAX } from './mediaItemKey.js';
 
 // Wire/request schemas for federated peer-to-peer record sync (see server/services/sharing/peerSync.js).
 
@@ -136,6 +137,7 @@ const seriesPushSchema = z.object({
 const mediaCollectionPushSchema = z.object({
   kind: z.literal('mediaCollection'),
   ...peerSyncPushBase,
+  assetManifest: z.array(peerAssetManifestEntrySchema).max(MEDIA_COLLECTION_ITEMS_MAX),
 }).strict();
 // Author personas push the bare record + headshot via the asset manifest; `.strict()` rejects smuggled bundle keys.
 const authorPushSchema = z.object({
@@ -383,5 +385,17 @@ const lenientPeerQueryScalar = peerQueryScalar.catch(undefined);
 export const peerSubscriptionsQuerySchema = z.object({ peerId: lenientPeerQueryScalar, recordKind: lenientPeerQueryScalar, recordId: lenientPeerQueryScalar });
 export const peerManifestQuerySchema = z.object({ kind: peerQueryScalar });
 export const peerCosAgentArchiveQuerySchema = z.object({ date: peerQueryScalar, agentId: peerQueryScalar, file: peerQueryScalar });
-export const peerRecordQuerySchema = z.object({ kind: peerQueryScalar, id: peerQueryScalar });
-export const peerIntegrityQuerySchema = z.object({ peerId: peerQueryScalar, kind: peerQueryScalar });
+export const peerRecordQuerySchema = z.object({ kind: peerQueryScalar, id: peerQueryScalar, collectionIntegrity: z.literal('1').optional() });
+export const peerIntegrityQuerySchema = z.object({ peerId: peerQueryScalar, kind: peerQueryScalar, recordId: peerQueryScalar });
+// A collection can hold more items than the push endpoint accepts in one
+// request. The read-only diagnostic bounds the response by bytes instead.
+export const peerCollectionIntegrityPayloadSchema = z.object({
+  kind: z.literal('mediaCollection'),
+  sourceInstanceId: z.string(),
+  record: peerWireRecordSchema,
+  assetManifest: z.array(peerAssetManifestEntrySchema),
+  videoFilenames: z.record(z.string().max(255), z.string().max(255)).optional(),
+  // `<kind>:<filename>` → peers the responder streams that file from (host
+  // mode). Optional: older peers omit it and every gap stays a difference.
+  hostedBy: z.record(z.string().max(270), z.array(z.string().max(128)).max(16)).optional(),
+});

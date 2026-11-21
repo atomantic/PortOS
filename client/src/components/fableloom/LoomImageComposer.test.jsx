@@ -1,9 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import LoomImageComposer from './LoomImageComposer';
-import { previewImagePrompt } from '../../services/api';
+import { previewImagePrompt } from '../../services/apiImageVideo.js';
 
-vi.mock('../../services/api', () => ({ previewImagePrompt: vi.fn() }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  previewImagePrompt: vi.fn(),
+}));
 afterEach(() => vi.useRealTimers());
 
 // Catches a stale server response enabling Render for text that was never previewed.

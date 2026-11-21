@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiCore.js', () => ({
   default: {
     get: vi.fn(),
     post: vi.fn(),
@@ -10,7 +10,7 @@ vi.mock('../services/api', () => ({
   },
 }));
 
-import api from '../services/api';
+import api from '../services/apiCore.js';
 import Jira from './Jira';
 
 const DAY_MS = 86400000;

@@ -20,7 +20,8 @@ import ToggleSwitch from '../ToggleSwitch';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import * as api from '../../services/api';
+import { getHarnesses, refreshHarnessModels } from '../../services/apiHarnesses.js';
+import { setProviderHarnessEnabled } from '../../services/apiProviders.js';
 import useProviderCatalog, { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
 import { pluralize } from '../../lib/textUtils';
 import { serviceReadinessCopy } from '../../lib/providerManagement';
@@ -295,9 +296,9 @@ export default function ProviderHarnessesTab({ selectedHarnessId = null, runtime
   const [refreshResults, setRefreshResults] = useState({});
 
   const loadHarnessDetails = useCallback(async ({ fresh = false } = {}) => {
-    if (typeof api.getHarnesses !== 'function') return;
+    if (typeof getHarnesses !== 'function') return;
     setDetailsError(null);
-    const data = await api.getHarnesses({ fresh, silent: true }).catch((err) => {
+    const data = await getHarnesses({ fresh, silent: true }).catch((err) => {
       setDetailsError(err?.message || 'Could not load harnesses.');
       return null;
     });
@@ -346,7 +347,7 @@ export default function ProviderHarnessesTab({ selectedHarnessId = null, runtime
 
   const handleToggle = async (harness, enabled) => {
     setPending((prev) => ({ ...prev, [harness.id]: true }));
-    const result = await api.setProviderHarnessEnabled(harness.id, enabled, { silent: true }).catch(() => null);
+    const result = await setProviderHarnessEnabled(harness.id, enabled, { silent: true }).catch(() => null);
     setPending((prev) => ({ ...prev, [harness.id]: false }));
     if (!result) {
       toast.error(`Could not ${enabled ? 'enable' : 'disable'} ${harness.label}`);
@@ -372,7 +373,7 @@ export default function ProviderHarnessesTab({ selectedHarnessId = null, runtime
       const { [runtimeId]: _dropped, ...rest } = prev;
       return rest;
     });
-    const result = await api.refreshHarnessModels(runtimeId, { silent: true })
+    const result = await refreshHarnessModels(runtimeId, { silent: true })
       .then((data) => ({
         ok: !data.reason,
         message: [

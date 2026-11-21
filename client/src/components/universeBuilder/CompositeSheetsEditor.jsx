@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Plus, Play, Lock, Unlock, Edit3, X } from 'lucide-react';
-import { COMPOSITE_PROMPT_MAX } from '../../services/api';
+import { COMPOSITE_PROMPT_MAX } from '../../services/apiUniverseBuilder.js';
 import { COMPOSITE_BOARD_KINDS, compositeKindLabel } from '../../lib/universeBuilderShared';
 import EntryCard from '../universe/EntryCard';
 import EntryThumbSlot from '../universe/EntryThumbSlot';

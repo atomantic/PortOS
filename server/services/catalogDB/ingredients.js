@@ -185,8 +185,9 @@ export async function getIngredientDescriptionsByRequestedIds(ids, { client } = 
 
 // All stable IDs belonging to a local consolidated identity. The source row
 // stays live for peers; callers can match embedded IDs without rewriting canon.
-export async function getIngredientIdentityIds(id) {
-  const { rows } = await query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [id]);
+export async function getIngredientIdentityIds(id, { client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec('SELECT unnest(catalog_identity_member_ids($1)) AS id', [id]);
   return rows.map(row => row.id);
 }
 

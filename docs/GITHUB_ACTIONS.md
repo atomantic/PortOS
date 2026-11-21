@@ -62,7 +62,8 @@ A release therefore pays for one full run (on its PR), not three.
 
 ## CI Workflow (`ci.yml`)
 
-PRs into `main` use `scripts/ci-test-plan.js` to classify the changed files
+PRs into `main` use `scripts/ci-test-plan.js` (its path rules, manifest verdicts,
+repository inputs and output in `scripts/lib/ciPlan*.js`) to classify the changed files
 before installing dependencies. Directory-scoped features add their server and
 client feature tests, and every behavioral source (nested or flat) uses the
 runner's import-graph-aware `related` mode, fed the changed behavioral source
@@ -99,7 +100,7 @@ its caller's `with:` inputs, so they assert the steps GitHub runs. Its reads are
 anchored at `import.meta.url`, which makes `ci.yml` and `.github/actions/` test
 memo inputs for every test that uses it. actionlint validates each caller's
 inputs against the action's metadata while it lints `ci.yml`;
-`scripts/github-actions-pinned.guard.test.js` applies the SHA-pin contract to the
+`server/test/guards/repo/github-actions-pinned.test.js` applies the SHA-pin contract to the
 action files, and any change under `.github/actions/` makes the impact plan
 full, Windows included.
 
@@ -182,8 +183,8 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   file is always some *other* file the guard sees only as a path string. Left
   off the list they are structurally unselectable and can sit red on `main`
   while every PR reports green (issue #5055).
-- **Doc-parity guards** — `docs/api-doc.test.js` and `docs/deps-doc.test.js`
-  compare the `.md` beside them with source they read rather than import
+- **Doc-parity guards** — `server/test/guards/repo/api-doc.test.js` and `server/test/guards/repo/deps-doc.test.js`
+  compare a `.md` with source they read rather than import
   (the route graph, the dependency manifests). The `.md` is documentation-only
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
@@ -198,26 +199,36 @@ Full plans and pushes to `main` run all of them.
 **A tree guard registers by its filename.** The planner selects every tracked
 `*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
 read): a guard outside `client/src` joins every plan, and a client guard rides
-any `client/src` js/jsx change. The test memo never skips one. So a test that
-scans the tracked tree is named `<name>.guard.test.js`, and a suite that mixes
-one scan with behavioural tests keeps the scan in a sibling guard file, so the
-behavioural tests go back to import-graph selection instead of riding every
-push. `EXPLICIT_ALWAYS_RUN_TESTS` lists only the always-run tests whose file is
-not named as a guard (doc parity, route policy, import cycles, the
-prompt-upgrade contract).
+any `client/src` js/jsx change. The test memo never skips one.
+
+**Server scans are checks inside three structural guard runners (#16996).**
+`server/test/guards/{runtime,modules,repo}.guard.test.js` (`GUARD_CHECK_DIRS`
+in `scripts/lib/guardScanners.js`) each load every `*.test.js` in the same-named
+directory into one worker over one corpus (`scripts/lib/guardCorpus.js`: one
+`git ls-files`, each file read once); the Vitest config excludes the directories
+and a changed check selects its runner. A new scan goes in the directory for its
+subject; a standalone guard needs a reason in `STANDALONE_GUARDS`. Client scans run the same way in
+`client/src/test/guards/{a11y,ui}.guard.test.js`, node-environment runners that
+ride any `client/src` js/jsx change.
+`EXPLICIT_ALWAYS_RUN_TESTS` lists the always-run tests that are neither (route
+policy, import growth, the prompt-upgrade contract).
 
 The content detectors in `scripts/lib/guardScanners.js` (git enumeration, the
 shared source walkers, `readdirSync` with `recursive: true`, a hand-rolled
 recursive directory walker, an unnamed cross-root read) select nothing. They
-are a one-way check in `scripts/repo-scan-guards.guard.test.js`: a test they
-recognise as a scanner fails unless it carries the suffix or is listed in that
-file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
+are a one-way check in `server/test/guards/repo/repo-scan-guards.test.js`: a test they
+recognise as a scanner fails unless it carries the suffix, lives in a guard
+directory, or is listed in that file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
 or its walk reads a temporary directory). A scanner the detectors cannot see
 (one that scans through an imported helper) is still selected by its name.
 
-Because they run on every PR, each always-run guard has a per-file time budget
-(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
-runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets `CI_GUARD_BUDGET` to `enforce` only on the scheduled run (`ci.yml`, #16810), where `scripts/run-ci-tests.js` runs the always-run guards as their own Vitest pass and fails the job naming any file over the budget. Other runs keep them in the normal pass and emit a `::warning::`. Windows, browser and DB jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+Because they run on every PR, each always-run guard has a time budget: each
+structural guard runner's checks (a check's load plus its test times) and every other
+always-run file whole (`CI_GUARD_BUDGET_MS`, 4s, in `scripts/lib/guardBudget.js`;
+~1.6x the 2.5s local target). Only the scheduled Linux server run enforces it
+(`CI_GUARD_BUDGET=enforce`, `ci.yml`, #16810): `scripts/run-ci-tests.js` runs the
+always-run guards in their own pass and fails any guard over budget. Other runs
+warn with a `::warning::`, and local pregate only reports it (`docs/PREGATE.md`).
 
 ### The bundled `lib/slashdo` submodule
 
@@ -362,7 +373,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.guard.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/guards/ui/timeouts.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
@@ -538,15 +549,9 @@ The selected work is split across parallel jobs:
   `PORTOS_SMOKE_BOOT=1` so no scheduler, agent recovery, or peer sync starts —
   `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
-  restored and its trusted-rebuild mark checks out. The impact job (which
-  always runs, even when the planner skips the server job) runs
-  `npm ci --prefix autofixer` — uncached and never skipped, because resolving
-  that workspace's tracked lockfile *is* the check — and `node --check
-  server/index.js`. It is the only CI step that installs `autofixer/`, which
-  `npm run setup` and `scripts/ensure-deps.js` install on every user's
-  machine; without it a lockfile that stopped resolving shipped green and
-  failed at setup time. (`browser/` gets no such step: zero dependencies, and
-  its lockfile is deliberately gitignored.)
+  restored and its trusted-rebuild mark checks out. Autofixer tests use the
+  server workspace's Express install. The impact job always checks the syntax
+  of `server/index.js`, even when the planner skips the server job.
 - **Client tests and build** — affected client tests, plus the production build
   whenever client source changed. The build runs on shard 1 only.
 - **Lint client** — Biome over the changed client sources, in its own job. It used
@@ -632,8 +637,8 @@ The selected work is split across parallel jobs:
   server Vitest harness (so the spawn, kill and child-environment helpers it
   depends on select it), `docker/supercollider/`, a `package.json` or
   `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
-  `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
-  `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
+  `SUPERCOLLIDER_LIVE_PATH_RE` in `scripts/lib/ciPlanRules.js`,
+  `collectSuperColliderLiveInputs()` in `scripts/lib/ciPlanInputs.js`). The closure is recomputed from the head tree on
   every run, so a new import is covered without a list edit. Non-push full runs
   and pull requests into `release` always run it, a push gates it; `workflow_dispatch`
   of `CI` is the manual evidence run. Pregate reports it as CI-only.
@@ -689,6 +694,9 @@ suites, and a Windows run (#11871). A server `related` plan also fans out
 when its measured import reach (`serverReach.selected`, the suites the related
 walk will select) exceeds the same cap, even with few explicit selectors: one
 runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+The reach, the DB, browser and client consumer closures and the gated-job
+closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
+the same extractor and resolver pregate's local selection uses.
 The summary names that reach-based fan-out. Every other scoped plan stays on one
 runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
 each selected suite runs. The runner slices the selection itself and never hands Vitest
@@ -746,7 +754,7 @@ speculative cross-browser matrix.
 
 ### Windows native contract coverage
 
-The canonical registry is `scripts/ci-test-plan.js` (25 files):
+The canonical registry is `WINDOWS_CONTRACT_TESTS` in `scripts/lib/ciPlanRules.js` (25 files):
 
 | Boundary | Retained suites |
 | --- | --- |
@@ -776,7 +784,7 @@ macOS is the primary interactive target, and release agents there run under
 the launchd-coalition supervisor (`server/lib/darwinAgentSupervisor.py`). Its
 real-process boundary suite, `server/lib/windowsAgentProcess.darwin.test.js`,
 skips on every other platform. The `macos-native` job (`macos-latest`) runs that
-file (`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so native supervision
+file (`MACOS_NATIVE_TESTS` in `scripts/lib/ciPlanRules.js`), so native supervision
 remains a required check. Release pre-flight uses platform-neutral Git/GitHub
 checks and also runs in the Windows contract set.
 
@@ -822,7 +830,7 @@ or model data; cleanup waits for actual ConPTY exit before removing it.
 
 ### Python sidecar scripts
 
-`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
+`scripts/ml/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
 not reachable through Vitest's import graph, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
 paths). The planner resolves the suites naming each changed script with
@@ -968,8 +976,9 @@ GitHub itself cancels in-flight runs — no job fails, and **no successor run ex
 That last property is the whole diagnosis: a `cancel-in-progress` supersession
 always leaves a newer run for the same PR, and an external cancel leaves none.
 
-`.github/workflows/ci-cancel-recovery.yml` runs on `workflow_run` and
-re-dispatches such a run exactly once. `scripts/ci-retry-cancelled-run.js`
+`.github/workflows/ci-cancel-recovery.yml` listens for completed CI runs.
+Only first-attempt cancelled PR runs allocate a recovery runner, and an
+eligible run is re-dispatched exactly once. `scripts/ci-retry-cancelled-run.js`
 retries only when every one of these holds:
 
 | Guard | Why |
@@ -984,18 +993,11 @@ retries only when every one of these holds:
 Any API lookup that cannot be completed skips the retry rather than assuming a
 guard passed — a missed retry costs one manual re-run, a wrong one loops.
 
-**The re-dispatch waits five minutes first** (`RETRY_DELAY_MS`, issue 7439).
-The cancel it recovers from is caused by a saturated queue, so firing the
-one-retry budget the instant the `workflow_run` event arrives spends it at the
-moment it is least likely to survive: on PR 7434 three re-runs of the identical
-SHA were each cancelled again while other runs were in flight, and that same SHA
-passed on the first attempt made against an idle queue. One job idling — not
-computing — for five minutes is the cheap side of that trade against re-running
-twelve jobs straight into another cancel. The recovery job pins
-`timeout-minutes` above `MAX_RUNTIME_MS` — the delay *plus* two worst-case
-guard passes — so a slow GitHub can never get it killed mid-wait; that bound is
-derived from the constants, and the workflow test asserts the inequality, so
-raising the delay fails the build rather than quietly eating the margin.
+**The re-dispatch waits 60 seconds first** (`RETRY_DELAY_MS`). This gives
+cancellation records time to settle while limiting the time a hosted runner
+sits idle. The recovery job's timeout leaves headroom above `MAX_RUNTIME_MS`,
+which covers the delay and two worst-case guard passes. The workflow wiring
+test checks that the job timeout exceeds that bound.
 
 Every API-backed guard in the table is evaluated **twice**: once before the wait
 and once after it. A push or a human re-run that lands during the delay
@@ -1086,12 +1088,12 @@ successor run".
 - Any server source change adds `server/lib/apiRouteParity.test.js` and
   `scripts/generate-prompt-stage-call-sites.test.js`: they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
-  The route-graph guard, `server/lib/apiRouteGraph.guard.test.js`, rides every
+  The route-graph guard, `server/test/guards/modules/apiRouteGraph.test.js`, rides every
   plan by its name.
 - A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
   `server/lib/db.ddlParity.test.js`, which fails when the generated file is
   stale (#16092).
-- A `scripts/*.py` sidecar selects every test that names a python script
+- A `scripts/ml/*.py` sidecar selects every test that names a python script
   (`git grep`), in `files` mode, and falls back to the full suite when none do
   — see "Python sidecar scripts" above.
 - A deleted executable source cannot be handed to `vitest related`, so that
@@ -1151,7 +1153,7 @@ action clears it (the review ledger that recorded this was retired in #16425).
 The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
 (`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
 in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
-`scripts/dbImageDigestPin.guard.test.js` rejects a second copy. Do not move the Debian
+`server/test/guards/repo/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
 snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
@@ -1264,7 +1266,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or
@@ -1302,35 +1304,6 @@ a specific upstream incident has been proved. Preserve the cancelled attempt; a
 recurrence needs the fixed-stage evidence plus the runner's completion, queue and
 transport diagnostics (sensitive fields redacted) before changing lifecycle
 behavior or attributing a GitHub incident.
-
-### Superseded queued aggregate recovery (#13591)
-
-A newly requested PR CI run can be pending without jobs because its older run
-still owns the CI concurrency slot. The default-branch `CI cancel recovery`
-workflow observes requests outside that group. It acts only when a fresh API
-read proves the same PR/workflow/repository, a different older head, the current
-PR head on the waiting successor, and exactly one unfinished old job: a queued,
-never-started `CI Gate`. All other jobs, including cleanup, must be terminal.
-Completed failed tests and their logs remain intact; recovery never publishes a
-passing gate or changes `always()` failure reporting.
-
-If the older run still has known live non-gate jobs when the successor is
-requested, the observer waits read-only and re-inspects every 15 seconds, for a
-single two-minute deadline that includes API work. Every poll verifies the same
-old attempt and current waiting successor. Missing job data, identity changes,
-or live work at the deadline stop recovery without cancellation. The queued,
-never-started aggregate must independently qualify after the live jobs finish.
-
-The observer then requests normal cancellation once, waits 45 seconds, and rechecks
-all identities, jobs and the current PR head. Only an accepted normal cancellation
-that still has not settled permits one force-cancel request. It reads back the
-outcome and distinguishes settlement, accepted-but-pending, and uncertainty; an
-uncertain write is never retried or escalated blindly. More than 100 jobs/runs,
-missing data, a permission refusal, live work, same-head reruns, and changed heads
-all stop recovery. The existing Actions write grant is reused without adding
-permissions. Private repositories that cannot read the PR with that grant remain
-held rather than expanding authority. No PR checkout or code executes in this
-privileged observer; both scripts run from the default branch's sparse checkout.
 
 ## Test runs report every failure
 

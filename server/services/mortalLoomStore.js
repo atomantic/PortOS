@@ -227,6 +227,10 @@ function configureStoreWatcher(settings) {
   const generation = ++watchGeneration;
   if (!path) return;
   let previous = null;
+  // ino:size:mtimeMs of the file as stat()ed just before the last good read. An
+  // unchanged stamp skips the read/parse/compare/clone work on every 10s tick;
+  // atomic replacement (iCloud) changes the inode, so it still reloads.
+  let lastFileStamp = null;
   let pending = false;
   let dirty = false;
   const refresh = async () => {
@@ -235,10 +239,18 @@ function configureStoreWatcher(settings) {
     try {
       do {
         dirty = false;
+        // stat() never materializes an evicted iCloud file. A failed stat (absent,
+        // unreadable) yields no stamp, so the full read below classifies it.
+        let st = null;
+        try { st = await stat(path); } catch { /* classified by the full read below */ }
+        const stamp = st ? `${st.ino}:${st.size}:${st.mtimeMs}` : null;
+        if (generation !== watchGeneration) return;
+        if (previous !== null && stamp !== null && stamp === lastFileStamp) continue;
         const result = await readStoreAtPathResult(path);
         if (generation !== watchGeneration) return;
         // Retain the last good snapshot through eviction/read failures.
         if (result.ok) {
+          lastFileStamp = result.present ? stamp : null;
           invalidateMortalLoomChanges(previous, result.store);
           if (JSON.stringify(previous?.goals) !== JSON.stringify(result.store?.goals)) {
             dashboardEvents.emit('goals:changed');

@@ -51,20 +51,29 @@ describe('parseDiffStat', () => {
 
 describe('parseBranchVerboseLine', () => {
   it('parses a current branch with ahead/behind tracking', () => {
-    expect(parseBranchVerboseLine('*|main|origin/main|ahead 2, behind 1')).toEqual({
-      name: 'main', current: true, tracking: 'origin/main', ahead: 2, behind: 1
+    expect(parseBranchVerboseLine('*\0main\0origin/main\0ahead 2, behind 1')).toEqual({
+      name: 'main', tip: null, current: true, tracking: 'origin/main', ahead: 2, behind: 1
     });
   });
 
   it('parses a non-current branch with no tracking', () => {
-    expect(parseBranchVerboseLine(' |feature||')).toEqual({
-      name: 'feature', current: false, tracking: null, ahead: 0, behind: 0
+    expect(parseBranchVerboseLine(' \0feature\0\0')).toEqual({
+      name: 'feature', tip: null, current: false, tracking: null, ahead: 0, behind: 0
     });
   });
 
+  it('captures only full commit tips and preserves legal pipe characters in branch names', () => {
+    for (const tip of ['a'.repeat(40), 'b'.repeat(64)]) {
+      const fields = [' ', 'feature/a|b', '', '', 'commit', tip];
+      expect(parseBranchVerboseLine(fields.join('\0'))).toMatchObject({ name: 'feature/a|b', tip });
+      fields[4] = 'blob';
+      expect(parseBranchVerboseLine(fields.join('\0')).tip).toBeNull();
+    }
+  });
+
   it('parses ahead-only and behind-only tracking', () => {
-    expect(parseBranchVerboseLine(' |dev|origin/dev|ahead 3')).toMatchObject({ ahead: 3, behind: 0 });
-    expect(parseBranchVerboseLine(' |dev|origin/dev|behind 4')).toMatchObject({ ahead: 0, behind: 4 });
+    expect(parseBranchVerboseLine(' \0dev\0origin/dev\0ahead 3')).toMatchObject({ ahead: 3, behind: 0 });
+    expect(parseBranchVerboseLine(' \0dev\0origin/dev\0behind 4')).toMatchObject({ ahead: 0, behind: 4 });
   });
 });
 

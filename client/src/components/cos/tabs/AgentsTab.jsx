@@ -2,7 +2,19 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { Trash2, Search, X, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getCosAgent,
+  getCosPendingAgentFeedback,
+  getCosCompletedAgents,
+  getCosLearningDurations,
+  killCosAgent,
+  pauseCosAgent,
+  deleteCosAgent,
+  hydrateCosAgentDescription,
+  resumeCosAgent,
+  addCosTask,
+  clearCompletedCosAgents,
+} from '../../../services/apiAgents.js';
 import ListLoadError from '../../ui/ListLoadError';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
@@ -55,7 +67,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     setFocusedAgent(null);
     setFocusError(null);
     setFocusLoading(true);
-    api.getCosAgent(agentId, { silent: true }).then(agent => { if (!cancelled) setFocusedAgent(agent); })
+    getCosAgent(agentId, { silent: true }).then(agent => { if (!cancelled) setFocusedAgent(agent); })
       .catch(err => { if (!cancelled && err?.status !== 404) setFocusError(err?.message || 'Request failed'); })
       .finally(() => { if (!cancelled) setFocusLoading(false); });
     return () => { cancelled = true; };
@@ -72,7 +84,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // historical date bucket; the response uses the same predicate as the server
   // queue and supplies a count even when those cards are not otherwise loaded.
   const pendingFeedback = useSocketResource(
-    ({ signal }) => api.getCosPendingAgentFeedback({ countOnly: true, silent: true, signal }),
+    ({ signal }) => getCosPendingAgentFeedback({ countOnly: true, silent: true, signal }),
     { namespace: 'cos', events: FEEDBACK_EVENTS },
   );
   const pendingFeedbackCount = Number.isFinite(pendingFeedback.data?.count) ? pendingFeedback.data.count : null;
@@ -88,7 +100,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const fetchCompletedPage = useCallback(({ cursor, signal }) => api.getCosCompletedAgents({
+  const fetchCompletedPage = useCallback(({ cursor, signal }) => getCosCompletedAgents({
     cursor, signal, limit: 25, feedback: feedbackFilter === 'needs-feedback', silent: true,
   }), [feedbackFilter]);
   const history = usePagedCollection(fetchCompletedPage);
@@ -99,28 +111,28 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // Fetch duration estimates for progress indicators
   useEffect(() => {
     let active = true;
-    api.getCosLearningDurations().then(result => {
+    getCosLearningDurations().then(result => {
       if (active) setDurations(result);
     }).catch(() => {});
     return () => { active = false; };
   }, []);
 
   const handleKill = async (agentId) => {
-    const result = await api.killCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await killCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent force killed');
     refresh();
   };
 
   const handlePause = async (agentId) => {
-    const result = await api.pauseCosAgent(agentId, 'Paused from CoS agent list', { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await pauseCosAgent(agentId, 'Paused from CoS agent list', { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent paused');
     refresh();
   };
 
   const handleDelete = useCallback(async (agentId) => {
-    const result = await api.deleteCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await deleteCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result || !mounted.current) return;
     // Keep the loaded history and card instances intact. Remember confirmed
     // removals across stale parent snapshots and delayed focused-agent reads.
@@ -139,7 +151,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // swapping the text in later would leave a window where Submit ships the
   // clipped copy, which is the failure this exists to prevent.
   const handleResumeClick = useCallback(async (agent) => {
-    setResumingAgent(await api.hydrateCosAgentDescription(agent));
+    setResumingAgent(await hydrateCosAgentDescription(agent));
   }, []);
 
   // A stalled RUNNING agent (a CLI parked on a provider usage limit) moves to a
@@ -180,8 +192,8 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
       screenshots
     };
     const result = await (resumingAgent?.status === 'paused'
-      ? api.resumeCosAgent(resumingAgent.id, payload, { silent: true })
-      : api.addCosTask({ ...payload, type }, { silent: true })
+      ? resumeCosAgent(resumingAgent.id, payload, { silent: true })
+      : addCosTask({ ...payload, type }, { silent: true })
     );
     // Errors propagate to the modal, which owns the failure toast and re-enables
     // its submit button — swallowing them here closed the dialog on failure and
@@ -197,7 +209,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
 
   const handleClearCompleted = async () => {
     setConfirmingClear(false);
-    const result = await api.clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     if (result.retained > 0) {
       const retainedWord = result.retained === 1 ? '1 active cleanup owner retained' : `${result.retained} active cleanup owners retained`;

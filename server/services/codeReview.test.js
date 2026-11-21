@@ -73,7 +73,8 @@ import {
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
-import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cos/cosValidation.js'
+import { codeReviewSettingsSchema } from '../lib/cos/cosValidation.js'
+import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/reviewerConfig.js'
 import { taskObjective } from '../lib/goalFidelity.js'
 import { updateSettingsWith } from './settings.js'
 
@@ -389,6 +390,30 @@ describe('codeReview helpers', () => {
       await reportReviewerSuccess('ollama', 200)
       expect(vi.mocked(updateSettingsWith).mock.lastCall[1]).toEqual({ skipUserAction: true })
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
+      expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
+    })
+
+    it.each([
+      ['launch', 'Check the configured Codex executable'],
+      ['timeout', 'Retry capability inspection'],
+      ['required_rpc', 'Update Codex to a compatible version'],
+    ])('keeps the %s speed probe category and projects approved health guidance', async (probeFailure, action) => {
+      const reviewer = 'provider:example-cli'
+      const code = 'EXECUTION_OPTIONS_UNSUPPORTED'
+      const raw = 'synthetic private process output'
+      mockedSettings.current = { codeReview: { reviewers: [reviewer] } }
+      await reportReviewerFailure(reviewer, { code, probeFailure, error: raw }, 100)
+      const config = mockedSettings.current.codeReview
+      expect(config.reviewerHealth[reviewer]).toEqual({ code, reason: 'configuration', probeFailure, failureCount: 1, lastFailureAt: 100 })
+      expect(codeReviewSettingsSchema.parse(config)).toEqual(config)
+      expect(await getReviewerConfigHealth()).toMatchObject({ status: 'warning', configFaults: {
+        [reviewer]: { code, probeFailure, message: expect.stringContaining(action) },
+      } })
+      expect(pickCodeReviewDefaults(mockedSettings.current).reviewerConfigFaults[reviewer].message).toContain(action)
+      await reportReviewerFailure(reviewer, { code, probeFailure: raw, error: raw }, 200)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({ [reviewer]: { code, lastFailureAt: 200 } })
+      expect(JSON.stringify(mockedSettings.current)).not.toContain(raw)
+      await reportReviewerSuccess(reviewer, 300)
       expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
     })
 

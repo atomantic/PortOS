@@ -4,7 +4,7 @@ import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import ListLoadError from '../ui/ListLoadError';
-import { departEidoverse, getEidoverseDestinations } from '../../services/api';
+import { departEidoverse, getEidoverseDestinations } from '../../services/apiSystem.js';
 
 export default function EidoverseTravel({ travelRef, enabled, objects = [], onDestinationsChange, beforeDeparture }) {
   const [destinations, setDestinations] = useState([]);

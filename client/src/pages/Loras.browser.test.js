@@ -34,7 +34,8 @@ describe.skipIf(!chrome)('LoRA touch targets (#10692)', () => {
           enforce: 'pre',
           resolveId(id) {
             if (id === '/loras-fixture.jsx') return '\0loras-fixture.jsx';
-            if (/\/services\/api(?:\.js)?$/.test(id)) return '\0loras-api';
+            if (/\/services\/apiImageVideo\.js$/.test(id)) return '\0loras-api';
+            if (id === '../../services/apiLoraTraining.js') return '\0loras-training';
           },
           load(id) {
             if (id === '\0loras-api') return `
@@ -50,6 +51,8 @@ describe.skipIf(!chrome)('LoRA touch targets (#10692)', () => {
               export const searchCivitaiLoras = async () => ({ items: [], nextCursor: null });
               export const searchVideoLoras = async () => ({ items: [], nextCursor: null });
               export const probeLoraEffect = async () => {};
+            `;
+            if (id === '\0loras-training') return `
               export const getRetiredDataInventory = async () => [];
               export const deleteRetiredData = async () => {};
             `;

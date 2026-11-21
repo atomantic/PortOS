@@ -218,7 +218,7 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
  * Resolve one surface's image render config through the render-target ladder:
  * per-request/per-record override → the target's saved `renderDefaults` pin → the
  * install-wide `settings.imageGen.mode` → the caller's own fallback. Every creative
- * surface resolves through THIS (renderTargets.guard.test.js fails a direct
+ * surface resolves through THIS (server/test/guards/modules/imageGenRenderTargets.test.js fails a direct
  * `resolveCloudProviderConfig` call outside the dispatcher) so the target's saved
  * `imageModel` reaches the provider.
  *

@@ -14,7 +14,14 @@ import {
   RefreshCw,
   ChevronRight
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinTraits,
+  getDigitalTwinConfidence,
+  getDigitalTwinGaps,
+  getDigitalTwinCompleteness,
+  detectSoulContradictions,
+  updateSoulSettings,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
@@ -70,9 +77,9 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
   const loadTraitsAndConfidence = async () => {
     setInsightsError(null);
     const [traitsRes, confidenceRes, gapsRes] = await Promise.allSettled([
-      api.getDigitalTwinTraits({ silent: true }),
-      api.getDigitalTwinConfidence({ silent: true }),
-      api.getDigitalTwinGaps({ silent: true })
+      getDigitalTwinTraits({ silent: true }),
+      getDigitalTwinConfidence({ silent: true }),
+      getDigitalTwinGaps({ silent: true })
     ]);
     if (traitsRes.status === 'fulfilled') setTraits(traitsRes.value.traits);
     if (confidenceRes.status === 'fulfilled') setConfidence(confidenceRes.value.confidence);
@@ -83,7 +90,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
   const loadCompleteness = async () => {
     setLoadingCompleteness(true);
-    const data = await api.getDigitalTwinCompleteness().catch(() => null);
+    const data = await getDigitalTwinCompleteness().catch(() => null);
     setCompleteness(data);
     setLoadingCompleteness(false);
   };
@@ -96,7 +103,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     setCheckingContradictions(true);
     // silent: the failure is surfaced inline below (contradictions.error), so
     // letting request() toast as well would double-report the same error.
-    const result = await api.detectSoulContradictions(
+    const result = await detectSoulContradictions(
       selectedProvider.providerId,
       selectedProvider.model,
       { silent: true }
@@ -112,7 +119,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     // request() owns the failure toast, but the spinner must clear either way:
     // an uncaught rejection here left `saving` true, stranding the button
     // permanently disabled on "Saving..." with no way to retry.
-    const ok = await api.updateSoulSettings(settingsForm).then(saved => {
+    const ok = await updateSoulSettings(settingsForm).then(saved => {
       onSettingsChange?.(saved);
       return true;
     }).catch(() => false);

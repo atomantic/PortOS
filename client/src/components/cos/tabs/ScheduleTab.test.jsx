@@ -16,10 +16,16 @@ const api = vi.hoisted(() => ({
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn() }));
-vi.mock('../../../services/apiLocalLlm', () => apiLocalLlm);
+vi.mock('../../../services/apiLocalLlm', () => ({ ...apiLocalLlm, getLocalLlmStatus: api.getLocalLlmStatus }));
 
 vi.mock('../../ui/Toast', () => ({ default: toast }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosSchedule: api.getCosSchedule,
+  triggerCosOnDemandTask: api.triggerCosOnDemandTask,
+  updateCosTaskInterval: api.updateCosTaskInterval,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 
 const { default: ScheduleTab, mergeUpdatedTaskInterval } = await import('./ScheduleTab');
 
@@ -81,6 +87,23 @@ describe('mergeUpdatedTaskInterval', () => {
 });
 
 describe('ScheduleTab on-demand feedback', () => {
+  it('shows scheduled legacy audits and makes on-demand legacy profiles available separately', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    const profile = { type: 'on-demand', enabled: true };
+    api.getCosSchedule.mockResolvedValueOnce({ tasks: {
+      'code-simplification': { ...profile, displayName: 'Code simplification' },
+      simplify: { ...profile, displayName: 'Legacy simplify', legacyAuditDomain: 'code-simplification' },
+      'better-complexity': { ...profile, displayName: 'Legacy complexity', legacyAuditDomain: 'code-simplification', enabledAppCount: 1 },
+    } });
+    render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
+    expect(await screen.findByText('Code simplification')).toBeVisible();
+    expect(screen.getByText('Legacy complexity')).toBeVisible();
+    expect(screen.queryByText('Legacy simplify')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Show all legacy audit profiles' }));
+    expect(screen.getByText('Legacy simplify')).toBeVisible();
+  });
+
   it('retains the last schedule on a failed refresh, shows the failure, and recovers', async () => {
     const user = userEvent.setup();
     api.getCodeReviewDefaults.mockResolvedValue({});
@@ -241,6 +264,7 @@ describe('Schedule labels', () => {
     await user.type(screen.getByRole('textbox', { name: 'Filter tasks by name' }), 'security');
     expect(screen.queryByText('claim-issue')).toBeNull();
     await user.click(screen.getByText('better-security'));
+    await user.click(await screen.findByRole('button', { name: /^Prompt & dependencies/ }));
     const labels = await screen.findByRole('textbox', { name: 'Custom labels' });
     await user.type(labels, 'backend');
     await user.tab();

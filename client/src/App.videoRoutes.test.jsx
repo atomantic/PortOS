@@ -3,7 +3,6 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Outlet, useLocation } from 'react-router';
 vi.mock('./components/Layout', () => ({ default: () => <Outlet /> }));
 vi.mock('./pages/Dashboard', () => ({ default: () => null }));
-vi.mock('./hooks/useCatalogTypes.jsx', () => ({ CatalogTypesProvider: ({ children }) => children }));
 vi.mock('./services/apiSystem.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
 vi.mock('./pages/MediaGen', () => ({ default: () => (
   <>
@@ -13,6 +12,7 @@ vi.mock('./pages/MediaGen', () => ({ default: () => (
 ) }));
 vi.mock('./pages/VideoGen', () => ({ default: () => { const location = useLocation(); return <pre data-testid="clip-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 vi.mock('./pages/MusicVideo', () => ({ default: () => { const location = useLocation(); return <pre data-testid="mv-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash })}</pre>; } }));
+vi.mock('./pages/CreativeDirector', () => ({ default: () => { const location = useLocation(); return <pre data-testid="library-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 vi.mock('./pages/CreativeDirectorDetail', () => ({ default: () => { const location = useLocation(); return <pre data-testid="project-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 import App from './App.jsx';
 it('keeps Generate Video inside the Media Gen tab shell', async () => {
@@ -24,6 +24,12 @@ it.each(['/media/video', '/video-gen'])('preserves clip handoff state through %s
   const state = { remix: { ingredientIds: ['example-ingredient'] } };
   render(<MemoryRouter initialEntries={[{ pathname: path, search: '?settings=1', hash: '#clip', state }]}><App /></MemoryRouter>);
   expect(JSON.parse((await screen.findByTestId('clip-location')).textContent)).toEqual({ pathname: '/video/generate', search: '?settings=1', hash: '#clip', state });
+});
+
+it('redirects the retired Video library and preserves draft handoff state', async () => {
+  const state = { remix: { ingredientIds: ['example-ingredient'] } };
+  render(<MemoryRouter initialEntries={[{ pathname: '/video', search: '?new=video', hash: '#drafts', state }]}><App /></MemoryRouter>);
+  expect(JSON.parse((await screen.findByTestId('library-location')).textContent)).toEqual({ pathname: '/creative-director', search: '?new=video', hash: '#drafts', state });
 });
 
 it('normalizes a bare Video project URL while preserving its identity and handoff', async () => {

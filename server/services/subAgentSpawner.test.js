@@ -235,10 +235,6 @@ describe('Worktree & metadata flag helpers', () => {
  * new `await` is added ahead of the listener's inner `try`.
  */
 describe('CoS event listener rejection guards', () => {
-  const flushMicrotasks = async () => {
-    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
-  };
-
   let logs;
   let unhandled;
   const collectLog = entry => logs.push(entry);
@@ -264,8 +260,9 @@ describe('CoS event listener rejection guards', () => {
   it('logs a task:ready dispatch failure with the task id instead of leaking a rejection', async () => {
     listenerGuardState.loadStateError = new Error('state read failed');
 
+    const logged = new Promise(resolve => cosEvents.once('log', resolve));
     cosEvents.emit('task:ready', { id: 'task-x' });
-    await flushMicrotasks();
+    await logged;
 
     expect(unhandled).toEqual([]);
     const errors = logs.filter(entry => entry.level === 'error');

@@ -7,6 +7,7 @@ import { join } from 'path';
 import { pathToFileURL } from 'url';
 
 import { runMigrations, listPendingMigrations, sourceDeclaresPurge } from './run-migrations.js';
+import { createProviderService } from '../server/lib/aiToolkit/providers.js';
 
 const fsMocks = vi.hoisted(() => ({ readFailures: new Map(), realRename: null }));
 
@@ -265,6 +266,58 @@ export default {
 
     await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
     expect(readFileSync(installed, 'utf-8')).toBe('# new\n');
+  });
+
+  it('offers new shipped models after upgrades and keeps manual removals across restarts', async () => {
+    const reference = join(rootDir, 'data.reference');
+    const installed = join(dataDir, 'providers.json');
+    mkdirSync(reference);
+    const ship = (models) => writeFileSync(join(reference, 'providers.json'), JSON.stringify({
+      providers: {
+        example: { type: 'cli', models },
+        narrowed: { type: 'api', models },
+        deleted: { type: 'api', models },
+      },
+    }));
+    const initial = {
+      activeProvider: 'example',
+      providers: {
+        example: { id: 'example', type: 'cli', models: ['custom', 'old'], defaultModel: 'custom' },
+        narrowed: { id: 'narrowed', type: 'api', models: ['old'], catalogNarrowing: ['old'] },
+      },
+    };
+    writeFileSync(installed, JSON.stringify(initial));
+    ship(['old', 'new']);
+
+    await runMigrations({ rootDir, migrationsDir, through: '001-fixture.js' });
+    expect(JSON.parse(readFileSync(installed, 'utf-8'))).toEqual(initial);
+    await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
+    const service = createProviderService({ dataDir });
+    expect(await service.getProviderById('example')).toMatchObject({
+      models: ['custom', 'old', 'new'], defaultModel: 'custom',
+    });
+
+    await service.updateProvider('example', { models: ['custom', 'new'] }, { trackModelRemovals: true });
+    ship(['old', 'new', 'newer']);
+    await expect(runMigrations({ rootDir, migrationsDir })).resolves.toBe(0);
+    const reconciled = readFileSync(installed, 'utf-8');
+    expect(JSON.parse(reconciled)).toEqual({
+      ...initial,
+      providers: {
+        ...initial.providers,
+        example: { ...initial.providers.example, models: ['custom', 'new', 'newer'], removedModels: ['old'] },
+      },
+    });
+    await runMigrations({ rootDir, migrationsDir });
+    expect(readFileSync(installed, 'utf-8')).toBe(reconciled);
+
+    const restarted = createProviderService({ dataDir });
+    const restoredModels = ['custom', 'old', 'new', 'newer'];
+    await restarted.updateProvider('example', { models: restoredModels }, { trackModelRemovals: true });
+    await runMigrations({ rootDir, migrationsDir });
+    expect(JSON.parse(readFileSync(installed, 'utf-8')).providers.example).toMatchObject({
+      models: restoredModels, removedModels: [],
+    });
   });
 
   // #16827 deleted the migrations that only swapped a shipped prompt body. An

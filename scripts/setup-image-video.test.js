@@ -9,6 +9,7 @@ import { BYOV_RUNTIME_INFO } from '../server/services/videoGen/runtimes.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SETUP_SCRIPT = join(REPO_ROOT, 'scripts', 'setup-image-video.sh');
+const REQUIREMENTS_DIR = join(REPO_ROOT, 'scripts', 'ml', 'requirements');
 const source = readFileSync(SETUP_SCRIPT, 'utf8');
 const helper = source.match(/^venv_python\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
 const existsHelper = source.match(/^venv_exists\(\) \{.*\}\n/m)?.[0];
@@ -657,13 +658,13 @@ describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
   const block = source.slice(source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'), source.indexOf('INSTALL_LTX2="${INSTALL_LTX2:-0}"'));
 
   it('installs the mflux-video lock with --require-hashes --no-deps and never by bare package name', () => {
-    expect(block).toContain('VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"');
+    expect(block).toContain('VIDEO_LOCK="$SCRIPT_DIR/ml/requirements/requirements-mflux-video-mlx.lock.txt"');
     expect(block).toContain('pip install --user --require-hashes --no-deps --only-binary :all: -r "$VIDEO_LOCK"');
     // Removing the wrong `mlx_video` namesake must be followed by a force-reinstall of the real package's own files.
     expect(block).toMatch(/--require-hashes --no-deps --only-binary :all: --force-reinstall -r "\$VIDEO_SELF_REQ" \|\| VIDEO_STATUS=\$\?[\s\S]*-r "\$VIDEO_LOCK" \|\| VIDEO_STATUS=\$\?/);
     // A failed install must stop setup, not be masked by the temp-file cleanup.
     expect(block).toContain('[[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"');
-    expect(existsSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
+    expect(existsSync(join(REQUIREMENTS_DIR, 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
     expect(block).not.toMatch(/pip install --upgrade/);
     expect(block).not.toMatch(/^\s+(torch|diffusers|accelerate|mlx_vlm|mlx) *\\?$/m);
   });
@@ -686,11 +687,11 @@ describe('uv installs target their own venv, not an inherited one', () => {
   it('bootstraps every bundled uv from the hash-pinned lock, above the wheel traversal and compromised CA fixes', () => {
     // GHSA-hq85-5cpj-mr62 needs 0.13.4; that also includes the entry-point,
     // RECORD, ZIP and TAR extraction fixes. Check every executable install.
-    const installs = [...source.matchAll(/pip install[^\n]*-r "\$SCRIPT_DIR\/requirements-uv-bootstrap\.lock\.txt"/g)];
+    const installs = [...source.matchAll(/pip install[^\n]*-r "\$SCRIPT_DIR\/ml\/requirements\/requirements-uv-bootstrap\.lock\.txt"/g)];
     expect(installs).toHaveLength(1);
     for (const [install] of installs) expect(install).toContain('--require-hashes --no-deps');
     expect(source).not.toMatch(/pip install[^\n]*["']uv==/);
-    const pin = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-uv-bootstrap.txt'), 'utf8').match(/^uv==(\d+)\.(\d+)\.(\d+)$/m);
+    const pin = readFileSync(join(REQUIREMENTS_DIR, 'requirements-uv-bootstrap.txt'), 'utf8').match(/^uv==(\d+)\.(\d+)\.(\d+)$/m);
     const [major, minor, patch] = pin.slice(1).map(Number);
     expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
     // The tool directory and version probe must track the locked release.
@@ -984,8 +985,8 @@ describe('pinned runtime revisions', () => {
 
 describe('MiniMax H3 MLX hash-pinned lock', () => {
   const pinnedNames = (text) => text.split('\n').filter((l) => /^[a-z]/i.test(l)).map((l) => l.split(/ |\\/)[0]);
-  const input = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.txt'), 'utf8');
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.lock.txt'), 'utf8');
+  const input = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-mlx.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-mlx.lock.txt'), 'utf8');
 
   it('locks exactly the validated input set, every package carrying sha256 hashes', () => {
     const locked = pinnedNames(lock);
@@ -1077,7 +1078,7 @@ ${section}`;
 
 describe('LTX-2.5 CUDA Install/Repair', () => {
   const shell = resolveBashBinary();
-  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-ltx25-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
   function installer(target) {
@@ -1133,7 +1134,7 @@ source "$1"
   }
 
   it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-ltx25-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-ltx25-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+(?:==| @ )[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -1143,7 +1144,7 @@ source "$1"
     expect(lock).not.toMatch(/git\+/);
     expect(lock.match(/#subdirectory=packages\/ltx-/g)).toHaveLength(2);
     expect(lock).toContain('d151147788a9284cca791edc6ce898007e727fe6.tar.gz');
-    const backend = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda-build.lock.txt'), 'utf8');
+    const backend = readFileSync(join(REQUIREMENTS_DIR, 'requirements-ltx25-cuda-build.lock.txt'), 'utf8');
     expect(backend.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]).toBe(lock.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]);
     expect(lock.includes('nvidia-cuda-runtime==')).toBe(target === 'linux');
 
@@ -1186,11 +1187,11 @@ source "$1"
 
 describe('MiniMax H3 CUDA hash-pinned installation', () => {
   const section = source.slice(source.indexOf('INSTALL_MINIMAX_H3_CUDA="${'), source.indexOf('INSTALL_LTX25_CUDA="${'));
-  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-h3-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
   it.each(['windows', 'linux'])('hashes the complete %s set, including CUDA torch and torchao', (target) => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-h3-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-minimax-h3-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -1293,11 +1294,11 @@ exit "\${FAIL_PROBE:-0}"
 
 describe('Wan 2.2 CUDA hash-pinned installation', () => {
   const section = source.slice(source.indexOf('INSTALL_WAN22_CUDA="${'), source.indexOf('INSTALL_MUSICGEN="${'));
-  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-wan22-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-wan22-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
   it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including the CUDA torch stack', (target) => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -1378,13 +1379,13 @@ source "$1"
 }
 
 describe('MiniMax Music 3 CUDA Install/Repair', () => {
-  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-minimax-music3-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
 
   const installer = (target) => lockedCudaInstaller(target, { flag: 'INSTALL_MINIMAX_MUSIC3', probe: 'ModularPipeline' });
 
   it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-music3-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-minimax-music3-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -1434,7 +1435,7 @@ describe.each([
   { runtime: 'MusicGen (MLX)', lock: 'requirements-musicgen-mlx.lock.txt', from: 'INSTALL_MUSICGEN" == "1"', to: 'INSTALL_AUDIOLDM2="${' },
   { runtime: 'MiniMax Music 3 (MLX)', lock: 'requirements-minimax-music3-mlx.lock.txt', from: 'INSTALL_MINIMAX_MUSIC3_MLX" == "1"', to: 'INSTALL_MUSCRIPTOR="${' },
 ])('$runtime install is hash-pinned', ({ lock: lockName, from, to }) => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', lockName), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, lockName), 'utf8');
 
   it('every locked package carries a sha256 hash and none comes from a VCS or URL source', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1446,7 +1447,7 @@ describe.each([
   it('installs from the lock with --require-hashes and resolves nothing at install time', () => {
     const section = source.slice(source.indexOf(from), source.indexOf(to));
     const binaryOnly = lockName === 'requirements-minimax-music3-mlx.lock.txt' ? ' --only-binary :all:' : '';
-    expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/${lockName}"`);
+    expect(section).toContain(`pip install --require-hashes --no-deps${binaryOnly} -r "$SCRIPT_DIR/ml/requirements/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
   });
 });
@@ -1492,8 +1493,8 @@ ${section}`;
   };
 
   it('keeps every source pin in the complete lock and applies it during fresh Install and Repair', () => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
-    const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-music3-mlx.txt'), 'utf8').split('\n').filter((line) => /^[\w.-]+(?:\[.*?\])?==/.test(line));
+    const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-mlx.lock.txt'), 'utf8');
+    const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-minimax-music3-mlx.txt'), 'utf8').split('\n').filter((line) => /^[\w.-]+(?:\[.*?\])?==/.test(line));
     for (const pin of direct) expect(lock).toContain(`${pin.replace(/\[.*?\]/, '')} \\`);
     const run = installer();
     for (const extra of [{}, { REUSE: '1' }]) {
@@ -1538,7 +1539,7 @@ ${section}`;
 });
 
 describe('MuScriptor Apple Silicon install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-muscriptor-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-muscriptor-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_MUSCRIPTOR" == "1"'), source.indexOf('INSTALL_FLUX2="${'));
   const [appleBranch, otherBranch] = section.split(/^  else$/m);
 
@@ -1556,7 +1557,7 @@ describe('MuScriptor Apple Silicon install is hash-pinned', () => {
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
     expect(appleBranch).toContain('is_apple_silicon');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-muscriptor-mlx.lock.txt"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
   });
 
@@ -1570,7 +1571,7 @@ describe('MuScriptor Apple Silicon install is hash-pinned', () => {
 });
 
 describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-audioldm2-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-audioldm2-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_AUDIOLDM2" == "1"'), source.indexOf('INSTALL_ACESTEP="${'));
   const [appleBranch, otherBranch] = section.split(/^  else$/m);
 
@@ -1588,7 +1589,7 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
     expect(appleBranch).toContain('is_apple_silicon');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-audioldm2-mlx.lock.txt"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
   });
 
@@ -1606,13 +1607,13 @@ describe.each([
   { runtime: 'MuScriptor', lockName: 'muscriptor', flag: 'INSTALL_MUSCRIPTOR', probe: 'TranscriptionModel', probeImport: 'from muscriptor import TranscriptionModel' },
   { runtime: 'FLUX.2', lockName: 'flux2', flag: 'INSTALL_FLUX2', probe: 'Flux2KleinPipeline', probeImport: 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' },
 ])('$runtime Windows/Linux Install/Repair', ({ runtime, lockName, flag, probe, probeImport }) => {
-  const direct = readFileSync(join(REPO_ROOT, `scripts/requirements-${lockName}-cuda.txt`), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, `requirements-${lockName}-cuda.txt`), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
     .map((line) => line.replace(/\[[\w,-]+\]/, ''));
   const installer = (target) => lockedCudaInstaller(target, { flag, probe });
 
   it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-${lockName}-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-${lockName}-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -1665,9 +1666,9 @@ describe.each([
 });
 
 describe('shared mflux Apple Silicon install is hash-pinned', () => {
-  const lockPath = join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.lock.txt');
+  const lockPath = join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.lock.txt');
   const lock = readFileSync(lockPath, 'utf8');
-  const directPins = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.txt'), 'utf8');
+  const directPins = readFileSync(join(REQUIREMENTS_DIR, 'requirements-mflux-mlx.txt'), 'utf8');
   const block = source.slice(source.indexOf('if [[ "$INSTALL_MFLUX" == "1" ]]; then'), source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'));
 
   // Run the real install block on "Apple Silicon" with a fake interpreter and
@@ -1760,7 +1761,7 @@ ${block}`;
 });
 
 describe('FLUX.2 install is hash-pinned on every platform', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-flux2-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-flux2-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('FLUX.2 venv built but'));
   const [appleBranch, otherBranch] = section.split(/^  else$/m);
 
@@ -1777,12 +1778,12 @@ describe('FLUX.2 install is hash-pinned on every platform', () => {
   });
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
-    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-flux2-mlx.txt'), 'utf8')
+    const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-flux2-mlx.txt'), 'utf8')
       .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
       .map((line) => line.replace(/\[[\w,-]+\]/, ''));
     for (const pin of direct) expect(lock).toContain(`${pin} ;`);
     expect(appleBranch).toContain('if is_apple_silicon; then');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/ml/requirements/requirements-flux2-mlx.lock.txt"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
     expect(appleBranch).not.toContain('git+https');
   });
@@ -1802,7 +1803,7 @@ describe('FLUX.2 install is hash-pinned on every platform', () => {
 });
 
 describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-fastvideo-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-fastvideo-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"'), source.indexOf('INSTALL_WAN22="${INSTALL_WAN22:-0}"'));
   const requireMlxHelper = source.match(/^require_mlx_video_profile\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
 
@@ -1914,7 +1915,7 @@ ${section}`;
 });
 
 describe('ACE-Step Apple Silicon install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('if [[ "$INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
   const [, otherBranch] = section.split(/^  else$/m);
   const runBlock = ({ repair = false, oldPython = false, appleSilicon = true, failure = '' } = {}) => {
@@ -1963,8 +1964,8 @@ ${section}`;
   });
 
   it('keeps every direct pin and the build bootstrap consistent with the runtime lock', () => {
-    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx.txt'), 'utf8');
-    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx.txt'), 'utf8');
+    const build = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx-build.lock.txt'), 'utf8');
     for (const [, name, version] of direct.matchAll(/^([\w.-]+)(?:\[[\w,-]+\])?==([^\s]+)/gm)) {
       expect(lock).toContain(`${name}==${version} ;`);
     }
@@ -2017,13 +2018,13 @@ ${section}`;
 });
 
 describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
-  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
     .map((line) => line.replace(/\[[\w,-]+\]/, ''));
   const installer = () => lockedCudaInstaller(target, { flag: 'INSTALL_ACESTEP', probe: 'ACEStepPipeline' });
 
   it('locks every distribution with hashes and no VCS source', () => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-acestep-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-acestep-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);
@@ -2033,7 +2034,7 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
     expect(lock).toMatch(/^setuptools==/m);
     expect(lock).toMatch(/^wheel==/m);
-    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    const build = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx-build.lock.txt'), 'utf8');
     for (const [, name, version] of build.matchAll(/^([\w.-]+)==([^\s]+)/gm)) {
       if (name !== 'cython') expect(pins).toContain(`${name}==${version}`);
     }
@@ -2080,7 +2081,7 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
 });
 
 describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep15-mlx.lock.txt'), 'utf8');
+  const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep15-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_ACESTEP15" == "1"'), source.indexOf('INSTALL_MINIMAX_MUSIC3="${'));
   const [appleBranch, otherBranch] = section.split(/^  else$/m);
 
@@ -2098,7 +2099,7 @@ describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
     expect(appleBranch).toContain('is_apple_silicon');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-acestep15-mlx.lock.txt"');
     expect(appleBranch).toContain('pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
   });
@@ -2113,13 +2114,13 @@ describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
 });
 
 describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) => {
-  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep15-cuda.txt'), 'utf8')
+  const direct = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep15-cuda.txt'), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
     .map((line) => line.replace(/\[[\w,-]+\]/, ''));
   const installer = () => lockedCudaInstaller(target, { flag: 'INSTALL_ACESTEP15', probe: 'generate_music' });
 
   it('locks every distribution with hashes and no VCS source', () => {
-    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-acestep15-cuda-${target}.lock.txt`), 'utf8');
+    const lock = readFileSync(join(REQUIREMENTS_DIR, `requirements-acestep15-cuda-${target}.lock.txt`), 'utf8');
     const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
     const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
     expect(blocks.length).toBe(requirements.length);

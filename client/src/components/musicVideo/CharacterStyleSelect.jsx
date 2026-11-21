@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { listMusicVideoCharacterStyles } from '../../services/apiMusicVideo.js';
 import useListResource from '../../hooks/useListResource.js';
 import ListLoadError from '../ui/ListLoadError.jsx';
@@ -21,7 +22,7 @@ export default function CharacterStyleSelect({ id, value, onChange }) {
       <label htmlFor={id} className="block text-xs text-port-text-muted mb-1">Character style</label>
       <select id={id} value={value || ''} onChange={(e) => onChange(e.target.value)} className={inputClass}>
         <option value="">{state === 'loading' ? 'Loading…' : 'No character style'}</option>
-        {styles.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        {sortByLabel(styles, (s) => s.label).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
       </select>
       {state === 'error' && <ListLoadError what="character styles" error={error} onRetry={retry} className="mt-1" />}
       {style && (

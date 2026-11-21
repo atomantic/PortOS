@@ -63,7 +63,7 @@ because it is not the password. A disabled peer's token is refused.
 ### Peer API surface
 
 `PEER_API_SURFACE` in `server/lib/apiAccessPolicy.js` is the contract; this
-table mirrors it. `server/lib/apiAccessPolicy.guard.test.js` scans `peerFetch` and
+table mirrors it. `server/test/guards/modules/apiAccessPolicy.test.js` scans `peerFetch` and
 `peerStreamRequest` call sites and fails when this version calls a peer path
 the list does not admit.
 
@@ -78,6 +78,8 @@ the list does not admit.
 | GET | `/api/peer-sync/{manifest,library-manifest,cos-history-manifest,cos-tasks,eidoverse-foundations,cos-agent-archive,record,subscriptions}` | Record, manifest, and archive pulls. `/subscriptions` returns only the subscriptions targeting the calling peer; `/integrity` is operator-only |
 | POST | `/api/peer-sync/push` | Record push |
 | POST | `/api/peer-media/delete` | Remote media delete (also needs this install's media-delete capability for the peer) |
+| POST | `/api/peer-media/copy` | Verify a local gallery file. A request with a digest may fetch missing bytes from the authenticated caller only, with the media-delete grant. |
+| POST | `/api/peer-media/release` | Trash a redundant copy and stream from a verified primary, with the media-delete grant. Collection moves also require matching SHA-256 digests. |
 | any | `/api/federation/media/v1/*` | Federated media provider |
 | GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
 | POST | `/api/providers/fleet-host/key` | Fleet LLM host key |

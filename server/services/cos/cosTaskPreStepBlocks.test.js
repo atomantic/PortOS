@@ -1,3 +1,4 @@
+import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.js';
 /**
  * Tests for the CoS prompt PRE-STEP layer (`cosTaskPreStepBlocks.js`) — the
  * static prompt-fragment builders the claim prompts substitute (author filter,
@@ -27,7 +28,6 @@ import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../../lib/dispatchLabels.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
-const IMP_SRC = readFileSync(join(__dirname, 'cosImprovementTasks.js'), 'utf-8');
 const CLAIM_SRC = readFileSync(join(__dirname, 'cosTaskClaimWork.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 // The CoS task-generation layer spans the selection engine, improvement tasks,

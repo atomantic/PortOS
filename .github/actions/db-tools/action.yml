@@ -1,26 +1,34 @@
-name: Install PostgreSQL client and audio verification tools
+name: Install CI verification tools
 description: >-
-  pg_dump/psql matching the Postgres service major, plus the audio tools the
-  DB and browser suites verify with, through a cache of APT package downloads.
+  Audio verification tools, with an optional PostgreSQL client matching the
+  DB service major, through a cache of APT package downloads.
 
 inputs:
   pg-major:
-    description: The PostgreSQL service image's major version; pg_dump must match it.
-    required: true
+    description: The PostgreSQL service major required when include-postgres is true.
+    default: ''
+  include-postgres:
+    description: Whether to install the PostgreSQL client alongside ffmpeg.
+    default: 'true'
 
 runs:
   using: composite
   steps:
-    # Share only package downloads across DB/browser jobs. The helper checks
-    # restored bytes against fresh signed indexes; cache hits never skip setup.
+    # Cache only package downloads. The helper verifies restored bytes against
+    # fresh signed indexes; cache hits never skip setup.
     - name: Identify APT package cache
       id: apt-cache
       shell: bash
       env:
         PG_MAJOR: ${{ inputs.pg-major }}
+        INCLUDE_POSTGRES: ${{ inputs.include-postgres }}
       run: |
         . /etc/os-release
-        prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
+        toolset=ffmpeg
+        if [[ "$INCLUDE_POSTGRES" == true ]]; then
+          toolset="pg${PG_MAJOR}-ffmpeg"
+        fi
+        prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-${toolset}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
         echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
         # Refresh immutable entries daily as signed package indexes evolve.
         echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
@@ -34,9 +42,10 @@ runs:
 
     # Preserve bounded mirror fallback on a miss; the caller's step timeout
     # backs up the helper's 390-second download budget.
-    - name: Run the DB tool installer
+    - name: Install the selected tools
       shell: bash
       env:
         PG_MAJOR: ${{ inputs.pg-major }}
+        INCLUDE_POSTGRES: ${{ inputs.include-postgres }}
         APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
       run: bash scripts/ci-install-db-tools.sh

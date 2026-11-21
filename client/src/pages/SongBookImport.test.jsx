@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
   createSong: vi.fn(),
   importSongFromUrl: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSongbook.js', () => ({ createSong: api.createSong, importSongFromUrl: api.importSongFromUrl }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
@@ -284,6 +284,45 @@ describe('SongBookImport', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     // Nor a toast — it isn't news about the URL now in the input.
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('editing the URL away from a fetched draft drops it before the replacement resolves (#17101)', async () => {
+    // A previously successful draft must not stay saveable once the field
+    // shows a different URL: both Save paths would post A's content and source.
+    api.importSongFromUrl.mockResolvedValueOnce({
+      draft: { title: 'Song A', artist: '', content: { format: 'tab', text: 'C G Am' }, sourceUrl: 'https://example.com/a' },
+    });
+    let resolveB;
+    api.importSongFromUrl.mockReturnValueOnce(new Promise((resolve) => { resolveB = resolve; }));
+    await renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
+    const input = screen.getByLabelText('Tab / chord-sheet URL');
+    fireEvent.change(input, { target: { value: 'https://example.com/a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    await waitFor(() => expect(screen.getByLabelText('Title').value).toBe('Song A'));
+
+    fireEvent.change(input, { target: { value: 'https://example.com/b' } });
+    expect(screen.queryByText('Preview')).toBeNull();
+    expect(screen.getByLabelText('Title').value).toBe('');
+    expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Save song' }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    expect(api.createSong).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveB({ draft: { title: 'Song B', artist: '', content: { format: 'tab', text: 'D A Em' }, sourceUrl: 'https://example.com/b' } });
+    });
+    await waitFor(() => expect(screen.getByLabelText('Title').value).toBe('Song B'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalledTimes(1));
+    const [body] = api.createSong.mock.calls[0];
+    expect(body.title).toBe('Song B');
+    expect(body.content.text).toBe('D A Em');
+    expect(body.sourceUrl).toBe('https://example.com/b');
   });
 
   it('sends an in-range pasted capo through unchanged', async () => {

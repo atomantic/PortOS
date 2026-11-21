@@ -23,7 +23,7 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * `agentLifecycle.js` imports BOTH spawners. This module is a leaf with
  * respect to that cluster — it must NOT import `agentLifecycle.js`,
  * `agentCliSpawning.js`, `agentTuiSpawning.js`, or `agentManagement.js`, or the
- * cycle comes straight back. `server/services/serviceImportCycles.guard.test.js`
+ * cycle comes straight back. `server/test/guards/modules/serviceImportCycles.test.js`
  * enforces that.
  */
 
@@ -868,7 +868,39 @@ export async function finalizeAgent(input) {
   return outsideGitMutationLifetime(() => finalizeAgentInCompletionContext(input));
 }
 
-async function finalizeAgentInCompletionContext({
+/**
+ * @typedef {object} CompletionContext
+ * @property {string} agentId
+ * @property {object} task
+ * @property {string} taskType
+ * @property {string|null|undefined} runId
+ * @property {string|null|undefined} providerId
+ * @property {boolean} reportedSuccess
+ * @property {number|null|undefined} exitCode
+ * @property {number|null|undefined} duration
+ * @property {string|undefined} outputBuffer
+ * @property {string|null} finalSummary
+ * @property {object|null|undefined} reportedErrorAnalysis
+ * @property {object|null} executionInterruption
+ * @property {boolean} terminatedByUser
+ * @property {string|undefined} error
+ * @property {string|undefined} completionReason
+ * @property {string|null} workspacePath
+ * @property {boolean} recovery
+ * @property {boolean} prExpected
+ * @property {number|null} startedAt
+ * @property {boolean} executionSuccess
+ * @property {number|null} runStartedAt
+ */
+
+/**
+ * Normalize finalizeAgent's input into a typed completion context shared across
+ * all finalization stages.
+ *
+ * @param {object} input
+ * @returns {CompletionContext}
+ */
+export function createCompletionContext({
   agentId,
   task,
   runId,
@@ -889,29 +921,6 @@ async function finalizeAgentInCompletionContext({
   startedAt = null,
 }) {
   const executionSuccess = reportedSuccess && (typeof exitCode !== 'number' || exitCode === 0);
-  const reportedCompletion = !terminatedByUser && !isPrivateSecurityTask(task)
-    ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
-  let reportedTaskOutcome = reportedCompletion?.taskOutcome ?? null;
-  // Only a clean, uninterrupted, non-private run whose own analysis raised no
-  // terminal error may have its reported hold re-judged against the forge.
-  const forgeVerifiable = executionSuccess && !terminatedByUser && !executionInterruption
-    && !isPrivateSecurityTask(task) && !reportedErrorAnalysis?.actionable && !reportedErrorAnalysis?.permanent;
-  // A successful process may report a hold after discovering its PR merged.
-  // Verify that exact target before the hold can schedule another run.
-  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome,
-    eligible: forgeVerifiable });
-  if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
-  const claimDisposition = await completionClaimDisposition({ task, agentId, reportedOutcome: reportedTaskOutcome,
-    success: forgeVerifiable });
-  reportedTaskOutcome = await completionClaimOutcome(agentId, reportedTaskOutcome, claimDisposition);
-  const reviewHandoff = await completionReviewHandoff({ task, agentId, reportedOutcome: reportedTaskOutcome,
-    eligible: forgeVerifiable });
-  if (reviewHandoff) reportedTaskOutcome = reviewHandoff.taskOutcome;
-  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
-  ({ reportedSuccess, error, reportedErrorAnalysis, executionInterruption } = await settleReportedExecution({
-    agentId, task, reportedTaskOutcome, deliveryHeld,
-    reportedSuccess, error, reportedErrorAnalysis, executionInterruption,
-  }));
   // The run window the commit criterion is evaluated against (#3637). Callers
   // that don't track their own start timestamp still know how long the run took,
   // and `duration` is measured from the same instant, so derive it — a missing
@@ -924,6 +933,75 @@ async function finalizeAgentInCompletionContext({
   const runStartedAt = Number.isFinite(startedAt)
     ? startedAt
     : (Number.isFinite(duration) && duration > 0 ? Date.now() - duration : null);
+  return {
+    agentId,
+    task,
+    taskType: task?.taskType || 'user',
+    runId,
+    providerId,
+    reportedSuccess,
+    exitCode,
+    duration,
+    outputBuffer,
+    finalSummary,
+    reportedErrorAnalysis,
+    executionInterruption,
+    terminatedByUser,
+    error,
+    completionReason,
+    workspacePath,
+    recovery,
+    prExpected,
+    startedAt,
+    executionSuccess,
+    runStartedAt,
+  };
+}
+
+async function verifyForgeReportedOutcome(ctx) {
+  const { agentId, task, workspacePath, finalSummary, terminatedByUser, executionSuccess } = ctx;
+  const reportedCompletion = !terminatedByUser && !isPrivateSecurityTask(task)
+    ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
+  let reportedTaskOutcome = reportedCompletion?.taskOutcome ?? null;
+  // Only a clean, uninterrupted, non-private run whose own analysis raised no
+  // terminal error may have its reported hold re-judged against the forge.
+  const forgeVerifiable = executionSuccess && !terminatedByUser && !ctx.executionInterruption
+    && !isPrivateSecurityTask(task) && !ctx.reportedErrorAnalysis?.actionable && !ctx.reportedErrorAnalysis?.permanent;
+  // A successful process may report a hold after discovering its PR merged.
+  // Verify that exact target before the hold can schedule another run.
+  const mergedReviewFollowUp = await completionReviewFollowUp({
+    task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome, eligible: forgeVerifiable,
+  });
+  if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
+  const claimDisposition = await completionClaimDisposition({
+    task, agentId, reportedOutcome: reportedTaskOutcome, success: forgeVerifiable,
+  });
+  reportedTaskOutcome = await completionClaimOutcome(agentId, reportedTaskOutcome, claimDisposition);
+  const reviewHandoff = await completionReviewHandoff({
+    task, agentId, reportedOutcome: reportedTaskOutcome, eligible: forgeVerifiable,
+  });
+  if (reviewHandoff) reportedTaskOutcome = reviewHandoff.taskOutcome;
+  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
+  const settled = await settleReportedExecution({
+    agentId, task, reportedTaskOutcome, deliveryHeld,
+    reportedSuccess: ctx.reportedSuccess,
+    error: ctx.error,
+    reportedErrorAnalysis: ctx.reportedErrorAnalysis,
+    executionInterruption: ctx.executionInterruption,
+  });
+  return {
+    reportedCompletion,
+    reportedTaskOutcome,
+    forgeVerifiable,
+    mergedReviewFollowUp,
+    claimDisposition,
+    deliveryHeld,
+    ...settled,
+  };
+}
+
+async function verifyForgePrEvidence(ctx, reportedSuccess) {
+  const { agentId, task, runId, workspacePath, outputBuffer, terminatedByUser, prExpected } = ctx;
   // #3358: a run whose task shape promised a PR is not successful until the
   // forge confirms one exists. Runs BEFORE the completion verdict is derived so
   // every downstream write (task status, learning telemetry, the "Completed
@@ -959,10 +1037,11 @@ async function finalizeAgentInCompletionContext({
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
   if (primaryPrObservation.outcome === PR_OBSERVATION.VERIFIED_CLAIM && primaryPrObservation.url) {
     const { recordBranchCompletionPolicy } = await import('../branchCompletionPolicy.js');
-    await recordBranchCompletionPolicy({ agentId, task, repoPath: workspacePath,
-      branch: primaryPrObservation.branch, prUrl: primaryPrObservation.url });
+    await recordBranchCompletionPolicy({
+      agentId, task, repoPath: workspacePath,
+      branch: primaryPrObservation.branch, prUrl: primaryPrObservation.url,
+    });
   }
-  const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
   // the policy table marks recordable. The sparse result returns the same
@@ -991,6 +1070,21 @@ async function finalizeAgentInCompletionContext({
       },
     });
   }
+  return { primaryPrObservation, prEvidence };
+}
+
+/**
+ * Stage 1 of agent finalization: persist reported completion, verify forge-owned
+ * completion overrides (merged review follow-up, claim disposition, review handoff),
+ * inspect PR/no-change evidence and primary-checkout drift, and run goal-fidelity review.
+ *
+ * @param {CompletionContext} ctx
+ * @returns {Promise<object>}
+ */
+export async function resolveForgeOutcome(ctx) {
+  const { agentId, task, workspacePath, terminatedByUser, completionReason, runStartedAt } = ctx;
+  const reported = await verifyForgeReportedOutcome(ctx);
+  const { primaryPrObservation, prEvidence } = await verifyForgePrEvidence(ctx, reported.reportedSuccess);
 
   // #3680: a worktree agent that committed to the PRIMARY checkout left
   // unreviewed commits on an unprotected branch. Same posture as the PR check —
@@ -1007,9 +1101,9 @@ async function finalizeAgentInCompletionContext({
   // layer's answer, so each stage below re-resolves with the evidence gathered
   // so far rather than amending a shared accumulator.
   const verdictEvidence = {
-    reportedSuccess,
-    errorAnalysis: reportedErrorAnalysis,
-    error,
+    reportedSuccess: reported.reportedSuccess,
+    errorAnalysis: reported.reportedErrorAnalysis,
+    error: reported.error,
     completionReason,
     terminatedByUser,
     drift,
@@ -1020,12 +1114,84 @@ async function finalizeAgentInCompletionContext({
 
   const retirementCompletion = isCleanupOnlyRecovery(task) ? await verifyCleanupCompletion(task) : null;
   const { fidelity, fidelityDowngrade } = await reviewGoalFidelity({
-    agentId, task, workspacePath, startedAt: runStartedAt, deliveredVerdict, claimDisposition, retirementCompletion,
-    executionReport: reportedCompletion?.summary,
+    agentId, task, workspacePath, startedAt: runStartedAt, deliveredVerdict,
+    claimDisposition: reported.claimDisposition, retirementCompletion,
+    executionReport: reported.reportedCompletion?.summary,
   });
   const judgedVerdict = resolveAgentFinalVerdict({ ...verdictEvidence, fidelityReview: fidelity.review });
   await followUpAgentGoalFidelity({ agentId, task, fidelity, fidelityDowngrade });
 
+  return {
+    reportedTaskOutcome: reported.reportedTaskOutcome,
+    forgeVerifiable: reported.forgeVerifiable,
+    mergedReviewFollowUp: reported.mergedReviewFollowUp,
+    claimDisposition: reported.claimDisposition,
+    deliveryHeld: reported.deliveryHeld,
+    executionInterruption: reported.executionInterruption,
+    prEvidence,
+    verdictEvidence,
+    retirementCompletion,
+    fidelity,
+    judgedVerdict,
+  };
+}
+
+async function resolveSettledTaskOutcome({
+  agentId, task, executionSuccess, verdict, validationPassed,
+  reportedTaskOutcome, retirementCompletion, branchProvenEmpty,
+}) {
+  const runtimeCompletionMissing = task.metadata?.runtimeVerification?.status === 'resumed'
+    && !reportedTaskOutcome && validationPassed !== true;
+  const reported = retirementCompletion?.status === 'unverified'
+    ? { status: 'incomplete', reason: retirementCompletion.reason }
+    : runtimeCompletionMissing
+      ? { status: 'incomplete', reason: 'Runtime verification completion was not established.' }
+      : reportedTaskOutcome;
+  let taskOutcome = resolveTaskOutcome({
+    reported,
+    success: verdict.success,
+    validationPassed,
+    branchProvenEmpty,
+    noChangeAllowed: permitsNoChangeCompletion(task),
+    noCommitDeclared: declaresNoCommitCriterion(task),
+  });
+  if (verdict.success) {
+    const owner = await getAgentRecord(agentId);
+    if (owner?.metadata?.taskAnalysisType === 'do-release'
+      || owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
+      const { verifyReleaseDelivery } = await import('../releaseDeliveryGate.js');
+      const delivery = await verifyReleaseDelivery(owner, taskOutcome);
+      if (delivery && !delivery.verified) {
+        taskOutcome = {
+          status: 'incomplete',
+          reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}`,
+        };
+      }
+    }
+  }
+  if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
+    taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
+  }
+  return taskOutcome;
+}
+
+/**
+ * Stage 2 of agent finalization: dispatch the task output hook, resolve the final
+ * verdict and success-criteria validation, apply release/cleanup delivery gates,
+ * and build the fenced task update.
+ *
+ * @param {CompletionContext} ctx
+ * @param {object} forgeOutcome
+ * @returns {Promise<object>}
+ */
+export async function applyDeliverySettlement(ctx, forgeOutcome) {
+  const { agentId, task, workspacePath, recovery, terminatedByUser, executionSuccess, runStartedAt } = ctx;
+  const {
+    reportedTaskOutcome, forgeVerifiable, mergedReviewFollowUp, claimDisposition,
+    deliveryHeld, executionInterruption, prEvidence, verdictEvidence, retirementCompletion,
+    fidelity, judgedVerdict,
+  } = forgeOutcome;
+  const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
   // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
@@ -1078,8 +1244,6 @@ async function finalizeAgentInCompletionContext({
       || resolveFailedTaskDecision(preHookTask, analysis, { agentId }).status === 'blocked',
   });
 
-  const taskType = task?.taskType || 'user';
-
   const runtimeContinuation = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'completed'
     && task.metadata?.runtimeVerification?.status === 'resumed'
     ? await import('../runtimeVerification.js')
@@ -1118,41 +1282,68 @@ async function finalizeAgentInCompletionContext({
       return null;
     });
 
-  const runtimeCompletionMissing = task.metadata?.runtimeVerification?.status === 'resumed'
-    && !reportedTaskOutcome && validationPassed !== true;
-  let taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
-    ? { status: 'incomplete', reason: retirementCompletion.reason }
-    : runtimeCompletionMissing ? { status: 'incomplete', reason: 'Runtime verification completion was not established.' }
-      : reportedTaskOutcome, success: verdict.success,
-    validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
-    noCommitDeclared: declaresNoCommitCriterion(task) });
-  if (verdict.success) {
-    const owner = await getAgentRecord(agentId);
-    if (owner?.metadata?.taskAnalysisType === 'do-release' || owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-      const { verifyReleaseDelivery } = await import('../releaseDeliveryGate.js');
-      const delivery = await verifyReleaseDelivery(owner, taskOutcome);
-      if (delivery && !delivery.verified) taskOutcome = { status: 'incomplete',
-        reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
-    }
-  }
-  if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
-    taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
-  }
+  let taskOutcome = await resolveSettledTaskOutcome({
+    agentId, task, executionSuccess, verdict, validationPassed,
+    reportedTaskOutcome, retirementCompletion, branchProvenEmpty,
+  });
   const outcomeHeld = ['blocked', 'incomplete'].includes(taskOutcome?.status);
   const deliverySuccess = verdict.success && !outcomeHeld;
-  const deliveryVerdict = !deliverySuccess && verdict.success ? { ...verdict, success: false,
+  const deliveryVerdict = !deliverySuccess && verdict.success ? {
+    ...verdict,
+    success: false,
     error: taskOutcome.reason,
-    errorAnalysis: { category: hookResult?.outcome?.reason || `task-${taskOutcome.status}`,
-      message: taskOutcome.reason, permanent: true, actionable: false, requiresFallback: false },
+    errorAnalysis: {
+      category: hookResult?.outcome?.reason || `task-${taskOutcome.status}`,
+      message: taskOutcome.reason,
+      permanent: true,
+      actionable: false,
+      requiresFallback: false,
+    },
   } : verdict;
   const cleanupOwner = await getAgentRecord(agentId);
   const cleanupEligible = cleanupOwner?.metadata?.isWorktree === true || hasClaimCheckoutBindings(cleanupOwner?.metadata);
   const taskUpdate = await resolveCompletionTaskUpdate({
-    task, preHookTask, hookMetadata, hookResult, verdict, taskOutcome, reportedTaskOutcome, deliveryHeld, deliverySuccess,
+    task, preHookTask, hookMetadata, hookResult, verdict, taskOutcome,
+    reportedTaskOutcome, deliveryHeld, deliverySuccess,
     executionInterruption, terminatedByUser, agentId,
   });
   if (taskUpdate.runtimeRecoveryContext) taskOutcome = taskUpdate.metadata.taskOutcome;
   taskUpdate.metadata = { ...(taskUpdate.metadata || task.metadata), taskOutcome };
+
+  return {
+    hookResult,
+    preHookTask,
+    verdict,
+    validationPassed,
+    taskOutcome,
+    deliverySuccess,
+    deliveryVerdict,
+    cleanupOwner,
+    cleanupEligible,
+    taskUpdate,
+  };
+}
+
+/**
+ * Stage 3 of agent finalization: persist LI verdict, cleanup intent, handoff
+ * metadata, agent completion record, run tracking record, final task update,
+ * provider sidelining, scheduled-task ledger, and scratch cleanup.
+ *
+ * @param {CompletionContext} ctx
+ * @param {object} forgeOutcome
+ * @param {object} settlement
+ * @returns {Promise<object>}
+ */
+export async function recordCompletionArtifacts(ctx, forgeOutcome, settlement) {
+  const {
+    agentId, task, taskType, runId, providerId, exitCode, duration,
+    outputBuffer, terminatedByUser, executionSuccess,
+  } = ctx;
+  const { executionInterruption, prEvidence, claimDisposition, retirementCompletion, fidelity } = forgeOutcome;
+  const {
+    hookResult, preHookTask, verdict, validationPassed, taskOutcome,
+    deliverySuccess, deliveryVerdict, cleanupOwner, cleanupEligible, taskUpdate,
+  } = settlement;
 
   // Each write shares the cosState mutex, but separate records are not atomic.
   // Persist cleanup intent first so a crash after completeAgent can replay only
@@ -1160,36 +1351,58 @@ async function finalizeAgentInCompletionContext({
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
-  await stampLiExecutionVerdict(taskUpdate, task, { success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis });
+  await stampLiExecutionVerdict(taskUpdate, task, {
+    success: deliverySuccess, validationPassed, errorAnalysis: deliveryVerdict.errorAnalysis,
+  });
   await recordCompletionCleanupIntent({ agentId, cleanupOwner, task, deliverySuccess, outputBuffer, prEvidence });
-  if (cleanupEligible) await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
-    Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
-      key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
+  if (cleanupEligible) {
+    await prepareCompletionTaskHandoff(await getAgentRecord(agentId),
+      Object.fromEntries(Object.entries(taskUpdate.metadata || {}).filter(([key, value]) =>
+        key !== 'privateSecurityScope' && JSON.stringify(value) !== JSON.stringify(preHookTask.metadata?.[key]))));
+  }
   // Persist the prerequisite BEFORE retiring execution. A crash between the
   // agent and task writes must never expose this dispatch to generic retry.
   const prerequisiteTaskResult = PREREQUISITE_BLOCKED_CATEGORIES.includes(taskUpdate.metadata?.blockedCategory)
     ? await updateTask(task.id, taskUpdate, taskType, ...completionTaskFence(taskUpdate, cleanupOwner)) : null;
-  if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) throw new Error('Delivery prerequisite task ownership changed before completion');
-  const completedAgent = await completeAgent(agentId, { ...completionRecord({
-    task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption, exitCode, duration, outputBuffer, validationPassed,
-  }), executionSuccess, taskOutcome,
+  if (prerequisiteTaskResult?.error || prerequisiteTaskResult?.statusChanged) {
+    throw new Error('Delivery prerequisite task ownership changed before completion');
+  }
+  const completedAgent = await completeAgent(agentId, {
+    ...completionRecord({
+      task, verdict: deliveryVerdict, hookResult, fidelity, executionInterruption,
+      exitCode, duration, outputBuffer, validationPassed,
+    }),
+    executionSuccess,
+    taskOutcome,
     requireCheckoutSettlement: false,
     ...(claimDisposition ? { claimDisposition } : {}),
     ...(retirementCompletion ? { retirementCompletion } : {}),
-    ...completionRecoveryOwnership(taskUpdate.metadata, agentId) });
+    ...completionRecoveryOwnership(taskUpdate.metadata, agentId),
+  });
   const capturePending = completedAgent?.result?.cleanupPending === true;
   if (capturePending) {
     taskUpdate.status = 'in_progress';
-    taskUpdate.metadata = { ...taskUpdate.metadata, deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: agentId,
-      taskOutcome: completedAgent.result.taskOutcome };
+    taskUpdate.metadata = {
+      ...taskUpdate.metadata,
+      deliveryRecovery: 'cleanup',
+      deliveryRecoveryAgentId: agentId,
+      taskOutcome: completedAgent.result.taskOutcome,
+    };
   }
 
   if (runId) {
     // Every failed verdict overrides exit-code/commit rescue in run tracking,
     // so the history cannot contradict the task or the cleanup decision (#3358).
-    await completeAgentRun(runId, completionRunOutput(task, verdict.success, outputBuffer), exitCode, duration, deliveryVerdict.errorAnalysis, deliverySuccess ? null : false, { executionSuccess, taskOutcome });
+    await completeAgentRun(
+      runId,
+      completionRunOutput(task, verdict.success, outputBuffer),
+      exitCode,
+      duration,
+      deliveryVerdict.errorAnalysis,
+      deliverySuccess ? null : false,
+      { executionSuccess, taskOutcome },
+    );
   }
-
 
   // The bounded source inventory belongs only to this run and its private
   // report. Task metadata is replicated to peers and reused in later prompts.
@@ -1202,7 +1415,9 @@ async function finalizeAgentInCompletionContext({
     : await updateTask(task.id, taskUpdate, taskType, ...completionTaskFence(taskUpdate, cleanupOwner)));
   if (taskResult?.error && !isExpectedUnpersistedMiss(task, taskResult.error)) {
     const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
-    emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
+    emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, {
+      taskId: task.id, agentId, error: taskResult.error,
+    });
   }
 
   await sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser });
@@ -1210,8 +1425,14 @@ async function finalizeAgentInCompletionContext({
   // Pending physical cleanup is a separate obligation. Record the validated
   // execution verdict now, with a timestamp fence against a newer failure.
   const cleanupExecution = capturePending && executionSuccess && validationPassed !== false;
-  await recordScheduledAgentOutcome({ agentId, task, verdict: cleanupExecution ? verdict : deliveryVerdict,
-    terminatedByUser, hookResult, completedAt: cleanupExecution ? completedAgent.completedAt || '' : null });
+  await recordScheduledAgentOutcome({
+    agentId,
+    task,
+    verdict: cleanupExecution ? verdict : deliveryVerdict,
+    terminatedByUser,
+    hookResult,
+    completedAt: cleanupExecution ? completedAgent.completedAt || '' : null,
+  });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
 
@@ -1233,6 +1454,13 @@ async function finalizeAgentInCompletionContext({
     branchProvenEmpty: prEvidence.branchProvenEmpty,
     cleanupEvidence: prEvidence.cleanupEvidence,
   };
+}
+
+async function finalizeAgentInCompletionContext(input) {
+  const ctx = createCompletionContext(input);
+  const forgeOutcome = await resolveForgeOutcome(ctx);
+  const settlement = await applyDeliverySettlement(ctx, forgeOutcome);
+  return recordCompletionArtifacts(ctx, forgeOutcome, settlement);
 }
 
 /** Persist an explicitly delivered completion, independently of delivery success.

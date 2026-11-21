@@ -66,6 +66,9 @@ describe('appLaneHealth', () => {
     expect(result.lanes.length).toBeGreaterThan(20);
     expect(result.lanes.find(({ id }) => id === 'simplify')).toMatchObject({ filed: 1, completed: 1, reverted: 1 });
     expect(result.lanes.find(({ id }) => id === 'better-complexity')).toMatchObject({ filed: 1, open: 1 });
+    const grouped = await collectLaneHealth(APP, { forge: GLAB, taskType: 'code-simplification', now: NOW, deps: { exec, runGit } });
+    expect(grouped.lanes).toEqual([expect.objectContaining({ id: 'code-simplification', filed: 2, open: 1, reverted: 1 })]);
+    expect(exec.mock.calls.filter(([, args]) => args[0] === 'issue').at(-1)[1]).toEqual(['issue', 'list', '--all', '-P', '1000']);
   });
 
   it('shortens a truncated window and names failed PR and commit reads instead of reading them as no reverts', async () => {

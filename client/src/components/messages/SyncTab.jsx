@@ -6,7 +6,13 @@ import SettingsLoadError from '../ui/SettingsLoadError';
 import QueueInvestigationButton from '../ui/QueueInvestigationButton';
 import { formatDateTime } from '../../utils/formatters';
 import { buildSelectorTestFailureTask } from '../../lib/selectorTestFailureTask';
-import * as api from '../../services/api';
+import {
+  getMessageSelectors,
+  launchMessageBrowser,
+  syncMessageAccount,
+  updateMessageSelectors,
+  testMessageSelectors,
+} from '../../services/apiMessages.js';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import { accountSupportsSyncMode } from '../../lib/messageSyncModes';
 
@@ -48,7 +54,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   const selectorsLoadedRef = useRef(false);
   const fetchSelectors = useCallback(async () => {
     const requestId = ++selectorsRequestRef.current;
-    const data = await api.getMessageSelectors({ silent: true }).catch(() => null);
+    const data = await getMessageSelectors({ silent: true }).catch(() => null);
     if (requestId !== selectorsRequestRef.current) return;
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       // Once a read has succeeded, the shown values are saved ones (plus this tab's own
@@ -74,16 +80,16 @@ export default function SyncTab({ accounts, onRefresh }) {
   useEffect(() => { fetchSelectors(); }, [fetchSelectors]);
 
   const handleLaunch = async (accountId) => {
-    const result = await api.launchMessageBrowser(accountId).catch(() => null);
+    const result = await launchMessageBrowser(accountId).catch(() => null);
     if (result?.success) toast.success('Browser tab opened — log in if needed, then sync');
   };
 
   const handleSync = (accountId, mode) =>
-    sync(accountId, () => api.syncMessageAccount(accountId, mode, { silent: true }));
+    sync(accountId, () => syncMessageAccount(accountId, mode, { silent: true }));
 
   const handleSaveSelectors = async (provider) => {
     if (selectorsState !== 'ready') return;
-    const result = await api.updateMessageSelectors(provider, selectorForm).catch(() => null);
+    const result = await updateMessageSelectors(provider, selectorForm).catch(() => null);
     if (!result) return;
     setRawSelectors((prev) => ({ ...prev, [provider]: result }));
     toast.success(`${provider} selectors updated`);
@@ -93,7 +99,7 @@ export default function SyncTab({ accounts, onRefresh }) {
 
   const handleTestSelectors = async (provider) => {
     setTestResults(prev => ({ ...prev, [provider]: { status: 'testing' } }));
-    const result = await api.testMessageSelectors(provider).catch((err) => ({
+    const result = await testMessageSelectors(provider).catch((err) => ({
       status: 'error',
       error: err?.message || 'Test request failed',
     }));

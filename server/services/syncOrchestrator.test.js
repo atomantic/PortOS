@@ -131,6 +131,9 @@ vi.mock('./sharing/tombstoneGc.js', () => ({
 vi.mock('./sharing/peerSyncAssets.js', () => ({
   pullMissingAssetsFromPeer: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('./catalog/catalogMediaBytesSync.js', () => ({
+  pullMissingCatalogMediaBytes: vi.fn().mockResolvedValue(0),
+}));
 vi.mock('./brainTombstoneGc.js', () => ({
   sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));

@@ -2,7 +2,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { BarChart3, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
-import * as api from '../../services/api';
+import { getDatadogInstances } from '../../services/apiSystem.js';
+import {
+  upgradeAppTls,
+  getAppWorkTracker,
+  getAppLayeredIntelligence,
+  getAppTaskTypes,
+  updateApp,
+  updateAppTaskTypeOverride,
+} from '../../services/apiApps.js';
+import { getProviders } from '../../services/apiProviders.js';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
@@ -13,7 +22,7 @@ import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
-import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge } from '../cos/constants';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../cos/constants';
 import {
   APP_FEATURES,
   APP_FEATURE_IDS,
@@ -40,7 +49,7 @@ const TABS = [
 const TAB_IDS = TABS.map(t => t.id);
 
 // Silent: the DataDog section renders its own error row with Retry.
-const loadDatadogInstances = () => api.getDatadogInstances({ silent: true })
+const loadDatadogInstances = () => getDatadogInstances({ silent: true })
   .then(data => (data?.instances ? Object.values(data.instances) : []));
 
 // Port fields that must be validated on save even when their tab is unmounted.
@@ -79,6 +88,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     // Unset means ON for PortOS itself and OFF for every other app.
     useAutoMerge: resolveUseAutoMerge(app),
+    // Both default off for every app, PortOS included.
+    autoApprovePR: resolveAutoApprovePR(app),
+    adminMerge: resolveAdminMerge(app),
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     // Unset means ON server-side, so an app that has never been saved shows checked.
     verifyRepoStateOnCompletion: app.verifyRepoStateOnCompletion !== false,
@@ -126,7 +138,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setTlsUpgrading(true);
     setTlsError(null);
     try {
-      const result = await api.upgradeAppTls(app.id, { tlsPort: port, force });
+      const result = await upgradeAppTls(app.id, { tlsPort: port, force });
       setTlsResult(result);
       setFormData(prev => ({ ...prev, tlsPort: String(port) }));
       toast.success(result.overwrote
@@ -148,7 +160,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.getAppWorkTracker(app.id)
+    getAppWorkTracker(app.id)
       .then(info => { if (!cancelled) setWorkTrackerInfo(info); })
       .catch(() => { if (!cancelled) setWorkTrackerInfo(null); });
     return () => { cancelled = true; };
@@ -164,15 +176,15 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setLiLoaded(false);
     setLiError(false);
     Promise.all([
-      api.getAppLayeredIntelligence(app.id),
-      api.getProviders({ silent: true }),
+      getAppLayeredIntelligence(app.id),
+      getProviders({ silent: true }),
       // Scheduling (enabled/interval/provider/model) lives in the per-app task
       // override now (#2322); behavior (sources/scopes/rules/handoff) stays in the
       // layeredIntelligence config. Merge the override on top so the tab shows the
       // scheduling source of truth. A failed override read fails the whole tab:
       // defaulting it would show a running loop as off, and toggling "off" then
       // diffs as no change, so the loop could not be stopped from here.
-      api.getAppTaskTypes(app.id, { silent: true })
+      getAppTaskTypes(app.id, { silent: true })
     ]).then(([li, provData, taskTypes]) => {
       if (cancelled) return;
       const behavior = li?.config || null;
@@ -284,6 +296,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
       useAutoMerge: formData.useAutoMerge,
+      autoApprovePR: formData.autoApprovePR,
+      adminMerge: formData.adminMerge,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
       publishQualitySnapshot: formData.publishQualitySnapshot,
       // Empty string clears it, so audits fall back to the repository's docs.
@@ -314,7 +328,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
     if (liUpdate) data.layeredIntelligence = liUpdate;
 
-    await api.updateApp(app.id, data).catch(err => {
+    await updateApp(app.id, data).catch(err => {
       setError(err.message);
       setSaving(false);
       throw err;
@@ -325,7 +339,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // user changed a scheduling field.
     const schedUpdate = buildLayeredIntelligenceScheduleUpdate(liBaseline, liConfig);
     if (schedUpdate) {
-      await api.updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
+      await updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
         setError(err.message);
         setSaving(false);
         throw err;
@@ -739,6 +753,34 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               <p className="ml-6 text-xs text-gray-500">
                 Agents turn on GitHub auto-merge once review requirements pass, so the PR merges as soon as CI finishes. They still watch CI and fix failures. Leave-open and draft PRs are never auto-merged.
                 {!prCompletionMerges(formData.defaultPrCompletion) && formData.useAutoMerge ? ' The default PR completion above leaves PRs open, so this applies only to runs that choose a merging completion.' : ''}
+              </p>
+              <label htmlFor="edit-app-auto-approve-pr" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-auto-approve-pr"
+                  type="checkbox"
+                  checked={formData.autoApprovePR}
+                  onChange={e => setFormData(prev => ({ ...prev, autoApprovePR: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <ShieldCheck size={14} className="text-green-400" />
+                <span className="text-sm text-white">Auto-approve PRs blocked on a code-owner review</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                Agents approve the PR with their GitHub account when a required review is the only blocker. GitHub refuses this if that account opened the PR or is not a code owner, and the PR then stays open.
+              </p>
+              <label htmlFor="edit-app-admin-merge" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-admin-merge"
+                  type="checkbox"
+                  checked={formData.adminMerge}
+                  onChange={e => setFormData(prev => ({ ...prev, adminMerge: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <ShieldCheck size={14} className="text-amber-400" />
+                <span className="text-sm text-white">Admin merge when only a review blocks</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                After required CI is green on the verified head, agents merge with <code>gh pr merge --admin</code> when a review requirement is the only blocker. This bypasses branch protection for that rule; it never applies to failing or pending checks. The task form can change both options per run.
               </p>
               <label htmlFor="edit-app-verify-repo-state" className="flex items-center gap-2 cursor-pointer">
                 <input

@@ -1100,15 +1100,15 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   // counters, unlike replaying a window through its later commit timestamp,
   // cannot consume transcript growth that arrived while accounting awaited.
   const since = Date.parse(metadata.startTime) - 2 * WINDOW_SLACK_MS;
-  if (!selfContained && Number.isFinite(since)) {
-    mergeUsageClaims({ codexHighWater: await getRecentCodexUsageClaims(since) });
-  }
   const codexClaims = [];
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
   const releases = [];
   await completionClaims.run(releases, async () => {
     try {
+      if (!selfContained && Number.isFinite(since)) {
+        mergeUsageClaims({ codexHighWater: await getRecentCodexUsageClaims(since) });
+      }
       const records = await reconcileRunUsage(metadata, estimate, {
         home, providers: resolved, estimateSource,
         onCodexClaims: (claims) => codexClaims.push(...claims)

@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAgents.js', () => ({
   getCosConfig: vi.fn(),
+}));
+vi.mock('../../../services/apiMemory.js', () => ({
   getMemories: vi.fn(),
   getMemoryStats: vi.fn(),
   getEmbeddingStatus: vi.fn(),
@@ -38,7 +40,16 @@ vi.mock('../../ui/InlineConfirmRow', () => ({
   ),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getMemories,
+  getMemory,
+  getMemoryVersions,
+  getMemoryStats,
+  getEmbeddingStatus,
+  getMemoryBackendStatus,
+  searchMemories,
+} from '../../../services/apiMemory.js';
+import { getCosConfig } from '../../../services/apiAgents.js';
 import MemoryTab from './MemoryTab';
 
 const handlers = new Map();
@@ -71,24 +82,24 @@ beforeEach(() => {
     handlers.get(event).add(handler);
   });
   socket.off.mockImplementation((event, handler) => handlers.get(event)?.delete(handler));
-  api.getMemories.mockReset();
-  api.getCosConfig.mockResolvedValue({});
-  api.getMemory.mockResolvedValue({ ...activeMemory, version: 1 });
-  api.getMemoryVersions.mockResolvedValue({ versions: [] });
-  api.getMemories.mockResolvedValue({ memories: [] });
-  api.getMemoryStats.mockResolvedValue({ active: 0, pendingApproval: 0 });
-  api.getEmbeddingStatus.mockResolvedValue({ available: false });
-  api.getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
+  getMemories.mockReset();
+  getCosConfig.mockResolvedValue({});
+  getMemory.mockResolvedValue({ ...activeMemory, version: 1 });
+  getMemoryVersions.mockResolvedValue({ versions: [] });
+  getMemories.mockResolvedValue({ memories: [] });
+  getMemoryStats.mockResolvedValue({ active: 0, pendingApproval: 0 });
+  getEmbeddingStatus.mockResolvedValue({ available: false });
+  getMemoryBackendStatus.mockResolvedValue({ backend: 'postgres' });
 });
 
 describe('MemoryTab graph filters', () => {
   it('hides list-only controls in graph mode and restores selections when returning', async () => {
-    api.getMemories.mockResolvedValue({ memories: [activeMemory] });
-    api.searchMemories.mockResolvedValue({ memories: [{ ...activeMemory, summary: 'Filtered summary' }] });
+    getMemories.mockResolvedValue({ memories: [activeMemory] });
+    searchMemories.mockResolvedValue({ memories: [{ ...activeMemory, summary: 'Filtered summary' }] });
     renderTab();
     await screen.findAllByText('Original summary');
     fireEvent.click(screen.getByRole('button', { name: 'Brain' }));
-    await waitFor(() => expect(api.getMemories).toHaveBeenCalledWith(
+    await waitFor(() => expect(getMemories).toHaveBeenCalledWith(
       expect.objectContaining({ appId: 'brain' }), expect.any(Object)
     ));
 
@@ -108,13 +119,13 @@ describe('MemoryTab graph filters', () => {
     expect(screen.getByText('Source:')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search memories' })).toHaveValue('saved query');
     expect(screen.getByRole('button', { name: 'fact' })).toHaveAttribute('aria-pressed', 'true');
-    await waitFor(() => expect(api.searchMemories).toHaveBeenLastCalledWith(
+    await waitFor(() => expect(searchMemories).toHaveBeenLastCalledWith(
       'saved query', expect.objectContaining({ appId: 'brain' }), expect.any(Object)
     ));
   });
 
   it('keeps source selection scoped to pending approvals in graph mode', async () => {
-    api.getMemories.mockImplementation(async params => ({ memories: params.appId === 'brain' ? [pending] : [] }));
+    getMemories.mockImplementation(async params => ({ memories: params.appId === 'brain' ? [pending] : [] }));
     renderTab('/cos/memory?view=graph');
     await screen.findByText('Graph view');
     expect(screen.queryByRole('textbox', { name: 'Search memories' })).not.toBeInTheDocument();
@@ -122,7 +133,7 @@ describe('MemoryTab graph filters', () => {
     expect(screen.getByText('Pending approval source:')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Brain' }));
     expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
-    await waitFor(() => expect(api.getMemories).toHaveBeenCalledWith(
+    await waitFor(() => expect(getMemories).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'pending_approval', appId: 'brain' }), expect.any(Object)
     ));
   });
@@ -138,7 +149,7 @@ describe('MemoryTab live approvals', () => {
     await waitFor(() => expect(socket.on).toHaveBeenCalledWith('cos:memory:approval-needed', expect.any(Function)));
     expect(screen.queryByText('A synthetic pending memory')).toBeNull();
 
-    api.getMemories.mockImplementation(async (params = {}) => ({ memories: params.status === 'pending_approval' ? [pending] : [] }));
+    getMemories.mockImplementation(async (params = {}) => ({ memories: params.status === 'pending_approval' ? [pending] : [] }));
     const handler = socket.on.mock.calls.find(([event]) => event === 'cos:memory:approval-needed')[1];
     await act(async () => { await handler({ memories: [{ id: pending.id }] }); });
 
@@ -149,19 +160,19 @@ describe('MemoryTab live approvals', () => {
 
 describe('MemoryTab lifecycle reconciliation', () => {
   it('coalesces in-flight mutations and keeps rows/counts visible until the fresh result arrives', async () => {
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
-    api.getMemoryStats.mockResolvedValue({ active: 1 });
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+    getMemoryStats.mockResolvedValue({ active: 1 });
     renderTab();
     await screen.findByText('Original summary');
 
     const read = deferred();
     let activeReads = 0;
-    api.getMemories.mockImplementation(params => {
+    getMemories.mockImplementation(params => {
       if (params.status) return Promise.resolve({ memories: [] });
       activeReads += 1;
       return activeReads === 1 ? read.promise : Promise.resolve({ memories: [{ ...activeMemory, summary: 'Latest summary' }] });
     });
-    api.getMemoryStats.mockResolvedValue({ active: 2 });
+    getMemoryStats.mockResolvedValue({ active: 2 });
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByText('Original summary')).toBeInTheDocument();
     expect(screen.queryByText('Loading')).not.toBeInTheDocument();
@@ -174,8 +185,8 @@ describe('MemoryTab lifecycle reconciliation', () => {
     expect(screen.getByText(/2 active memories/)).toBeInTheDocument();
     expect(activeReads).toBe(2);
 
-    api.getMemories.mockImplementation(async () => ({ memories: [] }));
-    api.getMemoryStats.mockResolvedValue({ active: 0 });
+    getMemories.mockImplementation(async () => ({ memories: [] }));
+    getMemoryStats.mockResolvedValue({ active: 0 });
     await dispatch('cos:memory:deleted', { id: activeMemory.id });
     expect(screen.queryByText('Latest summary')).not.toBeInTheDocument();
     expect(screen.getByText(/0 active memories/)).toBeInTheDocument();
@@ -184,7 +195,7 @@ describe('MemoryTab lifecycle reconciliation', () => {
   it('drops an old source response and aborts a pending read on unmount', async () => {
     const oldRead = deferred();
     let oldSignal;
-    api.getMemories.mockImplementation((params, options) => {
+    getMemories.mockImplementation((params, options) => {
       if (params.status) return Promise.resolve({ memories: [] });
       if (params.appId === 'brain') return Promise.resolve({ memories: [{ ...activeMemory, summary: 'Brain summary' }] });
       oldSignal = options.signal;
@@ -199,7 +210,7 @@ describe('MemoryTab lifecycle reconciliation', () => {
     expect(screen.queryByText('Original summary')).not.toBeInTheDocument();
     const lateRead = deferred();
     let lateSignal;
-    api.getMemories.mockImplementation((params, options) => {
+    getMemories.mockImplementation((params, options) => {
       if (params.status) return Promise.resolve({ memories: [] });
       lateSignal = options.signal;
       return lateRead.promise;
@@ -212,19 +223,19 @@ describe('MemoryTab lifecycle reconciliation', () => {
   });
 
   it('recovers missed changes on reconnect and tab-show while suppressing hidden reads', async () => {
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     renderTab();
     await screen.findByText('Original summary');
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [{ ...activeMemory, summary: 'Reconnect summary' }] }));
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [{ ...activeMemory, summary: 'Reconnect summary' }] }));
     await dispatch('connect');
     expect(await screen.findByText('Reconnect summary')).toBeInTheDocument();
-    const calls = api.getMemories.mock.calls.length;
+    const calls = getMemories.mock.calls.length;
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     await dispatch('cos:memory:deleted', { id: activeMemory.id });
     await dispatch('connect');
-    expect(api.getMemories).toHaveBeenCalledTimes(calls);
-    api.getMemories.mockResolvedValue({ memories: [] });
+    expect(getMemories).toHaveBeenCalledTimes(calls);
+    getMemories.mockResolvedValue({ memories: [] });
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     expect(screen.queryByText('Reconnect summary')).not.toBeInTheDocument();
@@ -232,14 +243,14 @@ describe('MemoryTab lifecycle reconciliation', () => {
   });
 
   it('refreshes submitted search results and preserves an open dirty editor', async () => {
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     renderTab();
     await screen.findByText('Original summary');
     fireEvent.click(screen.getByRole('button', { name: 'Edit memory' }));
     await screen.findByDisplayValue('Original body');
     fireEvent.change(screen.getByRole('textbox', { name: /Content/ }), { target: { value: 'Unsaved draft' } });
-    api.getMemory.mockResolvedValue({ ...activeMemory, version: 2, content: 'Remote body', summary: 'Remote summary' });
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [{ ...activeMemory, content: 'Remote body', summary: 'Remote summary' }] }));
+    getMemory.mockResolvedValue({ ...activeMemory, version: 2, content: 'Remote body', summary: 'Remote summary' });
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [{ ...activeMemory, content: 'Remote body', summary: 'Remote summary' }] }));
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByRole('textbox', { name: /Content/ })).toHaveValue('Unsaved draft');
     expect(screen.getByRole('textbox', { name: /Summary/ })).toHaveValue('Original summary');
@@ -247,25 +258,25 @@ describe('MemoryTab lifecycle reconciliation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close edit memory' }));
     // Search remains a server-wide query and refreshes the submitted term,
     // even when the unsubmitted input has since changed.
-    api.searchMemories.mockResolvedValue({ memories: [{ ...activeMemory, summary: 'Search summary' }] });
+    searchMemories.mockResolvedValue({ memories: [{ ...activeMemory, summary: 'Search summary' }] });
     fireEvent.change(screen.getByRole('textbox', { name: 'Search memories' }), { target: { value: 'first query' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await screen.findByText('Search summary');
     fireEvent.change(screen.getByRole('textbox', { name: 'Search memories' }), { target: { value: 'unsubmitted query' } });
-    api.searchMemories.mockResolvedValue({ memories: [] });
+    searchMemories.mockResolvedValue({ memories: [] });
     await dispatch('cos:memory:deleted', { id: activeMemory.id });
-    expect(api.searchMemories).toHaveBeenLastCalledWith('first query', expect.any(Object), expect.any(Object));
+    expect(searchMemories).toHaveBeenLastCalledWith('first query', expect.any(Object), expect.any(Object));
     expect(screen.queryByText('Search summary')).not.toBeInTheDocument();
   });
 
   it('does not read inactive list data in graph view and retains rows after refresh failure', async () => {
     renderTab('/cos/memory?view=graph');
     await screen.findByText('Graph view');
-    expect(api.getMemories.mock.calls.every(([params]) => params.status === 'pending_approval')).toBe(true);
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+    expect(getMemories.mock.calls.every(([params]) => params.status === 'pending_approval')).toBe(true);
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
     fireEvent.click(screen.getByRole('button', { name: 'List' }));
     await screen.findByText('Original summary');
-    api.getMemories.mockResolvedValue({});
+    getMemories.mockResolvedValue({});
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByText('Original summary')).toBeInTheDocument();
     expect(screen.getByText('Unable to refresh memories')).toBeInTheDocument();
@@ -274,19 +285,19 @@ describe('MemoryTab lifecycle reconciliation', () => {
 
 describe('independent approval/count availability', () => {
   it('keeps a usable approval queue when counts fail and retains counts when the queue fails', async () => {
-    api.getMemories.mockImplementation(async params => ({ memories: params.status ? [pending] : [activeMemory] }));
-    api.getMemoryStats.mockRejectedValue(new Error('Synthetic stats failure'));
+    getMemories.mockImplementation(async params => ({ memories: params.status ? [pending] : [activeMemory] }));
+    getMemoryStats.mockRejectedValue(new Error('Synthetic stats failure'));
     renderTab();
     expect(await screen.findByText('A synthetic pending memory')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Approve memory' })).toBeEnabled();
     expect(screen.getByText(/— active memories/)).toBeInTheDocument();
-    api.getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 1 });
+    getMemoryStats.mockResolvedValue({ active: 1, pendingApproval: 1 });
     await dispatch('connect');
     expect(screen.getByText(/1 active memories/)).toBeInTheDocument();
-    api.getMemories.mockImplementation(params => params.status
+    getMemories.mockImplementation(params => params.status
       ? Promise.reject(new Error('Synthetic pending failure'))
       : Promise.resolve({ memories: [activeMemory] }));
-    api.getMemoryStats.mockResolvedValue({ active: 2, pendingApproval: 1 });
+    getMemoryStats.mockResolvedValue({ active: 2, pendingApproval: 1 });
     await dispatch('cos:memory:updated', { id: activeMemory.id });
     expect(screen.getByText(/2 active memories/)).toBeInTheDocument();
     expect(screen.getByText('A synthetic pending memory')).toBeInTheDocument();
@@ -294,11 +305,11 @@ describe('independent approval/count availability', () => {
 });
 
 it('reports an unavailable initial list instead of claiming it is empty, then recovers through Retry', async () => {
-  api.getMemories.mockImplementation(async params => params.status ? { memories: [] } : {});
+  getMemories.mockImplementation(async params => params.status ? { memories: [] } : {});
   renderTab();
   expect(await screen.findByText('Memory list unavailable.')).toBeInTheDocument();
   expect(screen.queryByText('No memories yet.')).not.toBeInTheDocument();
-  api.getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
+  getMemories.mockImplementation(async params => ({ memories: params.status ? [] : [activeMemory] }));
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByText('Original summary')).toBeInTheDocument();
 });

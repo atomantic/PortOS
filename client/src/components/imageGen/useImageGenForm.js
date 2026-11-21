@@ -14,13 +14,13 @@ import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from '../../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../../lib/runnerFamilies';
 import {
-  FAL_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudPromptRequired,
   deriveAvailableBackends,
   imageGenReadiness,
   isI2iCapableMode,
+  maxInputImages,
   pickI2iMode,
   referenceSlotsFor,
   supportsReferenceStrength,
@@ -31,13 +31,9 @@ import { isHardwareCompatible } from '../../utils/systemCapabilities';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import useMounted from '../../hooks/useMounted';
 import toast from '../ui/Toast';
-import {
-  getGalleryImages,
-  getImageGenStatus,
-  getSettings,
-  listImageModels,
-  listLorasFull,
-} from '../../services/api';
+import { getGalleryImages, listImageModels, listLorasFull } from '../../services/apiImageVideo.js';
+import { getImageGenStatus, getSettings } from '../../services/apiSystem.js';
+import { resolveCloudModelPicker } from './cloudModelPicker';
 
 const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
@@ -121,18 +117,12 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const [quantize, setQuantize] = useState('8');
   const [seed, setSeed] = useState('');
   const [selectedLoras, setSelectedLoras] = useState([]);
-  const [agyModel, setAgyModel] = useState('');
-  const [savedAgyModel, setSavedAgyModel] = useState('');
-  const [runwayModel, setRunwayModel] = useState('');
-  const [savedRunwayModel, setSavedRunwayModel] = useState('');
-  // Per-render fal.ai model ('' = the Settings default) and that default, for
-  // the picker's "Settings default (…)" row.
-  const [falModel, setFalModel] = useState('');
-  const [savedFalModel, setSavedFalModel] = useState('');
-  const [higgsfieldModel, setHiggsfieldModel] = useState('');
-  const [savedHiggsfieldModel, setSavedHiggsfieldModel] = useState('');
-  const [googleModel, setGoogleModel] = useState('');
-  const [savedGoogleModel, setSavedGoogleModel] = useState('');
+  // An empty override leaves the saved Settings model in charge of the render.
+  const [cloudModelsByMode, setCloudModelsByMode] = useState({});
+  const [savedCloudModelsByMode, setSavedCloudModelsByMode] = useState({});
+  const setCloudModel = useCallback((mode, value) => {
+    setCloudModelsByMode((previous) => ({ ...previous, [mode]: value }));
+  }, []);
   const [savedLocalModelId, setSavedLocalModelId] = useState(null);
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const initImagePreviewRef = useRef(initImage.previewUrl);
@@ -162,51 +152,24 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const reloadBackends = useCallback(() => getSettings().then((settings) => {
     setSettingsLoadFailed(false);
     const backends = deriveAvailableBackends(settings);
-    const perMode = {
-      external: resolveCleanersFromConfig(settings?.imageGen?.external, IMAGE_GEN_MODE.EXTERNAL),
-      local: resolveCleanersFromConfig(settings?.imageGen?.local, IMAGE_GEN_MODE.LOCAL),
-      codex: resolveCleanersFromConfig(settings?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
-      grok: resolveCleanersFromConfig(settings?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
-      agy: resolveCleanersFromConfig(settings?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
-      runway: resolveCleanersFromConfig(settings?.imageGen?.runway, IMAGE_GEN_MODE.RUNWAY),
-      fal: resolveCleanersFromConfig(settings?.imageGen?.fal, IMAGE_GEN_MODE.FAL),
-      higgsfield: resolveCleanersFromConfig(settings?.imageGen?.higgsfield, IMAGE_GEN_MODE.HIGGSFIELD),
-      google: resolveCleanersFromConfig(settings?.imageGen?.google, IMAGE_GEN_MODE.GOOGLE),
-    };
-    const c2 = {
-      external: perMode.external.cleanC2PA,
-      local: perMode.local.cleanC2PA,
-      codex: perMode.codex.cleanC2PA,
-      grok: perMode.grok.cleanC2PA,
-      agy: perMode.agy.cleanC2PA,
-      runway: perMode.runway.cleanC2PA,
-      fal: perMode.fal.cleanC2PA,
-      higgsfield: perMode.higgsfield.cleanC2PA,
-      google: perMode.google.cleanC2PA,
-    };
-    const dn = {
-      external: perMode.external.denoise,
-      local: perMode.local.denoise,
-      codex: perMode.codex.denoise,
-      grok: perMode.grok.denoise,
-      agy: perMode.agy.denoise,
-      runway: perMode.runway.denoise,
-      fal: perMode.fal.denoise,
-      higgsfield: perMode.higgsfield.denoise,
-      google: perMode.google.denoise,
-    };
+    const cleanC2PAByMode = {};
+    const denoiseByMode = {};
+    const savedModelsByMode = {};
+    for (const mode of Object.values(IMAGE_GEN_MODE)) {
+      const config = settings?.imageGen?.[mode];
+      const cleaners = resolveCleanersFromConfig(config, mode);
+      cleanC2PAByMode[mode] = cleaners.cleanC2PA;
+      denoiseByMode[mode] = cleaners.denoise;
+      savedModelsByMode[mode] = config?.model;
+    }
     const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
     const next = configureBackends(backends, saved);
-    setSavedAgyModel(settings?.imageGen?.agy?.model || '');
-    setSavedRunwayModel(settings?.imageGen?.runway?.model || RUNWAY_IMAGE_DEFAULT_MODEL);
-    setSavedFalModel(settings?.imageGen?.fal?.model || '');
-    setSavedHiggsfieldModel(settings?.imageGen?.higgsfield?.model || '');
-    setSavedGoogleModel(settings?.imageGen?.google?.model || '');
+    setSavedCloudModelsByMode(savedModelsByMode);
     setSavedLocalModelId(settings?.imageGen?.local?.modelId || '');
-    setSavedCleanC2PAByMode(c2);
-    setSavedDenoiseByMode(dn);
-    setCleanC2PA(c2[next] === true);
-    setDenoise(dn[next] === true);
+    setSavedCleanC2PAByMode(cleanC2PAByMode);
+    setSavedDenoiseByMode(denoiseByMode);
+    setCleanC2PA(cleanC2PAByMode[next] === true);
+    setDenoise(denoiseByMode[next] === true);
   }).catch(() => {
     setSettingsLoadFailed(true);
     setSavedLocalModelId('');
@@ -545,14 +508,22 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
-  const i2iCapable = remoteTargetActive
-    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
-    : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
-  const isHiggsfieldMode = effectiveMode === IMAGE_GEN_MODE.HIGGSFIELD;
   const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
   // A model that declares its own reference cap (separate from any init image).
   const localDeclaredRefs = Number.isInteger(currentModel?.maxReferenceImages) && currentModel.maxReferenceImages > 0;
+  const cloudModelPicker = resolveCloudModelPicker({
+    mode: effectiveMode, cloudModelsByMode, savedCloudModelsByMode, setCloudModel,
+    liveModelsByMode: {
+      [IMAGE_GEN_MODE.AGY]: backend.agy.models,
+      [IMAGE_GEN_MODE.RUNWAY]: backend.runwayImageModels,
+    },
+  });
+  const textOnlyCloudModel = !remoteTargetActive && isCloudMode
+    && maxInputImages(effectiveMode, cloudModelPicker.resolvedModel) === 0;
+  const i2iCapable = remoteTargetActive
+    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
+    : !textOnlyCloudModel && isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const referenceSlotCount = remoteTargetActive
     ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
     : referenceSlotsFor(effectiveMode, {
@@ -564,9 +535,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
         : (isLocalMode && (isQwen21Model || isFlux3Model)) || isFalMode || isGoogleMode ? 10 : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model || localDeclaredRefs,
     localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
-    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL)
-      : isHiggsfieldMode ? (higgsfieldModel || savedHiggsfieldModel || HIGGSFIELD_IMAGE_DEFAULT_MODEL)
-        : isGoogleMode ? (googleModel || savedGoogleModel || GOOGLE_IMAGE_DEFAULT_MODEL) : null,
+    cloudModelId: cloudModelPicker.resolvedModel,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
@@ -588,6 +557,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     () => referenceImages.slice(referenceSlotCount).filter((slot) => slot.file != null).length,
     [referenceImages, referenceSlotCount],
   );
+  const unsupportedCloudInputs = textOnlyCloudModel && (initImage.source != null || droppedRefCount > 0);
   const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
     && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
   const remoteUnsupportedInputs = useMemo(() => {
@@ -609,7 +579,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const remoteBlocked = remoteTargetActive
     ? (remoteTarget.blockedReason || remoteUnsupportedInputs)
     : null;
-  const hasCloudInputImage = initImage.source != null || populatedRefs.length > 0;
+  const hasCloudInputImage = (i2iCapable && initImage.source != null) || populatedRefs.length > 0;
   const cloudNeedsPrompt = cloudPromptRequired(effectiveMode, hasCloudInputImage) && !prompt.trim();
   const cloudPromptHint = hasCloudInputImage
     ? `${cloudModeLabel} always needs a prompt, even with a reference image`
@@ -772,15 +742,6 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       setSeed,
       selectedLoras,
       setSelectedLoras,
-      agyModel,
-      setAgyModel,
-      runwayModel, setRunwayModel,
-      falModel,
-      setFalModel,
-      higgsfieldModel,
-      setHiggsfieldModel,
-      googleModel,
-      setGoogleModel,
       batchCount,
       setBatchCount,
       cleanC2PA,
@@ -790,6 +751,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       verifyImage,
       setVerifyImage,
     },
+    cloudModelPicker,
     catalogs: {
       models,
       modelsState: modelCatalog.state,
@@ -801,11 +763,6 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       retryLoras: loraCatalog.retry,
     },
     settings: {
-      savedAgyModel,
-      savedRunwayModel,
-      savedFalModel,
-      savedHiggsfieldModel,
-      savedGoogleModel,
       savedCleanC2PAByMode,
       savedDenoiseByMode,
       reloadBackends,
@@ -828,11 +785,11 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     derived: {
       loraHandoffBlocked,
       unsupportedLocalInputs,
+      unsupportedCloudInputs,
       currentModel,
       isFlux2Model,
       sharesFlux2Venv,
       isEditOnlyModel,
-      isQwen21Model,
       i2iCapable,
       referenceSlotCount,
       showReferenceStrength: supportsReferenceStrength(effectiveMode) && isFlux2Model,

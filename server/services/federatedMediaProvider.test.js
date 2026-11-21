@@ -86,7 +86,8 @@ vi.mock('./sharing/peerSyncShared.js', () => ({
   findPeerById: vi.fn(async (id) => state.peer?.instanceId === id ? state.peer : null),
 }));
 
-vi.mock('./musicEngineCapabilities.js', () => ({
+vi.mock('./musicEngineCapabilities.js', async () => ({
+  musicEngineReadinessReason: (await import('../lib/generationModes.js')).musicEngineReadinessReason,
   listMusicEngineCapabilities: vi.fn(async () => state.capabilities),
 }));
 

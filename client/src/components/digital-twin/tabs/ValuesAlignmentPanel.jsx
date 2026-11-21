@@ -1,5 +1,9 @@
 import { Scale } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getValuesAlignmentTests,
+  getValuesAlignmentTestHistory,
+  runValuesAlignmentTests,
+} from '../../../services/apiDigitalTwin.js';
 import { VALUES_STATUS } from '../constants';
 import TwinEvaluationSuitePanel, { SuiteModelResponses } from './TwinEvaluationSuitePanel';
 
@@ -29,9 +33,9 @@ const SUITE = {
   statusMap: VALUES_STATUS,
   passResult: 'aligned',
   failResult: 'misaligned',
-  getTests: api.getValuesAlignmentTests,
-  getHistory: api.getValuesAlignmentTestHistory,
-  runTests: api.runValuesAlignmentTests,
+  getTests: getValuesAlignmentTests,
+  getHistory: getValuesAlignmentTestHistory,
+  runTests: runValuesAlignmentTests,
   successToast: 'Values-alignment tests completed'
 };
 

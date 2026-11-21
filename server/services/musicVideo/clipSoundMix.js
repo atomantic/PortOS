@@ -14,10 +14,33 @@ import { AUDIO_NORM, buildAudioBedMix, fmtSec } from '../videoTimeline/audioBedM
 // A short ramp on each end of a clip's sound so the cut into it never clicks.
 const EDGE_FADE_SEC = 0.03;
 
+// A shot's own fade (clipSound.fadeInSec / fadeOutSec), never shorter than the click-free edge,
+// and the two together never longer than the sound itself.
+const voiceFade = (wanted, durationSec) => Math.min(Math.max(EDGE_FADE_SEC, wanted || 0), durationSec / 2);
+
 export function clipSoundVoice({ sceneId, assetPath, offsetSec, startSec, durationSec, rate, clipSound }) {
-  const fade = Math.min(EDGE_FADE_SEC, durationSec / 4);
+  const edge = Math.min(EDGE_FADE_SEC, durationSec / 4);
+  const fadeInSec = clipSound.fadeInSec > 0 ? voiceFade(clipSound.fadeInSec, durationSec) : edge;
+  const fadeOutSec = clipSound.fadeOutSec > 0 ? voiceFade(clipSound.fadeOutSec, durationSec) : edge;
   return { sceneId, assetPath, offsetSec, startSec, durationSec, ...(rate != null ? { rate } : {}),
-    volume: clipSound.volume, musicLevel: clipSound.musicLevel, fadeInSec: fade, fadeOutSec: fade };
+    volume: clipSound.volume, musicLevel: clipSound.musicLevel, fadeInSec, fadeOutSec,
+    // The song's dip ramps with a real fade; with only the edge it steps, as before fades existed.
+    ...(clipSound.fadeInSec > 0 || clipSound.fadeOutSec > 0 ? { duckRamps: true } : {}) };
+}
+
+/**
+ * The song's dip under one clip sound as a `volume` filter: a step to
+ * `musicLevel` for the sound's span, or, when the shot fades its sound, a ramp
+ * down over the fade in and back up over the fade out.
+ */
+export function clipSoundDuck(voice) {
+  const start = voice.startSec;
+  const end = voice.startSec + voice.durationSec;
+  if (!voice.duckRamps) return `volume=enable='between(t,${fmtSec(start)},${fmtSec(end)})':volume=${fmtSec(voice.musicLevel)}`;
+  const depth = fmtSec(1 - voice.musicLevel);
+  const rise = `(t-${fmtSec(start)})/${fmtSec(voice.fadeInSec)}`;
+  const fall = `(${fmtSec(end)}-t)/${fmtSec(voice.fadeOutSec)}`;
+  return `volume=enable='between(t,${fmtSec(start)},${fmtSec(end)})':eval=frame:volume='1-${depth}*clip(min(${rise},${fall}),0,1)'`;
 }
 
 /**
@@ -40,17 +63,29 @@ export function clipSoundVoices(plan) {
 }
 
 /**
- * The master (`mainLabel`) mixed with the bed and the clip sounds into
- * `outLabel`, or null when there is nothing to mix (the master plays as is).
- * `durationSec` bounds the bed to the song.
+ * The timeline's audio layers (`soundBed.layers`, audioLayers.js) on song time,
+ * each cut at the song's end; a layer starting at or after it drops out.
+ */
+export function songAudioLayerBeds(layers, durationSec) {
+  return (layers || []).flatMap((layer) => {
+    const length = durationSec != null ? Math.min(layer.durationSec, durationSec - layer.startSec) : layer.durationSec;
+    return length > 0 ? [{ ...layer, durationSec: length }] : [];
+  });
+}
+
+/**
+ * The master (`mainLabel`) mixed with the bed, the timeline's audio layers and
+ * the clip sounds into `outLabel`, or null when there is nothing to mix (the
+ * master plays as is). `durationSec` bounds the bed and the layers to the song.
  */
 export function buildSongAudioMix({ mainLabel, soundBed = null, voices = [], firstInputIdx, durationSec, outLabel }) {
-  if (!soundBed?.path && !voices.length) return null;
-  const ducks = voices.filter((v) => v.musicLevel < 1)
-    .map((v) => `volume=enable='between(t,${fmtSec(v.startSec)},${fmtSec(v.startSec + v.durationSec)})':volume=${fmtSec(v.musicLevel)}`);
+  const layers = songAudioLayerBeds(soundBed?.layers, durationSec);
+  if (!soundBed?.path && !layers.length && !voices.length) return null;
+  const ducks = voices.filter((v) => v.musicLevel < 1).map(clipSoundDuck);
   const filters = [`${mainLabel}${[AUDIO_NORM, ...ducks].join(',')}[master]`];
   const beds = [
     ...(soundBed?.path ? [{ assetPath: soundBed.path, offsetSec: 0, durationSec, volume: soundBed.volume }] : []),
+    ...layers,
     ...voices,
   ];
   const bed = buildAudioBedMix({ beds, firstInputIdx, mainLabel: '[master]', outLabel, limitPeak: true });

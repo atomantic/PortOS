@@ -78,7 +78,7 @@ import {
 import {
   restoredParams, isUnderUploadsRoot, normalizeTempPaths, admitCompletion, stageTerminalTransition,
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads, restoreQueueSnapshot, drainMediaJobQueue,
-  isPersistBlocked, hasPendingTransitions, setCompletionRecoveryDeferred, settlePersistChain,
+  isPersistBlocked, hasPendingTransitions, configureTerminalTransitions, settlePersistChain,
   resetPersistenceForTests,
 } from './persistence.js';
 import {
@@ -154,7 +154,6 @@ const WATCHDOG_TRAINING_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_TRAINING_
 // threads them through), so this only trips on a genuine hang, not a slow
 // first-run download.
 const WATCHDOG_AUDIO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS, 10 * 60 * 1000);
-const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
 
 // 'video-upscale' (#6511) is its OWN kind rather than a 'video' mode so the
@@ -534,10 +533,10 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
 
 
 
-export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
+export async function initMediaJobQueue({ deferCompletionRecovery = false, prepareTerminalHooks = null } = {}) {
   installVideoExecutionRecorder();
   if (initPromise) return initPromise;
-  setCompletionRecoveryDeferred(deferCompletionRecovery);
+  configureTerminalTransitions({ deferCompletionRecovery, prepareTerminalHooks });
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);
@@ -1061,38 +1060,6 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // Transient: returned to the lane finalizer, never persisted or projected.
   const recovery = createRecoveryEvidence();
   let inputCleanupAttempted = false;
-  let progressPersistDirty = false;
-  let progressPersistTimer = null;
-  let progressPersisting = null;
-
-  const flushProgressPersist = async () => {
-    if (progressPersistTimer) {
-      clearTimeout(progressPersistTimer);
-      progressPersistTimer = null;
-    }
-    if (!progressPersistDirty) return;
-    progressPersistDirty = false;
-    await persist().catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on progress failed: ${e.message}`));
-  };
-
-  const drainProgressPersist = async () => {
-    if (progressPersisting) await progressPersisting.catch(() => {});
-    await flushProgressPersist();
-  };
-
-  const scheduleProgressPersist = () => {
-    progressPersistDirty = true;
-    if (progressPersistTimer || progressPersisting) return;
-    progressPersistTimer = setTimeout(() => {
-      progressPersistTimer = null;
-      progressPersisting = flushProgressPersist().finally(() => {
-        progressPersisting = null;
-        if (progressPersistDirty) scheduleProgressPersist();
-      });
-    }, PROGRESS_PERSIST_DEBOUNCE_MS);
-    progressPersistTimer.unref?.();
-  };
-
   let watchdogTimer;
   async function releaseRemoteAudioInputs(disposable) {
     if (!disposable || !isRemoteMediaJob(job)) return;
@@ -1134,13 +1101,12 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   }
   // All terminal paths compete for one outcome. claimTerminalOutcome sets the
   // transient job.terminating flag synchronously, so cancelJob also sees the
-  // claim while status is still running during the async progress drain.
+  // claim while the terminal transition is awaiting durable publication.
   async function terminate(state, apply, remoteInputsDisposable = false) {
     if (!claimTerminalOutcome(job)) return;
     clearInterval(watchdogTimer);
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
-    await drainProgressPersist();
     let publicationStarted = false;
     try {
       await admitCompletion(state, () => {
@@ -1191,24 +1157,21 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   const handlers = {
     progress: (payload) => {
       if (!canReceiveProgress(job)) return;
-      let didUpdatePersistedProgress = false;
-      if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
+      const { progress, statusMsg, etaMs } = job;
+      if (payload.type === 'progress' && Number.isFinite(payload.progress)) {
         job.progress = Math.max(0, Math.min(1, payload.progress));
-        didUpdatePersistedProgress = true;
       }
       if (typeof payload.message === 'string' && payload.message.length > 0) {
         job.statusMsg = payload.message;
-        didUpdatePersistedProgress = true;
       }
-      // Retain the render ETA (#3801) on the job so a browser that reloads
-      // mid-render gets it back from GET /api/media-jobs/:id instead of
-      // waiting minutes for the next progress frame to re-deliver it.
-      if (typeof payload.etaMs === 'number' && payload.etaMs !== job.etaMs) {
-        job.etaMs = payload.etaMs;
-        didUpdatePersistedProgress = true;
-      }
-      if (didUpdatePersistedProgress) scheduleProgressPersist();
+      // Reloaded browsers hydrate these values from the in-memory queue.
+      if (Number.isFinite(payload.etaMs)) job.etaMs = payload.etaMs;
       broadcastSse(sseEntry, payload);
+      if (job.progress !== progress || job.statusMsg !== statusMsg || job.etaMs !== etaMs) {
+        mediaJobEvents.emit('progress', {
+          id: job.id, startedAt: job.startedAt, progress: job.progress, statusMsg: job.statusMsg, etaMs: job.etaMs,
+        });
+      }
     },
     completed: (payload) => {
       const { remoteInputsDisposable, remoteRecoverySettlement, initImageFilename: _initImageFilename, referenceImageFilenames, ...result } = payload;
@@ -1401,9 +1364,6 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       console.log(`💤 media-job [${job.id.slice(0, 8)}] host was suspended ~${Math.round(tickGap / 1000)}s — not counted as runner idle time`);
     }
     if (watchdogInFlight) return;
-    // job.terminating closes the window terminate() opens: it now awaits a
-    // disk drain before flipping job.status, so a tick that only checked
-    // status could fire mod.cancel on a job that is already terminating.
     if (!canRequestCancellation(job)) return;
     const idleFor = Date.now() - lastActivityAt;
     if (idleFor < idleTimeoutMs) return;
@@ -1552,7 +1512,6 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     emitter.off('activity', onActivity);
     emitter.off('progress', onActivity);
     dispatcher.detach();
-    await drainProgressPersist();
   }
 }
 
@@ -1792,7 +1751,7 @@ export async function cancelJob(jobId) {
     ?? null;
   if (runningJob) {
     // A terminal transition already started (completed/failed/watchdog): its
-    // async progress-drain leaves job.status === 'running' for a beat, but the
+    // pending publication can leave job.status === 'running', but the
     // outcome is decided. Don't fire a redundant provider cancel or report
     // 'canceling' — treat it like an already-terminal job (route maps to 409).
     if (!canRequestCancellation(runningJob)) {

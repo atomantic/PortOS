@@ -19,7 +19,7 @@ import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
-import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE, DEFAULT_PR_COMPLETION, resolveUseAutoMerge } from '../../../../server/lib/prDisposition.js';
+import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE, DEFAULT_PR_COMPLETION, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../../../../server/lib/prDisposition.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 import { isFalsyMeta, isTruthyMeta } from '../../../../server/lib/metadataFlags.js';
 
@@ -265,7 +265,7 @@ export const PR_COMPLETION_OPTIONS = [
 
 export const prCompletionOption = (value) => PR_COMPLETION_OPTIONS.find(option => option.value === value);
 
-export { DEFAULT_PR_COMPLETION, resolveUseAutoMerge };
+export { DEFAULT_PR_COMPLETION, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge };
 
 // Leave-open and draft policies hand the PR to a human, so auto-merge has nothing to do.
 export const prCompletionMerges = (value) => value === 'review-then-merge' || value === 'merge-on-green';

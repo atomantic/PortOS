@@ -11,7 +11,15 @@ import {Sparkles,
   Eye,
   Save} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import {
+  getDigitalTwinEnrichProgress,
+  analyzeWritingSamples,
+  createDigitalTwinDocument,
+  getDigitalTwinDocuments,
+  updateDigitalTwinDocument,
+  getDigitalTwinEnrichQuestion,
+  submitSoulEnrichAnswer,
+} from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
@@ -63,7 +71,7 @@ export default function EnrichTab({ onRefresh }) {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const result = await api.getDigitalTwinEnrichProgress({ silent: true })
+    const result = await getDigitalTwinEnrichProgress({ silent: true })
       .then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
     setProgress(result.data);
     setProgressError(result.error ? (result.error instanceof Error ? result.error : new Error('Request failed')) : null);
@@ -102,7 +110,7 @@ export default function EnrichTab({ onRefresh }) {
     }
 
     setAnalyzingWriting(true);
-    const result = await api.analyzeWritingSamples(
+    const result = await analyzeWritingSamples(
       validSamples,
       selectedProvider.providerId,
       selectedProvider.model,
@@ -126,16 +134,16 @@ export default function EnrichTab({ onRefresh }) {
 
     setSavingWritingStyle(true);
     try {
-      await api.createDigitalTwinDocument({
+      await createDigitalTwinDocument({
         filename: 'WRITING_STYLE.md',
         title: 'Writing Style',
         category: 'core',
         content: writingAnalysis.suggestedContent
       }, { silent: true }).catch(async () => {
-        const docs = await api.getDigitalTwinDocuments({ silent: true });
+        const docs = await getDigitalTwinDocuments({ silent: true });
         const existing = docs.find(d => d.filename === 'WRITING_STYLE.md');
         if (existing) {
-          return api.updateDigitalTwinDocument(existing.id, {
+          return updateDigitalTwinDocument(existing.id, {
             content: writingAnalysis.suggestedContent
           }, { silent: true });
         }
@@ -152,7 +160,7 @@ export default function EnrichTab({ onRefresh }) {
     const requestId = ++questionRequestRef.current;
     setLoadingQuestion(true);
     setQuestionError(null);
-    const result = await api.getDigitalTwinEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
+    const result = await getDigitalTwinEnrichQuestion(categoryId, undefined, undefined, skipList.length ? skipList : undefined, { silent: true })
       .then((question) => ({ question, error: null }), (error) => ({ question: null, error }));
     if (requestId !== questionRequestRef.current) return;
     setCurrentQuestion(result.question);
@@ -213,7 +221,7 @@ export default function EnrichTab({ onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    const result = await api.submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
+    const result = await submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
     if (!result) {
       toast.error('Failed to save response. Please try again.');
       setSubmitting(false);

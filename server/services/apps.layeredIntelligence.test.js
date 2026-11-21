@@ -3,17 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the file/PM2/port surface apps.js touches so the accessors run against an
 // in-memory apps store. Mirrors apps.test.js's mock shape.
 let store;
-vi.mock('fs/promises', () => ({ writeFile: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('fs/promises', async (importActual) => ({
+  ...(await importActual()),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn(async (_path, data) => { store = data; }),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  pathExists: vi.fn().mockResolvedValue(false),
   readJSONFile: vi.fn(async () => store),
   PATHS: { data: '/mock/data', root: '/mock/root', cos: '/mock/data/cos' },
   DAY: 24 * 60 * 60 * 1000
 }));
-vi.mock('../../lib/tailscale-https.js', () => ({ hasTailscaleCert: () => false }));
-vi.mock('../../lib/certPaths.js', () => ({ certPaths: () => ({ dir: '/mock' }) }));
 vi.mock('../lib/ports.js', () => ({ PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, COS: 5556, AUTOFIXER: 5557, AUTOFIXER_UI: 5558, CDP: 5559, CDP_HEALTH: 5560 } }));
 vi.mock('./taskScheduleRegistry.js', () => ({ SELF_IMPROVEMENT_TASK_TYPES: [] }));
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn().mockResolvedValue([]) }));

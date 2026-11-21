@@ -9,7 +9,7 @@ vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () =>
 const exampleTracks = { tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] };
 vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: vi.fn(async () => exampleTracks) }));
 // The shared Film style picker reads the catalog through the api barrel.
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCodeAnimation.js', () => ({
   listFilmStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', summary: 'A fixture style.', nativeMoves: [] }]),
   getFilmStyle: vi.fn(async () => ({ id: 'example-style', nativeMoves: [] })),
 }));

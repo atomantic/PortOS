@@ -10,9 +10,9 @@ import OverflowMenu from '../ui/OverflowMenu';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
 import GitHubPullRequestActions from './GitHubPullRequestActions';
-import { AGENT_REFUSED_LABELS, DECISION_ACTIONS, DECISION_VIEW, REASON_WHY, TONE_EDGE, TRUST_VIEW, subjectStatusChip } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, AGENT_RULE_KINDS, DECISION_ACTIONS, DECISION_VIEW, REASON_WHY, TONE_EDGE, TRUST_VIEW, subjectStatusChip } from './githubTriageLabels';
 import { timeAgo } from '../../utils/formatters';
-import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent } from '../../services/api';
+import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent } from '../../services/apiGithub.js';
 
 // GitHub's `reason` vocabulary, phrased for a glance.
 const REASON_LABELS = {
@@ -103,8 +103,8 @@ const SUGGESTION_TONES = {
 };
 
 // The Automations tab's rule form, prefilled with this thread's kind and repo.
-const automationRuleLink = (notification) => {
-  const params = new URLSearchParams({ ruleAccount: notification.accountId, ruleKind: notification.ruleKind });
+const automationRuleLink = (notification, ruleKind = notification.ruleKind) => {
+  const params = new URLSearchParams({ ruleAccount: notification.accountId, ruleKind });
   if (notification.repoFullName) params.set('ruleRepo', notification.repoFullName);
   return `/devtools/github/automations?${params}`;
 };
@@ -160,6 +160,8 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
     }))),
     // Handle every similar thread the same way from now on (#13192).
     ...(notification.ruleKind ? [{ id: 'add-rule', label: 'Add automation rule…', icon: ListPlus, to: automationRuleLink(notification) }] : []),
+    // The same thread by GitHub's reason (e.g. "Someone commented on a thread you follow").
+    ...(notification.reasonRuleKind ? [{ id: 'add-reason-rule', label: `Add rule for "${AGENT_RULE_KINDS.find(({ value }) => value === notification.reasonRuleKind)?.label}"…`, icon: ListPlus, to: automationRuleLink(notification, notification.reasonRuleKind) }] : []),
   ];
   return (
     <article className={`flex min-w-0 gap-3 border-l-4 px-3 py-3 @3xl/page:px-4 ${TONE_EDGE[handled ? 'muted' : why?.tone] || TONE_EDGE.muted}`}>

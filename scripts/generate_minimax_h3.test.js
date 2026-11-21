@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_h3.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_minimax_h3.py');
 
 // Probe for an interpreter that actually RUNS rather than assuming a name.
 // On Windows a machine with no Store-installed Python still has `python` on

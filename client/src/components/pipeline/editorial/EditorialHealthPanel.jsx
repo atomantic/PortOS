@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Activity, Loader2, TrendingUp, TrendingDown, X } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { getEditorialHealth, setEditorialReadinessGate } from '../../../services/api';
+import { getEditorialHealth, setEditorialReadinessGate } from '../../../services/apiPipeline.js';
 import { FINDING_FILTER_PARAMS, FINDINGS_TRIAGE_ANCHOR_ID } from '../../../lib/editorialChecks';
 import { timeAgo } from '../../../utils/formatters';
 import {

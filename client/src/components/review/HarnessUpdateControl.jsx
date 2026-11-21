@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getHarnessUpdateReference } from '../../services/api';
+import { getHarnessUpdateReference } from '../../services/apiHarnesses.js';
 import { timeAgo } from '../../utils/formatters';
 
 const DAY_MS = 24 * 60 * 60 * 1000;

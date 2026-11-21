@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 import { createVideoDiagnosticTail } from '../server/lib/videoFailure.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_fastvideo.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'generate_fastvideo.py');
 const pyBin = resolveTestPython();
 const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
   encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -322,7 +322,7 @@ with tempfile.TemporaryDirectory() as tmp:
 // else runs it, so this wrapper is its only CI entry point.
 describe.skipIf(!pyBin)('generate_fastvideo_test.py argv-shape unit suite', () => {
   it('passes the unittest suite', () => {
-    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./generate_fastvideo_test.py', import.meta.url))], {
+    expect(() => execFileSync(pyBin, [fileURLToPath(new URL('./ml/generate_fastvideo_test.py', import.meta.url))], {
       encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS, stdio: 'pipe',
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     })).not.toThrow();

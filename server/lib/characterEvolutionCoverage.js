@@ -73,33 +73,6 @@ import { isNonBlankStr } from './textUtils.js';
  */
 export const EVOLUTION_COVERAGE_STATUSES = Object.freeze(['verified', 'findings', 'unreviewed']);
 
-/** Why an episode's paths could not be reasoned about. `null` = they could. */
-export const EVOLUTION_UNREVIEWED_REASONS = Object.freeze([
-  'no-scenes', // the episode is still an outline; there is no playable graph
-  'no-paths', // nothing walks from the opening scene (a broken/absent start)
-  'variation-limit', // FABLELOOM_PLAYTEST_LIMITS truncated the enumeration
-  'cycle', // a path repeats without terminating; prefixes are unreliable
-  'step-limit', // a path hit the per-path scene ceiling
-]);
-
-/**
- * How far one stage's evidence anchor got. Narrower than
- * `EVOLUTION_EVIDENCE_STATUSES` because coverage needs a NODE, not just a
- * resolvable pointer: an anchor naming a live episode but no scene resolves
- * for the prompt renderer and still cannot be placed on a path.
- *   - `unanchored` — nothing authored.
- *   - `unverified` — authored, but it cannot be placed on a scene in a
- *                    playable graph (episode-only anchor, an ambiguous scene
- *                    key with no episode, or a beat the teleplay never
- *                    expanded).
- *   - `stale`      — authored and DEAD: it names an episode or a scene that
- *                    does not exist. Preserved and reported, never satisfied.
- *   - `resolved`   — placed on a concrete node in a concrete episode.
- */
-export const EVOLUTION_ANCHOR_RESOLUTIONS = Object.freeze([
-  'unanchored', 'unverified', 'stale', 'resolved',
-]);
-
 export const EVOLUTION_COVERAGE_CODES = Object.freeze({
   EVIDENCE_STALE: 'EVOLUTION_EVIDENCE_STALE',
   STAGE_OUT_OF_ORDER: 'EVOLUTION_STAGE_OUT_OF_ORDER',

@@ -13,11 +13,12 @@
  * locked write (store.appendImportedItems), which dedupes on `source`.
  */
 
+import { imageGenEvents } from '../imageGenEvents.js';
+import { fileOwnedMediaBestEffort, imageItem } from '../mediaCollectionRules.js';
 import { createHash } from 'crypto';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
 import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, runFfmpegProcess, probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
@@ -139,7 +140,12 @@ export async function extractItemFrames(boardId, itemId, { count, times }) {
       caption: ownCaption ? `${ownCaption} (${label(i)})` : `${label(i)[0].toUpperCase()}${label(i).slice(1)} of ${file}`,
     }));
     // The append first names the frame files, so it commits under the backup lease (#9982).
-    const { board: next, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
+    const { board: next, added } = await withBackupAssetPublication(async () => {
+      const result = await store.appendImportedItems(boardId, imported);
+      for (const filename of names) imageGenEvents.emit('completed', { filename, path: `/data/images/${filename}` });
+      await fileOwnedMediaBestEffort('moodBoard', result.board, names.map(imageItem));
+      return result;
+    });
     if (added) emitRecordUpdated('moodBoard', boardId);
     console.log(`🎞️ Mood board ${boardId}: extracted ${names.length} frame(s) from ${file}, added ${added}`);
     return { board: next, added, frames: names };
@@ -149,6 +155,7 @@ export async function extractItemFrames(boardId, itemId, { count, times }) {
 }
 
 async function resizeCell(source, cell) {
+  const { default: sharp } = await import('sharp');
   return sharp(source).rotate().resize(cell, cell, { fit: 'cover', position: 'centre' }).jpeg({ quality: 90 }).toBuffer();
 }
 
@@ -227,6 +234,7 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
       return { input, left: GAP_PX + offset + (idx % cols) * (cell + GAP_PX), top: GAP_PX + row * (cell + GAP_PX) };
     });
 
+    const { default: sharp } = await import('sharp');
     const jpeg = await sharp({ create: { width, height, channels: 3, background: BG } })
       .composite(placed)
       .jpeg({ quality: 90 })
@@ -240,7 +248,11 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
     // both commit under one backup lease (#9982).
     const nextBoard = await withBackupAssetPublication(async () => {
       if (imported.length) await store.appendImportedItems(boardId, imported);
-      return store.updateBoard(boardId, { collageImageRef: filename });
+      const next = await store.updateBoard(boardId, { collageImageRef: filename });
+      const images = [filename, ...imported.map(item => boardItemLocalImage(item).filename)];
+      for (const image of images) imageGenEvents.emit('completed', { filename: image, path: `/data/images/${image}` });
+      await fileOwnedMediaBestEffort('moodBoard', next, images.map(imageItem));
+      return next;
     });
     emitRecordUpdated('moodBoard', boardId);
     console.log(`🧩 Mood board ${boardId}: collage ${cols}x${rows} (${composites.length} cells, ${skipped} skipped) → ${filename}`);

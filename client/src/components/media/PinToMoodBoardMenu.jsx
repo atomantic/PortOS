@@ -3,13 +3,7 @@ import { LayoutGrid, Check } from 'lucide-react';
 import { isValidKey } from '../../../../server/lib/mediaItemKey.js';
 import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
-import { tokenizeQuery, matchHaystack } from '../../lib/mediaSearch.js';
-import {
-  listMoodBoards,
-  createMoodBoard,
-  addMoodBoardItem,
-  removeMoodBoardItem,
-} from '../../services/api';
+import { listMoodBoards, createMoodBoard, addMoodBoardItem, removeMoodBoardItem } from '../../services/apiMoodBoard.js';
 
 // Self-contained "Pin to mood board" popover button, the mood-board sibling of
 // AddToCollectionMenu (issue #1455, follow-up to #911). It reuses the shared
@@ -37,20 +31,7 @@ const SIZES = {
   fill: { button: 'h-full w-full min-w-0 min-h-[44px] px-0 py-1 text-[10px]', icon: 'w-3.5 h-3.5' },
 };
 
-// Row search for the board list. The shell's default (#3312) is the media-
-// COLLECTION view, whose bucket ordering sinks auto-generated empties — that
-// classification reads collection provenance a board record simply doesn't
-// carry, so a user's empty board that happened to be named "Universe: Refs"
-// would be demoted for looking like an auto-created collection. Boards keep the
-// server's `updatedAt DESC` order and only get the shared AND-token filter over
-// name + description.
-const filterBoards = (boards, query) => {
-  const tokens = tokenizeQuery(query);
-  if (tokens.length === 0) return boards;
-  return boards.filter((b) => (
-    matchHaystack(`${b?.name || ''} ${b?.description || ''}`.toLowerCase(), tokens)
-  ));
-};
+const boardName = (board) => board.name;
 
 // Find the board item this asset is pinned as — by mediaKey when we have a real
 // one, else by the imageUrl we pinned it under.
@@ -194,7 +175,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         onCreated={handleCreated}
         loadItems={listMoodBoards}
         createItem={createMoodBoard}
-        orderItems={filterBoards}
+        getSortLabel={boardName}
       />
     </>
   );

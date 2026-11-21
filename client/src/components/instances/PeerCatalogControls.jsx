@@ -1,5 +1,6 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useId, useRef, useState } from 'react';
-import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/api';
+import { getPeerCatalogReview, getPeerCatalogReviews, savePeerCatalogReview } from '../../services/apiSystem.js';
 import useMounted from '../../hooks/useMounted';
 import { formatBytes } from '../../utils/formatters';
 
@@ -121,7 +122,7 @@ export default function PeerCatalogControls({ hostInstanceId, disabled, onPrepar
           className="w-full max-w-lg rounded border border-port-border bg-port-bg p-2"
           onChange={event => { setSelected(event.target.value); setReviewing(false); }}>
           <option value="">Choose a catalog entry</option>
-          {catalog.candidates.map(entry => <option key={entry.catalogKey} value={entry.catalogKey}>{entry.name}</option>)}
+          {sortByLabel(catalog.candidates).map(entry => <option key={entry.catalogKey} value={entry.catalogKey}>{entry.name}</option>)}
         </select>
         {selected && <>
           {review && <p role="status" className="text-xs text-gray-400 break-all">Local review saved: {review.fileName} · {formatBytes(review.downloadBytes)} · {review.license} · commit {review.sourceRevision}</p>}

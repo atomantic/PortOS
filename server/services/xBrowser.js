@@ -11,8 +11,6 @@ const assertUsername = (username) => {
   return username.trim();
 };
 
-export const xBrowserOrigin = ORIGIN;
-
 export const fixedXUrl = (kind, value = '') => {
   if (kind === 'profile') return `${ORIGIN}/${encodeURIComponent(assertUsername(value))}`;
   if (kind === 'latest') {

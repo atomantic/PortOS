@@ -12,6 +12,9 @@ vi.mock('./worktreeManager.js', () => ({
   listWorktrees: vi.fn().mockResolvedValue([])
 }));
 
+const headRow = (name, upstream = '', track = '', current = false) =>
+  [current ? '*' : ' ', name, upstream, track, 'commit', 'a'.repeat(40)].join('\0');
+
 describe('getBranches', () => {
   let getBranches;
   let execGit;
@@ -33,12 +36,12 @@ describe('getBranches', () => {
 
   it('flags a non-current, non-protected branch merged into the default branch, and excludes the current/default branch', async () => {
     execGit.mockImplementation((args) => {
-      if (args[0] === 'branch' && args.includes('-vv')) {
+      if (args[0] === 'for-each-ref' && args.includes('refs/heads/')) {
         return Promise.resolve({
           stdout: [
-            '*|main||',
-            ' |feature/done|origin/feature/done|',
-            ' |feature/wip|origin/feature/wip|[ahead 1]'
+            headRow('main', '', '', true),
+            headRow('feature/done', 'origin/feature/done'),
+            headRow('feature/wip', 'origin/feature/wip', '[ahead 1]')
           ].join('\n'),
           stderr: '',
           exitCode: 0
@@ -49,9 +52,6 @@ describe('getBranches', () => {
       }
       if (args[0] === 'rev-parse' && args.includes('--verify')) {
         return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
-      }
-      if (args[0] === 'branch' && args.includes('--list')) {
-        return Promise.resolve({ stdout: '  main\n  feature/done\n  feature/wip\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'branch' && args.includes('--merged')) {
         return Promise.resolve({ stdout: 'main\nfeature/done\n', stderr: '', exitCode: 0 });
@@ -77,9 +77,9 @@ describe('getBranches', () => {
 
   it('never flags a protected branch (e.g. dev) as merged even when it appears in the --merged output', async () => {
     execGit.mockImplementation((args) => {
-      if (args[0] === 'branch' && args.includes('-vv')) {
+      if (args[0] === 'for-each-ref' && args.includes('refs/heads/')) {
         return Promise.resolve({
-          stdout: ['*|main||', ' |dev||'].join('\n'),
+          stdout: [headRow('main', '', '', true), headRow('dev')].join('\n'),
           stderr: '',
           exitCode: 0
         });
@@ -89,9 +89,6 @@ describe('getBranches', () => {
       }
       if (args[0] === 'rev-parse' && args.includes('--verify')) {
         return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
-      }
-      if (args[0] === 'branch' && args.includes('--list')) {
-        return Promise.resolve({ stdout: '  main\n  dev\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'branch' && args.includes('--merged')) {
         return Promise.resolve({ stdout: 'main\ndev\n', stderr: '', exitCode: 0 });
@@ -107,9 +104,9 @@ describe('getBranches', () => {
 
   it('falls back to the remote-tracking ref when there is no local branch matching the default (single-branch clone / feature-only worktree)', async () => {
     execGit.mockImplementation((args) => {
-      if (args[0] === 'branch' && args.includes('-vv')) {
+      if (args[0] === 'for-each-ref' && args.includes('refs/heads/')) {
         return Promise.resolve({
-          stdout: ['*|feature-a||', ' |feature-b||'].join('\n'),
+          stdout: [headRow('feature-a', '', '', true), headRow('feature-b')].join('\n'),
           stderr: '',
           exitCode: 0
         });
@@ -120,9 +117,6 @@ describe('getBranches', () => {
       }
       if (args[0] === 'rev-parse' && args.includes('--verify')) {
         return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
-      }
-      if (args[0] === 'branch' && args.includes('--list')) {
-        return Promise.resolve({ stdout: '  feature-a\n  feature-b\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'branch' && args.includes('--merged')) {
         if (args[2] === 'main') {
@@ -154,12 +148,12 @@ describe('getBranches', () => {
       { branch: 'refs/heads/main' }             // the current branch's own worktree
     ]);
     execGit.mockImplementation((args) => {
-      if (args[0] === 'branch' && args.includes('-vv')) {
+      if (args[0] === 'for-each-ref' && args.includes('refs/heads/')) {
         return Promise.resolve({
           stdout: [
-            '*|main||',
-            ' |feature/locked|origin/feature/locked|',
-            ' |feature/free|origin/feature/free|'
+            headRow('main', '', '', true),
+            headRow('feature/locked', 'origin/feature/locked'),
+            headRow('feature/free', 'origin/feature/free')
           ].join('\n'),
           stderr: '',
           exitCode: 0
@@ -170,9 +164,6 @@ describe('getBranches', () => {
       }
       if (args[0] === 'rev-parse' && args.includes('--verify')) {
         return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
-      }
-      if (args[0] === 'branch' && args.includes('--list')) {
-        return Promise.resolve({ stdout: '  main\n  feature/locked\n  feature/free\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'branch' && args.includes('--merged')) {
         return Promise.resolve({ stdout: 'main\nfeature/locked\nfeature/free\n', stderr: '', exitCode: 0 });

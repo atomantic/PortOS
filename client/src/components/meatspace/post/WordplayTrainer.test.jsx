@@ -6,20 +6,25 @@ import { awaitEnabled } from '../../../test/enabledBarrier.js';
 // Stub every API call WordplayTrainer (and the shared WordplayDrillUI scoring
 // core it now delegates to) can reach — mirrors the mocking convention used
 // by MorseTrainer.test.jsx / PostDrillConfig.test.jsx.
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   generatePostDrill: vi.fn(),
   scorePostLlmDrill: vi.fn(),
   getPostDrillCacheStatus: vi.fn(() => Promise.resolve({})),
   fillPostDrillCache: vi.fn(() => Promise.resolve({})),
   updatePostConfig: vi.fn(() => Promise.resolve({})),
   submitTrainingEntry: vi.fn(() => Promise.resolve({})),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
 }));
 
 import WordplayTrainer from './WordplayTrainer';
 import {
-  generatePostDrill, scorePostLlmDrill, getPostDrillCacheStatus, submitTrainingEntry,
-} from '../../../services/api';
+  generatePostDrill,
+  scorePostLlmDrill,
+  getPostDrillCacheStatus,
+  submitTrainingEntry,
+} from '../../../services/apiMeatspace.js';
 
 // Mode activation crosses cache-status and drill-generation promises before a
 // clue renders. Give that real async chain enough time when the full client

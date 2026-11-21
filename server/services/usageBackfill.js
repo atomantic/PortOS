@@ -87,13 +87,28 @@ export async function startHistoricalUsageBackfill({
   // `job.status` is already `running` above, so the await can't let a second
   // POST start a duplicate scan.
   const providerList = providers ?? await listProviders().catch(() => []);
+  let runIds;
+  let reconciledRunIds;
+  let siblingReconciledRunIds;
+  try {
+    const { listUsageRunIds } = await import('./usageBackfillWorker.js');
+    runIds = await listUsageRunIds(runsDir);
+    [reconciledRunIds, siblingReconciledRunIds] = await Promise.all([
+      getReconciledUsageRunIds(runIds), getSiblingReconciledUsageRunIds(runIds),
+    ]);
+  } catch (error) {
+    job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
+    notifyUsageBackfillUpdated();
+    return publicJob();
+  }
 
   const worker = new WorkerClass(new URL('./usageBackfillWorker.js', import.meta.url), {
     workerData: {
       runsDir,
+      runIds,
       home,
-      reconciledRunIds: getReconciledUsageRunIds(),
-      siblingReconciledRunIds: getSiblingReconciledUsageRunIds(),
+      reconciledRunIds,
+      siblingReconciledRunIds,
       providers: providerList,
       // The worker gets its own empty copy of usageReconciler.js's claim
       // ledger (a separate module instance) — seed it from this thread's

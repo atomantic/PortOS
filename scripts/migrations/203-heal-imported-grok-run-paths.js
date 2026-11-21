@@ -126,7 +126,6 @@ async function neutralizeDirectionEntries(recDir, id, directions) {
     if (typeof entry.runManifest === 'string') {
       entry.runManifest = canonicalizeImportedRunPathValue(id, entry.runManifest);
       const rel = recordRelative(id, entry.runManifest);
-      // eslint-disable-next-line no-await-in-loop -- sequential per-direction is fine (≤8 entries)
       if (rel && await exists(join(recDir, rel))) entry.runManifestSha256 = await sha256File(join(recDir, rel));
     }
   }
@@ -147,14 +146,11 @@ async function hasGrokResidue(recDir, id) {
   const ws = await readFile(wsAbs, 'utf8').catch(() => '');
   if (ws.includes(marker)) return true;
   for (const abs of await listJsonFiles(join(recDir, NEUTRAL_DIR))) {
-    // eslint-disable-next-line no-await-in-loop -- short-circuits on first hit
     if ((await readFile(abs, 'utf8').catch(() => '')).includes(marker)) return true;
   }
   for (const vDir of await readdir(join(recDir, 'runtime'), { withFileTypes: true }).catch(() => [])) {
     if (!vDir.isDirectory() || !/^v\d+$/.test(vDir.name)) continue;
-    // eslint-disable-next-line no-await-in-loop -- short-circuits on first hit
     for (const abs of await listJsonFiles(join(recDir, 'runtime', vDir.name))) {
-      // eslint-disable-next-line no-await-in-loop -- short-circuits on first hit
       if ((await readFile(abs, 'utf8').catch(() => '')).includes(marker)) return true;
     }
   }

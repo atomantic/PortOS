@@ -6,7 +6,7 @@ Date: 2026-09-12
 This document is the implementation-facing bridge between PortOS's exhaustive
 HTTP inventory, the governed semantic registry, Persistent Mind, and Agent
 Tools (MCP). It records what is shipped and separates it from the long-running
-job and confirmation extensions retained in the [unified design spec](./plans/2026-08-27-unified-cos-tool-calling-interface.md).
+job and confirmation extensions retained in the [unified design spec](./plans/archive/2026-08-27-unified-cos-tool-calling-interface.md).
 
 ## Audit result
 
@@ -346,7 +346,7 @@ result path in `server/services/cos/cosToolRegistry.js`, and
 
 ## Validation
 
-- `server/lib/apiRouteGraph.guard.test.js` — source-derived HTTP inventory (at audit
+- `server/test/guards/modules/apiRouteGraph.test.js` — source-derived HTTP inventory (at audit
   time 2,138 operations / 2,141 declarations / 146 mounts), coverage of every
   declaration under `server/routes/`, and representative-route pins.
 - `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,

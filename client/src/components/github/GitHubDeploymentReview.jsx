@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { getGitHubDeploymentReview, reviewGitHubDeployment } from '../../services/api';
+import { getGitHubDeploymentReview, reviewGitHubDeployment } from '../../services/apiGithub.js';
 
 // Approve or reject the environments a waiting workflow run is blocked on.
 // Operator only: the server re-checks every id against the run's pending list.

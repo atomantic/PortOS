@@ -17,7 +17,7 @@ import {
   WORLD_LOCKABLE_FIELDS,
   ensureInfluences,
   isInfluenceLockField,
-} from '../../services/api';
+} from '../../services/apiUniverseBuilder.js';
 import { upsertByIdPrepend } from '../../lib/upsertByIdPrepend';
 import {
   extractPreservedFromDraft,

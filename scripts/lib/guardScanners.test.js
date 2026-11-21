@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   scansTrackedTree, readsUnnamedCrossRootFile, hasRecursiveDirectoryWalk, shellsOutToGitEnumeration,
   findUnsuffixedScanners, isGuardTest,
+  GUARD_CHECK_DIRS, guardCheckModules, registerGuardChecks,
 } from './guardScanners.js';
+import { mkdtempSync, readFileSync as readLog, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 describe('guard scanner detectors (#5055, #6363, #8723)', () => {
   it('detects the scan shape it registers, and leaves ordinary tests alone', () => {
@@ -109,5 +114,32 @@ describe('guard scanner detectors (#5055, #6363, #8723)', () => {
       "readFileSync(join(here, 'sibling.js'), 'utf8');",
       'server/lib/example.test.js',
     )).toBe(false);
+  });
+});
+
+describe('structural guard runner registration (#16996)', () => {
+  it("logs each check's load time for the guard budget when the runner is asked to", async () => {
+    const { dir, runner } = GUARD_CHECK_DIRS[0];
+    const root = join(import.meta.dirname, '..', '..');
+    const logDir = mkdtempSync(join(tmpdir(), 'portos-guard-load-log-'));
+    try {
+      const log = join(logDir, 'loads.jsonl');
+      const loaded = [];
+      const factories = [];
+      const describe = (name, factory) => { factories.push(factory); };
+      registerGuardChecks(pathToFileURL(join(root, dir, '/')), { describe, it: () => {}, load: async (name) => { loaded.push(name); }, env: { PORTOS_GUARD_LOAD_LOG: log } });
+      for (const factory of factories) await factory();
+      const checks = guardCheckModules(join(root, dir));
+      expect(loaded).toEqual(checks);
+      const records = readLog(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(records.map(({ check }) => check)).toEqual(checks.map((name) => name.replace(/\.test\.jsx?$/, '')));
+      expect(records.every((record) => record.runner === runner && Number.isFinite(record.ms))).toBe(true);
+      // Without the variable, nothing is written.
+      registerGuardChecks(pathToFileURL(join(root, dir, '/')), { describe, it: () => {}, load: async () => {}, env: {} });
+      for (const factory of factories.splice(0)) await factory();
+      expect(readLog(log, 'utf8').trim().split('\n')).toHaveLength(checks.length * 2);
+    } finally {
+      rmSync(logDir, { recursive: true, force: true });
+    }
   });
 });

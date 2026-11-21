@@ -1,5 +1,7 @@
 # Place greybox: a 3D layout reference on Environments
 
+Status: Active
+
 ## Context
 
 Music-video sets are described by text and conditioned on generated reference

@@ -13,10 +13,17 @@ afterAll(cleanupTempDataRoots);
 // keeps the whole peer-sync import graph out of this suite's load time.
 vi.mock('../services/sharing/peerSyncAssets.js', () => ({
   pullMissingAssetsFromPeer: vi.fn(),
-  collectionVideoRefToFilename: (ref) => ref,
+}));
+vi.mock('../services/instances.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getPeers: vi.fn(async () => []),
 }));
 
 const { default: router } = await import('./mediaCollections.js');
+const { getPeers } = await import('../services/instances.js');
+const { markHosted } = await import('../services/peerHostedMedia.js');
+const { pullMissingAssetsFromPeer } = await import('../services/sharing/peerSyncAssets.js');
+const { saveHistory } = await import('../services/videoGen/history.js');
 
 const app = express();
 app.use(express.json());
@@ -27,6 +34,22 @@ const BASE = '/api/media/collections';
 const api = (method, path = '', body) => request(app)[method](`${BASE}${path}`).send(body);
 const create = async (name = 'Concept Art') => (await api('post', '', { name })).body;
 const keysOf = (collection) => collection.items.map((i) => `${i.kind}:${i.ref}`);
+
+it('copies the hosted filename attached to the collection video ID by history', async () => {
+  const { id } = await create('Imported video');
+  await api('post', `/${id}/items`, { kind: 'video', ref: 'imported-id' });
+  await markHosted('video-peer', [{ kind: 'video', filename: 'imported.webm' }]);
+  expect((await api('get', `/${id}`)).body.items[0]).toMatchObject({ location: 'missing' });
+
+  await saveHistory([{ id: 'imported-id', filename: 'imported.webm' }]);
+  const peers = [{ instanceId: 'video-peer', enabled: true }];
+  vi.mocked(getPeers).mockResolvedValueOnce(peers).mockResolvedValueOnce(peers).mockResolvedValueOnce(peers);
+  expect((await api('get', `/${id}`)).body.items[0]).toMatchObject({ location: 'remote', hostPeerId: 'video-peer' });
+  const response = await api('post', `/${id}/localize`, { keys: ['video:imported-id'] });
+  expect(response.body).toEqual({ requested: 1, started: 1 });
+  await vi.waitFor(() => expect(pullMissingAssetsFromPeer).toHaveBeenCalledWith('video-peer',
+    [{ kind: 'video', filename: 'imported.webm' }], { includeMismatched: false }));
+});
 
 describe('mediaCollections routes — create / read / patch / delete', () => {
   it('creates a collection that reads back by id and in the list, then patches and soft-deletes it', async () => {
@@ -67,6 +90,67 @@ describe('mediaCollections routes — provenance (#3311)', () => {
     const created = await api('post', '', { name: 'Claimed', source: 'auto' });
     expect(created.status).toBe(201);
     expect((await api('get', `/${created.body.id}`)).body.source).toBe('user');
+  });
+});
+
+describe('mediaCollections routes — join', () => {
+  it('creates a named collection with the union of items and keeps the sources when asked', async () => {
+    const first = await create('First source');
+    const second = await create('Second source');
+    await api('post', `/${first.id}/items`, { kind: 'image', ref: 'shared' });
+    await api('post', `/${second.id}/items`, { kind: 'image', ref: 'shared' });
+    await api('post', `/${second.id}/items`, { kind: 'video', ref: 'shared' });
+
+    const joined = await api('post', '/join', {
+      name: '  Selected media — 2026  ', collectionIds: [first.id, second.id, first.id], keepOriginals: true,
+    });
+    expect(joined.status).toBe(201);
+    expect(joined.body).toMatchObject({ name: 'Selected media — 2026', source: 'user', removedCollectionIds: [] });
+    expect([first.id, second.id]).not.toContain(joined.body.id);
+    expect(keysOf((await api('get', `/${joined.body.id}`)).body)).toEqual(['image:shared', 'video:shared']);
+    expect(keysOf((await api('get', `/${first.id}`)).body)).toEqual(['image:shared']);
+    expect(keysOf((await api('get', `/${second.id}`)).body)).toEqual(['image:shared', 'video:shared']);
+  });
+
+  it('merges into the same-named collection and retires the other sources', async () => {
+    const keeper = await create('Creative Director: Daily Video');
+    const dated = await create('Creative Director: Daily Video — 2026-07-16');
+    const twin = await create('creative director: daily video');
+    await api('post', `/${keeper.id}/items`, { kind: 'video', ref: 'v1' });
+    await api('post', `/${dated.id}/items`, { kind: 'video', ref: 'v2' });
+    await api('post', `/${twin.id}/items`, { kind: 'video', ref: 'v3' });
+
+    const joined = await api('post', '/join', { name: 'Creative Director: Daily Video', collectionIds: [dated.id, keeper.id, twin.id] });
+    expect(joined.status).toBe(201);
+    // Both case-insensitive matches qualify; the first selected one in order wins.
+    expect(joined.body.id).toBe(keeper.id);
+    expect(joined.body.removedCollectionIds).toEqual([dated.id, twin.id]);
+    expect(keysOf((await api('get', `/${keeper.id}`)).body)).toEqual(['video:v1', 'video:v2', 'video:v3']);
+    expect((await api('get', `/${dated.id}`)).status).toBe(404);
+    expect((await api('get', `/${twin.id}`)).status).toBe(404);
+    const names = (await api('get')).body.map((c) => c.name);
+    expect(names.filter((n) => n.toLowerCase() === 'creative director: daily video')).toHaveLength(1);
+  });
+
+  it('re-points a Creative Director project at the merged collection before retiring its old one', async () => {
+    const { createProject, getProject } = await import('../services/creativeDirector/local.js');
+    const project = await createProject({ name: 'Daily Video — 2026-07-17', aspectRatio: '16:9', quality: 'standard', modelId: 'example-model', targetDurationSeconds: 10 });
+    const target = await create('Creative Director: Daily Video');
+
+    const joined = await api('post', '/join', { name: target.name, collectionIds: [project.collectionId, target.id] });
+    expect(joined.body.removedCollectionIds).toEqual([project.collectionId]);
+    expect((await getProject(project.id)).collectionId).toBe(target.id);
+  });
+
+  it('rejects invalid selections without creating a destination', async () => {
+    const first = await create('Available source');
+    const second = await create('Deleted source');
+    await api('delete', `/${second.id}`);
+
+    const name = 'Incomplete join';
+    expect((await api('post', '/join', { name, collectionIds: [first.id, first.id] })).status).toBe(400);
+    expect((await api('post', '/join', { name, collectionIds: [first.id, second.id] })).status).toBe(404);
+    expect((await api('get')).body.map((c) => c.name)).not.toContain(name);
   });
 });
 

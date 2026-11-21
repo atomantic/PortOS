@@ -17,7 +17,8 @@
  * never double-counted as a code-quality one.
  */
 
-import { AUDIT_DEFINITIONS } from './auditCatalog.js';
+import { auditDomainFor } from './auditDomains.js';
+import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
 
 export const LANE_HEALTH_WINDOW_DAYS = 60;
 export const LANE_REFILE_WINDOW_DAYS = 30;
@@ -26,7 +27,7 @@ const DAY_MS = 86_400_000;
 const MIN_SHA_PREFIX = 7;
 
 /** The audit lanes as `{ id, label, metricLabel, issueLabel }`, catalog order. */
-export function auditLanes(definitions = AUDIT_DEFINITIONS) {
+export function auditLanes(definitions = AUDIT_EXECUTION_PROFILES) {
   return Object.entries(definitions)
     .filter(([, definition]) => definition?.filing?.metricLabel)
     .map(([id, { label, filing }]) => ({ id, label, metricLabel: filing.metricLabel, issueLabel: filing.issueLabel }));
@@ -136,7 +137,11 @@ export function computeLaneHealth({
   const refileMs = refileDays * DAY_MS;
   const byLane = new Map(lanes.map((lane) => [lane.id, []]));
   for (const issue of issues) {
-    for (const laneId of attributeIssueLanes(issue, lanes)) byLane.get(laneId).push(issue);
+    const owners = attributeIssueLanes(issue, lanes);
+    // A multi-labelled issue still counts once in its domain. Keep the original
+    // profiles separate for callers running their saved legacy schedules.
+    const reportIds = new Set([...owners, ...owners.map(auditDomainFor)]);
+    for (const id of reportIds) byLane.get(id)?.push(issue);
   }
 
   const rows = lanes.map((lane) => {
@@ -191,7 +196,8 @@ export function computeLaneHealth({
     }
     // Newest first, so the agent sees what it most recently got wrong.
     flagged.reverse();
-    return { id: lane.id, label: lane.label, metricLabel: lane.metricLabel, ...counts, flagged: flagged.slice(0, flaggedLimit), flaggedTotal: flagged.length };
+    return { id: lane.id, label: lane.label, metricLabel: lane.metricLabel,
+      ...(auditDomainFor(lane.id) !== lane.id && { legacyAuditDomain: auditDomainFor(lane.id) }), ...counts, flagged: flagged.slice(0, flaggedLimit), flaggedTotal: flagged.length };
   });
 
   return { windowDays, refileDays, from: new Date(from).toISOString(), to: new Date(now).toISOString(), lanes: rows };

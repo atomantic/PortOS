@@ -44,8 +44,11 @@ const SHORTCUT_SECTIONS = [
 ];
 
 
-export default function KeyboardHelp() {
-  const { open, setOpen } = useKeyboardHelp();
+export default function KeyboardHelp({ open: controlledOpen, setOpen: controlledSetOpen } = {}) {
+  const isControlled = controlledOpen !== undefined;
+  const fallback = useKeyboardHelp(isControlled);
+  const open = isControlled ? controlledOpen : fallback.open;
+  const setOpen = isControlled ? controlledSetOpen : fallback.setOpen;
   const closeButtonRef = useRef(null);
 
   const close = useCallback(() => setOpen(false), [setOpen]);

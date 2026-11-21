@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
 
 import { useBeeperSettings, BEEPER_DEFAULT_BASE_URL } from './useBeeperSettings.js';
 

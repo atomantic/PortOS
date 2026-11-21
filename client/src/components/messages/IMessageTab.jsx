@@ -8,7 +8,17 @@ import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
-import * as api from '../../services/api';
+import {
+  purgeImessageConversation,
+  addImessageBlocklist,
+  deleteImessageEvent,
+  getImessageBlocklist,
+  removeImessageBlocklist,
+  getImessageStats,
+  getImessageConversations,
+  getImessageConversationEvents,
+  syncImessage,
+} from '../../services/apiMessages.js';
 import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../utils/formatters';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { IMessageSettingsPanel } from './IMessageSettingsPanel';
@@ -167,7 +177,7 @@ function ConversationDetail({
 
   const runPurge = async () => {
     setBusy(true);
-    const result = await api.purgeImessageConversation(chatKey, { silent: true }).catch(() => null);
+    const result = await purgeImessageConversation(chatKey, { silent: true }).catch(() => null);
     setBusy(false);
     setConfirm(null);
     if (!result) {
@@ -185,7 +195,7 @@ function ConversationDetail({
       return;
     }
     setBusy(true);
-    const result = await api.addImessageBlocklist(handle, { purgeExisting, silent: true }).catch(() => null);
+    const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch(() => null);
     setBusy(false);
     setConfirm(null);
     if (!result) {
@@ -202,7 +212,7 @@ function ConversationDetail({
   };
 
   const deleteEvent = async (id) => {
-    const result = await api.deleteImessageEvent(id, { silent: true }).catch(() => null);
+    const result = await deleteImessageEvent(id, { silent: true }).catch(() => null);
     if (!result) {
       toast.error('Failed to delete event');
       return;
@@ -400,7 +410,7 @@ function BlocklistPanel({ onChanged }) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api.getImessageBlocklist({ silent: true })
+    getImessageBlocklist({ silent: true })
       .then((res) => {
         if (!active) return;
         setHandles(res?.handles || []);
@@ -414,7 +424,7 @@ function BlocklistPanel({ onChanged }) {
   }, [attempt]);
 
   const unblock = async (handle) => {
-    const res = await api.removeImessageBlocklist(handle, { silent: true }).catch(() => null);
+    const res = await removeImessageBlocklist(handle, { silent: true }).catch(() => null);
     if (!res) {
       toast.error('Failed to unblock');
       return;
@@ -498,8 +508,8 @@ export default function IMessageTab() {
     setListLoading(true);
     const settle = (promise) => promise.then((value) => [value, null], (err) => [null, err instanceof Error ? err : new Error('Request failed')]);
     const [[statsRes, statsErr], [convRes, convErr]] = await Promise.all([
-      settle(api.getImessageStats({ silent: true })),
-      settle(api.getImessageConversations({ q: debouncedQ || undefined, silent: true })),
+      settle(getImessageStats({ silent: true })),
+      settle(getImessageConversations({ q: debouncedQ || undefined, silent: true })),
     ]);
     if (!isCurrent()) return;
     if (!statsErr) setStats(statsRes);
@@ -523,7 +533,7 @@ export default function IMessageTab() {
     }
     let active = true;
     setEventsLoading(true);
-    api.getImessageConversationEvents(selectedKey, { limit: 200, silent: true })
+    getImessageConversationEvents(selectedKey, { limit: 200, silent: true })
       .then((res) => {
         if (active) {
           setEvents(res?.events || []);
@@ -554,7 +564,7 @@ export default function IMessageTab() {
 
   const handleSync = async () => {
     setSyncing(true);
-    const result = await api.syncImessage({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
+    const result = await syncImessage({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
     setSyncing(false);
     if (result?.ok) {
       toast.success(

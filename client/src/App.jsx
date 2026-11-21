@@ -7,7 +7,7 @@ import { getSettings, updateSettings, getSelfInstance } from './services/apiSyst
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import BrailleSpinner from './components/BrailleSpinner';
-import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
+import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
 
 // Direct links to other pages should not download the dashboard's grid/editor.
@@ -65,6 +65,7 @@ const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Music = lazyWithReload(() => import('./pages/Music'));
+const CreativeStudio = lazyWithReload(() => import('./pages/CreativeStudio'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
 const SongBook = lazyWithReload(() => import('./pages/SongBook'));
@@ -200,16 +201,6 @@ function UniverseRouteRedirect({ fromPrefix, to }) {
   return <Navigate to={`${to}${rest.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
-// Rebase a legacy route prefix onto its current one, preserving the trailing
-// path (ids, tabs), query string, and hash. Used where the old prefix is still a
-// live route (`/video` is a page, so `/video/:id` can't be a `previousPaths`
-// entry without capturing it). `from` must be an anchored regex.
-function PrefixRedirect({ from, to }) {
-  const { pathname, search, hash, state } = useLocation();
-  const rest = pathname.replace(from, '');
-  return <Navigate to={`${to}${rest}${search}${hash}`} state={state} replace />;
-}
-
 // The retired /ai/harnesses/:harnessId/connections[/:connectionId] drawer
 // (#6369 → #7567): a connection id names a service, so a deep link into one
 // lands on that service; the bare harness-scoped list lands on the harness.
@@ -222,7 +213,6 @@ function HarnessConnectionsRedirect() {
   return <Navigate to={`${target}${search}${hash}`} replace />;
 }
 
-const VIDEO_PROJECT_PREFIX = /^\/video/;
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -246,12 +236,14 @@ if (import.meta.hot) {
 function useTimezoneBootstrap(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
-    getSettings().then((s) => {
-      if (s?.timezone) return;
+    let cancelled = false;
+    readShellBootstrap('settings', () => getSettings({ silent: true })).then((s) => {
+      if (cancelled || s?.timezone) return;
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (!tz || tz === 'UTC') return;
       return updateSettings({ timezone: tz });
     }).catch(() => null);
+    return () => { cancelled = true; };
   }, [enabled]);
 }
 
@@ -261,10 +253,12 @@ function useTimezoneBootstrap(enabled = true) {
 function useDocumentTitle(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
-    getSelfInstance({ silent: true }).then((self) => {
+    let cancelled = false;
+    readShellBootstrap('selfInstance', () => getSelfInstance({ silent: true })).then((self) => {
       const name = self?.name?.trim();
-      if (name) document.title = `PortOS: ${name}`;
+      if (!cancelled && name) document.title = `PortOS: ${name}`;
     }).catch(() => null);
+    return () => { cancelled = true; };
   }, [enabled]);
 }
 
@@ -443,7 +437,6 @@ export default function App() {
             <Route path="sprites/:id" element={<Sprites />} />
             {/* Creative Director — a top-level Create page (moved out of the
                 Media Gen tabs); /video is its browse-only view. */}
-            <Route path="video" element={<CreativeDirector browseOnly />} />
             {/* VideoGen still uses the Media Gen tab shell (header + tabs +
                 overflow-auto body); VideoGen has no internal scroller of its
                 own, so rendering it bare in the full-width main clips the form. */}
@@ -491,15 +484,17 @@ export default function App() {
             <Route path="songbook" element={<SongBook />} />
             <Route path="songbook/import" element={<SongBookImport />} />
             <Route path="songbook/:id" element={<SongBookViewer />} />
+            <Route path="create/media" element={<CreativeStudio studio="media" />} />
+            <Route path="create/story" element={<CreativeStudio studio="story" />} />
             <Route path="catalog" element={<Catalog />} />
             <Route path="catalog/ingest" element={<CatalogIngest />} />
             <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
-            <Route path="casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
+            <Route path="catalog/casting" element={<CreativeLibrary key="casting" libraryId="casting" />} />
             <Route path="casting/import" element={<CreativeCastImport />} />
             <Route path="casting/:id/:tab?" element={<CatalogIngredient />} />
-            <Route path="environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
+            <Route path="catalog/environments" element={<CreativeLibrary key="environments" libraryId="environments" />} />
             <Route path="environments/:id/:tab?" element={<CatalogIngredient />} />
-            <Route path="objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
+            <Route path="catalog/objects" element={<CreativeLibrary key="objects" libraryId="objects" />} />
             <Route path="objects/:id/:tab?" element={<CatalogIngredient />} />
             <Route path="code-animation" element={<CodeAnimation />} />
             <Route path="code-animation/gallery" element={<CodeAnimation />} />
@@ -578,16 +573,13 @@ export default function App() {
           <Route path="privacy" element={<Navigate to="/privacy/overview" replace />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
           <Route path="feature-agents/:id" element={<Navigate to="overview" replace />} />
-          <Route path="settings" element={<Navigate to="/settings/backup" replace />} />
+          <Route path="settings" element={<Navigate to="/settings/general" replace />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="models" element={<Navigate to="/models/llms" replace />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
           <Route path="post" element={<Navigate to="/post/launcher" replace />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
-          <Route path="video/:id" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
-          <Route path="video/:id/:tab/:sceneId" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
-          <Route path="video/:id/:tab" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           {/* :id with no tab lands on the overview tab, carrying any query string
               + hash, so /creative-director/abc?x#y → /creative-director/abc/overview?x#y. */}
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
@@ -600,7 +592,5 @@ export default function App() {
       </Routes>
     </Suspense>
   );
-  return isHostedAudienceRoute
-    ? routeContent
-    : <CatalogTypesProvider>{routeContent}</CatalogTypesProvider>;
+  return routeContent;
 }

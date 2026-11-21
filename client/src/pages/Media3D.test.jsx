@@ -20,11 +20,13 @@ const createImageTo3dModel = vi.fn();
 const getImageTo3dModel = vi.fn();
 const listImageTo3dModels = vi.fn();
 const getHfTokenStatus = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageTo3d.js', () => ({
   getImageTo3dTargets: (...a) => getImageTo3dTargets(...a),
   createImageTo3dModel: (...a) => createImageTo3dModel(...a),
   getImageTo3dModel: (...a) => getImageTo3dModel(...a),
   listImageTo3dModels: (...a) => listImageTo3dModels(...a),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
   getHfTokenStatus: (...a) => getHfTokenStatus(...a),
 }));
 

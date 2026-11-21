@@ -25,55 +25,68 @@ import pg from 'pg';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
+import { checkDbTestStorage } from './dbTestStorage.mjs';
 import { describeSetupFailure } from './setupDbTestFailure.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TEST_DB = process.env.PGTESTDATABASE || 'portos_test';
 
-// Guard the identifier — it's interpolated into CREATE DATABASE (which can't be
-// parameterized), so refuse anything but a plain, test-suffixed name.
-if (!/^[a-z][a-z0-9_]*_test$/.test(TEST_DB)) {
-  console.error(`❌ Refusing to provision '${TEST_DB}': test DB name must match /^[a-z][a-z0-9_]*_test$/`);
-  process.exit(1);
-}
-
-const conn = {
-  host: process.env.PGHOST || 'localhost',
-  port: parseInt(process.env.PGPORT || '5432', 10),
-  user: process.env.PGUSER || 'portos',
-  password: process.env.PGPASSWORD || 'portos',
-};
-
-async function provision() {
+export async function provisionTestDatabase({
+  env = process.env,
+  createClient = config => new pg.Client(config),
+  storage = {},
+  log = console.log,
+} = {}) {
+  const testDb = env.PGTESTDATABASE || 'portos_test';
+  // CREATE DATABASE cannot parameterize its identifier.
+  if (!/^[a-z][a-z0-9_]*_test$/.test(testDb)) {
+    throw new Error('test DB name must match /^[a-z][a-z0-9_]*_test$/');
+  }
+  const conn = {
+    host: env.PGHOST || 'localhost',
+    port: parseInt(env.PGPORT || '5432', 10),
+    user: env.PGUSER || 'portos',
+    password: env.PGPASSWORD || 'portos',
+  };
   // 1. Create the database if absent (from a maintenance connection — CREATE
   //    DATABASE cannot run inside the target DB or a transaction).
-  const admin = new pg.Client({ ...conn, database: process.env.PGADMINDATABASE || 'portos' });
-  await admin.connect();
-  const exists = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [TEST_DB]);
-  if (exists.rowCount === 0) {
-    await admin.query(`CREATE DATABASE ${TEST_DB}`);
-    console.log(`🗄️ Created test database '${TEST_DB}'`);
-  } else {
-    console.log(`🗄️ Test database '${TEST_DB}' already exists`);
+  const admin = createClient({ ...conn, database: env.PGADMINDATABASE || 'portos' });
+  try {
+    await admin.connect();
+    await checkDbTestStorage(admin, { ...storage, host: conn.host, log });
+    const exists = await admin.query('SELECT 1 FROM pg_database WHERE datname = $1', [testDb]);
+    if (exists.rowCount === 0) {
+      await admin.query(`CREATE DATABASE ${testDb}`);
+      log(`🗄️ Created test database '${testDb}'`);
+    } else {
+      log(`🗄️ Test database '${testDb}' already exists`);
+    }
+  } finally {
+    await admin.end().catch(() => {});
   }
-  await admin.end();
 
   // 2. Apply the schema. node-postgres runs a multi-statement string in one
   //    simple-query call (no params), so the whole init-db.sql — including the $$
   //    function bodies — applies as a single batch.
   const sql = readFileSync(join(HERE, 'init-db.sql'), 'utf8');
-  const client = new pg.Client({ ...conn, database: TEST_DB });
-  await client.connect();
-  await client.query(sql);
-  await client.end();
-  console.log(`✅ Schema applied to '${TEST_DB}'. Run the DB suites with: npm run test:db --prefix server`);
+  const client = createClient({ ...conn, database: testDb });
+  try {
+    await client.connect();
+    await client.query(sql);
+  } finally {
+    await client.end().catch(() => {});
+  }
+  log(`✅ Schema applied to '${testDb}'. Run the DB suites with: npm run test:db --prefix server`);
 }
 
 // A failure must end the process non-zero with one readable line: pregate and CI
 // treat the exit status as the only provisioning verdict.
-try {
-  await provision();
-} catch (error) {
-  console.error(`❌ Failed to provision '${TEST_DB}': ${describeSetupFailure(error, TEST_DB)}`);
-  process.exit(1);
+if (isDirectlyInvoked(import.meta.url)) {
+  try {
+    await provisionTestDatabase();
+  } catch (error) {
+    const testDb = process.env.PGTESTDATABASE || 'portos_test';
+    console.error(`❌ Failed to provision '${testDb}': ${describeSetupFailure(error, testDb)}`);
+    process.exitCode = 1;
+  }
 }

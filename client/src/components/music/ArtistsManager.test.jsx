@@ -14,7 +14,7 @@ const listArtists = vi.fn();
 const createArtist = vi.fn();
 const updateArtist = vi.fn();
 const getArtistSubmissionProfile = vi.fn();
-vi.mock('../../services/api', async (importOriginal) => ({
+vi.mock('../../services/apiArtists.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listArtists: (...a) => listArtists(...a),
   createArtist: (...a) => createArtist(...a),

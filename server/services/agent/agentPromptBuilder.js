@@ -1,3 +1,4 @@
+import { formatClaimDependencyStatus } from '../claimDependencyLock.js';
 import { auditWorkflow, EXTENDED_AUDIT_INSTRUCTIONS } from '../../lib/auditWorkflow.js';
 /**
  * Agent Prompt Builder
@@ -15,14 +16,15 @@ import { isTruthyMeta, isFalsyMeta } from '../../lib/metadataFlags.js';
 import { permitsNoChangeCompletion } from '../../lib/noChangeCompletion.js';
 import { PATHS, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy, SWARM_COUNT_MIN } from '../../lib/cos/cosValidation.js';
+import { SWARM_COUNT_MIN } from '../../lib/cos/cosTaskMetadata.js';
+import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../../lib/reviewerConfig.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../../lib/agent/agentSentinel.js';
 import { canTypeSlashCommands, PR_OPENED_BY, SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { getDigitalTwinForPrompt } from '../digital-twin.js';
 import { TASK_PROMPT_KEY, taskContextBlock } from '../../lib/cos/cosTaskPrompt.js';
 import { injectReconcileAgentId } from '../../lib/claimContinuation.js';
-import { PR_COMPLETIONS, leavesPrForHuman, prStaysOpen, resolvePrCompletion, resolveUseAutoMerge } from '../../lib/prDisposition.js';
+import { PR_COMPLETIONS, leavesPrForHuman, prStaysOpen, resolvePrCompletion, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../../lib/prDisposition.js';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { repositoryCleanupMergeTarget } from '../../lib/recoveryMergeTarget.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
@@ -121,7 +123,7 @@ const AGENT_PR_DELIVERY_MODES = new Set([COMPLETION_MODES.TUI, COMPLETION_MODES.
 // prompts and tasks queued before a prompt revision get the same guidance.
 
 export const UI_AUDIT_TASK_TYPES = Object.freeze([
-  'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux'
+  'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux', 'design-usability', 'ui-runtime-bugs'
 ]);
 const UI_AUDIT_TASK_TYPE_SET = new Set(UI_AUDIT_TASK_TYPES);
 
@@ -379,6 +381,14 @@ function fillReconcileAgentId(task, agentId) {
 // merge-owning section reads one value; an explicit per-task choice wins.
 const usesAutoMerge = (task) => isTruthyMeta(task.metadata?.useAutoMerge);
 
+// Every merge-owning section takes the same pinned choices; one helper keeps the call sites from drifting.
+const mergeAdmissionOptions = (task) => ({
+  autoMerge: usesAutoMerge(task),
+  autoApprove: isTruthyMeta(task.metadata?.autoApprovePR),
+  adminMerge: isTruthyMeta(task.metadata?.adminMerge),
+  mergeHandoff: mergeHandoffEnabled(task),
+});
+
 // Queued task metadata can round-trip through Markdown as a numeric string.
 function usesSwarmClaim(task) {
   const count = Number(task.metadata?.swarmCount);
@@ -393,8 +403,13 @@ async function pinAutoMergeChoice(task) {
   const { getAppById } = await import('../apps.js');
   const app = await getAppById(task.metadata?.app || PORTOS_APP_ID).catch(() => null);
   const metadata = { ...task.metadata, mergeHandoffMinQueuedRuns: task.metadata?.mergeHandoffMinQueuedRuns ?? app?.mergeHandoffMinQueuedRuns ?? null };
-  if (isTruthyMeta(metadata.useAutoMerge) || isFalsyMeta(metadata.useAutoMerge)) return { ...task, metadata };
-  metadata.useAutoMerge = resolveUseAutoMerge(app || { id: task.metadata?.app || PORTOS_APP_ID }, task.metadata);
+  const resolvedApp = app || { id: task.metadata?.app || PORTOS_APP_ID };
+  // Pin each choice independently: an explicit per-task useAutoMerge must not skip the code-owner choices.
+  if (!isTruthyMeta(metadata.useAutoMerge) && !isFalsyMeta(metadata.useAutoMerge)) {
+    metadata.useAutoMerge = resolveUseAutoMerge(resolvedApp, task.metadata);
+  }
+  metadata.autoApprovePR = resolveAutoApprovePR(resolvedApp, task.metadata);
+  metadata.adminMerge = resolveAdminMerge(resolvedApp, task.metadata);
   return { ...task, metadata };
 }
 
@@ -417,19 +432,8 @@ async function attachWorkflowScope(task, workspaceDir) {
 }
 
 export function renderClaimDependencyStatus(prompt, dependencies) {
-  const marker = 'CLAIM_DEPENDENCY_PROVISIONING_STATUS';
-  let status = 'Dependency provisioning could not be verified. Inspect dependency paths and symlinks before installing; never install through links to the source checkout.';
-  if (Array.isArray(dependencies) && dependencies.length) {
-    const linked = dependencies.filter(item => item.status === 'linked').map(item => item.path);
-    const absent = dependencies.filter(item => item.status === 'absent').map(item => item.path);
-    const existing = dependencies.filter(item => item.status === 'existing').map(item => item.path);
-    if (absent.length === dependencies.length) {
-      status = 'The source checkout has no installed dependencies to link. Install dependencies inside this worktree after verifying no dependency paths are symlinks.';
-    } else {
-      status = `Dependency provisioning: linked or provisioned: ${linked.join(', ') || 'none'}; absent in source: ${absent.join(', ') || 'none'}; existing and preserved: ${existing.join(', ') || 'none'}. Never install through dependency paths linked to the source checkout; inspect preserved paths before installing.`;
-    }
-  }
-  return expandPromptParts(prompt, text => text.replaceAll(marker, () => status));
+  const status = formatClaimDependencyStatus(dependencies);
+  return expandPromptParts(prompt, text => text.replaceAll('CLAIM_DEPENDENCY_PROVISIONING_STATUS', () => status));
 }
 
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
@@ -680,8 +684,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       claimResume: claimResumeContext(task, worktreeInfo),
       swarmClaim: usesSwarmClaim(task),
       agentId,
-      autoMerge: usesAutoMerge(task),
-      mergeHandoff: mergeHandoffEnabled(task),
+      ...mergeAdmissionOptions(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
@@ -887,7 +890,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
     reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: true, rprBody, localAgentLoopBody, mergeHandoff: mergeHandoffEnabled(task) });
-    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) });
+    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task));
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -901,7 +904,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     }
   } else if (repositoryCleanupMergeTarget(task)) {
     // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) });
+    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task));
   }
 
   // Build JIRA context section if applicable
@@ -1243,7 +1246,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, humanLandsPr: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr, mergeHandoff: mergeHandoffEnabled(task) }));
   // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
   // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) }));
+  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task)));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1262,14 +1265,13 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       claimResume: claimResumeContext(task, worktreeInfo),
       swarmClaim: usesSwarmClaim(task),
       agentId,
-      autoMerge: usesAutoMerge(task),
-      mergeHandoff: mergeHandoffEnabled(task),
+      ...mergeAdmissionOptions(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
       contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: false, localAgentLoopBody, mergeHandoff: mergeHandoffEnabled(task), forgeCli: resolvedForgeCli }));
-      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) }));
+      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, mergeAdmissionOptions(task)));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';

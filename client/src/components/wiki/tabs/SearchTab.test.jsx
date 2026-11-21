@@ -2,9 +2,9 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import SearchTab from './SearchTab';
-import * as api from '../../../services/api';
+import { searchNotes } from '../../../services/apiNotes.js';
 
-vi.mock('../../../services/api');
+vi.mock('../../../services/apiNotes.js');
 
 const renderTab = (vaultId) => (
   <MemoryRouter><SearchTab vaultId={vaultId} /></MemoryRouter>
@@ -13,8 +13,8 @@ const renderTab = (vaultId) => (
 describe('SearchTab superseded searches (#12951)', () => {
   it('drops a slower earlier-vault response that resolves after the current search', async () => {
     let resolveOld;
-    api.searchNotes.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
-    api.searchNotes.mockResolvedValueOnce({ results: [], total: 0 });
+    searchNotes.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    searchNotes.mockResolvedValueOnce({ results: [], total: 0 });
     const { rerender } = render(renderTab('v1'));
     const box = screen.getByLabelText('Search wiki pages and raw sources');
     fireEvent.change(box, { target: { value: 'alpha' } });

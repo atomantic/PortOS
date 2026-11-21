@@ -6,6 +6,7 @@ import { io } from 'socket.io-client';
 import { isPublicGuestRoute } from '../lib/publicGuestRoutes';
 import { showStaleBuildToast } from './staleBuildToast';
 import { createBuildDriftWatcher, SERVED_BUILD_ID } from '../lib/buildStamp.js';
+import { readShellBootstrap } from './shellBootstrap.js';
 import { getSystemBuild } from './apiSystem';
 import toast from '../components/ui/Toast';
 
@@ -76,7 +77,7 @@ const TOAST_IDS = { reload: 'portos-stale-build' };
 // the once-per-kind latching live in a tested factory.
 const buildWatcher = createBuildDriftWatcher({
   embeddedBuildId: EMBEDDED_BUILD_ID,
-  fetchIdentity: () => getSystemBuild({ silent: true }),
+  fetchIdentity: () => readShellBootstrap('build', () => getSystemBuild({ silent: true })),
   onShow: (action) => (action === 'reload' ? showStaleBuildToast() : undefined),
   onClear: (action) => action === 'reload' ? toast.dismiss(TOAST_IDS.reload) : undefined
 });

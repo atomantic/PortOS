@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { HeartPulse } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getBloodTests, removeBloodTest } from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import BloodTestCard from '../BloodTestCard';
 import LoadFailureNotice from '../LoadFailureNotice';
@@ -15,7 +15,7 @@ export default function BloodTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchData = useCallback(async () => {
-    const blood = await api.getBloodTests({ silent: true }).catch(() => null);
+    const blood = await getBloodTests({ silent: true }).catch(() => null);
     setFailed(blood === null);
     setBloodData(blood);
     setLoading(false);
@@ -67,7 +67,7 @@ export default function BloodTab() {
                   confirming={isConfirming(test.id)}
                   onRequestDelete={() => requestDelete(test.id)}
                   onConfirmDelete={() => confirmDelete(async () => {
-                    const removed = await api.removeBloodTest(test.id).catch(() => null);
+                    const removed = await removeBloodTest(test.id).catch(() => null);
                     if (removed) setRemovingId(test.id);
                   })}
                   onCancelDelete={cancelDelete}

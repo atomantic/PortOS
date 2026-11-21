@@ -31,7 +31,7 @@ Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green
 Write-Host ""
 
 # scripts/setup.js is the one install pipeline shared with `npm run setup` and
-# setup.sh: version checks, submodules, root/client/server/autofixer deps (cwd-based
+# setup.sh: version checks, submodules, root/client/server deps (cwd-based
 # installs, so no --prefix directory symlink that would need Developer Mode or admin
 # rights on Windows) + the trusted native rebuilds, data dir, db, llm, browser, cert,
 # then ffmpeg, slash-do and the setup walkthrough. This script keeps only the

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AudioLines, Loader2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
-import { fitMusicVideoToStoryboard } from '../../services/api';
+import { fitMusicVideoToStoryboard } from '../../services/apiStoryboards.js';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { fitStoryboardToSong, STORYBOARD_FIT_MIN_SHOT_SEC, storyboardFitSong } from '../../../../server/lib/storyboardFit.js';
 

@@ -20,7 +20,7 @@ import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 
 describe('prepareAgentSpawn — duplicate dispatch', () => {
   it('skips a task another run already owns and reports the skip on stdout, not stderr', async () => {

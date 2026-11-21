@@ -25,7 +25,7 @@ describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
           name: 'agent-card-touch-fixture', enforce: 'pre',
           resolveId(id) {
             if (id === '/agent-card-touch-fixture.jsx') return '\0agent-card-touch-fixture.jsx';
-            if (id === '../../../services/api') return '\0agent-card-touch-api';
+            if (id === '../../../services/apiAgents.js' || id === '../../../services/apiBrain.js') return '\0agent-card-touch-api';
             if (id === '../../../services/socket') return '\0agent-card-touch-socket';
             if (id === '../../../lib/clipboard') return '\0agent-card-touch-clipboard';
             if (id === '../../ui/Toast') return '\0agent-card-touch-toast';

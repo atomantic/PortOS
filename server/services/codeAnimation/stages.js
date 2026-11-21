@@ -46,6 +46,10 @@ const BUDGET_CODE = 'CODE_ANIMATION_BUDGET_EXHAUSTED';
 const CANCEL_CODE = 'CODE_ANIMATION_RUN_CANCELED';
 
 const lifecycle = channel('portos.code-animation-stage.lifecycle');
+const reportStage = (ctx, stage, phase, child) => lifecycle.publish({
+  runId: ctx.runId, stage, phase, elapsedMs: Date.now() - ctx.startedAt,
+  ...(child ? { childPhase: child.phase, childPid: child.pid } : {}),
+});
 
 const activeRuns = admittedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
 export const activeStageRunIds = () => [...activeRuns.keys()];
@@ -118,7 +122,7 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
   checkBudget(ctx);
   const entry = { key, rendererBinding: ctx.state.renderer?.binding ?? null, stageRunId: randomUUID(), revisionId: revision.id, sourceHash: revision.sourceHash, packageHash: revision.packageHash, status: 'running', startedAt: iso() };
   ctx.state.stages.push(entry);
-  const report = phase => lifecycle.publish({ runId: ctx.runId, stage: key, phase, elapsedMs: Date.now() - ctx.startedAt });
+  const report = (phase, child) => reportStage(ctx, key, phase, child);
   report('persist-start');
   await persist(ctx);
   report('execute');
@@ -130,7 +134,7 @@ async function runStage(ctx, key, revision, body, { renders = false } = {}) {
   const began = Date.now();
   try {
     signal.throwIfAborted();
-    const result = await body({ signal, entry });
+    const result = await body({ signal, entry, report });
     // A published final render has crossed its atomic commit point already.
     if (!activeRuns.get(ctx.runId)?.committing) signal.throwIfAborted();
     Object.assign(entry, result, { status: 'completed', completedAt: iso() });
@@ -434,24 +438,32 @@ async function finalStage(ctx, revision, verdictStage, soundtrack) {
   // Re-evaluate against the revision about to render: stale or failed evidence never reaches the renderer.
   const verdict = evaluateVerdict({ evidence: verdictStage.evidence, packageHash: revision.packageHash, sourceHash: revision.sourceHash, findings: verdictStage.findings, unverified: verdictStage.verdict.unverified });
   if (verdict.status !== 'pass') throw new ServerError(`The final render needs passing evidence (${verdict.status})`, { status: 409, code: 'CODE_ANIMATION_EVIDENCE_NOT_PASSING' });
-  const stage = await runStage(ctx, 'final', revision, async ({ signal }) => {
+  const stage = await runStage(ctx, 'final', revision, async ({ signal, report }) => {
+    report('render');
     const result = ctx.state.renderer
       ? await ctx.deps.publishBlender(await blenderSequence(ctx, revision, signal, 'final'), { revision, signal, reserve: bytes => reserve(ctx, bytes) })
       : await ctx.deps.render({ directory: revision.staged, signal });
     let published = false;
     try {
       signal.throwIfAborted();
-      const audioEvidence = await ctx.deps.mux({ projectId: ctx.projectId, revision, soundtrack, result, signal, reserve: bytes => reserve(ctx, bytes) });
+      report('audio-mux');
+      const audioEvidence = await ctx.deps.mux({ projectId: ctx.projectId, revision, soundtrack, result, signal, report, reserve: bytes => reserve(ctx, bytes) });
       signal.throwIfAborted();
       if (result.commit) {
         // Publishing is the commit point: don't accept a cancellation halfway
         // through a shared history write after the soundtrack passed.
         activeRuns.get(ctx.runId).committing = true;
+        report('publication');
         await result.commit();
       }
       published = true;
       return { audioEvidence, ...(result.renderer ? { renderer: result.renderer, artifacts: result.artifacts } : {}), output: { packageHash: revision.packageHash, audioHash: soundtrack.artifact?.sha256 ?? null, jobId: result.jobId ?? null, videoId: result.id ?? null, filename: result.filename ?? null, path: result.path ?? null, revisionId: revision.id, sourceHash: revision.sourceHash } };
-    } finally { if (!published) await result.cleanup?.(); }
+    } finally {
+      if (!published && result.cleanup) {
+        report('cleanup');
+        await result.cleanup();
+      }
+    }
   }, { renders: true });
   ctx.state.output = { ...stage.output, stageRunId: stage.stageRunId, audioEvidence: stage.audioEvidence, soundtrack, verifiedDimensions: [...verdictStage.verified.filter(key => key !== 'audio'), ...stage.audioEvidence.verified], unverified: [...verdict.unverified.filter(item => item.dimension !== 'audio'), ...soundtrack.unverified] };
 }
@@ -467,8 +479,8 @@ async function execute(ctx, start) {
     ctx.state.findings = inspected.findings;
     ctx.state.verdict = { ...inspected.verdict, revisionId: revision.id, sourceHash: revision.sourceHash };
     if (inspected.verdict.status === 'pass') {
-      const soundtrack = await runStage(ctx, 'soundtrack', revision, ({ signal }) => ctx.deps.sound({
-        projectId: ctx.projectId, runId: ctx.runId, revision, signal, reserve: bytes => reserve(ctx, bytes),
+      const soundtrack = await runStage(ctx, 'soundtrack', revision, ({ signal, report }) => ctx.deps.sound({
+        projectId: ctx.projectId, runId: ctx.runId, revision, signal, report, reserve: bytes => reserve(ctx, bytes),
       }), { renders: true });
       ctx.state.soundtrack = soundtrack;
       ctx.state.verdict = { ...ctx.state.verdict, unverified: [...ctx.state.verdict.unverified.filter(item => item.dimension !== 'audio'), ...soundtrack.unverified] };
@@ -493,6 +505,7 @@ async function finish(ctx, run) {
     }
   }
   Object.assign(ctx.state, outcome || { stopReason: null }, { resumable: status !== 'completed' });
+  reportStage(ctx, 'run', 'persist-terminal');
   await persist(ctx, status, { completed: true, revisionId: ctx.state.currentRevisionId }).catch(error => {
     activeRuns.markUnsettled(ctx.runId);
     console.error(`❌ Code Animation production run ${ctx.runId.slice(0, 8)} final status could not be saved: ${error.message}`);

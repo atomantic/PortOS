@@ -29,7 +29,6 @@
 
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
-import sharp from 'sharp';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -279,6 +278,7 @@ export async function checkConnection({ model } = {}) {
 // its size in megapixels (FLUX.2 bills input megapixels).
 async function encodeInputImage(filePath, reviewedBytes = null) {
   const input = reviewedBytes ?? await readFile(filePath);
+  const { default: sharp } = await import('sharp');
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   const passThrough = longSide <= INPUT_MAX_LONG_SIDE

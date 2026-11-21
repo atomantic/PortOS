@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Pause, Play, Repeat, Scissors, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FilePlus2, Maximize2, Pause, Play, Repeat, Scissors, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import useKeyCapture from '../../hooks/useKeyCapture.js';
 import { scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -12,6 +12,8 @@ import {
 import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
+import FilePickerButton from '../ui/FilePickerButton.jsx';
+import { AUDIO_LAYER_ACCEPT, AUDIO_LAYER_ROW_H, TimelineAudioLayerPanel, TimelineAudioLayerRow, TimelineClipSoundRow, clipSoundShots } from './ShotTimelineAudioLayers.jsx';
 import { TimelineEffectLibrary, TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
 
 // About the width of a ruler label ("12:30") at its 10px size.
@@ -88,11 +90,18 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * the playhead in two there (on a frame). The song's loudness, when analyzed,
  * draws as a waveform row at the bottom.
  *
+ * Each audio layer (`project.audioLayers`: a file placed over the song, mixed
+ * into the preview and the render) has a row under the song's waveform. With
+ * `onAddAudioLayer(file, startSec)` the toolbar adds one at the playhead; with
+ * `onEditAudioLayers(layers)` (the whole list, in order) a layer is dragged
+ * along its row to move it, and tapping it opens its level, mute and remove
+ * controls under the timeline.
+ *
  * With `libraryEl` (a side panel the page gives) an effects library fills it,
  * whose styles add at the playhead, and a selected effect's controls take its
  * place there until closed; without it the controls show under the timeline.
  */
-export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null }) {
+export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null, onAddAudioLayer = null, onEditAudioLayers = null }) {
   const { shots: savedShots, off } = useMemo(() => timelineShots(project), [project]);
   const durationSec = timelineDurationSec(project, savedShots);
   // A cut being dragged, or one let go and still saving, shows where it will land.
@@ -107,6 +116,10 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const cues = useMemo(() => lyricSpans(project.lyricCues), [project.lyricCues]);
   const wave = useMemo(() => waveformPath(project.audioAnalysis?.features?.envelopes), [project.audioAnalysis]);
   const sections = project.audioAnalysis?.sections || [];
+  const audioLayers = useMemo(() => (Array.isArray(project.audioLayers) ? project.audioLayers : []), [project.audioLayers]);
+  const [audioLayerId, setAudioLayerId] = useState(null);
+  const selectedLayer = audioLayers.find((layer) => layer.id === audioLayerId) || null;
+  const [addingLayer, setAddingLayer] = useState(false);
 
   const scrollerRef = useRef(null);
   const playheadRef = useRef(null);
@@ -137,6 +150,20 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const loopRef = useRef(null);
   const loopJump = useRef(-Infinity); // never jumped; 0 would read as a jump at clock zero and mute the first loop-back for LOOP_SETTLE_MS
   const timeRef = useRef(0);
+  const clipSoundRow = useMemo(() => clipSoundShots(project.scenes), [project.scenes]);
+  const editLayer = (id, patch) => onEditAudioLayers(audioLayers.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)));
+  const removeLayer = (id) => {
+    setAudioLayerId(null);
+    return onEditAudioLayers(audioLayers.filter((layer) => layer.id !== id));
+  };
+  const addLayer = (file) => {
+    if (!file || !onAddAudioLayer) return undefined;
+    setAddingLayer(true);
+    return Promise.resolve(onAddAudioLayer(file, Math.round(timeRef.current * 1000) / 1000))
+      .then((layer) => { if (layer?.id) setAudioLayerId(layer.id); })
+      .catch(() => {})
+      .finally(() => setAddingLayer(false));
+  };
 
   // A zoom keeps one moment of the song under the same point of the view.
   const zoomAnchor = useRef(null);
@@ -410,6 +437,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const rowLabels = [
     ['Time', 'h-7'], ...(sections.length ? [['Sections', 'h-4']] : []), ['Shots', 'h-14'],
     ...effectRows.map((row) => [row.label, FX_ROW_H]), ...(cues.length ? [['Lyrics', 'h-5']] : []), ...(wave ? [['Song', 'h-8']] : []),
+    ...audioLayers.map((layer) => [layer.label || 'Audio', AUDIO_LAYER_ROW_H, `audio:${layer.id}`]),
   ];
 
   const stepSec = rulerStepSec(pxPerSec);
@@ -463,6 +491,13 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
             <Repeat size={14} aria-hidden="true" />
           </button>
         )}
+        {onAddAudioLayer && (
+          <FilePickerButton accept={AUDIO_LAYER_ACCEPT} disabled={addingLayer} className={zoomButtonCls}
+            ariaLabel="Add an audio layer at the playhead" title={addingLayer ? 'Adding the audio layer…' : 'Add an audio file as a layer at the playhead'}
+            onChange={(event) => addLayer(event.target.files?.[0])}>
+            <FilePlus2 size={14} aria-hidden="true" />
+          </FilePickerButton>
+        )}
         <div role="group" aria-label="Zoom" className="ml-auto flex items-center gap-1">
           <button type="button" className={zoomButtonCls} onClick={() => zoomBy(1 / TIMELINE_ZOOM_STEP)} disabled={atFit} aria-label="Zoom out" title="Zoom out">
             <ZoomOut size={14} aria-hidden="true" />
@@ -478,8 +513,11 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
       <div className="flex min-w-0 border-t border-port-border bg-port-bg">
       {/* Each row's name, beside the row; it stays put while the rows scroll. */}
       <div aria-hidden="true" className="w-[4.5rem] shrink-0 border-r border-port-border bg-port-card sm:w-24">
-        {rowLabels.map(([label, height]) => (
-          <div key={label} className={`${ROW_CLS} ${height} flex items-center px-1.5 text-[10px] font-medium leading-3 text-port-text-muted`}>{label}</div>
+        {rowLabels.map(([label, height, key]) => (
+          <div key={key || label} className={`${ROW_CLS} ${height} flex items-center px-1.5 text-[10px] font-medium leading-3 text-port-text-muted`}>
+            {/* A layer's name is the director's (often a file name): two lines at most, broken anywhere. */}
+            {key ? <span className="line-clamp-2 [overflow-wrap:anywhere]">{label}</span> : label}
+          </div>
         ))}
       </div>
       <div ref={scrollerRef} data-testid="shot-timeline-scroller" className="relative min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
@@ -584,10 +622,27 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
               <path d={wave} fill="currentColor" />
             </svg>
           )}
+          {audioLayers.map((layer) => (
+            <div key={layer.id} role="group" aria-label={`Audio layer: ${layer.label || 'Audio'}`} className={`${ROW_CLS} ${AUDIO_LAYER_ROW_H}`}>
+              <TimelineAudioLayerRow layer={layer} pxPerSec={pxPerSec} durationSec={durationSec} snapPoints={snapPoints}
+                selected={layer.id === audioLayerId} onSelect={(id, toggle = true) => setAudioLayerId((current) => (toggle && current === id ? null : id))}
+                onMove={onEditAudioLayers ? (id, startSec) => editLayer(id, { startSec }) : null} />
+            </div>
+          ))}
+          {clipSoundRow.length > 0 && (
+            <div role="group" aria-label="Clip sound" className={`${ROW_CLS} ${AUDIO_LAYER_ROW_H}`}>
+              <TimelineClipSoundRow shots={clipSoundRow} pxPerSec={pxPerSec} shotName={shotName} activeSceneId={activeSceneId} onOpen={onOpenShot} />
+            </div>
+          )}
           <div ref={playheadRef} data-testid="shot-timeline-playhead" aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-port-error" />
         </div>
       </div>
       </div>
+      {selectedLayer && onEditAudioLayers && (
+        <TimelineAudioLayerPanel key={selectedLayer.id} layer={selectedLayer} playheadSec={() => timeRef.current}
+          onChange={(patch) => editLayer(selectedLayer.id, patch)}
+          onRemove={() => removeLayer(selectedLayer.id)} onClose={() => setAudioLayerId(null)} />
+      )}
       {(() => {
         const picture = (shot) => (shot ? posters?.get(shot.sceneId) ?? scenePosterSrc(shot.scene, project.scenes) : null);
         if (effectsShot) {

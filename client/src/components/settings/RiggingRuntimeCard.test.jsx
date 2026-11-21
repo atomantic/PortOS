@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mock = vi.hoisted(() => ({ getRiggingReadiness: vi.fn() }));
-vi.mock('../../services/api', () => mock);
+vi.mock('../../services/apiRigging.js', () => ({ getRiggingReadiness: mock.getRiggingReadiness }));
 
 const copyToClipboard = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard }));

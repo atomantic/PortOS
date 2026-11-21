@@ -2,7 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import useUrlParams from '../../../hooks/useUrlParams';
 import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Settings,
   Plus, Trash2, CloudUpload, Menu, X, Sparkles, RefreshCw} from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getDailyLog,
+  listDailyLogs,
+  getDailyLogSettings,
+  getActivityDigestSettings,
+  updateDailyLog,
+  appendDailyLog,
+  deleteDailyLog,
+  syncDailyLogsToObsidian,
+  updateDailyLogSettings,
+  updateActivityDigestSettings,
+  draftActivityDigest,
+} from '../../../services/apiBrain.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
@@ -182,7 +195,7 @@ export default function DailyLogTab() {
     successfulReadDateRef.current = null;
     setReadState({ date: d, status: 'pending' });
     setLoading(true);
-    const res = await api.getDailyLog(d, { silent: true }).catch(() => null);
+    const res = await getDailyLog(d, { silent: true }).catch(() => null);
     if (reqId !== loadRequestRef.current || selectedDateRef.current !== d || !mountedRef.current) return;
     pendingReadRef.current = null;
     const data = res?.entry;
@@ -204,7 +217,7 @@ export default function DailyLogTab() {
   }, [mountedRef]);
 
   const loadHistory = useCallback(async () => {
-    const res = await api.listDailyLogs({ limit: 60 }).catch(() => null);
+    const res = await listDailyLogs({ limit: 60 }).catch(() => null);
     if (!Array.isArray(res?.records)) {
       // Keep any already-loaded list; only the status flips.
       setHistoryStatus('error');
@@ -216,9 +229,9 @@ export default function DailyLogTab() {
 
   const loadSettings = useCallback(async () => {
     const [s, d, p] = await Promise.all([
-      api.getDailyLogSettings().catch(() => null),
-      api.getActivityDigestSettings().catch(() => null),
-      api.getProviders({ silent: true }).catch(() => null),
+      getDailyLogSettings().catch(() => null),
+      getActivityDigestSettings().catch(() => null),
+      getProviders({ silent: true }).catch(() => null),
     ]);
     if (s) setSettings(s);
     if (d) setDigestSettings(d);
@@ -244,7 +257,7 @@ export default function DailyLogTab() {
   // serverToday and follows it the moment this resolves.
   useEffect(() => {
     let cancelled = false;
-    api.getDailyLog('today', { silent: true }).then((res) => {
+    getDailyLog('today', { silent: true }).then((res) => {
       if (cancelled || !res?.date) return;
       setServerToday(res.date);
     }).catch(() => null);
@@ -396,7 +409,7 @@ export default function DailyLogTab() {
   // owns failure UX so auto vs explicit saves can differ.
   const putDailyLog = async (targetDate, body, ifMatchUpdatedAt) => {
     try {
-      return await api.updateDailyLog(targetDate, body, {
+      return await updateDailyLog(targetDate, body, {
         silent: true,
         ...(ifMatchUpdatedAt ? { ifMatchUpdatedAt } : {}),
       });
@@ -518,7 +531,7 @@ export default function DailyLogTab() {
     // request is in flight (see applyEntry's comment above).
     const requestDate = date;
     setAppending(true);
-    const res = await api.appendDailyLog(date, text, 'text', { silent: true }).catch(() => null);
+    const res = await appendDailyLog(date, text, 'text', { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     setAppending(false);
     if (!res?.entry) {
@@ -565,7 +578,7 @@ export default function DailyLogTab() {
   };
 
   const handleDelete = async () => {
-    const ok = await api.deleteDailyLog(date, { silent: true }).then(() => true, () => false);
+    const ok = await deleteDailyLog(date, { silent: true }).then(() => true, () => false);
     if (!ok) {
       toast.error('Delete failed');
       return;
@@ -579,14 +592,14 @@ export default function DailyLogTab() {
 
   const handleSyncObsidian = async () => {
     setSyncing(true);
-    const res = await api.syncDailyLogsToObsidian({ silent: true }).catch(() => null);
+    const res = await syncDailyLogsToObsidian({ silent: true }).catch(() => null);
     setSyncing(false);
     if (res) toast.success(`Synced ${pluralize(res.synced, 'entry', 'entries')} to Obsidian`);
     else toast.error('Sync failed');
   };
 
   const saveSettings = async (partial) => {
-    const next = await api.updateDailyLogSettings(partial).catch(() => null);
+    const next = await updateDailyLogSettings(partial).catch(() => null);
     if (next) {
       setSettings(next);
       toast.success('Settings saved');
@@ -597,7 +610,7 @@ export default function DailyLogTab() {
     // Optimistic local merge so the control reflects the change immediately;
     // the server response is authoritative and replaces it on success.
     setDigestSettings((prev) => ({ ...(prev || {}), ...partial }));
-    const next = await api.updateActivityDigestSettings(partial).catch(() => null);
+    const next = await updateActivityDigestSettings(partial).catch(() => null);
     if (next) {
       setDigestSettings(next);
       toast.success('Digest settings saved');
@@ -616,7 +629,7 @@ export default function DailyLogTab() {
     // request is in flight (see applyEntry's comment above).
     const requestDate = date;
     setDrafting(true);
-    const res = await api.draftActivityDigest(date, { silent: true }).catch(() => null);
+    const res = await draftActivityDigest(date, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     setDrafting(false);
     if (!res) {

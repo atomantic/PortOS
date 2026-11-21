@@ -15,7 +15,12 @@ import {
   Trophy,
   Minus
 } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getCosWeeklyDigest,
+  getCosWeekProgress,
+  listCosWeeklyDigests,
+  generateCosDigest,
+} from '../../../services/apiAgents.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import { formatDateNumeric } from '../../../utils/formatters';
@@ -45,7 +50,7 @@ export default function DigestTab() {
     const version = ++loadVersion.current;
     setLoading(true);
     const [digestResult, progressResult, listResult] = await Promise.allSettled([
-      api.getCosWeeklyDigest(), api.getCosWeekProgress(), api.listCosWeeklyDigests()
+      getCosWeeklyDigest(), getCosWeekProgress(), listCosWeeklyDigests()
     ]);
     if (loadVersion.current !== version) return false;
     setLoadFailed(digestResult.status === 'rejected');
@@ -63,7 +68,7 @@ export default function DigestTab() {
     setSelectedWeek(weekId);
     setLoadFailed(false);
     try {
-      const digest = await api.getCosWeeklyDigest(weekId);
+      const digest = await getCosWeeklyDigest(weekId);
       if (loadVersion.current !== version) return false;
       setCurrentDigest(digest);
       setLoadFailed(false);
@@ -85,7 +90,7 @@ export default function DigestTab() {
   const handleGenerate = async () => {
     const selectionAtStart = selectedWeekRef.current;
     setGenerating(true);
-    const digest = await api.generateCosDigest().catch(() => null);
+    const digest = await generateCosDigest().catch(() => null);
     if (digest) {
       if (selectedWeekRef.current === selectionAtStart) {
         selectedWeekRef.current = null;

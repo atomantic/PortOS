@@ -82,9 +82,10 @@ export function isKeyboardActivatable(src, tag) {
 
 // Every non-interactive element in `src` carrying a mouse-only `onClick`; shared by the rule and its fixture probes.
 export function* mouseOnlyClickables(src) {
+  if (!src.includes('onClick')) return;
   for (const name of CLICKABLE_HOST_TAGS) {
     for (const node of forEachOpeningTag(src, name)) {
-      if (!isKeyboardActivatable(src, node.tag)) yield node;
+      if (node.tag.includes('onClick') && !isKeyboardActivatable(src, node.tag)) yield node;
     }
   }
 }

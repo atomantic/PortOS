@@ -10,7 +10,6 @@
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
 import { getSettingsWithStatus, settingsEvents } from './settings.js';
-import { runBackup, getState } from './backup.js';
 import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 
@@ -76,6 +75,7 @@ async function runScheduledBackup(logReason) {
   const excludePaths = fresh.backup?.excludePaths || [];
   const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
   console.log(`💾 Backup scheduler: running ${logReason} backup`);
+  const { runBackup } = await import('./backup.js');
   const result = await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
   if (result?.skipped) {
     console.log(`⏭️ Backup scheduler: ${logReason} backup skipped — a backup is already running`);
@@ -107,6 +107,7 @@ async function maybeCatchUpMissedSlot(inputs, timezone, settings) {
     if (!prevRun) return;
     const prevRunMs = prevRun.getTime();
 
+    const { getState } = await import('./backup.js');
     const state = await getState().catch(() => null);
     // Older installs recorded only attempts; only an ok legacy result proves success.
     const lastSuccess = Object.hasOwn(state ?? {}, 'lastSuccessfulRun')

@@ -4,7 +4,6 @@
 
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
-import sharp from 'sharp';
 import { atomicWrite, PATHS } from './fileUtils.js';
 
 const pending = new Map();
@@ -26,6 +25,7 @@ export async function ensureImageThumbnail(filename) {
     if (!sourceStat?.isFile()) return false;
     const targetStat = await optionalStat(target);
     if (!targetStat?.isFile() || targetStat.mtimeMs < sourceStat.mtimeMs) {
+      const { default: sharp } = await import('sharp');
       const bytes = await sharp(source).rotate()
         .resize({ width: 512, height: 512, fit: 'outside', withoutEnlargement: true })
         .webp({ quality: 78 }).toBuffer();

@@ -28,7 +28,6 @@ import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalog/catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
-import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 
 export { startingImageFilename } from './projectsLogic.js';
 
@@ -115,6 +114,14 @@ export async function createProject(input) {
   return project;
 }
 
+/** Re-point projects filing into any of `fromIds` at collection `toId` (a collection join). */
+export async function repointProjectCollections(fromIds, toId) {
+  const from = new Set(fromIds);
+  const projects = (await listProjects()).filter((project) => from.has(project.collectionId));
+  for (const project of projects) await updateProject(project.id, { collectionId: toId });
+  return projects.length;
+}
+
 export async function updateProject(id, patch) {
   const next = await (await selectBackend()).updateProject(id, patch);
   // A standalone project reaches peers only via its per-record subscription —
@@ -145,6 +152,7 @@ export async function setTreatment(id, treatmentInput) {
   // `/:id/treatment` PATCH, episodeVideo, liveDirector) honors the opt-in
   // instead of the flag silently no-op'ing for treatments that land another way.
   if (next?.generateFirstPass && next.workspace !== 'video') {
+    const { enqueueFirstPassSceneFrames } = await import('./firstPassGen.js');
     enqueueFirstPassSceneFrames(next)
       .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
   }

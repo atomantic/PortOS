@@ -45,6 +45,7 @@ import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/prov
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 import { buildUsageDigest, buildUsageReport, getUsage, providerVolumeSinceBlock, USAGE_FILE } from './usage.js';
+import { getChangeToken } from './changeToken.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './provider/providerQuotaShare.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE } from './claudeCodeTranscriptUsage.js';
@@ -355,13 +356,13 @@ function sanitizeEntry(entry, expectedId) {
 // probing peer, all producing the identical byte-for-byte digest.
 let digestMemo = null;
 function selfDigest(usageData) {
-  const key = `${usageData?.lastUpdated ?? ''}|${nativeUsageSignature()}|${new Date().toISOString().slice(0, 10)}`;
+  const key = `${getChangeToken('usage')}|${usageData?.lastUpdated ?? ''}|${nativeUsageSignature()}|${new Date().toISOString().slice(0, 10)}`;
   if (digestMemo?.key !== key) digestMemo = { key, digest: buildUsageDigest(usageData) };
   return digestMemo.digest;
 }
 
 /**
- * This instance's own live entry, rebuilt from `usage.json` (and the last quota
+ * This instance's own live entry, rebuilt from the usage ledger (and the last quota
  * readings) on every read.
  *
  * `capturedAt` is the LWW stamp AND the manifest fingerprint, so it has to move

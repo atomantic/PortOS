@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Check, X, Lock } from 'lucide-react';
 import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
-import { updatePeer } from '../../services/api';
+import { updatePeer } from '../../services/apiSystem.js';
 
 export default function PeerAuthEditor({ peer, onRefresh }) {
   const [editing, setEditing] = useState(false);

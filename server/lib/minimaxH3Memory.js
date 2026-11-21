@@ -14,7 +14,7 @@
  *   - the registry entry's single `memoryGb` number (128 MLX / 96 CUDA), which
  *     nothing checked at render time — it only ever rendered as a UI fact; and
  *   - a VRAM heuristic living inside `resolve_offload_profile()` in
- *     scripts/generate_minimax_h3_cuda.py, which picked a recipe from the
+ *     scripts/ml/generate_minimax_h3_cuda.py, which picked a recipe from the
  *     card's nameplate VRAM, never failed closed below the smallest recipe's
  *     floor, and returned an explicitly pinned profile without checking the
  *     device could run it at all.
@@ -58,7 +58,7 @@
  * failing. This is a deliberate policy reserve — the only number in this module
  * that is not lifted from an existing runner-proven constant.
  *
- * It caps the ALLOCATOR (`apply_memory_limit` in scripts/generate_minimax_h3.py)
+ * It caps the ALLOCATOR (`apply_memory_limit` in scripts/ml/generate_minimax_h3.py)
  * and is reported beside the requirement; it is deliberately NOT subtracted
  * before comparing against `minMemoryGb`. Those floors were hoisted from the
  * entries' `memoryGb`, which has always been a claim about TOTAL system memory,

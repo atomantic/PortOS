@@ -4,14 +4,14 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import MemoryTab from './MemoryTab';
 
 const api = vi.hoisted(() => ({
-  getBrainMemories: vi.fn(), getBrainMemory: vi.fn().mockResolvedValue(null), getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
+  getBrainMemories: vi.fn(), getBrainMemory: vi.fn().mockResolvedValue(null),
   getChatgptArchive: vi.fn(), deleteBrainMemory: vi.fn()
 }));
 // Socket connect fires a reconnect-reconciliation refresh in MemoryTab; mock it
 // so an unrelated real socket connection can never add a surprise getBrainMemories
 // call in this suite (see the socket-mock convention in AgendaTab.test.jsx).
 const { socketMock } = vi.hoisted(() => ({ socketMock: { on: vi.fn(), off: vi.fn() } }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiMemory.js', () => ({ getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }) }));
 vi.mock('../../../services/apiBrain', () => api);
 vi.mock('../../../services/socket', () => ({ default: socketMock }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });

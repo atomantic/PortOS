@@ -92,6 +92,30 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     expect((await db.listRaw({ withHistory: false })).find((r) => r.id === 'iss-other').stages).toBeNull();
   });
 
+  it('checks global ids, live series membership and tombstones without transferring issue data', async () => {
+    const old = '2026-01-01T00:00:00.000Z';
+    const cutoff = Date.parse('2026-01-02T00:00:00.000Z');
+    for (const id of ['iss-restored', 'iss-expired']) {
+      await db.writeRaw(id, I(id, { deleted: true, deletedAt: old }));
+    }
+    await db.writeRaw('iss-boundary', I('iss-boundary', { deleted: true, deletedAt: new Date(cutoff).toISOString() }));
+    await db.writeRaw('iss-unknown', I('iss-unknown', { deleted: true }));
+    await db.writeRaw('iss-live', I('iss-live', { seriesId: 'ser-other' }));
+    const queries = vi.spyOn(dbConnection, 'query');
+    expect(await db.listLiveIssueSeriesIds()).toEqual(['ser-other']);
+    expect((await db.listSeriesIdsForIssues(['iss-expired', 'iss-live', 'iss-missing'])).sort()).toEqual(['ser-1', 'ser-other']);
+    expect(await db.getDeletionStatus('iss-live')).toBe(false);
+    expect(await db.getDeletionStatus('iss-expired')).toBe(true);
+    expect(await db.getDeletionStatus('iss-missing')).toBeNull();
+    const candidates = await db.listTombstoneIdsBefore(cutoff);
+    expect(candidates.sort()).toEqual(['iss-expired', 'iss-restored']);
+    await dbConnection.query('UPDATE pipeline_issues SET deleted = FALSE WHERE id = $1', ['iss-restored']);
+    expect(await db.deleteTombstonesBefore(candidates, cutoff)).toEqual(['iss-expired']);
+    expect(await db.listIds()).toEqual(expect.arrayContaining(['iss-restored', 'iss-boundary', 'iss-unknown', 'iss-live']));
+    expect(queries.mock.calls.map(([sql]) => sql).join(' ')).not.toMatch(/\bdata\b/i);
+    queries.mockRestore();
+  });
+
   it('recent reads limit in SQL and summaries never transfer stage data', async () => {
     for (let n = 0; n < 60; n += 1) {
       await db.writeRaw(`iss-${n}`, I(`iss-${n}`, {

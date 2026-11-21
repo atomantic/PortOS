@@ -6,7 +6,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 // Real gates, mounted routers and schemas. Stub the first service boundaries:
 // refusal must happen before private reads, document writes or provider dispatch.
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal and every authorized workflow.
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal and every authorized workflow.
 const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => Object.fromEntries([
   'generateEnrichmentQuestion', 'processEnrichmentAnswer', 'analyzeEnrichmentList',

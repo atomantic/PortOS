@@ -2,16 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiDigitalTwin.js', () => ({
   getDigitalTwinStatus: vi.fn(),
   getDigitalTwinSettings: vi.fn(),
   getDigitalTwinTraits: vi.fn(),
   getDigitalTwinConfidence: vi.fn(),
   getDigitalTwinGaps: vi.fn(),
   getDigitalTwinCompleteness: vi.fn(),
-  getProviders: vi.fn(),
   detectSoulContradictions: vi.fn(),
   updateSoulSettings: vi.fn(),
+}));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 // useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
 // never provided getInstanceFeatures, so keep the hook on its fail-open path.
@@ -29,7 +31,9 @@ vi.mock('../components/digital-twin/TwinProviderPicker.jsx', () => ({
   default: ({ providers }) => <div data-testid="picker">{providers.map((p) => p.id).join(',')}</div>,
 }));
 
-import * as api from '../services/api';
+import * as digitalTwinApi from '../services/apiDigitalTwin.js';
+import { getProviders } from '../services/apiProviders.js';
+const api = { ...digitalTwinApi, getProviders };
 import DigitalTwin from './DigitalTwin';
 import socket from '../services/socket';
 vi.mock('../services/socket', async () => {

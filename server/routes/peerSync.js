@@ -1,6 +1,3 @@
-import { tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { isMachineLocalCosTask } from '../lib/cos/cosFederationPolicy.js';
-import { isPlainObject } from '../lib/objects.js';
 /**
  * Federated peer-sync HTTP routes.
  *
@@ -25,6 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
  * functions (`applyIncomingPush`, `subscribePeer`, etc.) that these wrap.
  */
 
+import { isFederatableCosArchive } from '../lib/cos/cosFederationPolicy.js';
 import { Router } from 'express';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -272,9 +270,9 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
   // otherwise a peer denied the manifest could still fetch archives by guessing
   // (or remembering) a path.
   await authorizePeerPull(req, { route: 'cos-agent-archive' });
-  const abs = join(PATHS.cos, 'agents', date, agentId, file);
-  const metadata = safeJSONParse(await tryReadFile(join(PATHS.cos, 'agents', date, agentId, 'metadata.json')), null);
-  if (!isPlainObject(metadata) || isMachineLocalCosTask(metadata) || !existsSync(abs)) {
+  const directory = join(PATHS.cos, 'agents', date, agentId);
+  const abs = join(directory, file);
+  if (!existsSync(abs) || !await isFederatableCosArchive(directory)) {
     throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.sendFile(abs);
@@ -289,6 +287,7 @@ router.get('/record', asyncHandler(async (req, res) => {
   const recordQuery = validateRequest(peerRecordQuerySchema, req.query);
   const kind = (recordQuery.kind ?? '').trim();
   const id = (recordQuery.id ?? '').trim();
+  const collectionIntegrity = kind === 'mediaCollection' && recordQuery.collectionIntegrity === '1';
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -305,7 +304,9 @@ router.get('/record', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, {
     recordKind: kind, route: `record ${kind}`, alwaysEnforce: newlySupported, allowOperator: newlySupported,
   });
-  const payload = await getRecordPayloadForPeer(kind, id);
+  const payload = collectionIntegrity
+    ? await getRecordPayloadForPeer(kind, id, { collectionIntegrity })
+    : await getRecordPayloadForPeer(kind, id);
   if (!payload) {
     throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -324,13 +325,14 @@ router.get('/integrity', asyncHandler(async (req, res) => {
   const integrityQuery = validateRequest(peerIntegrityQuerySchema, req.query);
   const peerId = (integrityQuery.peerId ?? '').trim();
   const kind = (integrityQuery.kind ?? '').trim();
+  const recordId = integrityQuery.recordId?.trim();
   if (!peerId) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  res.json(await getPeerIntegrity({ peerId, kind }));
+  res.json(await getPeerIntegrity({ peerId, kind, ...(recordId ? { recordId } : {}) }));
 }));
 
 // --- POST /sync-record --- force a push for a specific record to a specific peer.

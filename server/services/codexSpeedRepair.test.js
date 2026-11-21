@@ -10,12 +10,13 @@ const { usage, addDatedUsageBatch } = vi.hoisted(() => {
   };
 });
 
-vi.mock('../lib/fileUtils.js', () => ({
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...await importOriginal(),
   PATHS: { data: '/tmp/portos-codex-speed-repair-test' },
 }));
-vi.mock('./usage.js', () => ({
-  loadUsage: vi.fn(async () => {}),
-  getUsage: vi.fn(() => usage),
+vi.mock('./usage.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  loadUsage: vi.fn(async () => usage),
   addDatedUsageBatch,
 }));
 vi.mock('./codexUsageSources.js', async () => {

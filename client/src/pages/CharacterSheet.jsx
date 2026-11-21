@@ -10,7 +10,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
 import { timeAgo, formatCompactCount, formatCount } from '../utils/formatters';
-import api, { generateAvatar } from '../services/api';
+import api from '../services/apiCore.js';
+import { generateAvatar } from '../services/apiSystem.js';
 import socket from '../services/socket';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 

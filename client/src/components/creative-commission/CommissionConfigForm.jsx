@@ -14,7 +14,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
-import { getProviders, getSettings, listImageModels, listVideoModels, listMusicEngines } from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings } from '../../services/apiSystem.js';
+import { listImageModels, listVideoModels } from '../../services/apiImageVideo.js';
+import { listMusicEngines } from '../../services/apiMusic.js';
+import { musicEngineReadinessReason, musicEngineReadinessMessage } from '../../../../server/lib/generationModes.js';
 import UniverseMoodBoardPicker, { useStyleSourceLists } from '../media/UniverseMoodBoardPicker';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends';
 import CronSchedulePicker from '../CronSchedulePicker';
@@ -302,14 +306,17 @@ function MusicTasteSection({ musicTaste, patchForm }) {
 
   const selectedEngineId = musicTaste.musicEngineId || catalog?.defaultEngine || '';
   const selectedEngine = catalog?.engines?.find((engine) => engine.id === selectedEngineId) || null;
+  const selectedModelId = musicTaste.musicModelId || selectedEngine?.defaultModelId;
+  const selectedModel = selectedEngine?.models?.find((model) => model.id === selectedModelId);
+  const modelReady = !!selectedModel
+    && (!selectedEngine.fixedModelInstall || selectedEngine.modelReadyById?.[selectedModel.id] === true);
+  const reason = selectedEngine && musicEngineReadinessReason(selectedEngine, modelReady);
   let readiness = null;
   if (catalog?.error) readiness = 'Music engine readiness could not be checked. Open Music → Generate before enabling this commission.';
   else if (catalog && !selectedEngine) readiness = 'The configured music engine is no longer available. Choose an installed engine before enabling this commission.';
-  else if (selectedEngine && !selectedEngine.platformSupported) readiness = `${selectedEngine.name} requires ${selectedEngine.platformLabel} on this machine.`;
-  else if (selectedEngine?.cudaRequired && selectedEngine.cudaState !== 'available') readiness = `${selectedEngine.name} requires an available NVIDIA CUDA GPU.`;
-  else if (selectedEngine && !selectedEngine.runtimeReady) readiness = `${selectedEngine.name} is not installed. Install its runtime from Music → Generate.`;
-  else if (selectedEngine && !selectedEngine.modelReady) readiness = `${selectedEngine.name} model weights are not installed. Install them from Music → Generate.`;
-  else if (musicTaste.musicModelId && !selectedEngine?.models?.some((model) => model.id === musicTaste.musicModelId)) readiness = 'The configured music model is no longer available. Choose an installed model before enabling this commission.';
+  else if (reason === 'runtime-unavailable') readiness = `${musicEngineReadinessMessage(selectedEngine, reason)} Install its runtime from Music → Generate.`;
+  else if (reason === 'model-unavailable' && !selectedModel) readiness = 'The configured music model is no longer available. Choose an installed model before enabling this commission.';
+  else if (reason) readiness = musicEngineReadinessMessage(selectedEngine, reason);
 
   return (
     <section className="space-y-3 border-t border-port-border pt-4">

@@ -73,9 +73,8 @@ async function saveNotifications(data) {
 /**
  * Get all notifications
  */
-export async function getNotifications(options = {}) {
-  const data = await loadNotifications();
-  let notifications = [...data.notifications];
+function selectNotifications(records, options) {
+  let notifications = [...records];
   if (!options.includeHidden) notifications = notifications.filter(n => n.historyHidden !== true);
 
   // Filter by type
@@ -99,12 +98,24 @@ export async function getNotifications(options = {}) {
   return notifications;
 }
 
+export async function getNotifications(options = {}) {
+  const data = await loadNotifications();
+  return selectNotifications(data.notifications, options);
+}
+
+const countUnread = records => records.filter(n => !n.read && n.historyHidden !== true).length;
+
+export async function getNotificationSnapshot(options = {}) {
+  const { notifications } = await loadNotifications();
+  return { notifications: selectNotifications(notifications, options), count: countUnread(notifications) };
+}
+
 /**
  * Get unread notification count
  */
 export async function getUnreadCount() {
   const data = await loadNotifications();
-  return data.notifications.filter(n => !n.read && n.historyHidden !== true).length;
+  return countUnread(data.notifications);
 }
 
 /**

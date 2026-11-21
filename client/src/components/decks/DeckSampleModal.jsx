@@ -5,7 +5,7 @@ import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import VisionProviderPicker from '../universe/VisionProviderPicker';
 import StyleDiffPreview from '../universeBuilder/StyleDiffPreview';
-import { addDeckSample, analyzeDeckSample } from '../../services/api';
+import { addDeckSample, analyzeDeckSample } from '../../services/apiDecks.js';
 
 const TITLE_MAX = 120;
 

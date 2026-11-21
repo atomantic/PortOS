@@ -1,78 +1,66 @@
 /**
- * Catalog ingredient type registry (system + user-defined) merged with the static fallback via a
- * Provider/hook pair.
- *
- * Synchronous fallback to the built-in six so first render never blanks. Use when: Catalog
- * list/picker/editor; anywhere the catalog type list/lookup is needed.
+ * Lazily shares the Catalog type registry with built-in types available on first render.
  */
 
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import useMounted from './useMounted';
+import { useMemo, useSyncExternalStore } from 'react';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 import { CATALOG_TYPES, mergeCatalogTypes } from '../lib/catalogTypes';
 
-/**
- * Catalog type registry hook + context. Fetches `GET /api/catalog/types` once (the FULL active registry, system + user-defined) and merges it with the static `CATALOG_TYPES` fallback, which is the SYNCHRONOUS fallback so the first render returns the built-in six and the UI never blanks.
- * Exposed: `types` (ordered merged list `{ id, label, badgeColor, primaryContentKey, primaryContentLabel, snippetFallbackKeys, editorFields?, system }`), `getType(id)`, `ids`, `loading` (true until the first fetch resolves), `error` (the last fetch failure, null when current; `types` still carries the fallback), `refresh` (re-fetch after a Settings → Catalog mutation).
- */
+const initialState = {
+  registry: mergeCatalogTypes(CATALOG_TYPES, []),
+  loading: true,
+  error: null,
+};
+let snapshot = initialState;
+let inFlight = null;
+const listeners = new Set();
+const getSnapshot = () => snapshot;
 
-const CatalogTypesContext = createContext(null);
-
-// Build the merged registry from a raw server array (or [] for fallback). The
-// server returns system + user entries; mergeCatalogTypes drops the system
-// ones (already in the static fallback) and normalizes the rest.
-const buildRegistry = (userTypesRaw) => mergeCatalogTypes(CATALOG_TYPES, userTypesRaw);
-
-// Shared fetch-and-merge state machine used by BOTH the Provider and the
-// standalone (provider-less) fallback. `enabled` gates the fetch effect so the
-// standalone path can stay dormant when a context is present. Synchronous
-// fallback to the static system registry so first render never blanks.
-function useRegistryFetcher(enabled = true) {
-  const [registry, setRegistry] = useState(() => buildRegistry([]));
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const mountedRef = useMounted();
-
-  const refresh = useCallback(() => listCatalogTypes({ silent: true })
-    .then((data) => {
-      if (!mountedRef.current) return;
-      const serverTypes = Array.isArray(data?.types) ? data.types : [];
-      setRegistry(buildRegistry(serverTypes.filter((t) => t && t.system === false)));
-      setError(null);
-      setLoading(false);
-    })
-    // Network/route failure → keep the static fallback, surface the error so
-    // Settings can offer a retry instead of reading as "no custom types".
-    .catch((err) => { if (mountedRef.current) { setError(err || new Error('Failed to load catalog types')); setLoading(false); } }), []);
-
-  useEffect(() => { if (enabled) refresh(); }, [enabled, refresh]);
-
-  return useMemo(() => ({
-    types: registry.list,
-    getType: (id) => registry.byId[id],
-    ids: registry.list.map((t) => t.id),
-    loading,
-    error,
-    refresh,
-  }), [registry, loading, error, refresh]);
+function refresh() {
+  const run = listCatalogTypes({ silent: true }).then((data) => {
+    const serverTypes = Array.isArray(data?.types) ? data.types : [];
+    return {
+      registry: mergeCatalogTypes(CATALOG_TYPES, serverTypes.filter(type => type?.system === false)),
+      loading: false,
+      error: null,
+    };
+  }).catch(error => ({
+    ...snapshot,
+    loading: false,
+    error: error || new Error('Failed to load catalog types'),
+  })).then(next => {
+    // A read after a mutation wins over an older in-flight read.
+    if (inFlight !== run) return;
+    inFlight = null;
+    snapshot = next;
+    for (const listener of listeners) listener();
+  });
+  inFlight = run;
+  return run;
 }
 
-export function CatalogTypesProvider({ children }) {
-  const value = useRegistryFetcher(true);
-  return <CatalogTypesContext.Provider value={value}>{children}</CatalogTypesContext.Provider>;
+function subscribe(listener) {
+  listeners.add(listener);
+  if (!inFlight && snapshot === initialState) void refresh();
+  return () => listeners.delete(listener);
 }
 
-/**
- * Read the catalog type registry. When used outside a `CatalogTypesProvider`
- * (e.g. a test that doesn't mount the provider) it falls back to a standalone
- * fetch-and-merge so the hook is still usable in isolation.
- */
 export function useCatalogTypes() {
-  const ctx = useContext(CatalogTypesContext);
-  // Hooks must run unconditionally — run the standalone fetcher but keep it
-  // dormant (no fetch) when a context already provides the registry.
-  const standalone = useRegistryFetcher(!ctx);
-  return ctx || standalone;
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
+  return useMemo(() => ({
+    types: snapshot.registry.list,
+    getType: (id) => snapshot.registry.byId[id],
+    ids: snapshot.registry.list.map((t) => t.id),
+    loading: snapshot.loading,
+    error: snapshot.error,
+    refresh,
+  }), [snapshot]);
+}
+
+/** Test seam. Reset only after the previous consumers unmount. */
+export function __resetCatalogTypes() {
+  inFlight = null;
+  snapshot = initialState;
 }
 
 export default useCatalogTypes;

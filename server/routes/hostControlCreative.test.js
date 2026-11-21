@@ -9,7 +9,7 @@ afterAll(cleanupTempDataRoots);
 
 // Creative Director and Commission steering (#10867) is gated by the default-deny
 // write policy (#16018); the refusal and principal matrix live in
-// services/authGate.test.js and hostControlCoverage.test.js. The production
+// services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js. The production
 // routers run with every service boundary doubled; the workflows watch the
 // project starter and the commission scheduler.
 const auth = vi.hoisted(() => ({ enabled: false }));

@@ -12,7 +12,7 @@ import {
   slashdoWorkflowsForApp,
 } from './slashdoCatalog.js';
 import { isValidSlashdoCommand, SLASHDO_NAMESPACE } from './slashdoInvocation.js';
-import { sanitizeTaskMetadata } from './cos/cosValidation.js';
+import { sanitizeTaskMetadata } from './cos/cosTaskMetadata.js';
 import { PATHS } from './fileUtils.js';
 
 describe('SLASHDO_WORKFLOWS', () => {

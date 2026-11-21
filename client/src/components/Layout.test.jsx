@@ -58,12 +58,12 @@ vi.mock('./NotificationDropdown', () => ({
 }));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('./voice/VoiceWidgetGate', () => ({ default: ({ children }) => children }));
-vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
+vi.mock('./CmdKSearchGate', () => ({ default: () => <div data-testid="command-palette" /> }));
 vi.mock('../utils/staleChunkReload', async (importOriginal) => ({
   ...await importOriginal(),
   reloadOnceForStaleChunk: vi.fn().mockResolvedValue(false),
 }));
-vi.mock('./KeyboardHelp', () => ({ default: () => null }));
+vi.mock('./KeyboardHelpGate', () => ({ default: () => null }));
 
 // --- Socket: record handlers, never connect. ---
 vi.mock('../services/socket', () => ({
@@ -178,9 +178,12 @@ describe('Layout — manifest-derived sidebar structure', () => {
   });
 
 
-  it('loads sidebar apps through the lean navigation projection', async () => {
-    await renderLayout();
+  it('loads the lean apps list after the Apps section expands', async () => {
+    api.getApps.mockClear();
+    await renderLayout('/apps');
 
+    expect(api.getApps).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Apps' })));
     expect(api.getApps).toHaveBeenCalledWith({ silent: true, view: 'nav' });
   });
 
@@ -196,7 +199,27 @@ describe('Layout — manifest-derived sidebar structure', () => {
     }
   });
 
-  it('covers all sub-tabs for Settings, Digital Twin, and Messages in NAV_PRESENTATION', () => {
+  // Regression guard: a presentation-layer filter once hid whole groups of
+  // destinations (Chief of Staff, Comms and Settings tabs) from the sidebar
+  // while their routes and icons still existed. Every destination with an
+  // icon must render as a sidebar link once its sections are expanded.
+  it('renders a sidebar link for every destination in NAV_PRESENTATION', async () => {
+    await renderLayout('/');
+    let expand;
+    while ((expand = screen.queryAllByRole('button', { name: /^Expand / })).length > 0) {
+      expand.forEach((button) => fireEvent.click(button));
+      await act(async () => {});
+    }
+    const hrefs = new Set(screen.getAllByRole('link').map((link) => link.getAttribute('href')));
+    expect(Object.keys(NAV_PRESENTATION).filter((path) => !hrefs.has(path))).toEqual([]);
+    // Hub tab pages stay in the sidebar too, even though their hub also shows
+    // them as in-page tabs.
+    for (const path of ['/cos/tasks', '/cos/agents', '/messages/inbox', '/settings/features', '/brain/inbox']) {
+      expect(hrefs.has(path), `sidebar is missing ${path}`).toBe(true);
+    }
+  });
+
+  it('covers all sub-tabs for Settings, Digital Twin, and Messages in the destination icon registry', () => {
     const settingsPaths = [
       '/settings/general', '/settings/ai-assignments', '/settings/api-access', '/settings/autofixer',
       '/settings/backup', '/settings/credentials', '/settings/database', '/settings/features',
@@ -205,7 +228,7 @@ describe('Layout — manifest-derived sidebar structure', () => {
       '/openclaw', '/prompts', '/ai/presets', '/ai/harnesses', '/ai/services'
     ];
     for (const p of settingsPaths) {
-      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for settings path ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for settings path ${p}`).toBeDefined();
     }
 
     const digitalTwinTabs = [
@@ -216,13 +239,13 @@ describe('Layout — manifest-derived sidebar structure', () => {
     ];
     for (const tab of digitalTwinTabs) {
       const p = `/digital-twin/${tab}`;
-      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for digital twin tab ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for digital twin tab ${p}`).toBeDefined();
     }
 
     const messageTabs = ['inbox', 'drafts', 'imessage', 'signal', 'beeper', 'contacts', 'sync', 'config'];
     for (const tab of messageTabs) {
       const p = `/messages/${tab}`;
-      expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for message tab ${p}`).toBeDefined();
+      expect(NAV_PRESENTATION[p], `missing destination icon for message tab ${p}`).toBeDefined();
     }
   });
 });
@@ -252,14 +275,15 @@ describe('Layout — pinned single nav rows', () => {
   it('keeps destination icons in pinned and recent rows, including nested and dynamic pages', async () => {
     const destinations = [
       ['/devtools/usage', 'Usage', 'lucide-chart-column'],
-      ['/casting', 'Casting', 'lucide-drama'],
+      ['/catalog/casting', 'Casting', 'lucide-drama'],
       ['/pipeline/series/example-series', 'Example Series', 'lucide-workflow'],
       ['/universes/example-universe', 'Example Universe', 'lucide-globe'],
     ];
     api.listPipelineSeriesNames.mockResolvedValue([{ id: 'example-series', name: 'Example Series' }]);
     api.listUniverseNames.mockResolvedValue([{ id: 'example-universe', name: 'Example Universe' }]);
-    localStorage.setItem(PINNED_KEY, JSON.stringify(destinations.map(([path]) => path)));
-    localStorage.setItem(RECENT_KEY, JSON.stringify(destinations.map(([path]) => path)));
+    const savedPaths = destinations.map(([path]) => path === '/catalog/casting' ? '/casting' : path);
+    localStorage.setItem(PINNED_KEY, JSON.stringify(savedPaths));
+    localStorage.setItem(RECENT_KEY, JSON.stringify(savedPaths));
     await renderLayout();
 
     for (const [path, label, iconClass] of destinations) {
@@ -373,6 +397,7 @@ describe('Layout — instance feature gating', () => {
   it('shows Settings > Features in the primary navigation', async () => {
     await renderLayout('/settings/features');
 
+    expect(screen.getByRole('button', { name: 'Settings', exact: true })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('link', { name: 'Features' })).toHaveAttribute('href', '/settings/features');
   });
 
@@ -388,9 +413,10 @@ describe('Layout — instance feature gating', () => {
     expect(screen.queryByRole('link', { name: 'Eidoverse' })).toBeNull();
   });
 
-  it('shows and hides OpenClaw with its instance feature flag', async () => {
+  it('shows and hides a saved OpenClaw destination with its instance feature flag', async () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/openclaw']));
     await renderLayout('/openclaw');
-    expect(screen.getByRole('link', { name: 'OpenClaw' })).toHaveAttribute('href', '/openclaw');
+    expect(within(pinnedSection()).getByRole('link', { name: 'OpenClaw' })).toHaveAttribute('href', '/openclaw');
 
     featureMock.features = allFeaturesOn()
       .map((feature) => feature.id === 'openclaw' ? { ...feature, enabled: false } : feature);
@@ -429,22 +455,16 @@ describe('Layout — instance feature gating', () => {
   });
 });
 
-describe('Layout — Comms section (Beeper)', () => {
-  // #30 / real-browser pass: the Beeper row never rendered in the sidebar Comms
-  // section, feature on or off, because NAV_PRESENTATION had no '/messages/beeper'
-  // key. navRowForPath() throws the other way around — for a NAV_PRESENTATION
-  // path with no matching NAV_COMMANDS entry — so a path missing from
-  // NAV_PRESENTATION itself never reaches navRowForPath at all (presentedNavRows
-  // only maps over NAV_PRESENTATION's own keys), and the row was silently absent
-  // rather than a crash.
-  it('lists Beeper in the Comms section alongside the other messaging rows when the feature is on', async () => {
-    await renderLayout('/messages/inbox');
+describe('Layout — Comms section', () => {
+  it('lists every messaging tab alongside the standalone Comms destinations', async () => {
+    await renderLayout('/messages/beeper');
 
-    const beeper = screen.getByRole('link', { name: 'Beeper' });
-    expect(beeper).toHaveAttribute('href', '/messages/beeper');
-    // Same section as its siblings, not a stray top-level row.
-    expect(screen.getByRole('link', { name: 'Signal' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'iMessage' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Comms', exact: true })).toHaveAttribute('aria-current', 'true');
+    for (const [label, href] of [['Beeper', '/messages/beeper'], ['Signal', '/messages/signal'], ['iMessage', '/messages/imessage'], ['Inbox', '/messages/inbox']]) {
+      expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', href);
+    }
+    expect(screen.getByRole('link', { name: 'Stacker News' })).toHaveAttribute('href', '/stacker-news');
+    expect(screen.getByRole('link', { name: 'X', exact: true })).toHaveAttribute('href', '/x');
   });
 
   it('drops only the Beeper row when the beeper feature is off, keeping the rest of Comms', async () => {
@@ -455,7 +475,6 @@ describe('Layout — Comms section (Beeper)', () => {
 
     expect(screen.queryByRole('link', { name: 'Beeper' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Signal' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'iMessage' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Inbox' })).toBeTruthy();
   });
 });
@@ -551,22 +570,25 @@ describe('Layout — persistent mobile touch targets', () => {
     await renderLayout('/');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Create' })));
 
     expect(screen.getByRole('link', { name: 'Authors' })).toHaveAttribute('href', '/authors');
   });
 
   it('enlarges grandchild navigation links to at least 44px on mobile viewports while staying compact on desktop', async () => {
+    api.listPipelineSeriesNames.mockResolvedValue([{ id: 'example', name: 'Example Series' }]);
+    api.listUniverseNames.mockResolvedValue([{ id: 'example', name: 'Example Universe' }]);
+    api.listMusicVideoProjectNames.mockResolvedValue([{ id: 'example', name: 'Example Video' }]);
     await renderLayout('/');
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Create' })));
 
-    const castingLink = screen.getByRole('link', { name: 'Casting' });
-    const environmentsLink = screen.getByRole('link', { name: 'Environments' });
-    const objectsLink = screen.getByRole('link', { name: 'Objects' });
+    const seriesLink = screen.getByRole('link', { name: 'Example Series' });
+    const universeLink = screen.getByRole('link', { name: 'Example Universe' });
+    const videoLink = screen.getByRole('link', { name: 'Example Video' });
 
-    for (const link of [castingLink, environmentsLink, objectsLink]) {
+    for (const link of [seriesLink, universeLink, videoLink]) {
       expect(link.className).toContain('min-h-[44px]');
       expect(link.className).toContain('flex');
       expect(link.className).toContain('items-center');
@@ -596,20 +618,21 @@ describe('Layout — persistent mobile touch targets', () => {
 
   it('enlarges collapsed flyout grandchild navigation links on coarse viewports while staying compact on desktop', async () => {
     localStorage.setItem('portos-sidebar-collapsed', 'true');
+    api.listPipelineSeriesNames.mockResolvedValue([{ id: 'example', name: 'Example Series' }]);
     await renderLayout('/');
 
     const createButton = screen.getByRole('button', { name: 'Create' });
-    fireEvent.mouseEnter(createButton.parentElement);
+    await act(async () => fireEvent.mouseEnter(createButton.parentElement));
 
     const flyoutNav = screen.getByRole('navigation', { name: 'Create pages' });
-    const castingFlyoutLink = within(flyoutNav).getByRole('link', { name: 'Casting' });
+    const seriesFlyoutLink = within(flyoutNav).getByRole('link', { name: 'Example Series' });
 
-    expect(castingFlyoutLink.className).toContain('min-h-[44px]');
-    expect(castingFlyoutLink.className).toContain('flex');
-    expect(castingFlyoutLink.className).toContain('items-center');
-    expect(castingFlyoutLink.className).toContain('lg:min-h-0');
-    expect(castingFlyoutLink.className).toContain('lg:block');
-    expect(castingFlyoutLink.className).toContain('pointer-coarse:min-h-11');
+    expect(seriesFlyoutLink.className).toContain('min-h-[44px]');
+    expect(seriesFlyoutLink.className).toContain('flex');
+    expect(seriesFlyoutLink.className).toContain('items-center');
+    expect(seriesFlyoutLink.className).toContain('lg:min-h-0');
+    expect(seriesFlyoutLink.className).toContain('lg:block');
+    expect(seriesFlyoutLink.className).toContain('pointer-coarse:min-h-11');
   });
 });
 
@@ -686,35 +709,20 @@ describe('Layout — dynamic third-level navigation', () => {
     expect(screen.queryByRole('link', { name: 'Example Video' })).toBeNull();
   });
 
-  it('renders Casting, Environments, and Objects as 3rd-level sub-pages under Catalog in Create', async () => {
-    await renderLayout('/catalog');
-
-    const collapseCatalog = screen.getByRole('button', { name: 'Collapse Catalog' });
-    expect(collapseCatalog).toBeInTheDocument();
-
-    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
-    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
-    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
-
-    fireEvent.click(collapseCatalog);
-    expect(screen.queryByRole('link', { name: 'Casting' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Environments' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Objects' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Catalog' }));
-    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting');
-    expect(screen.getByRole('link', { name: 'Environments' })).toHaveAttribute('href', '/environments');
-    expect(screen.getByRole('link', { name: 'Objects' })).toHaveAttribute('href', '/objects');
-  });
-
-  it('auto-expands Create and Catalog when visiting a grandchild route', async () => {
-    await renderLayout('/casting');
+  it('opens Create on a catalog record and nests hub pages under their hub', async () => {
+    await renderLayout('/casting/example-cast-member');
 
     expect(screen.getByRole('button', { name: 'Collapse Create' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Collapse Catalog' })).toBeInTheDocument();
-    const castingLink = screen.getByRole('link', { name: 'Casting' });
-    expect(castingLink).toHaveAttribute('href', '/casting');
-    expect(castingLink.className).toContain('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Catalog' })).toHaveClass('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Media Studio' })).toHaveAttribute('href', '/create/media');
+    expect(screen.getByRole('link', { name: 'Story Studio' })).toHaveAttribute('href', '/create/story');
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
+    expect(screen.getByRole('link', { name: 'Writers Room' })).toHaveAttribute('href', '/writers-room');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Catalog' }));
+    expect(screen.queryByRole('link', { name: 'Casting' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Catalog' }));
+    expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/catalog/casting');
   });
 
   it('updates dynamic apps navigation when apps:changed is emitted', async () => {
@@ -724,6 +732,7 @@ describe('Layout — dynamic third-level navigation', () => {
     });
     api.getApps.mockResolvedValueOnce([]);
     await renderLayout('/apps');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Expand Apps' })));
 
     expect(screen.queryByRole('link', { name: 'Super New App' })).not.toBeInTheDocument();
 

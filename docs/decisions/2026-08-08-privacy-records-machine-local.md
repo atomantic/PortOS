@@ -4,7 +4,7 @@
 - **Status:** Amended 2026-09-19 by [user-controlled federation](./2026-09-19-user-controlled-federation.md). The current storage implementation remains local-only; the blanket prohibition on personal-data federation is superseded.
 - **Related:** issue #2148 (closes the federation half; household subjects split
   out), epic #2138,
-  [design record](../plans/2026-07-04-privacy-center-pii-vault-broker-optout.md),
+  [design record](../plans/archive/2026-07-04-privacy-center-pii-vault-broker-optout.md),
   [`server/lib/vaultCrypto.js`](../../server/lib/vaultCrypto.js),
   [`server/services/sharing/peerSync.js`](../../server/services/sharing/peerSync.js),
   [`docs/STORAGE.md`](../STORAGE.md),

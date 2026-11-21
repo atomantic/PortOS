@@ -120,7 +120,7 @@ const catalogLabel = (type) => CATALOG_LIBRARIES[type]?.[1] || 'Catalog';
  * app path, `video:<id>` for a video history id, filename, app path or key.
  * Thumbnails and outside URLs are not the file itself.
  */
-function mediaKeyOf(value, videos) {
+export function mediaKeyOf(value, videos) {
   if (typeof value !== 'string' || !value || value.length > MAX_STRING || /\s/.test(value)) return null;
   const keyed = /^(image|video):([^/:]+)$/.exec(value);
   if (keyed) {
@@ -171,7 +171,8 @@ function collectMediaRefs(data, videos) {
   return found;
 }
 
-async function videoLookup() {
+/** `{ ids, byFilename }` over video history, the `videos` argument of `mediaKeyOf`. */
+export async function videoLookup() {
   const { loadHistory } = await import('./videoGen/history.js');
   const history = await loadHistory();
   const ids = new Set();

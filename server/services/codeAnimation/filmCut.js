@@ -1,4 +1,5 @@
 /** Final assembly publishes an accepted film to Media History, without Music Video finishing. */
+import { fileCompositionVideos } from '../mediaCollectionRules.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { createReadStream, constants } from 'node:fs';
 import { copyFile, mkdir, rm } from 'node:fs/promises';
@@ -56,6 +57,7 @@ async function publishFilm(owner, output, plan, song, signal) {
         committed = true;
         return { acceptedOutput: accepted };
       });
+      await fileCompositionVideos([videoId]);
     });
     emitCodeAnimationChanged(owner.id);
   } finally {

@@ -60,6 +60,7 @@ import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron, isValidRecurrence } from '../eventScheduler.js';
+import { preserveLegacyRenderPins } from '../../lib/schemaVersions.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import {
   contentHashForRecord,
@@ -351,11 +352,6 @@ function preserveLocalCommissionFields(remote, local) {
   return out;
 }
 
-// Federated generation keys introduced by `creativeCommissions` v3 (#3135) —
-// the per-commission render-backend pin. A v2 sender's sanitizer keeps only the
-// generation keys it knows, so its record ALWAYS carries the default here.
-const COMMISSION_BACKEND_PIN_KEYS = ['imageMode', 'videoMode', 'imageModelId', 'videoModelId'];
-
 /**
  * Carry the local brief's additive federated fields onto a winning remote from a
  * sender too old to represent them (#8414). The version gate only rejects AHEAD
@@ -367,15 +363,8 @@ const COMMISSION_BACKEND_PIN_KEYS = ['imageMode', 'videoMode', 'imageModelId', '
 function preserveLegacyCommissionFields(remote, local, senderVersion) {
   const sender = Number(senderVersion) || 0;
   let out = remote;
-  if (sender < 3 && remote.generation && local.generation) {
-    // Only the keys BOTH shapes carry: a sender that also switched the output
-    // type has no slot for the old type's pin, and the new type never had one.
-    const pins = {};
-    for (const key of COMMISSION_BACKEND_PIN_KEYS) {
-      if (key in remote.generation && key in local.generation) pins[key] = local.generation[key];
-    }
-    if (Object.keys(pins).length) out = { ...out, generation: { ...out.generation, ...pins } };
-  }
+  const generation = preserveLegacyRenderPins('creativeCommissions', sender, remote.generation, local.generation);
+  if (generation !== remote.generation) out = { ...out, generation };
   // v4 — Digital Twin musicTaste config (#4347), persisted only when set.
   if (sender < 4 && !out.brief?.musicTaste && local.brief?.musicTaste) {
     out = { ...out, brief: { ...out.brief, musicTaste: local.brief.musicTaste } };

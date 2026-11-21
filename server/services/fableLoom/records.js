@@ -18,6 +18,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { sanitizeCharacterEvolutionList } from '../../lib/characterEvolution.js';
 import { sanitizeSeriesDesign } from '../../lib/storyArc.js';
+import { preserveLegacyRenderPins } from '../../lib/schemaVersions.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
@@ -790,12 +791,16 @@ const peerVisualProjection = (manifest, senderVersion) => sanitizeVisualConditio
 // on nodes that still exist instead of letting its unaware sanitizer clear
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
-const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 9) return remote;
+const preserveLegacyVisualProduction = (incoming, local, senderVersion) => {
+  if (!local) return incoming;
+  // Pre-v6 senders lack preference fields entirely and restore those below.
+  const renderSettings = senderVersion >= 6
+    ? preserveLegacyRenderPins('fableLoom', senderVersion, incoming.renderSettings, local.renderSettings)
+    : incoming.renderSettings;
+  const remote = renderSettings === incoming.renderSettings ? incoming : { ...incoming, renderSettings };
+  if (senderVersion >= 9) return remote;
   const seriesPlan = preserveLegacySeriesPlan(remote.seriesPlan, local.seriesPlan, senderVersion);
-  // A v7/v8 sender's only unrepresentable plan fields are restored above —
-  // every branch below is gated at <7 or lower. Returning early keeps the
-  // dominant legacy path off the O(episodes x nodes) rebuild it would all skip.
+  // Only pre-v7 senders need to rebuild the episode graph.
   if (senderVersion >= 7) {
     return seriesPlan === remote.seriesPlan ? remote : { ...remote, seriesPlan };
   }

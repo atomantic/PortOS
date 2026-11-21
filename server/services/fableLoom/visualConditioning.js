@@ -19,6 +19,7 @@ import {
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import { IMAGE_GEN_PROVIDER_CAPABILITIES, maxInputImages } from '../../lib/imageGenCapabilities.js';
 import { CLOUD_IMAGE_GEN_MODES } from '../../lib/generationModes.js';
+import { usesFlux3, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { buildFableLoomVisualPrompts } from '../../lib/fableLoomVisualPrompts.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
@@ -392,9 +393,10 @@ export async function compileFableLoomVisualRequest({
     failures.push('required canon assets exceed or are unsupported by the backend capability manifest');
   }
 
+  const { supportsNegativePrompt, ...recordedCapability } = capability;
   const { prompt: positive, negativePrompt, promptAdditions } = buildFableLoomVisualPrompts({
     node, universe, series, bindings, references: allocation.accepted, temporalSourceNode: temporal.node,
-    adapterTriggerWords, kind, capability, authoredPrompt, authoredNegativePrompt,
+    adapterTriggerWords, kind, capability, authoredPrompt, authoredNegativePrompt, supportsNegativePrompt,
   });
   const manifest = {
     version: 1,
@@ -402,7 +404,7 @@ export async function compileFableLoomVisualRequest({
     visualProfile: resolveUniverseVisualProfile(universe, undefined, series),
     status: manifestStatus({ locked, omitted, warnings }),
     universeId: universe.id,
-    capability,
+    capability: recordedCapability,
     bindings: manifestBindings(bindings),
     assets: allocation.accepted.map(({ path: _path, ...asset }) => {
       if (capability.backend !== 'runway') return asset;
@@ -444,6 +446,7 @@ export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4
   const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);
   return Object.freeze({
     version: 1, kind: 'image', backend: mode, modelId: model?.id || null,
+    ...(mode === 'local' && (usesFlux3(model) || usesMinimaxH3Image(model)) ? { supportsNegativePrompt: false } : {}),
     modelRevision: model?.revision || null,
     referenceRoles: localReferences || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']

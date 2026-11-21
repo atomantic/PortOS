@@ -2,11 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import AddToCollectionMenu from './AddToCollectionMenu';
 
-// Covers the picker's list presentation (#3312): CollectionPickerShell orders
-// rows with the shared `applyCollectionView` and each row renders the
-// prefix-stripped title with the auto-creator prefix lifted into a badge, the
-// same as the /media/collections grid (#3283).
-
 const api = vi.hoisted(() => ({
   listMediaCollections: vi.fn(),
   createMediaCollection: vi.fn(),
@@ -14,15 +9,17 @@ const api = vi.hoisted(() => ({
   removeMediaCollectionItem: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listMediaCollections: api.listMediaCollections,
+  createMediaCollection: api.createMediaCollection,
+  addMediaCollectionItem: api.addMediaCollectionItem,
+  removeMediaCollectionItem: api.removeMediaCollectionItem,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const item = { kind: 'image', key: 'image:hero.png', filename: 'hero.png' };
 
-// Six collections so the shell's search input renders (SEARCH_THRESHOLD).
-// Deliberately shuffled relative to the expected display order, and the auto
-// empties carry the NEWEST timestamps so a raw "recently updated" sort alone
-// would float them to the top.
+// Six collections make the search input available.
 const collections = [
   { id: 'cd-1', name: 'Creative Director: Zephyr Drift', source: 'auto', items: [], updatedAt: '2026-01-05T00:00:00Z' },
   { id: 'c-keep', name: 'Keepers', source: 'user', items: [], updatedAt: '2026-01-01T00:00:00Z' },
@@ -49,17 +46,20 @@ beforeEach(() => {
 });
 
 describe('AddToCollectionMenu row presentation', () => {
-  it('sinks auto-created empties below everything else, newest-updated first within a bucket', async () => {
+  it('sorts by the displayed title across collection sources and item counts', async () => {
     await openMenu();
 
     expect(rowTitles()).toEqual([
-      'Creative DirectorAmber Loop', // auto but has items → stays in the top bucket
-      'Reference Shots',
-      'Keepers',
-      'Wallpapers',
-      'Creative DirectorZephyr Drift', // auto + empty → bottom bucket despite newest updatedAt
+      'Creative DirectorAmber Loop',
       'UniverseExample Universe',
+      'Keepers',
+      'Reference Shots',
+      'Wallpapers',
+      'Creative DirectorZephyr Drift',
     ]);
+
+    fireEvent.change(screen.getByPlaceholderText('Search collections…'), { target: { value: 'creative director' } });
+    expect(rowTitles()).toEqual(['Creative DirectorAmber Loop', 'Creative DirectorZephyr Drift']);
   });
 
   it('lifts the auto-creator prefix into a badge and keeps the full name as the tooltip', async () => {

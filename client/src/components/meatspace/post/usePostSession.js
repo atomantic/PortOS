@@ -5,7 +5,12 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../../../services/api';
+import {
+  generatePostDrill,
+  submitPostSession,
+  scorePostLlmDrill,
+  submitTrainingRun,
+} from '../../../services/apiMeatspace.js';
 import toast from '../../ui/Toast';
 import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../../../lib/safeStorage.js';
 import { uuidv4 } from '../../../lib/uuid.js';

@@ -369,7 +369,8 @@ import { resolveGalleryImage } from '../lib/fileUtils.js';
 import {
   listIcLoraWeights, listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey,
 } from '../lib/icLoraWeights.js';
-import videoGenRoutes, { isAudioMime, LOCAL_ONLY_VIDEO_PARAMS } from './videoGen.js';
+import videoGenRoutes, { isAudioMime } from './videoGen.js';
+import { LOCAL_ONLY_VIDEO_PARAMS } from '../lib/videoGenValidation.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
 // multipart mock in these route tests bypasses fileFilter entirely, so we
@@ -746,6 +747,22 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /model-context', () => {
+    it('reports the backend usability flags from env-only keys, same as /status', async () => {
+      const prevFal = process.env.FAL_KEY;
+      process.env.FAL_KEY = 'env-fal-key';
+      try {
+        const ctx = await request(app).get('/api/video-gen/model-context');
+        const status = await request(app).get('/api/video-gen/status');
+        expect(ctx.body.falEnabled).toBe(true);
+        for (const key of ['falEnabled', 'reactorEnabled', 'runwayEnabled', 'geminiEnabled', 'higgsfieldEnabled', 'googleEnabled']) {
+          expect(typeof ctx.body[key]).toBe('boolean');
+          expect(status.body[key]).toBe(ctx.body[key]);
+        }
+      } finally {
+        if (prevFal === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prevFal;
+      }
+    });
+
     it('serves the model list and its auto-select numbers without probing python', async () => {
       const { checkPackages } = await import('../lib/pythonSetup.js');
       checkPackages.mockClear();

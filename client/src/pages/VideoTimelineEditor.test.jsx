@@ -43,17 +43,17 @@ const api = vi.hoisted(() => ({
   listMusic: vi.fn(),
 }));
 
-vi.mock('../services/api', () => ({
-  getTimelineProject: (...args) => api.getTimelineProject(...args),
-  listVideoHistory: (...args) => api.listHistory(...args),
-  getGalleryImages: (...args) => api.getGalleryImages(...args),
+vi.mock('../services/apiTracks.js', () => ({
   listMusicLibrary: (...args) => api.listMusic(...args),
-  updateTimelineProject: (...args) => api.updateTimelineProject(...args),
-  renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
 
 vi.mock('../services/apiImageVideo', () => ({
   listImageGalleryPage: async ({ limit, offset }) => ({ items: api.gallery.slice(offset, offset + limit), total: api.gallery.length, offset, limit }),
+  getTimelineProject: (...args) => api.getTimelineProject(...args),
+  listVideoHistory: (...args) => api.listHistory(...args),
+  getGalleryImages: (...args) => api.getGalleryImages(...args),
+  updateTimelineProject: (...args) => api.updateTimelineProject(...args),
+  renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;

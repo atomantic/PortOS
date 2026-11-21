@@ -12,7 +12,12 @@ const api = vi.hoisted(() => ({
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
 const clipboard = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiMessages.js', () => ({
+  checkImessageSetup: api.checkImessageSetup,
+  getImessageStatus: api.getImessageStatus,
+  syncImessage: api.syncImessage,
+}));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../lib/clipboard', () => clipboard);
 

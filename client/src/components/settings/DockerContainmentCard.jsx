@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
-import { getDockerContainmentStatus, pullDockerContainmentImage } from '../../services/api';
+import { getDockerContainmentStatus, pullDockerContainmentImage } from '../../services/apiDockerContainment.js';
 
 const ENGINE_STATE_LABELS = {
   ready: 'Ready',

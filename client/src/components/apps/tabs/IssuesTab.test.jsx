@@ -20,6 +20,7 @@ vi.mock('../../../services/socket', () => ({ default: socketMock }));
 vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
   ...await importOriginal(),
   getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+  getLocalLlmStatus: vi.fn().mockResolvedValue(null),
 }));
 
 // Label chips grade their color against the ACTIVE theme mode, so the mode has
@@ -30,15 +31,18 @@ vi.mock('../../ThemeContext', () => ({
   useThemeContext: () => ({ theme: { mode: themeMode.current } }),
 }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiApps.js', () => ({
   getAppIssues: vi.fn(),
-  syncGithubThreads: vi.fn(),
-  createSlashdoTask: vi.fn(),
-  getProviders: vi.fn(),
-  getLocalLlmStatus: vi.fn().mockResolvedValue(null),
-  // The tab reads the reviewers a claim will actually run so it can name them
-  // (and say whether a claim-work override supplied them).
   getAppClaimReviewers: vi.fn(),
+}));
+vi.mock('../../../services/apiBrainThreads.js', () => ({
+  syncGithubThreads: vi.fn(),
+}));
+vi.mock('../../../services/apiAgents.js', () => ({
+  createSlashdoTask: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 
 // useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above never
@@ -48,7 +52,10 @@ vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
   getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
 }));
 
-import * as api from '../../../services/api';
+import { getAppIssues, getAppClaimReviewers } from '../../../services/apiApps.js';
+import { createSlashdoTask } from '../../../services/apiAgents.js';
+import { getProviders } from '../../../services/apiProviders.js';
+import { syncGithubThreads } from '../../../services/apiBrainThreads.js';
 import { chipColors, parseColor } from '../../../lib/chipContrast';
 import IssuesTab from './IssuesTab';
 
@@ -95,10 +102,10 @@ beforeEach(() => {
   socketMock.on.mockClear();
   socketMock.off.mockClear();
   socketMock.emit.mockClear();
-  api.getAppIssues.mockResolvedValue(okPayload([ISSUE]));
-  api.createSlashdoTask.mockResolvedValue({ id: 'task-1' });
-  api.getProviders.mockResolvedValue({ providers: [] });
-  api.getAppClaimReviewers.mockResolvedValue({
+  getAppIssues.mockResolvedValue(okPayload([ISSUE]));
+  createSlashdoTask.mockResolvedValue({ id: 'task-1' });
+  getProviders.mockResolvedValue({ providers: [] });
+  getAppClaimReviewers.mockResolvedValue({
     source: 'defaults', reviewers: ['antigravity'], usernames: [], optionalReviewers: [],
     reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'antigravity',
   });
@@ -114,7 +121,7 @@ describe('IssuesTab', () => {
     await renderTab();
 
     expect(await screen.findByText('Crash on save')).toBeInTheDocument();
-    expect(api.getAppIssues).toHaveBeenCalledWith('app-1');
+    expect(getAppIssues).toHaveBeenCalledWith('app-1');
     expect(screen.getByText('#42')).toBeInTheDocument();
     // Scoped by the row chip's own title — the label also appears as a filter
     // toggle in the header, so a bare getByText('bug') is ambiguous.
@@ -151,7 +158,7 @@ describe('IssuesTab', () => {
   // rendered as white-on-cream before chips were graded per mode.
   it.each(['day', 'night'])('styles label chips for the %s theme mode', async (mode) => {
     themeMode.current = mode;
-    api.getAppIssues.mockResolvedValue(okPayload([{
+    getAppIssues.mockResolvedValue(okPayload([{
       ...ISSUE,
       labels: [{ name: 'plan', color: '#fef2c0', description: 'Planned work' }],
     }]));
@@ -167,7 +174,7 @@ describe('IssuesTab', () => {
   });
 
   it('leaves a colorless label on the neutral chip instead of an inline color', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([{
+    getAppIssues.mockResolvedValue(okPayload([{
       ...ISSUE,
       labels: [{ name: 'feature', color: null, description: 'No forge color' }],
     }]));
@@ -179,7 +186,7 @@ describe('IssuesTab', () => {
   });
 
   it('shows a comment count only for issues that have comments', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       { ...ISSUE, number: 42, title: 'Crash on save', commentCount: 3 },
       { ...ISSUE, number: 43, title: 'Add CSV export', commentCount: 1 },
       { ...ISSUE, number: 44, title: 'Untouched', commentCount: 0 },
@@ -208,11 +215,11 @@ describe('IssuesTab', () => {
   });
 
   it('does not override an unresolved app completion policy when claiming', async () => {
-    api.getAppClaimReviewers.mockReturnValue(new Promise(() => {}));
+    getAppClaimReviewers.mockReturnValue(new Promise(() => {}));
     await renderTab();
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    expect(api.createSlashdoTask.mock.calls.at(-1)[2]).not.toHaveProperty('prCompletion');
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    expect(createSlashdoTask.mock.calls.at(-1)[2]).not.toHaveProperty('prCompletion');
   });
 
   it('claims an issue with its prefetched content pinned to the /do:next task', async () => {
@@ -220,7 +227,7 @@ describe('IssuesTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'next', 'app-1', {
         target: '42',
         issueContext: {
@@ -244,11 +251,11 @@ describe('IssuesTab', () => {
     ['Claim', 'next', { title: 'x'.repeat(1_001) }],
     ['Replan', 'replan', { url: `https://example.com/${'x'.repeat(2_048)}` }],
   ])('queues %s without a partial issue snapshot', async (action, command, fields) => {
-    api.getAppIssues.mockResolvedValue(okPayload([{ ...ISSUE, ...fields }]));
+    getAppIssues.mockResolvedValue(okPayload([{ ...ISSUE, ...fields }]));
     await renderTab();
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(action) }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    const [sentCommand, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    const [sentCommand, , payload] = createSlashdoTask.mock.calls.at(-1);
     expect(sentCommand).toBe(command);
     expect(payload.target).toBe('42');
     expect(payload).not.toHaveProperty('issueContext');
@@ -292,8 +299,8 @@ describe('IssuesTab', () => {
       title: 'Sync conflict',
       url: 'https://github.com/acme/widget/issues/43',
     };
-    api.getAppIssues.mockResolvedValue(okPayload([ISSUE, SECOND_ISSUE]));
-    api.createSlashdoTask
+    getAppIssues.mockResolvedValue(okPayload([ISSUE, SECOND_ISSUE]));
+    createSlashdoTask
       .mockResolvedValueOnce({ id: 'task-1' })
       .mockResolvedValueOnce({ id: 'task-2' });
     await renderTab();
@@ -301,7 +308,7 @@ describe('IssuesTab', () => {
     const claimButtons = await screen.findAllByRole('button', { name: /Claim/ });
     fireEvent.click(claimButtons[0]);
     fireEvent.click(claimButtons[1]);
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledTimes(2));
 
     act(() => {
       socketHandlers.get('cos:tasks:changed')({ task: { id: 'task-1', status: 'completed' } });
@@ -322,7 +329,7 @@ describe('IssuesTab', () => {
 
   it('does not lose an active socket update that arrives before the POST response', async () => {
     let resolveClaim;
-    api.createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveClaim = resolve; }));
+    createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveClaim = resolve; }));
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
@@ -350,7 +357,7 @@ describe('IssuesTab', () => {
   // Reviewers panel's list whenever a claim-work override exists. That gap sent
   // claims to codex + claude for weeks after the install default had been moved.
   it('names the reviewers a Claim will run, and blames the claim-work override that supplied them', async () => {
-    api.getAppClaimReviewers.mockResolvedValue({
+    getAppClaimReviewers.mockResolvedValue({
       source: 'task-override', reviewers: ['codex', 'claude'], usernames: [], optionalReviewers: [],
       reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'codex,claude',
     });
@@ -362,7 +369,7 @@ describe('IssuesTab', () => {
   });
 
   it('formats provider tokens into human-friendly reviewer format with model and effort', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       activeProvider: 'selection-e0a2d22261158b86fe9783e1',
       providers: [{
         id: 'selection-e0a2d22261158b86fe9783e1',
@@ -375,7 +382,7 @@ describe('IssuesTab', () => {
         effort: 'max'
       }],
     });
-    api.getAppClaimReviewers.mockResolvedValue({
+    getAppClaimReviewers.mockResolvedValue({
       source: 'defaults',
       reviewers: ['provider:selection-e0a2d22261158b86fe9783e1'],
       usernames: [],
@@ -402,7 +409,7 @@ describe('IssuesTab', () => {
   it('says nothing about reviewers when the lookup failed, rather than implying none are configured', async () => {
     // "couldn't ask" and "nothing configured" must not collapse — an empty chain
     // rendered here would read as a claim that merges with no review at all.
-    api.getAppClaimReviewers.mockRejectedValue(new Error('offline'));
+    getAppClaimReviewers.mockRejectedValue(new Error('offline'));
 
     await renderTab();
 
@@ -411,7 +418,7 @@ describe('IssuesTab', () => {
   });
 
   it('shows and submits the configured default without touching the override controls', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       activeProvider: 'codex',
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
         models: ['gpt-5'], defaultModel: 'gpt-5', effort: 'high' }],
@@ -422,14 +429,14 @@ describe('IssuesTab', () => {
     expect(screen.getByLabelText('Model')).toHaveValue('gpt-5');
     expect(screen.getByRole('option', { name: 'Default effort — high' }).selected).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'next', 'app-1', expect.objectContaining({ provider: 'codex', model: 'gpt-5', effort: undefined }),
       { silent: true }
     ));
   });
 
   it('sends the page-level provider/model/effort pin along with a claim', async () => {
-    api.getProviders.mockResolvedValue({
+    getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
         models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
@@ -443,7 +450,7 @@ describe('IssuesTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'next', 'app-1',
       {
         target: '42',
@@ -466,8 +473,8 @@ describe('IssuesTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Edit reviewers' }));
     fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    const payload = api.createSlashdoTask.mock.calls[0][2];
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    const payload = createSlashdoTask.mock.calls[0][2];
     expect(payload.reviewerEfforts).toEqual({ antigravity: 'high' });
     expect(payload).not.toHaveProperty('reviewers');
     expect(payload).not.toHaveProperty('reviewerModels');
@@ -481,8 +488,8 @@ describe('IssuesTab', () => {
     expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent('Add an AI reviewer or a GitHub/GitLab user');
     fireEvent.click(screen.getByRole('button', { name: /Replan/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    expect(createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
     fireEvent.click(screen.getByRole('button', { name: 'Use configured reviewers' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remove Antigravity/i })).toBeInTheDocument();
@@ -498,8 +505,8 @@ describe('IssuesTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add reviewer username' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    expect(api.createSlashdoTask.mock.calls[0][2]).toMatchObject({ reviewers: [], usernames: ['reviewer-one'] });
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    expect(createSlashdoTask.mock.calls[0][2]).toMatchObject({ reviewers: [], usernames: ['reviewer-one'] });
   });
 
   it('collapses run settings into a truthful summary that Change expands', async () => {
@@ -537,7 +544,7 @@ describe('IssuesTab', () => {
   });
 
   it('shows a failed issues load above the run settings', async () => {
-    api.getAppIssues.mockRejectedValue(new Error('forge down'));
+    getAppIssues.mockRejectedValue(new Error('forge down'));
     await renderTab();
 
     const banner = await screen.findByText(/Couldn.t load issues — forge down/);
@@ -552,9 +559,9 @@ describe('IssuesTab', () => {
     view.rerender(<MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>);
     await screen.findByRole('button', { name: 'Edit reviewers' });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    expect(api.createSlashdoTask.mock.calls[0][1]).toBe('app-2');
-    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewerEfforts');
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    expect(createSlashdoTask.mock.calls[0][1]).toBe('app-2');
+    expect(createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewerEfforts');
   });
 
   it('sends optional override context with the selected claim', async () => {
@@ -566,7 +573,7 @@ describe('IssuesTab', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'next', 'app-1',
       expect.objectContaining({
         target: '42',
@@ -577,7 +584,7 @@ describe('IssuesTab', () => {
   });
 
   it('re-enables the Claim button when queuing fails, instead of stranding it', async () => {
-    api.createSlashdoTask.mockRejectedValue(new Error('CoS is not running'));
+    createSlashdoTask.mockRejectedValue(new Error('CoS is not running'));
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
@@ -587,7 +594,7 @@ describe('IssuesTab', () => {
   });
 
   it('filters the list by title, label, or assignee', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, title: 'Add CSV export', labels: [], assignees: [] },
     ]));
@@ -601,7 +608,7 @@ describe('IssuesTab', () => {
   });
 
   it('filters to unassigned issues when the toggle is enabled', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, title: 'Add CSV export', labels: [], assignees: [] },
     ]));
@@ -622,7 +629,7 @@ describe('IssuesTab', () => {
   });
 
   it('filters issues by the selected filed-by author and restores all when cleared', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       { ...ISSUE, number: 42, title: 'Crash on save', author: 'carol' },
       { ...ISSUE, number: 43, title: 'Add CSV export', author: 'alice' },
       { ...ISSUE, number: 44, title: 'Fix styling', author: 'bob' },
@@ -664,7 +671,7 @@ describe('IssuesTab', () => {
   });
 
   it('hides in-progress issues by default and lists them once the chip is toggled on', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       {
         ...ISSUE,
@@ -691,7 +698,7 @@ describe('IssuesTab', () => {
   });
 
   it('hides blocked issues by default and lists them once the chip is toggled on', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       {
         ...ISSUE,
@@ -715,7 +722,7 @@ describe('IssuesTab', () => {
   });
 
   it('hides needs-input issues by default and lists them once the chip is toggled on', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       {
         ...ISSUE,
@@ -739,7 +746,7 @@ describe('IssuesTab', () => {
   });
 
   it('hides needs-decision issues by default and lists them once the chip is toggled on', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       {
         ...ISSUE,
@@ -765,7 +772,7 @@ describe('IssuesTab', () => {
   it('tints the issue card background for in-progress and blocked labels, blocked winning when both are present', async () => {
     // The tint is theme-aware (port-warning / port-error tokens), so the row
     // stays readable in every theme instead of shipping a hardcoded color.
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, title: 'Being worked right now', labels: [{ name: 'in-progress', color: '#0e8a16', description: '' }] },
       { ...ISSUE, number: 44, title: 'Waiting on a dependency', labels: [{ name: 'blocked', color: '#b60205', description: '' }] },
@@ -792,7 +799,7 @@ describe('IssuesTab', () => {
   });
 
   it('toggles a label chip off to hide every issue carrying that label', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, title: 'Add CSV export', labels: [{ name: 'feature', color: null, description: '' }] },
     ]));
@@ -812,7 +819,7 @@ describe('IssuesTab', () => {
   });
 
   it('hides every issue from Hide all labels and restores them from Show all labels', async () => {
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, title: 'Add CSV export', labels: [{ name: 'feature', color: null, description: '' }] },
       { ...ISSUE, number: 44, title: 'Untagged cleanup', labels: [] },
@@ -844,7 +851,7 @@ describe('IssuesTab', () => {
     // Exclude-all (the naive Hide-all) would still drop a `critical`+`bug`
     // issue when `bug` stayed hidden. Include mode is what "show only critical"
     // has to mean.
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       {
         ...ISSUE,
         title: 'Crash on save',
@@ -877,7 +884,7 @@ describe('IssuesTab', () => {
     // `!important` in index.css, and author `!important` beats an inline style —
     // so a chip carrying both renders in theme neutrals with its label color
     // silently dead. Colored chips drop the utilities; colorless ones keep them.
-    api.getAppIssues.mockResolvedValue(okPayload([
+    getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
       { ...ISSUE, number: 43, labels: [{ name: 'feature', color: null, description: '' }] },
     ]));
@@ -906,7 +913,7 @@ describe('IssuesTab', () => {
       author: 'alice',
       labels: [{ name: 'in-progress', color: '#0e8a16', description: '' }],
     };
-    api.getAppIssues.mockResolvedValue(okPayload([ISSUE, inProgress]));
+    getAppIssues.mockResolvedValue(okPayload([ISSUE, inProgress]));
     const { rerender } = await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /in-progress/ }));
@@ -931,7 +938,7 @@ describe('IssuesTab', () => {
     // Switching apps updates this component in place, so a slow first response
     // must not land on top of the newer app's list.
     let resolveFirst;
-    api.getAppIssues
+    getAppIssues
       .mockImplementationOnce(() => new Promise(res => { resolveFirst = res; }))
       .mockResolvedValueOnce(okPayload([{ ...ISSUE, number: 99, title: 'Second app issue' }]));
 
@@ -951,7 +958,7 @@ describe('IssuesTab', () => {
   });
 
   it('says "couldn\'t reach" for a transient failure — never "no open issues"', async () => {
-    api.getAppIssues.mockResolvedValue({
+    getAppIssues.mockResolvedValue({
       forge: 'github', fullName: 'acme/widget', issues: [],
       reason: 'gh-unauthenticated', transient: true, headline: null, remedy: 'run gh auth login',
     });
@@ -968,7 +975,7 @@ describe('IssuesTab', () => {
     // those apart, so it ships the sentence; the client must not second-guess it
     // with a reason table, which is how an authenticated user got told to
     // authenticate.
-    api.getAppIssues.mockResolvedValue({
+    getAppIssues.mockResolvedValue({
       forge: 'gitlab', fullName: 'group/proj', issues: [],
       reason: 'glab-output-not-json', transient: true,
       headline: "Reached GitLab, but couldn't read its answer",
@@ -986,7 +993,7 @@ describe('IssuesTab', () => {
   it('falls back to the reachability framing when the server ships no headline', async () => {
     // Older reasons (and any the server adds without copy) still read sensibly
     // rather than rendering a blank banner.
-    api.getAppIssues.mockResolvedValue({
+    getAppIssues.mockResolvedValue({
       forge: 'gitlab', fullName: 'group/proj', issues: [],
       reason: 'some-new-reason', transient: true, headline: null, remedy: null,
     });
@@ -997,7 +1004,7 @@ describe('IssuesTab', () => {
   });
 
   it('explains a non-forge origin instead of showing an empty list', async () => {
-    api.getAppIssues.mockResolvedValue({
+    getAppIssues.mockResolvedValue({
       forge: null, fullName: null, issues: [], reason: 'unsupported-forge', transient: false, remedy: null,
     });
     await renderTab();
@@ -1007,7 +1014,7 @@ describe('IssuesTab', () => {
 
   it('points at the Work Tracker setting when the tracker owns no forge issues', async () => {
     // The server refuses to list issues a Claim here would not actually touch.
-    api.getAppIssues.mockResolvedValue({
+    getAppIssues.mockResolvedValue({
       forge: null, tracker: 'jira', fullName: null, issues: [],
       reason: 'tracker-not-a-forge', transient: false, remedy: null,
     });
@@ -1029,7 +1036,7 @@ describe('IssuesTab replan', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalledWith(
       'replan', 'app-1', {
         target: '42',
         issueContext: {
@@ -1056,7 +1063,7 @@ describe('IssuesTab replan', () => {
   // would light up the Claim row from a replan's events (and vice versa).
   it('matches a pre-response socket update on replanTarget, never on claimTarget', async () => {
     let resolveReplan;
-    api.createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveReplan = resolve; }));
+    createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveReplan = resolve; }));
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
@@ -1076,7 +1083,7 @@ describe('IssuesTab replan', () => {
   });
 
   it('re-enables the Replan button when queuing fails, instead of stranding it', async () => {
-    api.createSlashdoTask.mockRejectedValue(new Error('tracker is not a forge'));
+    createSlashdoTask.mockRejectedValue(new Error('tracker is not a forge'));
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
@@ -1096,8 +1103,8 @@ describe('IssuesTab replan', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
 
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    const [, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    const [, , payload] = createSlashdoTask.mock.calls.at(-1);
     expect(payload.prCompletion).toBe('merge-on-green');
     expect(payload.reviewers).toBeUndefined();
   });
@@ -1113,8 +1120,8 @@ describe('IssuesTab replan', () => {
     expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
-    const [, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    await waitFor(() => expect(createSlashdoTask).toHaveBeenCalled());
+    const [, , payload] = createSlashdoTask.mock.calls.at(-1);
     expect(payload.prCompletion).toBe('merge-on-green');
     expect(payload.reviewers).toBeUndefined();
   });
@@ -1123,13 +1130,13 @@ describe('IssuesTab replan', () => {
 // One click imports the server-selected account's assignments, independent of
 // the visible list filters, and blocks another click until the request settles.
 it('tracks assigned GitHub issues explicitly and links to the resulting Brain list', async () => {
-  api.getAppIssues.mockResolvedValue(okPayload([ISSUE]));
+  getAppIssues.mockResolvedValue(okPayload([ISSUE]));
   let finish;
-  api.syncGithubThreads.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  syncGithubThreads.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   await renderTab();
   const button = await findEnabledByRole('button', { name: 'Track my assigned issues in Brain' });
   fireEvent.click(button);
-  expect(api.syncGithubThreads).toHaveBeenCalledWith({ appId: 'app-1' }, { silent: true });
+  expect(syncGithubThreads).toHaveBeenCalledWith({ appId: 'app-1' }, { silent: true });
   expect(button.disabled).toBe(true);
   expect(screen.getByRole('link', { name: 'Open Threads' }).getAttribute('href')).toBe('/brain/threads');
   await act(async () => finish({ created: 1, updated: 0, possiblyTruncated: false }));

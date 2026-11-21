@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams, Link, useNavigate } from 'react-router';
-import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Images, Wand2, Loader2 } from 'lucide-react';
+import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Images, Wand2, Loader2, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { uuidv4 } from '../lib/uuid';
 import { undoStrokes, clampSize, DEFAULT_COLOR, DEFAULT_SIZE, MIN_SIZE, MAX_SIZE } from '../lib/sketchCanvas';
-import { getMediaSketch, saveMediaSketch, getRegenAvailability, rerenderWithAnnotations } from '../services/api';
+import {
+  getMediaSketch,
+  saveMediaSketch,
+  getRegenAvailability,
+  rerenderWithAnnotations,
+} from '../services/apiImageVideo.js';
 import { clamp } from '../utils/formatters.js';
 
 // Default denoise for an annotation re-render — high enough that the drawn marks
@@ -68,7 +73,21 @@ export default function MediaAnnotate() {
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [size, setSize] = useState(DEFAULT_SIZE);
   const [mode, setMode] = useState('draw'); // 'draw' | 'erase'
-  const [loading, setLoading] = useState(true);
+  // Saved-state read result, tagged with the key it belongs to. Deriving status
+  // from the tag makes a key change read as 'pending' in the same render, so no
+  // frame can offer Save against the previous key's (or an unknown) saved state.
+  const [loadResult, setLoadResult] = useState({ key: null, status: 'pending' });
+  const [loadNonce, setLoadNonce] = useState(0);
+  const resetKeyRef = useRef(null);
+  // A→B→A navigation must not resurrect A's earlier 'loaded' result while its new
+  // read is in flight, so a key change drops the stored result during render.
+  const [seenKey, setSeenKey] = useState(mediaKey);
+  if (seenKey !== mediaKey) {
+    setSeenKey(mediaKey);
+    setLoadResult({ key: null, status: 'pending' });
+  }
+  const loadStatus = loadResult.key === mediaKey ? loadResult.status : 'pending';
+  const loaded = loadStatus === 'loaded';
   const [imageError, setImageError] = useState(false);
 
   // Re-render (issue #2036 phase 2). `regenInfo` is the same local-FLUX
@@ -101,36 +120,48 @@ export default function MediaAnnotate() {
   // transient view state synchronously before fetching — otherwise the previous
   // key's strokes / imageError / dims leak onto the new image.
   useEffect(() => {
-    if (!isSupported) { setLoading(false); return; }
+    if (!isSupported) return;
     let active = true;
-    setStrokes([]);
-    // In image mode dims come from the <img> onLoad, which re-fires when the src
-    // changes — so reset to null and let it re-report. In blank mode dims derive
-    // from the (stable-per-key) URL size params; the child's dims effect won't
-    // re-fire when navigating sketch→sketch at the same w/h, so clearing here
-    // would strand Save disabled (`!dims`). Leave blank dims in place.
-    if (!isBlank) setDims(null);
-    setImageError(false);
-    setLoading(true);
+    // A Retry reruns this effect for the SAME key: resetting dims then would strand
+    // Save disabled, since the unchanged <img> never fires onLoad again.
+    if (resetKeyRef.current !== mediaKey) {
+      resetKeyRef.current = mediaKey;
+      setStrokes([]);
+      // In image mode dims come from the <img> onLoad, which re-fires when the src
+      // changes — so reset to null and let it re-report. In blank mode dims derive
+      // from the (stable-per-key) URL size params; the child's dims effect won't
+      // re-fire when navigating sketch→sketch at the same w/h, so clearing here
+      // would strand Save disabled (`!dims`). Leave blank dims in place.
+      if (!isBlank) setDims(null);
+      setImageError(false);
+    }
     getMediaSketch(mediaKey, { silent: true })
       .then((res) => {
         if (!active) return;
-        const loaded = Array.isArray(res?.sketch?.strokes) ? res.sketch.strokes : [];
-        setStrokes(loaded);
-        if (loaded.length > 0) toast.success(`Restored ${loaded.length} stroke${loaded.length === 1 ? '' : 's'}`);
+        const restored = Array.isArray(res?.sketch?.strokes) ? res.sketch.strokes : [];
+        setStrokes(restored);
+        setLoadResult({ key: mediaKey, status: 'loaded' });
+        if (restored.length > 0) toast.success(`Restored ${restored.length} stroke${restored.length === 1 ? '' : 's'}`);
       })
-      .catch(() => { if (active) toast.error('Failed to load saved annotation'); })
-      .finally(() => { if (active) setLoading(false); });
+      .catch(() => { if (active) setLoadResult({ key: mediaKey, status: 'failed' }); });
     return () => { active = false; };
-  }, [mediaKey, isSupported]);
+  }, [mediaKey, isSupported, loadNonce]);
 
   const tool = useMemo(() => ({ color, size, mode }), [color, size, mode]);
 
   const handleUndo = useCallback(() => setStrokes((prev) => undoStrokes(prev)), []);
   const handleClear = useCallback(() => setStrokes([]), []);
+  // The canvas stays mounted (it reports dims) but accepts no edits until the saved
+  // strokes are known; otherwise a save would replace them unseen.
+  const handleStrokesChange = useCallback((next) => { if (loaded) setStrokes(next); }, [loaded]);
+  const retryLoad = useCallback(() => {
+    setLoadResult({ key: mediaKey, status: 'pending' });
+    setLoadNonce((n) => n + 1);
+  }, [mediaKey]);
 
   const [save, saving] = useAsyncAction(async () => {
     if (!dims) throw new Error('Canvas not ready');
+    if (!loaded) throw new Error('Saved annotation has not loaded');
     const png = canvasApiRef.current?.exportPng?.() || undefined;
     const res = await saveMediaSketch(mediaKey, {
       width: dims.w,
@@ -177,6 +208,7 @@ export default function MediaAnnotate() {
   // silent so useAsyncAction owns the single error toast.
   const [rerender, rerendering] = useAsyncAction(async () => {
     if (!dims) throw new Error('Canvas not ready');
+    if (!loaded) throw new Error('Saved annotation has not loaded');
     if (strokes.length === 0) throw new Error('Draw over the image before re-rendering');
     const png = canvasApiRef.current?.exportPng?.() || undefined;
     await saveMediaSketch(mediaKey, { width: dims.w, height: dims.h, strokes, png }, { silent: true });
@@ -296,12 +328,12 @@ export default function MediaAnnotate() {
           <span className="text-xs text-gray-400 w-5 tabular-nums">{size}</span>
         </div>
 
-        <div className="flex items-center gap-1 ml-auto">
+        <div className="flex flex-wrap items-center gap-1 ml-auto">
           <button
             type="button"
             onClick={handleUndo}
-            disabled={strokes.length === 0}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            disabled={!loaded || strokes.length === 0}
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Undo last stroke"
           >
             <Undo2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Undo</span>
@@ -309,8 +341,8 @@ export default function MediaAnnotate() {
           <button
             type="button"
             onClick={handleClear}
-            disabled={strokes.length === 0}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            disabled={!loaded || strokes.length === 0}
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Clear all strokes"
           >
             <Trash2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Clear</span>
@@ -319,7 +351,7 @@ export default function MediaAnnotate() {
             type="button"
             onClick={handleExport}
             disabled={!dims}
-            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
+            className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
             title="Download flattened PNG"
           >
             <Download className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Export</span>
@@ -327,7 +359,7 @@ export default function MediaAnnotate() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !dims}
+            disabled={saving || !dims || !loaded}
             className="px-3 py-1.5 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title={`Save ${noun.toLowerCase()}`}
           >
@@ -339,8 +371,8 @@ export default function MediaAnnotate() {
             <button
               type="button"
               onClick={openRerender}
-              disabled={!dims || strokes.length === 0}
-              className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+              disabled={!dims || !loaded || strokes.length === 0}
+              className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center justify-center gap-1 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
               title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
             >
               <Wand2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Re-render</span>
@@ -360,7 +392,19 @@ export default function MediaAnnotate() {
           </div>
         ) : (
           <div className="w-full max-w-4xl">
-            {loading && <div className="text-gray-500 text-sm mb-2">Loading saved {noun.toLowerCase()}…</div>}
+            {loadStatus === 'pending' && <div className="text-gray-500 text-sm mb-2">Loading saved {noun.toLowerCase()}…</div>}
+            {loadStatus === 'failed' && (
+              <div role="alert" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-2 text-sm text-port-error">
+                <span>Couldn’t load the saved {noun.toLowerCase()}. Editing and saving are paused so it isn’t overwritten.</span>
+                <button
+                  type="button"
+                  onClick={retryLoad}
+                  className="px-2.5 py-1 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border inline-flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry
+                </button>
+              </div>
+            )}
             <AnnotationCanvas
               ref={canvasApiRef}
               imageSrc={imageSrc}
@@ -368,7 +412,7 @@ export default function MediaAnnotate() {
               blankHeight={blankHeight}
               strokes={strokes}
               tool={tool}
-              onStrokesChange={setStrokes}
+              onStrokesChange={handleStrokesChange}
               onImageLoad={setDims}
               onImageError={() => setImageError(true)}
             />

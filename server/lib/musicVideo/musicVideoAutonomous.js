@@ -153,10 +153,6 @@ export const ORCHESTRATOR_CHECKPOINTS = Object.freeze([
   Object.freeze({ id: 'text', label: 'Overlay text' }),
   Object.freeze({ id: 'final', label: 'Final video' }),
 ]);
-export const ORCHESTRATOR_CHECKPOINT_IDS = Object.freeze(ORCHESTRATOR_CHECKPOINTS.map((c) => c.id));
-// approve = accepted as is; revise = the orchestrator changed or sent it back;
-// retake = a new song; noted = recorded only (nothing left to change, e.g. the final video).
-export const ORCHESTRATOR_VERDICTS = Object.freeze(['approve', 'revise', 'retake', 'noted']);
 // How many review entries a run keeps (oldest dropped first).
 export const ORCHESTRATOR_REVIEW_LOG_MAX = 60;
 

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Rocket } from 'lucide-react';
 import toast from '../../../ui/Toast';
 import ConfirmModal from '../../../ui/ConfirmModal';
-import * as api from '../../../../services/api';
+import { addCosTask, forceCosEvaluate } from '../../../../services/apiAgents.js';
 import { buildReleasePrompt } from './releasePrompt';
 
 // Dev-branch commits not yet on the base branch, and the confirm that queues a
@@ -24,7 +24,7 @@ export default function ReleaseStatusPanel({ appName, repoPath, gitInfo, branchC
       devBranch: gitInfo?.devBranch || 'dev',
       hasChangelog: gitInfo?.hasChangelog || false
     });
-    const result = await api.addCosTask({
+    const result = await addCosTask({
       description: prompt,
       context: `Release PR for ${appName}`,
       priority: 'high',
@@ -33,7 +33,7 @@ export default function ReleaseStatusPanel({ appName, repoPath, gitInfo, branchC
     setReleasing(false);
     if (result) {
       toast.success(`Release task queued for ${appName} — check CoS Agents tab`);
-      await api.forceCosEvaluate().catch(() => null);
+      await forceCosEvaluate().catch(() => null);
     }
   };
 

@@ -48,13 +48,12 @@ describe('Dependabot maintainer release', () => {
     expect(ci.gate).toContain('if: always()');
     expect(ci.gate).toContain('CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}');
     expect(summarizeGateResults([{ job: 'impact', result: 'failure' }, { job: 'client', result: 'skipped' }]).verdict).toBe('failure');
-    const native = ci['supercollider-live'];
-    expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeGreaterThan(-1);
-    expect(native.indexOf('node scripts/ci-dependabot-admission.js')).toBeLessThan(native.indexOf('actions/setup-node@'));
-    // The Docker containment live suite installs from the public registry inside its container.
-    const contained = ci['docker-containment-live'];
-    expect(contained.indexOf('node scripts/ci-dependabot-admission.js')).toBeGreaterThan(-1);
-    expect(contained.indexOf('node scripts/ci-dependabot-admission.js')).toBeLessThan(contained.indexOf('actions/setup-node@'));
+    // The live jobs install and execute dependencies only after their
+    // admission-bearing prerequisite succeeds (the default Actions status check).
+    for (const job of ['supercollider-live', 'docker-containment-live']) {
+      expect(ci[job]).toMatch(new RegExp(`^    if: fromJSON\\(needs\\.impact\\.outputs\\.plan\\)\\.${job.replaceAll('-', '_')}$`, 'm'));
+      expect(ci[job]).not.toContain('node scripts/ci-dependabot-admission.js');
+    }
     expect(workflow('ci')).not.toContain('pull_request_target:');
     expect(workflow('ci')).not.toMatch(/(?:contents|actions): write/);
     expect(ci.gate).toContain('supercollider-live]');

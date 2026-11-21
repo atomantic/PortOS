@@ -12,7 +12,19 @@ import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
 import { useAppOperation } from '../../../hooks/useAppOperation';
-import * as api from '../../../services/api';
+import {
+  getAppSpriteBindings,
+  refreshAppConfig,
+  openAppInXcode,
+  detectAppIcon,
+  installXcodeScripts,
+  archiveApp,
+  unarchiveApp,
+  deleteApp,
+  openAppInEditor,
+  openAppFolder,
+} from '../../../services/apiApps.js';
+import { PORTOS_APP_ID as apiPORTOS_APP_ID } from '../../../services/apiCore.js';
 import { formatBytes } from '../../../utils/formatters';
 
 const SCRIPT_ICONS = {
@@ -40,7 +52,7 @@ export default function OverviewTab({ app, onRefresh }) {
   // Reverse lookup (#2991): sprite records that publish assets into this app.
   const appId = app?.id;
   const fetchSpriteBindings = useCallback(
-    () => api.getAppSpriteBindings(appId).then((res) => res?.bindings || []),
+    () => getAppSpriteBindings(appId).then((res) => res?.bindings || []),
     [appId],
   );
   const {
@@ -51,14 +63,14 @@ export default function OverviewTab({ app, onRefresh }) {
 
   const handleRefreshConfig = async () => {
     setRefreshingConfig(true);
-    await api.refreshAppConfig(app.id).catch(() => null);
+    await refreshAppConfig(app.id).catch(() => null);
     setRefreshingConfig(false);
     onRefresh();
   };
 
   const handleStandardize = () => startStandardize(app.id, app.name);
 
-  const handleOpenXcode = () => api.openAppInXcode(app.id)
+  const handleOpenXcode = () => openAppInXcode(app.id)
     .then(result => {
       if (result?.success) toast.success(`Opening ${app.name} in Xcode`);
     })
@@ -66,7 +78,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
   const handleDetectIcon = async () => {
     setDetectingIcon(true);
-    const result = await api.detectAppIcon(app.id).catch(() => null);
+    const result = await detectAppIcon(app.id).catch(() => null);
     setDetectingIcon(false);
     if (!result) return;
     if (result.detected) {
@@ -81,7 +93,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
   const handleInstallScripts = async (scriptNames) => {
     setInstallingScripts(true);
-    const result = await api.installXcodeScripts(app.id, scriptNames).catch(() => null);
+    const result = await installXcodeScripts(app.id, scriptNames).catch(() => null);
     setInstallingScripts(false);
     if (!result) return; // request() already showed error toast
 
@@ -100,7 +112,7 @@ export default function OverviewTab({ app, onRefresh }) {
   // excluded from CoS scheduling when nothing changed.
   const setArchived = async (archived) => {
     setArchiving(true);
-    const result = await (archived ? api.archiveApp(app.id) : api.unarchiveApp(app.id)).catch(() => null);
+    const result = await (archived ? archiveApp(app.id) : unarchiveApp(app.id)).catch(() => null);
     setArchiving(false);
     if (!result) return;
     toast.success(archived
@@ -119,7 +131,7 @@ export default function OverviewTab({ app, onRefresh }) {
     // DELETE returns 204, so success is represented by resolution rather than
     // a response body. request() owns the failure toast; this handler only
     // adds the success path and returns the user to the registry.
-    const removed = await api.deleteApp(app.id).then(() => true, () => false);
+    const removed = await deleteApp(app.id).then(() => true, () => false);
     setDeleting(false);
     if (!removed) return;
     toast.success(`${app.name} removed from PortOS — files kept on disk`);
@@ -347,13 +359,13 @@ export default function OverviewTab({ app, onRefresh }) {
       {/* Quick Actions */}
       <div className="flex flex-wrap gap-2 pt-2">
         <button
-          onClick={() => api.openAppInEditor(app.id).catch(() => null)}
+          onClick={() => openAppInEditor(app.id).catch(() => null)}
           className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
         >
           <Code size={14} /> Open in Editor
         </button>
         <button
-          onClick={() => api.openAppFolder(app.id).catch(() => null)}
+          onClick={() => openAppFolder(app.id).catch(() => null)}
           className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
         >
           <FolderOpen size={14} /> Open Folder
@@ -396,7 +408,7 @@ export default function OverviewTab({ app, onRefresh }) {
             it is never regenerated from an LLM analysis (the server refuses too).
             `isStandardizable` also keeps the button off non-Node repos, whose
             ecosystem config the Node-shaped prompt has no business writing. */}
-        {isStandardizable(app.type) && app.id !== api.PORTOS_APP_ID && (
+        {isStandardizable(app.type) && app.id !== apiPORTOS_APP_ID && (
           <button
             onClick={handleStandardize}
             disabled={isOperating}
@@ -406,7 +418,7 @@ export default function OverviewTab({ app, onRefresh }) {
             {standardizing ? 'Standardizing...' : 'Standardize PM2'}
           </button>
         )}
-        {app.id !== api.PORTOS_APP_ID && (
+        {app.id !== apiPORTOS_APP_ID && (
           <button
             onClick={app.archived ? handleUnarchive : handleArchive}
             disabled={archiving}
@@ -422,7 +434,7 @@ export default function OverviewTab({ app, onRefresh }) {
         )}
       </div>
 
-      {app.id !== api.PORTOS_APP_ID && (
+      {app.id !== apiPORTOS_APP_ID && (
         <div className="border-t border-port-border pt-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>

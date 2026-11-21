@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as api from '../../../services/api';
+import { getPlatformAccounts, getAgentPublished } from '../../../services/apiAccounts.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailedState from '../../ui/LoadFailedState';
 import ListLoadError from '../../ui/ListLoadError';
@@ -21,7 +21,7 @@ export default function PublishedTab({ agentId }) {
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
     setAccountsError(false);
-    await api.getPlatformAccounts(agentId, null, { silent: true })
+    await getPlatformAccounts(agentId, null, { silent: true })
       .then((data) => {
         const active = data.filter(a => a.status === 'active');
         setAccounts(active);
@@ -48,7 +48,7 @@ export default function PublishedTab({ agentId }) {
     setPublishedLoading(true);
     setPublishedError(false);
     try {
-      const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays }, { silent: true });
+      const data = await getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays }, { silent: true });
       if (!isCurrent()) return;
       setPublished(data);
     } catch {

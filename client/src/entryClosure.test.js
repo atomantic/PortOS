@@ -2,12 +2,8 @@
 // test-memo: never (tree-wide scanner)
 
 // Every module statically reachable from `main.jsx` ships in the cold-load
-// preload set. `services/api.js` re-exports every API wrapper (music video,
-// pipeline, the Runway catalog snapshot, ...), so one barrel import anywhere in
-// the app shell puts the whole API surface on every first paint (#16562).
-// Shell code imports the specific `apiX.js` module instead; pages are lazy and
-// may keep using the barrel. The large page modules are listed too: the sidebar
-// reads their name lists through `services/apiNavNames.js`.
+// preload set. Large page API modules stay out of this set (#16562). The
+// sidebar reads their name lists through `services/apiNavNames.js`.
 //
 // The voice stack is held out the same way (#16563): voice is off by default,
 // so `components/voice/VoiceWidgetGate.jsx` is the only voice code the shell
@@ -22,7 +18,7 @@ import { stripComments } from './test/stripComments.js';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 const ENTRY = resolve(SRC, 'main.jsx');
-const PAGE_ONLY_MODULES = ['services/api.js', 'services/apiMusicVideo.js', 'services/apiPipeline.js'];
+const PAGE_ONLY_MODULES = ['services/apiMusicVideo.js', 'services/apiPipeline.js'];
 const VOICE_STACK_MODULES = [
   'components/voice/VoiceWidget.jsx',
   'services/voiceClient.js',
@@ -31,9 +27,22 @@ const VOICE_STACK_MODULES = [
   'lib/audioRecorder.js',
   'lib/audioContext.js',
 ];
-// The landing Dashboard page and its widgets are in the same first-paint path as the
-// shell, so they follow the same barrel rule (#16813). Each is a separate root: the
-// walk from every one must stay clear of the api barrel.
+// Shell overlays and domain-specific helpers stay out of the cold-load bundle
+// until invoked (#17007): CmdKSearch and KeyboardHelp sit behind thin hotkey
+// gates, OutputBlocks/MarkdownOutput load when a toast expands, and
+// the Catalog type store populates lazily when a consumer mounts.
+const LAZY_SHELL_MODULES = [
+  'components/CmdKSearch.jsx',
+  'components/KeyboardHelp.jsx',
+  'components/cos/OutputBlocks.jsx',
+  'components/cos/MarkdownOutput.jsx',
+  'lib/creativeLibraries.js',
+  'lib/catalogTypes.js',
+  '../../server/lib/greyboxVocabulary.js',
+  '../../server/lib/bibleLimits.js',
+];
+// The landing Dashboard page and its widgets contribute to first paint too
+// (#16813), so each is a separate root for the page-only API checks.
 const DASHBOARD_ROOTS = [
   'pages/Dashboard.jsx',
   ...readdirSync(resolve(SRC, 'components/dashboard'), { recursive: true })
@@ -99,16 +108,28 @@ describe('cold-load entry closure (#16562)', () => {
     ).toBeNull();
   });
 
-  it.each(DASHBOARD_ROOTS)('%s never statically reaches the api barrel (#16813)', (root) => {
-    const chain = findStaticPath(resolve(SRC, root), resolve(SRC, 'services/api.js'));
-    expect(
-      chain && chain.map((file) => file.slice(SRC.length + 1)).join(' -> '),
-      'import the specific services/apiX.js module the component uses, not the barrel',
-    ).toBeFalsy();
+  it.each(DASHBOARD_ROOTS)('%s never statically reaches page-only api modules (#16813)', (root) => {
+    for (const mod of PAGE_ONLY_MODULES) {
+      const chain = findStaticPath(resolve(SRC, root), resolve(SRC, mod));
+      expect(
+        chain && chain.map((file) => file.slice(SRC.length + 1)).join(' -> '),
+        `import a narrower services/apiX.js module instead of ${mod}`,
+      ).toBeFalsy();
+    }
   });
 
-  it('still reaches the gate that loads the voice stack on demand', () => {
+  it.each(LAZY_SHELL_MODULES)('main.jsx never statically reaches lazy shell or domain module %s (#17007)', (module) => {
+    const chain = findStaticPath(ENTRY, resolve(SRC, module));
+    expect(
+      chain && chain.map((file) => (file.startsWith(SRC) ? file.slice(SRC.length + 1) : file)).join(' -> '),
+      'load this overlay or domain helper lazily instead of importing it into the cold-load shell',
+    ).toBeNull();
+  });
+
+  it('still reaches the gates that load the voice stack and shell overlays on demand', () => {
     expect(chainFromEntry('components/voice/VoiceWidgetGate.jsx')).not.toBeNull();
+    expect(chainFromEntry('components/CmdKSearchGate.jsx')).not.toBeNull();
+    expect(chainFromEntry('components/KeyboardHelpGate.jsx')).not.toBeNull();
   });
 
   it('follows static imports and re-exports, but not dynamic import()', () => {

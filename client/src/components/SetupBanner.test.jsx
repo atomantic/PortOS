@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('../services/apiSystem.js', () => ({
   getCapabilities: vi.fn(),
@@ -23,7 +23,8 @@ const renderBanner = () => render(
   <MemoryRouter initialEntries={['/']}>
     <SetupBanner />
     <Routes>
-      <Route path="/capabilities" element={<div>Setup destination</div>} />
+      <Route path="/" element={null} />
+      <Route path="/capabilities" element={<Link to="/">Leave setup</Link>} />
     </Routes>
   </MemoryRouter>,
 );
@@ -40,7 +41,9 @@ describe('SetupBanner', () => {
 
     expect(await screen.findByText('Finish setup: Enable MagicDNS and a ready AI provider.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Review setup' }));
-    expect(await screen.findByText('Setup destination')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Leave setup' })).toBeInTheDocument();
+    expect(api.getCapabilities).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('link', { name: 'Leave setup' }));
     await waitFor(() => expect(api.getCapabilities).toHaveBeenCalledTimes(2));
   });
 

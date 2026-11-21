@@ -2,9 +2,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import GraphTab from './GraphTab';
-import * as api from '../../../services/api';
+import { getNotesVaultGraph } from '../../../services/apiNotes.js';
 
-vi.mock('../../../services/api');
+vi.mock('../../../services/apiNotes.js');
 
 function LocationProbe() {
   const loc = useLocation();
@@ -15,7 +15,7 @@ function LocationProbe() {
 const NODE_POINT = { clientX: 615, clientY: 300 };
 
 async function renderCanvas() {
-  api.getNotesVaultGraph.mockResolvedValue({
+  getNotesVaultGraph.mockResolvedValue({
     nodes: [{ path: 'wiki/alpha.md', name: 'alpha', folder: 'wiki' }],
     edges: [],
     totalNodes: 1,

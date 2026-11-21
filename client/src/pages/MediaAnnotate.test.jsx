@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
@@ -11,7 +11,7 @@ import { awaitEnabled } from '../test/enabledBarrier.js';
 vi.mock('../components/media/AnnotationCanvas', async () => {
   const React = await import('react');
   return {
-    default: React.forwardRef(function StubCanvas({ onImageLoad, imageSrc, blankWidth, blankHeight }, ref) {
+    default: React.forwardRef(function StubCanvas({ onImageLoad, onStrokesChange, imageSrc, blankWidth, blankHeight }, ref) {
       React.useImperativeHandle(ref, () => ({ exportPng: () => 'data:image/png;base64,QQ==' }), []);
       // Defer to a macrotask: the real <img> onLoad fires asynchronously, AFTER
       // the page's own mount effect resets dims to null. Reporting synchronously
@@ -22,7 +22,11 @@ vi.mock('../components/media/AnnotationCanvas', async () => {
           : { w: blankWidth, h: blankHeight }), 0);
         return () => clearTimeout(t);
       }, [onImageLoad, imageSrc, blankWidth, blankHeight]);
-      return <div data-testid="stub-canvas" />;
+      return (
+        <div data-testid="stub-canvas">
+          <button type="button" onClick={() => onStrokesChange?.([{ mode: 'draw', color: '#000000', size: 2, points: [{ x: 0, y: 0 }] }])}>stub-draw</button>
+        </div>
+      );
     }),
   };
 });
@@ -32,7 +36,7 @@ const saveMediaSketch = vi.fn();
 const getRegenAvailability = vi.fn();
 const rerenderWithAnnotations = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   getMediaSketch: (...a) => getMediaSketch(...a),
   saveMediaSketch: (...a) => saveMediaSketch(...a),
   getRegenAvailability: (...a) => getRegenAvailability(...a),
@@ -166,5 +170,120 @@ describe('MediaAnnotate blank-canvas sketch (phase 3)', () => {
     renderBlank('?returnTo=%2Fpipeline%2Fissues%2Fabc%2Fstoryboards');
     const back = await screen.findByRole('link', { name: 'Back' });
     expect(back).toHaveAttribute('href', '/pipeline/issues/abc/storyboards');
+  });
+});
+
+describe('MediaAnnotate saved-state safety', () => {
+  const SAVED = [{ mode: 'draw', color: '#ef4444', size: 4, points: [{ x: 1, y: 2 }] }];
+  const renderSketch = () => render(
+    <MemoryRouter initialEntries={['/media/annotate/sketch:11111111-1111-1111-1111-111111111111']}>
+      <Routes>
+        <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    saveMediaSketch.mockResolvedValue({ sketch: {} });
+  });
+
+  it('blocks Save and edits while the saved read is pending, then enables on success', async () => {
+    let resolveRead;
+    getMediaSketch.mockReturnValue(new Promise((r) => { resolveRead = r; }));
+    renderSketch();
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+
+    expect(screen.getByTitle('Save sketch')).toBeDisabled();
+    fireEvent.click(screen.getByText('stub-draw'));
+    expect(screen.getByTitle('Undo last stroke')).toBeDisabled();
+
+    await act(async () => { resolveRead({ sketch: { strokes: SAVED } }); });
+    const save = await awaitEnabled(() => screen.getByTitle('Save sketch'));
+    fireEvent.click(save);
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
+      'sketch:11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({ strokes: SAVED }),
+      { silent: true },
+    ));
+  });
+
+  it('keeps Save blocked after a failed read and restores editing on a successful Retry', async () => {
+    getMediaSketch.mockRejectedValueOnce(new Error('503'));
+    renderSketch();
+    const retry = await screen.findByRole('button', { name: /Retry/ });
+    expect(screen.getByTitle('Save sketch')).toBeDisabled();
+    fireEvent.click(screen.getByText('stub-draw'));
+    expect(screen.getByTitle('Undo last stroke')).toBeDisabled();
+    expect(saveMediaSketch).not.toHaveBeenCalled();
+
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    fireEvent.click(retry);
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    expect(screen.getByTitle('Undo last stroke')).toBeEnabled();
+  });
+
+  it('allows a new sketch after an empty read and saves a deliberate clear of a loaded sketch', async () => {
+    getMediaSketch.mockResolvedValueOnce({ sketch: null });
+    const first = renderSketch();
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+    fireEvent.click(screen.getByText('stub-draw'));
+    await waitFor(() => expect(screen.getByTitle('Clear all strokes')).toBeEnabled());
+    first.unmount();
+
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    renderSketch();
+    const clear = await awaitEnabled(() => screen.getByTitle('Clear all strokes'));
+    fireEvent.click(clear);
+    fireEvent.click(screen.getByTitle('Save sketch'));
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
+      'sketch:11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({ strokes: [] }),
+      { silent: true },
+    ));
+  });
+
+  it('does not reuse an earlier loaded result when navigating A to B and back to A mid-read', async () => {
+    const A = 'sketch:11111111-1111-1111-1111-111111111111';
+    const B = 'sketch:22222222-2222-2222-2222-222222222222';
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/' + A]}>
+        <Link to={'/media/annotate/' + B}>go-b</Link>
+        <Link to={'/media/annotate/' + A}>go-a</Link>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+
+    getMediaSketch.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByText('go-b'));
+    fireEvent.click(screen.getByText('go-a'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+    expect(screen.getByTitle('Save sketch')).toBeDisabled();
+  });
+
+  it('keeps an annotated image saveable after Retry (the image does not re-report its size)', async () => {
+    getMediaSketch.mockRejectedValueOnce(new Error('503'));
+    getRegenAvailability.mockResolvedValue({ available: false });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/image:foo.png']}>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const retry = await screen.findByRole('button', { name: /Retry/ });
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    fireEvent.click(retry);
+    fireEvent.click(await awaitEnabled(() => screen.getByTitle('Save annotation')));
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
+      'image:foo.png',
+      expect.objectContaining({ width: 100, height: 80, strokes: SAVED }),
+      { silent: true },
+    ));
   });
 });

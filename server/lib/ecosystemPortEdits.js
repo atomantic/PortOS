@@ -6,7 +6,9 @@
  * identities and runtime port source spans; rejects ambiguous mutations, opaque spreads and partial
  * batches before file or registry writes.
  */
-import { parse } from '@babel/parser';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 function walk(node, visit, parent = null, parentKey = null) {
   if (!node || typeof node !== 'object') return;
@@ -36,6 +38,7 @@ function bindingNames(pattern) {
 }
 
 function contextFor(content) {
+  const { parse } = require('@babel/parser');
   const ast = parse(content, { sourceType: 'unambiguous' }).program;
   const bindings = new Map();
   let exported;

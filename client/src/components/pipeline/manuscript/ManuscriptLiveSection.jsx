@@ -9,13 +9,14 @@
  * round-trips plain strings, and anchors are verbatim substrings — a transparent
  * mirror div with identical monospace metrics paints underlines exactly under
  * the words with zero changes to the editing/persistence path. See the plan at
- * docs/plans/2026-06-06-manuscript-editor-inline-feedback.md.
+ * docs/plans/archive/2026-06-06-manuscript-editor-inline-feedback.md.
  */
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import useEscapeKey from '../../../hooks/useEscapeKey';
 import useAnchorReveal from '../../../hooks/useAnchorReveal';
+import './manuscriptAnchorFlash.css';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
 import { CommentCardFromProps } from './ManuscriptCommentCard';
 import ManuscriptSectionFrame from './ManuscriptSectionFrame';

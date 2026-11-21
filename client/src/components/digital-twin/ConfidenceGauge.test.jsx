@@ -3,7 +3,9 @@ import { render, screen } from '@testing-library/react';
 
 import ConfidenceGauge from './ConfidenceGauge';
 
-vi.mock('../../services/api', () => ({ calculateDigitalTwinConfidence: vi.fn() }));
+vi.mock('../../services/apiDigitalTwin.js', () => ({
+  calculateDigitalTwinConfidence: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 const confidence = {

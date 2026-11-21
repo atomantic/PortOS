@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from '../ui/Toast';
-import { getTailcatForwards, retryTailcatForward, forgetTailcatForward } from '../../services/api';
+import { getTailcatForwards, retryTailcatForward, forgetTailcatForward } from '../../services/apiSystem.js';
 import TailcatForwardStatus from './TailcatForwardStatus';
 
 export default function TailcatForwardsPanel({ onChange, peerIds, renderPanel = (panel) => panel }) {

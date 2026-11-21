@@ -12,10 +12,11 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { createHash, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-owned-primitive-' });
-const refFault = vi.hoisted(() => ({ failCanonLink: false, failReferenceLink: false }));
+const refFault = vi.hoisted(() => ({ failCanonLink: false, failReferenceLink: false, failAfterWrite: null }));
 const dbFault = vi.hoisted(() => ({ forbidUniversePoolRead: false }));
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('../lib/db.js', async (importOriginal) => {
@@ -36,12 +37,19 @@ vi.mock('../services/instances.js', () => mockNoPeers());
 vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../services/catalogDB/refs.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, linkIngredientToRef: async (...args) => {
-    if ((refFault.failCanonLink && args[3] === 'canon-character') || (refFault.failReferenceLink && args[3] === 'reference')) {
-      throw new Error('Injected membership link failure');
-    }
-    return actual.linkIngredientToRef(...args);
-  } };
+  return { ...actual,
+    linkIngredientToRef: async (...args) => {
+      if ((refFault.failCanonLink && args[3] === 'canon-character') || (refFault.failReferenceLink && args[3] === 'reference')) {
+        throw new Error('Injected membership link failure');
+      }
+      await actual.linkIngredientToRef(...args);
+      if (refFault.failAfterWrite === 'post') throw new Error('Injected failure after link SQL');
+    },
+    unlinkIngredientFromRef: async (...args) => {
+      await actual.unlinkIngredientFromRef(...args);
+      if (refFault.failAfterWrite === 'delete') throw new Error('Injected failure after unlink SQL');
+    },
+  };
 });
 vi.mock('../services/embeddings.js', () => ({
   embedBatch: vi.fn(async (seeds) => (seeds || []).map(() => ({ embedding: null, model: null }))),
@@ -114,6 +122,69 @@ const liveUniverseRefs = async (id) => (await catalogDB.listRefsForIngredient(id
   .filter((ref) => ref.refKind === 'universe' && !ref.deleted)
   .map((ref) => ref.role)
   .sort();
+
+describe.skipIf(!runDb)('POST /api/catalog/ingredients with initial relations', () => {
+  it.each([
+    { scope: 'standalone', type: 'character' },
+    { scope: 'universe canon', type: 'character' },
+    { scope: 'universe reference', type: 'idea' },
+  ])('rolls back a $scope create when the second relation insert fails', async ({ scope, type }) => {
+    const universe = scope === 'standalone' ? null : await makeUniverse();
+    const operationKey = universe ? randomUUID() : undefined;
+    if (operationKey) receiptKeys.add(operationKey);
+    const targets = await Promise.all(['First', 'Second'].map(name =>
+      catalogDB.createIngredient({ type, name: `${name} relation target` })));
+    for (const target of targets) ingredientIds.add(target.id);
+    const relations = targets.map(({ id }) => ({ toId: id, kind: 'references' }));
+    const body = { type, name: `Relation rollback ${randomUUID()}`, universeId: universe?.id, operationKey, relations };
+    const send = (input) => request(app).post('/api/catalog/ingredients').send(input);
+
+    const original = pg.Client.prototype.query;
+    const attemptedTargets = [];
+    let createdId;
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (sql, ...args) {
+      if (typeof sql === 'string' && /^INSERT INTO catalog_ingredient_relations/i.test(sql.trim())) {
+        const [fromId, toId] = args[0];
+        if (targets.some(target => target.id === toId)) {
+          createdId = fromId;
+          ingredientIds.add(fromId);
+          attemptedTargets.push(toId);
+          if (toId === targets[1].id) return original.call(this, 'SELECT 1 / 0', ...args.slice(1));
+        }
+      }
+      return original.call(this, sql, ...args);
+    });
+    const failed = await Promise.resolve(send(body)).finally(() => spy.mockRestore());
+
+    expect(failed.status).toBe(500);
+    expect(attemptedTargets).toEqual(targets.map(({ id }) => id));
+    expect((await query(`SELECT
+      EXISTS (SELECT 1 FROM catalog_ingredients WHERE id = $1) AS ingredient,
+      EXISTS (SELECT 1 FROM catalog_ingredient_refs WHERE ingredient_id = $1) AS ref,
+      EXISTS (SELECT 1 FROM catalog_ingredient_relations WHERE from_id = $1) AS relation,
+      EXISTS (SELECT 1 FROM catalog_commit_receipts WHERE operation_key = $2) AS receipt`,
+    [createdId, operationKey ?? null])).rows).toEqual([{ ingredient: false, ref: false, relation: false, receipt: false }]);
+    if (universe && type === 'character') expect((await getUniverse(universe.id)).characters).toEqual([]);
+
+    const corrected = { ...body, relations: relations.slice(0, 1) };
+    const retry = await send(corrected);
+    expect(retry.status).toBe(201);
+    ingredientIds.add(retry.body.id);
+    expect((await catalogDB.listRelationsForIngredient(retry.body.id)).outbound)
+      .toEqual([expect.objectContaining(relations[0])]);
+
+    if (operationKey) {
+      const conflict = await send(body);
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.code).toBe('CATALOG_CREATE_REPLAY_CONFLICT');
+      await catalogDB.unlinkIngredientRelation(retry.body.id, relations[0].toId, relations[0].kind);
+      const replay = await send(corrected);
+      expect(replay.status).toBe(201);
+      expect(replay.body.id).toBe(retry.body.id);
+      expect((await catalogDB.listRelationsForIngredient(retry.body.id)).outbound).toEqual([]);
+    }
+  });
+});
 
 describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () => {
   it('creates an unlocked character that joins the universe cast and previews its sheet', async () => {
@@ -283,6 +354,27 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     expect(res.status).toBe(201);
     ingredientIds.add(res.body.id);
     expect(res.body.payload.locked).toBe(false);
+  });
+});
+
+describe.skipIf(!runDb)('catalog canon membership link and unlink', () => {
+  it.each(['post', 'delete'])('rolls back both writes if %s fails after writing the reference', async (method) => {
+    const universe = await makeUniverse();
+    const ingredient = await createInUniverse(universe.id, { type: 'character', name: 'Example character', payload: {} });
+    const body = { refKind: 'universe', refId: universe.id, role: 'canon-character' };
+    const path = `/api/catalog/ingredients/${ingredient.id}/link`;
+    if (method === 'post') expect((await request(app).delete(path).send(body)).status).toBe(204);
+    const before = (await getUniverse(universe.id)).characters;
+    const beforeRefs = await liveUniverseRefs(ingredient.id);
+    const beforeEpoch = getUniverseMutationEpoch();
+
+    refFault.failAfterWrite = method;
+    const response = await Promise.resolve(request(app)[method](path).send(body))
+      .finally(() => { refFault.failAfterWrite = null; });
+    expect(response.status).toBe(500);
+    expect((await getUniverse(universe.id)).characters).toEqual(before);
+    expect(await liveUniverseRefs(ingredient.id)).toEqual(beforeRefs);
+    expect(getUniverseMutationEpoch()).toBe(beforeEpoch);
   });
 });
 

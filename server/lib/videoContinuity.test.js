@@ -195,9 +195,9 @@ describe('runtime continuation timing boundary', () => {
 
 describe('history adapter pin parity', () => {
   it('reports the pins and output layout the merged adapters enforce without claiming fidelity', () => {
-    const mlx = readFileSync(new URL('../../scripts/_minimax_h3_mlx_history.py', import.meta.url), 'utf8');
+    const mlx = readFileSync(new URL('../../scripts/ml/_minimax_h3_mlx_history.py', import.meta.url), 'utf8');
     const runtimes = readFileSync(new URL('../services/videoGen/runtimes.js', import.meta.url), 'utf8');
-    const cuda = JSON.parse(readFileSync(new URL('../../scripts/minimax_h3_cuda_history.json', import.meta.url), 'utf8'));
+    const cuda = JSON.parse(readFileSync(new URL('../../scripts/ml/minimax_h3_cuda_history.json', import.meta.url), 'utf8'));
     const contract = continuationContract('minimax_h3');
     expect(mlx).toContain(`PIN = "${contract.backendPin}"`);
     expect(runtimes).toContain(`MINIMAX_H3_EXPECTED_REVISION = '${contract.backendPin}'`);

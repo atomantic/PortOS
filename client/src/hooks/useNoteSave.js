@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as api from '../services/api';
+import { updateNote } from '../services/apiNotes.js';
 
 // Consecutive non-transient refusals of the SAME note before the force-save
 // override is offered. One is a bad-luck threshold: it would put a "write
@@ -61,7 +61,7 @@ export function useNoteSave({ vaultId, notePath, content }) {
     if (!notePath || inFlight.current) return null;
     inFlight.current = true;
     setSaving(true);
-    const data = await api.updateNote(vaultId, notePath, content, { force }).catch((err) => {
+    const data = await updateNote(vaultId, notePath, content, { force }).catch((err) => {
       if (err?.code === 'NOTE_EVICTED' && err.context?.stalled) {
         setRefusal(prev => (
           prev.target === target ? { target, count: prev.count + 1 } : { target, count: 1 }

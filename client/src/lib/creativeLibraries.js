@@ -13,9 +13,9 @@ import { isDesignRole } from '../../../server/lib/catalog/catalogDesign.js';
 
 export const CATALOG_NAV_TABS = Object.freeze([
   Object.freeze({ id: 'catalog', label: 'Catalog', to: '/catalog', icon: Sparkles }),
-  Object.freeze({ id: 'casting', label: 'Casting', to: '/casting', icon: Drama }),
-  Object.freeze({ id: 'environments', label: 'Environments', to: '/environments', icon: Mountain }),
-  Object.freeze({ id: 'objects', label: 'Objects', to: '/objects', icon: Package }),
+  Object.freeze({ id: 'casting', label: 'Casting', to: '/catalog/casting', icon: Drama }),
+  Object.freeze({ id: 'environments', label: 'Environments', to: '/catalog/environments', icon: Mountain }),
+  Object.freeze({ id: 'objects', label: 'Objects', to: '/catalog/objects', icon: Package }),
 ]);
 
 // `detailTabs` are the record page's sections (`/casting/:id/:tab`); the
@@ -46,13 +46,9 @@ export const libraryForType = (type) => CREATIVE_LIBRARIES.find((lib) => lib.typ
 export const libraryForPathname = (pathname = '') =>
   CREATIVE_LIBRARIES.find((lib) => pathname === lib.path || pathname.startsWith(`${lib.path}/`)) || null;
 
-// Detail route for an ingredient: its library page when it has one, otherwise
-// the generic catalog editor.
-export function ingredientPath(ingredient) {
-  const id = encodeURIComponent(ingredient?.id || '');
-  const lib = libraryForType(ingredient?.type);
-  return lib ? `${lib.path}/${id}` : `/catalog/${encodeURIComponent(ingredient?.type || 'idea')}/${id}`;
-}
+// Detail route for an ingredient: re-exported from the pure leaf helper so
+// shell/palette callers don't pull in `greyboxVocabulary.js`.
+export { ingredientPath } from './ingredientPath.js';
 
 // The detail tab a `:tab` route param names, falling back to the first
 // (Profile) for an absent or unknown one.

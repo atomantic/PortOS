@@ -63,6 +63,7 @@ import {
   rerunCatalogMigration,
 } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
+import { __resetCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { listPipelineSeriesNames } from '../services/apiPipeline';
 import toast from '../components/ui/Toast';
@@ -95,6 +96,7 @@ const sampleFacets = {
 };
 
 beforeEach(() => {
+  __resetCatalogTypes();
   vi.clearAllMocks();
   listCatalogIngredients.mockResolvedValue({ items: sample, nextOffset: sample.length });
   linkCatalogIngredient.mockResolvedValue({ success: true });

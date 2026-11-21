@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
@@ -11,7 +11,7 @@ vi.mock('../ui/Toast', () => ({
   }),
 }));
 
-import { getSettings, updateSettings } from '../../services/api';
+import { getSettings, updateSettings } from '../../services/apiSystem.js';
 import toast from '../ui/Toast';
 import UnattendedRenderRouting from './UnattendedRenderRouting';
 

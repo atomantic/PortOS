@@ -1,16 +1,18 @@
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn, spawnSync, execFileSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { join, dirname, delimiter } from 'path';
 import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../server/lib/gitTestRepo.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const UPDATE_SH = join(REPO_ROOT, 'update.sh');
+const WINDOWS = process.platform === 'win32';
+const SHIM = WINDOWS ? 'update.ps1' : 'update.sh';
+const windowsSpawnHelpers = 'server/lib/aiToolkit/internal/windowsSafeSpawn.js';
+const ecosystem = JSON.parse(execFileSync(process.execPath, ['-p', "JSON.stringify(require('./ecosystem.config.cjs').apps.map(x => x.name))"], { cwd: REPO_ROOT, encoding: 'utf8' }));
+const productionApps = ecosystem.filter(name => name !== 'portos-ui').join(',');
 
 // Everything update.sh shells out to between the pm2 delete and the pm2 start.
 // Stubbing them lets the success path run end to end offline, which is the only
@@ -18,7 +20,8 @@ const UPDATE_SH = join(REPO_ROOT, 'update.sh');
 const STUB_SCRIPTS = [
   'setup-data.js', 'setup-db.js', 'setup-browser.js', 'setup-ghostty.js',
   'setup-cert.js', 'setup-guide.js', 'run-migrations.js',
-  'verify-server-health.js', 'print-access-url.js', 'open-ui-in-browser.js'
+  'verify-server-health.js', 'print-access-url.js', 'open-ui-in-browser.js',
+  'ensure-ffmpeg.js', 'install-slashdo.js'
 ];
 
 /**
@@ -40,43 +43,54 @@ const STUB_SCRIPTS = [
  */
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
-  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false
+  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false, unknownPrevious = false, withoutDeps = false, pm2StartFailure = false
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
   const calls = join(scratch, 'pm2-calls.log');
   const releaseFile = join(scratch, 'pm2-delete-stalled');
+  const optionalCalls = join(scratch, 'optional-calls.log');
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(join(repo, 'scripts'), { recursive: true });
-  mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
+  if (!withoutDeps) mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
 
   installUpdateTestSupervisor(repo);
-  copyFileSync(UPDATE_SH, join(repo, 'update.sh'));
-  chmodSync(join(repo, 'update.sh'), 0o755);
-  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'sandbox', version: '0.0.0' }));
+  for (const file of [SHIM, 'scripts/update.mjs', windowsSpawnHelpers]) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true });
+    copyFileSync(join(REPO_ROOT, file), join(repo, file));
+  }
+  if (!WINDOWS) chmodSync(join(repo, SHIM), 0o755);
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'sandbox', version: '0.0.0', type: 'module' }));
   writeFileSync(join(repo, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n');
   // Mirror the production ignore rule so update.sh's own runtime log does not
   // turn an otherwise clean synthetic checkout into a dirty one.
-  writeFileSync(join(repo, '.gitignore'), 'data/*\n');
+  writeFileSync(join(repo, '.gitignore'), 'data/*\nnode_modules/\n');
 
   // Records every pm2 invocation the script makes, in order. When stallDelete is
   // set the `delete` call logs and then BLOCKS until the test deletes the release
   // file, so a signal can be delivered while the delete is still running — the
   // window a latch armed after the delete would miss.
-  writeFileSync(join(repo, 'node_modules', 'pm2', 'package.json'), JSON.stringify({ name: 'pm2', version: '0.0.0' }));
-  writeFileSync(
-    join(repo, 'node_modules', 'pm2', 'bin', 'pm2'),
-    `const fs = require('fs');
+  if (!withoutDeps) {
+    writeFileSync(join(repo, 'node_modules', 'pm2', 'package.json'), JSON.stringify({ name: 'pm2', version: '0.0.0' }));
+    writeFileSync(
+      join(repo, 'node_modules', 'pm2', 'bin', 'pm2'),
+      `const fs = require('fs');
 const args = process.argv.slice(2).join(' ');
 fs.appendFileSync(${JSON.stringify(calls)}, args + '\\n');
 if (${stallDelete} && args.startsWith('delete')) {
   const release = ${JSON.stringify(releaseFile)};
   fs.writeFileSync(release, 'stalled');
-  while (fs.existsSync(release)) { try { require('child_process').execFileSync('sleep', ['0.05']); } catch { break; } }
+  const sleep = new Int32Array(new SharedArrayBuffer(4));
+  while (fs.existsSync(release)) Atomics.wait(sleep, 0, 0, 30);
+}
+if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stringify(join(scratch, 'pm2-start-once'))})) {
+  fs.writeFileSync(${JSON.stringify(join(scratch, 'pm2-start-once'))}, '');
+  process.exitCode = 1;
 }
 `
-  );
+    );
+  }
 
   // The REAL runtime gate (the pulled target's own copy), so the preflight
   // exercises the shared requirement rather than a stub with a copied floor.
@@ -88,13 +102,17 @@ if (${stallDelete} && args.startsWith('delete')) {
   if (nodeVersion) {
     const preload = join(scratch, 'fake-node-version.mjs');
     writeFileSync(preload, `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(nodeVersion)} });\n`);
-    nodeOptions = `--import=${preload}`;
+    nodeOptions = `--import=${pathToFileURL(preload).href}`;
   }
 
   writeFileSync(join(repo, 'scripts', 'SLASHDO_VERSION'), '0.0.0\n');
   writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), `process.exit(${failAfterDelete ? 1 : 0});\n`);
   for (const stub of STUB_SCRIPTS) {
-    writeFileSync(join(repo, 'scripts', stub), 'process.exit(0);\n');
+    const optional = ['ensure-ffmpeg.js', 'install-slashdo.js'].includes(stub);
+    // Executed by the real Node process, not a simulated updater step.
+    writeFileSync(join(repo, 'scripts', stub), optional ?
+      `import { appendFileSync } from 'node:fs'; appendFileSync(${JSON.stringify(optionalCalls)}, ${JSON.stringify(stub + '\n')}); process.exit(1);\n`
+      : 'process.exit(0);\n');
   }
   writeFileSync(join(repo, 'scripts', 'verify-server-health.js'), `process.exit(${healthy ? 0 : 1});\n`);
   // Non-zero means "the daemon is already ours", which skips the co-located
@@ -102,30 +120,31 @@ if (${stallDelete} && args.startsWith('delete')) {
   writeFileSync(join(repo, 'scripts', 'pm2-daemon-refresh.js'), 'process.exit(1);\n');
 
   // The workspaces safe_install cd's into, and the dependency it sanity-checks.
-  for (const ws of ['client', 'server', 'autofixer']) {
+  for (const ws of ['client', 'server']) {
     mkdirSync(join(repo, ws), { recursive: true });
-    writeFileSync(join(repo, ws, 'package.json'), JSON.stringify({ name: ws, version: '0.0.0' }));
+    writeFileSync(join(repo, ws, 'package.json'), JSON.stringify({ name: ws, version: '0.0.0', type: 'module' }));
   }
   mkdirSync(join(repo, 'client', 'node_modules', 'vite', 'bin'), { recursive: true });
   writeFileSync(join(repo, 'client', 'node_modules', 'vite', 'bin', 'vite.js'), '');
 
   // update.sh only ever calls these as bare commands, so a PATH shim covers
   // every install and the slash-do refresh without touching the network.
-  const npmBody = { ok: 'exit 0', fail: 'exit 1', slow: 'sleep 2\nexit 0' }[npmShim];
-  for (const shim of ['npm', 'npx']) {
-    writeFileSync(join(bin, shim), `#!/bin/sh\n${npmBody}\n`);
-    chmodSync(join(bin, shim), 0o755);
-  }
+  const npmCode = npmShim === 'fail' ? 1 : 0;
+  const shim = (name, posixBody, windowsBody) => {
+    const path = join(bin, WINDOWS ? `${name}.cmd` : name);
+    writeFileSync(path, WINDOWS ? `@echo off\r\n${windowsBody}\r\n` : `#!/bin/sh\n${posixBody}\n`);
+    if (!WINDOWS) chmodSync(path, 0o755);
+  };
+  for (const name of ['npm', 'npx']) shim(name, `exit ${npmCode}`, `exit /b ${npmCode}`);
   // The success case is the only one that runs past trusted-rebuilds, so it
   // reaches update.sh's ffmpeg step — which on a machine without ffmpeg would
   // run a real `brew install`, or on Linux CI a passwordless `sudo apt-get
   // install` that mutates the runner. update.sh only probes `command -v`.
-  writeFileSync(join(bin, 'ffmpeg'), '#!/bin/sh\nexit 0\n');
-  chmodSync(join(bin, 'ffmpeg'), 0o755);
+  shim('ffmpeg', 'exit 0', 'exit /b 0');
   // A pm2 the recovery can still reach after safe_install wipes the local one.
   if (pm2OnPath) {
-    writeFileSync(join(bin, 'pm2'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\n`);
-    chmodSync(join(bin, 'pm2'), 0o755);
+    shim('pm2', `printf '%s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      `echo %*>>"${calls}"\r\nexit /b 0`);
   }
 
   // The updater now refuses dirty checkouts instead of stashing them. Commit
@@ -153,22 +172,63 @@ if (${stallDelete} && args.startsWith('delete')) {
     execFileSync('git', ['reset', '--hard', 'HEAD~1'], { cwd: repo, stdio: 'ignore' });
   }
   const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  const flags = [];
+  if (!WINDOWS) {
+    // A host may have ffmpeg under /usr/bin: avoid invoking the system
+    // installer while still exercising the optional helper's real dispatch.
+    const preload = join(scratch, 'ffmpeg-fixture.mjs');
+    writeFileSync(preload, `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      if (process.argv[1]?.endsWith('update.mjs')) {
+        const access = fs.accessSync;
+        fs.accessSync = (path, ...args) => {
+          if (String(path).endsWith('/ffmpeg')) throw Error('ffmpeg is absent in this fixture');
+          return access(path, ...args);
+        };
+        syncBuiltinESMExports();
+      }
+    `);
+    flags.push(`--import=${pathToFileURL(preload).href}`);
+  }
+  if (nodeOptions) flags.push(nodeOptions);
+  if (unknownPrevious) {
+    const preload = join(scratch, 'unknown-previous.mjs');
+    writeFileSync(preload, `
+      import imports from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { basename } from 'node:path';
+      const spawn = imports.spawn;
+      imports.spawn = (cmd, args, options) => /^git(?:[.]exe)?$/i.test(basename(cmd)) && args.join(' ') === 'rev-parse HEAD'
+        ? spawn(process.execPath, ['-e', 'process.exitCode = 1'], options) : spawn(cmd, args, options);
+      syncBuiltinESMExports();
+    `);
+    flags.push(`--import=${pathToFileURL(preload).href}`);
+  }
+  if (withoutDeps) rmSync(join(repo, 'client', 'node_modules'), { recursive: true, force: true });
 
-  return { scratch, repo, bin, calls, forceClean, releaseFile, nodeOptions, headSha, aheadSha, peerTarget };
+
+  return { scratch, repo, bin, calls, optionalCalls, forceClean, releaseFile, nodeOptions: flags.join(' '), headSha, aheadSha, peerTarget };
 }
 
 // The three runs share no state, so they go out concurrently rather than
 // serializing three full update scripts.
-function runUpdate(sandbox, { onStart, automatic = false } = {}) {
-  return new Promise((resolve) => {
-    const env = { ...process.env, PORTOS_DATA_ROOT: sandbox.repo, PATH: `${sandbox.bin}:${process.env.PATH}` };
+function runUpdate(sandbox, { onStart, automatic = false, operationId } = {}) {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env, PORTOS_DATA_ROOT: sandbox.repo, HOME: sandbox.scratch,
+      PATH: [sandbox.bin, process.env.PATH || process.env.Path].join(delimiter) };
+    if (WINDOWS) delete env.Path;
+    if (operationId) env.PORTOS_DEFERRED_UPDATE_ID = operationId;
     if (sandbox.forceClean) env.PORTOS_FORCE_CLEAN_WORKSPACES = '.';
     if (sandbox.nodeOptions) env.NODE_OPTIONS = sandbox.nodeOptions;
     if (sandbox.peerTarget) {
       env.PORTOS_PEER_UPDATE_TARGET_SHA = sandbox.aheadSha;
       env.PORTOS_PEER_UPDATE_EXPECTED_SHA = sandbox.headSha;
     }
-    const child = spawn('bash', [join(sandbox.repo, 'update.sh'), ...(automatic ? ['--automatic'] : [])], { cwd: sandbox.repo, env });
+    const prefix = WINDOWS ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'] : [];
+    const child = spawn(WINDOWS ? 'powershell' : 'bash', [...prefix, join(sandbox.repo, SHIM), ...(automatic ? ['--automatic'] : [])],
+      { cwd: sandbox.repo, env });
+    child.on('error', reject);
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stdout += d; });
@@ -192,9 +252,9 @@ function waitForFile(path, timeoutMs = 30000) {
 }
 
 const pm2Calls = (sandbox) =>
-  (existsSync(sandbox.calls) ? readFileSync(sandbox.calls, 'utf8') : '').split('\n').filter(Boolean);
+  (existsSync(sandbox.calls) ? readFileSync(sandbox.calls, 'utf8') : '').split(/\r?\n/).filter(Boolean);
 
-describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.sh headless-install guard', () => {
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard', () => {
   const sandboxes = {};
   const results = {};
 
@@ -214,6 +274,8 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       // The pre-pull archive gate passes, the pull lands, and only the post-pull
       // gate refuses: the checkout must be rolled back with apps untouched.
       postPullRefusal: { origin: true, originAhead: true, aheadRefusesInCheckout: true },
+      unknownPrevious: { originAhead: true, aheadRefusesInCheckout: true, unknownPrevious: true },
+      startFails: { failAfterDelete: false, pm2StartFailure: true },
       cleanAhead: { nodeVersion: null, failAfterDelete: false, origin: true, originAhead: true },
       // The failure the guard's own comment names: both npm installs fail, and
       // safe_install wiped root node_modules — pm2 included — on the way.
@@ -223,12 +285,13 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       sandboxes[name] = await makeSandbox(options);
     }));
     await Promise.all(Object.keys(cases).map(async (name) => {
-      const automatic = ['preDelete', 'oldNode', 'oldNodeAhead', 'oldNodePeer', 'postPullRefusal'].includes(name);
+      const automatic = ['preDelete', 'oldNode', 'oldNodeAhead', 'oldNodePeer', 'postPullRefusal', 'unknownPrevious'].includes(name);
       results[name] = await runUpdate(sandboxes[name], { automatic });
     }));
   }, 180000);
 
   afterAll(async () => {
+
     await Promise.all(Object.values(sandboxes).map(box => destroyGitSandbox(box.scratch)));
   });
 
@@ -270,18 +333,34 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(results.pm2Wiped.status).not.toBe(0);
   });
 
-  it('restarts the apps when the update is killed during the delete itself', async () => {
-    // Two guards at once: without the TERM/INT/HUP traps bash runs NO exit trap
-    // for a fatal signal, and with the latch armed AFTER the delete the trap
-    // would see it unset — bash only runs a pending trap between statements, so
-    // a signal delivered while `pm2 delete` is still running lands here.
+  const interruptCases = WINDOWS ? [['SIGINT', 130], ['SIGHUP', 129]] : [['SIGTERM', 143]];
+  it.each(interruptCases)('restarts the apps when the updater receives %s during the delete itself', async (signal, status) => {
     const box = await makeSandbox({ stallDelete: true });
+    if (WINDOWS) {
+      // Win32 TerminateProcess cannot run signal handlers. Inject the console
+      // signal event in the real Node updater, while its child is still busy.
+      const preload = join(box.scratch, 'console-signal.mjs');
+      writeFileSync(preload, `
+        import { existsSync, rmSync } from 'node:fs';
+        if (process.argv[1]?.endsWith('update.mjs') && process.env.PORTOS_DEFERRED_UPDATE_ID) {
+          const path = ${JSON.stringify(box.releaseFile)};
+          const timer = setInterval(() => {
+            if (!existsSync(path)) return;
+            process.emit(${JSON.stringify(signal)});
+            rmSync(path, { force: true });
+            clearInterval(timer);
+          }, 20);
+          timer.unref();
+        }
+      `);
+      box.nodeOptions = [box.nodeOptions, `--import=${pathToFileURL(preload).href}`].filter(Boolean).join(' ');
+    }
     try {
       const result = await runUpdate(box, {
-        onStart: (child) => {
+        onStart: WINDOWS ? undefined : (child) => {
           waitForFile(box.releaseFile)
             .then(() => {
-              child.kill('SIGTERM');
+              child.kill(signal);
               rmSync(box.releaseFile, { force: true });
             })
             .catch(() => child.kill('SIGKILL'));
@@ -291,7 +370,8 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       const deleteAt = calls.findIndex(c => c.startsWith('delete ecosystem.config.cjs'));
       const startAt = calls.findIndex(c => c.startsWith('start ecosystem.config.cjs'));
       expect(startAt, `pm2 calls were: ${JSON.stringify(calls)}`).toBeGreaterThan(deleteAt);
-      expect(result.status).toBe(143);
+      expect(result.status).toBe(status);
+      expect(result.stdout).toContain('STEP:restart:warning:');
     } finally {
       await destroyGitSandbox(box.scratch);
     }
@@ -345,21 +425,63 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(pm2Calls(sandboxes.postPullRefusal)).toEqual([]);
   });
 
-  it('never resets to an unknown pre-pull commit on the post-pull refusal path', () => {
-    const sh = readFileSync(UPDATE_SH, 'utf8');
-    const gate = sh.indexOf('node_gate_output=$(node scripts/checkNodeVersion.js');
-    const exitAt = sh.indexOf('exit 1', gate);
-    const refusal = sh.slice(gate, exitAt);
-    expect(gate).toBeGreaterThan(-1);
-    const guardAt = refusal.indexOf('[ -n "$pre_pull_sha" ]');
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(refusal.indexOf('git reset --hard "$pre_pull_sha"')).toBeGreaterThan(guardAt);
-    // Only the guarded branch may reset; the empty-sha branch must not.
-    const emptyBranch = refusal.slice(refusal.lastIndexOf('else\n'));
-    expect(emptyBranch).not.toContain('git reset');
-    expect(refusal).not.toContain('git clean');
-    expect(refusal).not.toMatch(/pm2/i);
+  it('never resets to an unknown pre-pull commit', () => {
+    const { repo, aheadSha } = sandboxes.unknownPrevious;
+    const { status, stdout } = results.unknownPrevious;
+    expect(status).toBe(1);
+    expect(stdout).toContain('STEP:runtime-preflight:failed:Unsupported Node.js runtime; update stopped');
+    expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(aheadSha);
+    expect(existsSync(join(repo, 'ahead.txt'))).toBe(true);
+    expect(pm2Calls(sandboxes.unknownPrevious)).toEqual([]);
   });
+
+  it('preserves the manual update step protocol exactly', () => {
+    const steps = results.clean.stdout.split(/\r?\n/).filter(line => /^STEP:/.test(line))
+      .map(line => line.split(':').slice(1, 3).join(':')).filter(step => !step.startsWith('waiting:'));
+    expect(steps).toEqual(['pm2-stop', 'git-pull', 'submodules', 'runtime-preflight', 'npm-install', 'setup',
+      'network-setup', 'ffmpeg', 'migrations', 'slash-do', 'build', 'restart', 'verify']
+      .flatMap(name => [`${name}:running`, `${name}:done`]));
+  });
+
+  it('dispatches ffmpeg and slash-do through their fail-soft shared helpers', () => {
+    expect(readFileSync(sandboxes.clean.optionalCalls, 'utf8').trim().split(/\r?\n/))
+      .toEqual(['ensure-ffmpeg.js', 'install-slashdo.js']);
+    expect(results.clean.status).toBe(0);
+  });
+
+  it('deletes stale Vite and starts only production apps on success and recovery', () => {
+    for (const box of [sandboxes.clean, sandboxes.failed, sandboxes.pm2Wiped]) {
+      const calls = pm2Calls(box);
+      const start = calls.findIndex(line => line.startsWith('start ecosystem.config.cjs'));
+      expect(start).toBeGreaterThan(0);
+      expect(calls.slice(0, start)).toContain('delete portos-ui --silent');
+      expect(calls.filter(line => line.startsWith('start '))).toEqual([`start ecosystem.config.cjs --only ${productionApps}`]);
+    }
+  });
+
+  it('removes the completion marker on startup failure before restoring apps', () => {
+    expect(results.startFails.status).toBe(1);
+    expect(results.startFails.stdout).toContain('STEP:restart:warning:');
+    expect(existsSync(join(sandboxes.startFails.repo, 'data', 'update-complete.json'))).toBe(false);
+    expect(JSON.parse(readFileSync(join(sandboxes.clean.repo, 'data', 'update-complete.json'), 'utf8')).version).toBe('0.0.0');
+  });
+
+  it('publishes failed terminal evidence after recovery without any application dependencies', async () => {
+    const box = await makeSandbox({ withoutDeps: true, npmShim: 'fail', pm2OnPath: true });
+    try {
+      expect(existsSync(join(box.repo, 'node_modules'))).toBe(false);
+      const admission = createMaintenanceAdmission(join(box.repo, 'data'));
+      const operation = admission.deferredUpdate.request();
+      admission.deferredUpdate.acquire(operation.id);
+      const result = await runUpdate(box, { operationId: operation.id });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('STEP:restart:warning:');
+      expect(admission.deferredUpdate.get().operation.terminal).toEqual({ success: false });
+      admission.deferredUpdate.reconcile({ absent: () => true, platform: process.platform });
+      expect(admission.held()).toBe(false);
+      expect(admission.deferredUpdate.get().result.success).toBe(false);
+    } finally { await destroyGitSandbox(box.scratch); }
+  }, 30000);
 
   it('still pulls and updates when the target supports the runtime', () => {
     const { repo, aheadSha } = sandboxes.cleanAhead;
@@ -376,137 +498,5 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
   it('does not touch PM2 when the update aborts before the delete', () => {
     expect(results.preDelete.status).not.toBe(0);
     expect(pm2Calls(sandboxes.preDelete)).toEqual([]);
-  });
-});
-
-/**
- * update.ps1 is the Windows half of the same bracket and cannot be executed
- * here, so guard the invariant that makes its recovery reachable: PowerShell's
- * `exit` inside a function terminates the whole script WITHOUT raising a
- * terminating error, bypassing both Stop-UpdateScript and the script-scope trap.
- * So every fatal exit in the file must route through Stop-UpdateScript. Scanning
- * the whole file rather than the delete→start line window is the point: the
- * exit that actually caused this bug lives in Safe-Install, which is DEFINED
- * above the delete and CALLED below it.
- */
-describe('update.ps1 headless-install guard', () => {
-  const ps1 = readFileSync(join(REPO_ROOT, 'update.ps1'), 'utf8').split('\n');
-  const lineOf = (needle) => ps1.findIndex(line => line.includes(needle));
-
-  // The only two script-terminating exits that may bypass the recovery: the one
-  // Stop-UpdateScript itself performs (after running it), and the final status.
-  const SANCTIONED_EXITS = ['exit $Code', 'exit $verifyFailed'];
-  const admissionExits = ['exit $LASTEXITCODE', 'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }'];
-
-  it('routes every fatal exit through the recovery', () => {
-    const exits = ps1
-      .map((line, i) => ({ line: line.trim(), number: i + 1 }))
-      .filter(({ line }) => /(^|[{;]\s*)exit\b/i.test(line) || /\[Environment\]::Exit\(/i.test(line));
-
-    const admission = exits.filter(({ line }) => admissionExits.includes(line));
-    expect(admission).toHaveLength(3);
-    for (const { number } of admission) {
-      expect(number < lineOf('New-Item -ItemType Directory') + 1 || ps1[number - 2].includes('--terminal')).toBe(true);
-    }
-    const recoveryExits = exits.filter(({ line }) => !admissionExits.includes(line));
-    const offenders = recoveryExits.filter(({ line }) => !SANCTIONED_EXITS.includes(line));
-    expect(offenders, `exit(s) bypassing Restore-Pm2Apps: ${JSON.stringify(offenders)}`).toEqual([]);
-    // ...and both sanctioned exits must still be there, so the guard can't be
-    // "satisfied" by deleting the exit inside Stop-UpdateScript.
-    expect([...new Set(recoveryExits.map(e => e.line))].sort()).toEqual([...SANCTIONED_EXITS].sort());
-  });
-
-  it.runIf(process.platform === 'win32')('publishes failed terminal evidence after recovery with application dependencies absent', () => {
-    const root = mkdtempSync(join(tmpdir(), 'update-no-deps-'));
-    try {
-      installUpdateTestSupervisor(root, { standalone: true });
-      const admission = createMaintenanceAdmission(join(root, 'data'));
-      const operation = admission.deferredUpdate.request();
-      admission.deferredUpdate.acquire(operation.id);
-      const stop = ps1.slice(lineOf('function Stop-UpdateScript'), lineOf('# Backstop for a synchronous')).join('\n');
-      const env = { ...process.env, PORTOS_DATA_ROOT: root, PORTOS_DEFERRED_UPDATE_ID: operation.id };
-      // Run the copied disposable install as a standalone process, like boot smoke.
-      delete env.VITEST;
-      const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `
-        function Restore-Pm2Apps { Write-Output 'recovery-settled' }
-        & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        ${stop}
-        Stop-UpdateScript 23
-      `], { cwd: root, encoding: 'utf8', env });
-      expect(result.status, result.stderr).toBe(23);
-      expect(result.stdout).toContain('recovery-settled');
-      expect(admission.deferredUpdate.get().operation.terminal).toEqual({ success: false });
-      admission.deferredUpdate.reconcile({ absent: () => true, platform: 'win32' });
-      expect(admission.held()).toBe(false);
-      expect(admission.deferredUpdate.get().result.success).toBe(false);
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it('keeps every Resolve-Pm2Command branch a plain array collected by @()', () => {
-    // `return` ENUMERATES an array into the output stream, so a single-element
-    // branch arrives as a bare string and `$pm2 + @('start', …)` concatenates
-    // into one garbage token — the PATH fallback would never start pm2. The
-    // call-site @() fixes that, but only if every branch returns a PLAIN array:
-    // a `,@(…)` wrapper emits the array as ONE stream item and @() nests rather
-    // than flattens it, so $CmdArgs[0] is an object[] instead of the executable.
-    expect(ps1.some(line => line.includes('$pm2 = @(Resolve-Pm2Command)'))).toBe(true);
-
-    const body = ps1.slice(lineOf('function Resolve-Pm2Command'), lineOf('function Restore-Pm2Apps'));
-    const returns = body.map(line => line.trim()).filter(line => line.startsWith('return'));
-    expect(returns.length).toBeGreaterThan(2);
-    expect(returns.filter(line => /return\s*,/.test(line)), 'a ,@() return nests instead of flattening').toEqual([]);
-    expect(returns.every(line => /^return\s+@\(/.test(line))).toBe(true);
-  });
-
-  it('runs the target Node gate before the ordinary PM2 stop call and any install', () => {
-    const gate = lineOf('if (Test-Path "scripts/checkNodeVersion.js")');
-    expect(gate).toBeGreaterThan(-1);
-    const ordinaryStop = ps1.findIndex((line, index) => index > gate && line.trim() === 'Stop-PortosApps');
-    expect(ordinaryStop).toBeGreaterThan(gate);
-    const earlyStop = ps1.findIndex(line => line.trim() === 'Stop-PortosApps');
-    expect(ps1.slice(earlyStop - 1, earlyStop + 1).join('\n')).toContain('PORTOS_UPDATE_INTERRUPT');
-    expect(gate).toBeLessThan(lineOf('Safe-Install -Dir "."'));
-    expect(ps1.slice(gate, gate + 40).join('\n')).toContain('Stop-UpdateScript 1');
-  });
-
-  it('rolls the checkout back to $prePullSha before Stop-UpdateScript when the post-pull gate refuses', () => {
-    const gate = lineOf('if (Test-Path "scripts/checkNodeVersion.js")');
-    const stop = ps1.findIndex((line, i) => i > gate && line.includes('Stop-UpdateScript 1'));
-    const block = ps1.slice(gate, stop + 1).join('\n');
-    const guardAt = block.indexOf('if ($prePullSha) {');
-    expect(guardAt).toBeGreaterThan(-1);
-    const resetAt = block.indexOf('Invoke-Logged git reset --hard $prePullSha');
-    expect(resetAt).toBeGreaterThan(guardAt);
-    expect(resetAt).toBeLessThan(block.indexOf('Stop-UpdateScript 1'));
-    expect(block).toContain('Invoke-Logged git submodule update --init --recursive');
-    expect(block).not.toContain('git clean');
-    // The reset sits inside the $prePullSha guard: nothing resets after it closes.
-    expect(block.slice(block.indexOf('if ($rolledBack)'))).not.toContain('git reset');
-  });
-
-  it('evaluates the target Node gate from git archive before HEAD moves', () => {
-    const archive = lineOf('git archive --output=$gateArchive $preflightTarget');
-    expect(archive).toBeGreaterThan(-1);
-    expect(archive).toBeLessThan(lineOf('Invoke-Logged git merge --ff-only'));
-    expect(archive).toBeLessThan(lineOf('Invoke-Logged git pull --rebase'));
-    expect(archive).toBeLessThan(lineOf('Step "submodules" "running"'));
-    expect(ps1.slice(archive, archive + 25).join('\n')).toContain('Stop-UpdateScript 1');
-  });
-
-    it('arms the latch before the delete, not after', () => {
-    const armed = lineOf('$script:Pm2AppsDown = $true');
-    const deleted = lineOf('pm2 delete ecosystem.config.cjs --silent');
-    expect(armed).toBeGreaterThan(-1);
-    expect(armed).toBeLessThan(deleted);
-  });
-
-  it('defines the recovery before every call site that depends on it', () => {
-    const definedAt = lineOf('function Stop-UpdateScript');
-    expect(definedAt).toBeGreaterThan(-1);
-    const firstCall = ps1.findIndex(line => line.includes('Stop-UpdateScript ') && !line.includes('function '));
-    expect(firstCall).toBeGreaterThan(definedAt);
-    expect(lineOf('function Restore-Pm2Apps')).toBeLessThan(lineOf('$script:Pm2AppsDown = $true'));
-    expect(lineOf('trap {')).toBeLessThan(lineOf('$script:Pm2AppsDown = $true'));
   });
 });

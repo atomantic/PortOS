@@ -160,12 +160,12 @@ describe('Video workspace draft creation', () => {
   });
 });
 
-it.each(['/creative-director', '/video'])('keeps a Video remix from %s open and forwards source IDs once on save', async pathname => {
+it('keeps a video remix open and forwards source IDs once on save', async () => {
   vi.clearAllMocks();
   cdApi.listCreativeDirectorProjects.mockResolvedValue([]);
   cdApi.createCreativeDirectorProject.mockResolvedValue({ id: 'remix-draft', name: 'Example remix', workspace: 'video', status: 'draft' });
   const user = userEvent.setup();
-  render(<MemoryRouter initialEntries={[{ pathname, search: '?view=all&new=video', hash: '#drafts', state: { remix: { ingredientIds: ['source-example'] } } }]}><Routes><Route path="/video" element={<CreativeDirector browseOnly />} /><Route path="/creative-director" element={<CreativeDirector />} /><Route path="/creative-director/:id/overview" element={<div>Saved draft</div>} /></Routes></MemoryRouter>);
+  render(<MemoryRouter initialEntries={[{ pathname: '/creative-director', search: '?view=all&new=video', hash: '#drafts', state: { remix: { ingredientIds: ['source-example'] } } }]}><Routes><Route path="/creative-director" element={<CreativeDirector />} /><Route path="/creative-director/:id/overview" element={<div>Saved draft</div>} /></Routes></MemoryRouter>);
   await user.type(await screen.findByRole('textbox', { name: 'Name' }), 'Example remix');
   await user.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() => expect(cdApi.createCreativeDirectorProject).toHaveBeenCalledTimes(1));
@@ -173,15 +173,11 @@ it.each(['/creative-director', '/video'])('keeps a Video remix from %s open and 
 });
 
 
-it('keeps Video as a browsing surface and sends production actions to Creative Director', async () => {
+it('lists completed commission videos in Creative Director', async () => {
   vi.clearAllMocks();
   cdApi.listCreativeDirectorProjects.mockResolvedValue([{ id: 'commission-video', name: 'Example commission video', status: 'complete', commissionId: 'example-commission' }]);
-  render(<MemoryRouter initialEntries={['/video']}><CreativeDirector browseOnly /></MemoryRouter>);
+  await renderPage();
   expect(await screen.findByRole('link', { name: 'Open Example commission video' })).toHaveAttribute('href', '/creative-director/commission-video/overview');
-  expect(screen.getByRole('link', { name: 'Open Creative Director' })).toHaveAttribute('href', '/creative-director');
-  expect(screen.queryByRole('button', { name: /New|Start|Delete|Model defaults/ })).toBeNull();
-  expect(cdApi.createCreativeDirectorProject).not.toHaveBeenCalled();
-  expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
 });
 
 describe('Project library discovery', () => {

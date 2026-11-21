@@ -23,9 +23,13 @@ import { FormField } from '../ui/FormField.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
-  addLoomTransition, branchLoomNode, deleteLoomNode, deleteLoomTransition,
-  updateLoomNode, updateLoomTransition,
-} from '../../services/api';
+  addLoomTransition,
+  branchLoomNode,
+  deleteLoomNode,
+  deleteLoomTransition,
+  updateLoomNode,
+  updateLoomTransition,
+} from '../../services/apiFableLoom.js';
 import { fieldClass, labelClass, sceneFieldClass } from './fieldStyles';
 import { isTeleplayFormat } from './loomFormats';
 import LoomSceneMedia from './LoomSceneMedia';

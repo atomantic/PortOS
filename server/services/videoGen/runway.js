@@ -15,7 +15,6 @@
  */
 
 import { basename } from 'path';
-import sharp from 'sharp';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, buildRunwayVideoRequest, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
@@ -95,6 +94,7 @@ async function runwayFrameDataUri(filePath, aspect) {
   const framed = await frameDataUriAtAspect(filePath, aspect);
   if (Buffer.byteLength(framed.dataUri) <= RUNWAY_DATA_URI_MAX_BYTES) return { ...framed, reencoded: null };
   const source = Buffer.from(framed.dataUri.slice(framed.dataUri.indexOf(',') + 1), 'base64');
+  const { default: sharp } = await import('sharp');
   const buffer = await sharp(source)
     .resize(RUNWAY_FRAME_MAX_SIDE, RUNWAY_FRAME_MAX_SIDE, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 92 })

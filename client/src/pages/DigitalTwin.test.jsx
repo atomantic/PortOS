@@ -6,7 +6,10 @@ const api = vi.hoisted(() => ({
   getDigitalTwinStatus: vi.fn(),
   getDigitalTwinSettings: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiDigitalTwin.js', () => ({
+  getDigitalTwinStatus: api.getDigitalTwinStatus,
+  getDigitalTwinSettings: api.getDigitalTwinSettings,
+}));
 // useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
 // never provided getInstanceFeatures, so keep the hook on its fail-open path.
 vi.mock('../services/apiSystem.js', async (importOriginal) => ({

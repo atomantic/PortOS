@@ -43,9 +43,9 @@ import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage.js';
-import {
-  createTrack, describeMusic, generateLyrics, getSettings, getTrack, patchSettingsSlice, updateTrack,
-} from '../../services/api';
+import { createTrack, getTrack, updateTrack } from '../../services/apiTracks.js';
+import { describeMusic, generateLyrics } from '../../services/apiMusic.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 
 const STEPS = [
   { id: 'concept', label: 'Concept', icon: Lightbulb },

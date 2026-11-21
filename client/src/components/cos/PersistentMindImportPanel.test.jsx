@@ -6,7 +6,10 @@ const api = vi.hoisted(() => ({
   previewPersistentMindBundle: vi.fn(),
   applyPersistentMindBundle: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({
+  previewPersistentMindBundle: api.previewPersistentMindBundle,
+  applyPersistentMindBundle: api.applyPersistentMindBundle,
+}));
 
 const PersistentMindImportPanel = (await import('./PersistentMindImportPanel.jsx')).default;
 

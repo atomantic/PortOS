@@ -16,7 +16,7 @@ import { isNonBlankStr } from '../textUtils.js';
 
 /**
  * The CONNECTION half of the provider-connection graph proposed in
- * `docs/plans/2026-09-06-provider-connections-and-harnesses.md` (#6366).
+ * `docs/plans/archive/2026-09-06-provider-connections-and-harnesses.md` (#6366).
  *
  * A connection is the backend a harness talks to: its wire protocol, its base
  * URL, and the credential material that reaches it. This module is the pure
@@ -269,7 +269,7 @@ export function withoutConnectionOwnedFields(provider, owned) {
 export function withConnectionOwnedFields(routeRecord, owned) {
   const merged = { ...routeRecord, ...owned.fields };
   // `Object.assign` rather than an object spread here: the spawn-site guard in
-  // `cliChildEnv.guard.test.js` reads a spread of a record's env map beside an
+  // `server/test/guards/runtime/cliChildEnv.test.js` reads a spread of a record's env map beside an
   // `envVars:` key as a hand-rolled CLI child environment, and this module can
   // never spawn anything. Same result, no false positive to exempt.
   if (owned.hasEnvVars) merged.envVars = Object.assign({}, routeRecord.envVars, owned.envVars);

@@ -21,7 +21,14 @@ import {
   Image as ImageIcon, Music,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import {
+  getTimelineProject,
+  listVideoHistory,
+  getGalleryImages,
+  updateTimelineProject,
+  renderTimelineProject,
+} from '../services/apiImageVideo.js';
+import { listMusicLibrary } from '../services/apiTracks.js';
 import { formatTimecode, clamp, formatPercent } from '../utils/formatters';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress';
 import {
@@ -211,16 +218,16 @@ function TimelineProjectEditor({ projectId }) {
     // every segment, overlay and bed drawing on it as "missing" — sources the
     // server can still render perfectly well.
     const [proj, hist, library] = await Promise.all([
-      api.getTimelineProject(projectId, { silent: true }).catch((err) => {
+      getTimelineProject(projectId, { silent: true }).catch((err) => {
         if (isCurrent()) setError(err.message);
         return null;
       }),
-      api.listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY }).catch(() => null),
-      api.listMusicLibrary({ silent: true }).catch(() => null),
+      listVideoHistory({ silent: true, query: CLIP_CATALOG_QUERY }).catch(() => null),
+      listMusicLibrary({ silent: true }).catch(() => null),
     ]);
     if (!isCurrent()) return;
     const imageRefs = [...(proj?.segments || []), ...(proj?.overlays || [])].filter(item => item.assetKind === 'images').map(item => item.assetFile);
-    const gallery = proj ? await api.getGalleryImages(imageRefs, { silent: true }).catch(() => null) : null;
+    const gallery = proj ? await getGalleryImages(imageRefs, { silent: true }).catch(() => null) : null;
     if (!isCurrent()) return;
     if (gallery) setCheckedImageNames(new Set(imageRefs));
     if (proj) {
@@ -267,7 +274,7 @@ function TimelineProjectEditor({ projectId }) {
   const retryCatalog = useCallback(async (kind) => {
     const generation = ++catalogGenerationRef.current[kind];
     setCatalogStatus((prev) => ({ ...prev, [kind]: { ...prev[kind], pending: true } }));
-    const fetchCatalog = kind === 'clips' ? api.listVideoHistory : api.listMusicLibrary;
+    const fetchCatalog = kind === 'clips' ? listVideoHistory : listMusicLibrary;
     const result = await fetchCatalog(kind === 'clips' ? { silent: true, query: CLIP_CATALOG_QUERY } : { silent: true }).catch(() => null);
     if (!activeRef.current || catalogGenerationRef.current[kind] !== generation) return;
     const ok = kind === 'clips' ? Array.isArray(result) : !!result;
@@ -383,7 +390,7 @@ function TimelineProjectEditor({ projectId }) {
     if (updatedAtRef.current == null) return false;
     setSavePending(true);
     setSaveError(null);
-    const updated = await api.updateTimelineProject(projectId, {
+    const updated = await updateTimelineProject(projectId, {
       ...timelinePatch(next),
       expectedUpdatedAt: updatedAtRef.current,
     }, { silent: true }).catch((err) => {
@@ -718,7 +725,7 @@ function TimelineProjectEditor({ projectId }) {
     clearTimeout(saveTimerRef.current);
     const saved = await saveTimeline(lanes);
     if (!saved) return;
-    const result = await api.renderTimelineProject(projectId, { silent: true }).catch((err) => {
+    const result = await renderTimelineProject(projectId, { silent: true }).catch((err) => {
       if (err.code === 'RENDER_IN_PROGRESS') {
         const jobId = err.context?.jobId;
         if (jobId) { setRenderJobId(jobId); toast('Re-attaching to in-flight render'); return null; }
@@ -1020,7 +1027,7 @@ function TimelineProjectEditor({ projectId }) {
               // expectedUpdatedAt read has to happen INSIDE the queued fn, or
               // it captures a value the preceding write has already replaced.
               queueWrite(async () => {
-                const updated = await api.updateTimelineProject(projectId, {
+                const updated = await updateTimelineProject(projectId, {
                   name: trimmed, expectedUpdatedAt: updatedAtRef.current,
                 }, { silent: true }).catch((err) => {
                   toast.error(`Rename failed: ${err.message}`);

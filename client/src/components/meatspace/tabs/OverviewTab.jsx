@@ -1,6 +1,15 @@
 import { useNavigate } from 'react-router';
 import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getLatestHealthMetrics } from '../../../services/apiHealth.js';
+import {
+  getMeatspaceOverview,
+  getAlcoholSummary,
+  getBodyHistory,
+  getBloodTests,
+  getEpigeneticTests,
+  getEyeExams,
+  getLifeCalendar,
+} from '../../../services/apiMeatspace.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import DeathClockCountdown from '../../DeathClockCountdown';
 import ProvenanceChip from '../../ui/ProvenanceChip';
@@ -148,7 +157,7 @@ function riskColor(level) {
 }
 
 const OVERVIEW_EVENTS = ['meatspace:changed', 'meatspace:death-clock:changed'];
-const fetchHealthBody = () => api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']);
+const fetchHealthBody = () => getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']);
 function useOverviewResource(resource, fetchResource) {
   return useSocketResource(fetchResource, {
     events: OVERVIEW_EVENTS,
@@ -159,14 +168,14 @@ function useOverviewResource(resource, fetchResource) {
 }
 
 export default function OverviewTab() {
-  const { data, loading } = useOverviewResource('overview', api.getMeatspaceOverview);
-  const { data: alcohol } = useOverviewResource('alcohol', api.getAlcoholSummary);
-  const { data: body } = useOverviewResource('body', api.getBodyHistory);
+  const { data, loading } = useOverviewResource('overview', getMeatspaceOverview);
+  const { data: alcohol } = useOverviewResource('alcohol', getAlcoholSummary);
+  const { data: body } = useOverviewResource('body', getBodyHistory);
   const { data: healthBody } = useOverviewResource('healthBody', fetchHealthBody);
-  const { data: blood } = useOverviewResource('blood', api.getBloodTests);
-  const { data: epigenetic } = useOverviewResource('epigenetic', api.getEpigeneticTests);
-  const { data: eyes } = useOverviewResource('eyes', api.getEyeExams);
-  const { data: calendar } = useOverviewResource('calendar', api.getLifeCalendar);
+  const { data: blood } = useOverviewResource('blood', getBloodTests);
+  const { data: epigenetic } = useOverviewResource('epigenetic', getEpigeneticTests);
+  const { data: eyes } = useOverviewResource('eyes', getEyeExams);
+  const { data: calendar } = useOverviewResource('calendar', getLifeCalendar);
   const navigate = useNavigate();
 
   if (loading) {

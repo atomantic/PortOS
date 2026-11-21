@@ -16,7 +16,7 @@
  *
  * - `admitted`: holds `withBackupAssetPublication` from its first byte change
  *   through the row that names (or stops naming) those bytes. Every listed
- *   module calls it; `backupAssetOwners.guard.test.js` keeps this list and the code
+ *   module calls it; `server/test/guards/modules/backupAssetOwners.test.js` keeps this list and the code
  *   in step in both directions. Where a long producer (a sidecar or child
  *   process) writes the bytes in place, only the row commit takes the lease:
  *   a cut copies files before it dumps rows, so a row that waits out the cut
@@ -44,6 +44,12 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'media-job-attach-hooks', status: 'admitted', modules: ['services/mediaJobImageHook.js'] },
   { id: 'music-video-dcp', status: 'admitted', modules: ['services/musicVideo/dcp.js'] },
   { id: 'music-video-collection-hook', status: 'admitted', modules: ['services/musicVideoCollectionHook.js'] },
+  { id: 'requested-collection-hook', status: 'admitted', modules: ['services/requestedCollectionHook.js'] },
+  {
+    id: 'automatic-media-collections',
+    status: 'admitted',
+    modules: ['services/mediaCollectionCompletionHook.js', 'services/mediaCollectionAutoOrganize.js'],
+  },
   {
     id: 'pipeline-filename-hooks',
     status: 'admitted',
@@ -54,7 +60,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/universeBuilderCollectionHook.js', 'services/universeCharacterSheet.js'],
   },
-  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/local.js', 'services/imageGen/sidecarStore.js', 'services/imageGen/imageRecords.js'] },
+  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/localGallery.js', 'services/imageGen/sidecarStore.js', 'services/imageGen/imageRecords.js'] },
   { id: 'gallery-image-deletion-canon-purge', status: 'admitted', modules: ['services/galleryImageDeletion.js'] },
   { id: 'restored-gallery-image-stamp', status: 'admitted', modules: ['services/mediaRestoreTombstones.js'] },
   { id: 'video-history-deletion', status: 'admitted', modules: ['services/videoGen/historyOps.js'] },
@@ -191,7 +197,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // track row that first names it commits under the lease.
     id: 'music-video-autonomous-song',
     status: 'admitted',
-    modules: ['services/musicVideo/autonomousService.js'],
+    modules: ['services/musicVideo/autonomous/autonomousStages.js'],
   },
   {
     // A draft body replaces its .md in place and the manifest row records its new
@@ -367,9 +373,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'image-generation-completion-tails',
     status: 'admitted',
     modules: [
-      'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
-      // The hosted runner publishes for fal.ai, Runway, Higgsfield and Google (#16098).
-      'services/imageGen/grok.js', 'services/imageGen/hostedJobRunner.js', 'services/imageGen/external.js',
+      'services/imageGen/local.js',
+      // The shared runners hold admission for their CLI and hosted adapters.
+      'services/imageGen/cliJobRunner.js', 'services/imageGen/hostedJobRunner.js', 'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
       'services/imageGen/publication.js', 'services/imageGen/index.js',
       // A storyboard-guided Grok clip files the first frame it built into the
@@ -473,7 +479,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
       'services/agent/agentCliOutputStream.js', 'services/agent/agentSpawnDispatch.js',
       'services/subAgentSpawner.js', 'services/featureAgents.js',
-      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
+      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js', 'services/privacyPromptScrub.js'],
   },
   {
     id: 'agent-run-recording-publication',

@@ -1,10 +1,10 @@
 # MiniMax H3 CUDA history adapter
 
-The PortOS-owned adapter in `scripts/minimax_h3_cuda_history.py` uses the
+The PortOS-owned adapter in `scripts/ml/minimax_h3_cuda_history.py` uses the
 Diffusers 0.42.0 modular FL2VA checkpoint. It shares only the source interval
 CLI with MLX; it imports no reference runner. Runtime packages, model revision
 and inspected encoder/layout/scheduler/decoder source hashes are recorded in
-`scripts/minimax_h3_cuda_history.json` and checked before model loading.
+`scripts/ml/minimax_h3_cuda_history.json` and checked before model loading.
 
 Pass `--source-video <local-clip> --history-end-frame <exclusive-24-fps-index>`
 with `--history-frames 17` to `generate_minimax_h3_cuda.py`. The selected frames
@@ -32,7 +32,7 @@ output.
 
 ## Verified evidence
 
-The weight-free fixture `scripts/minimax_h3_cuda_history_fixture.py`
+The weight-free fixture `scripts/ml/minimax_h3_cuda_history_fixture.py`
 ran on Windows with Python 3.13, CPU PyTorch 2.12.0, and the exact CUDA runtime
 dependency pins. It uses real PyAV decoding, native modular layout, packing,
 schedulers, denoising and unpacking, with small synthetic model components:

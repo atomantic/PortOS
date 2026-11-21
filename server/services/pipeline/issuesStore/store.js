@@ -14,11 +14,6 @@
  * Federation invisibility: every record write/delete bumps the shared pipeline
  * MUTATION EPOCH (../syncEpoch.js) — see seriesStore/store.js for the rationale.
  *
- * `queueTypeIndexWrite` keeps the single-tail "one consistent merge snapshot"
- * semantics issues.js relies on for mergeIssuesFromSync / pruneTombstonedIssues
- * (those read the whole issue set, mutate, and write back; they must serialize
- * against themselves). It's a process-local promise tail — backend-agnostic.
- *
  * The first PG-backed call runs a one-time, marker-gated import of the legacy
  * data/pipeline-issues file store into the table (migrateIssuesToDB).
  */
@@ -31,8 +26,8 @@ import { createFileWriteQueue } from '../../../lib/fileWriteQueue.js';
 import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 
 // Strip history before file-backend sanitization; PG already removes it in
-// SQL. Full records remain the default because exports and sync must retain
-// every version. Public sanitized list stages still expose runHistory: [].
+// SQL. Detail, exports, and inbound merge need full records. Sanitized lean
+// lists still expose runHistory: [].
 export const stripRunHistoryFromIssue = (issue) => {
   if (!issue || typeof issue !== 'object' || !issue.stages) return issue;
   const strippedStages = {};
@@ -59,6 +54,7 @@ function makeFileBackend(dir, sanitizeRecord) {
     sanitizeRecord,
     idPattern: ID_PATTERN,
   });
+  const isOldTombstone = (record, beforeMs) => record?.deleted === true && Date.parse(record.deletedAt) < beforeMs;
   return {
     name: 'file',
     readOne: (id) => cs.loadOne(id),
@@ -72,6 +68,31 @@ function makeFileBackend(dir, sanitizeRecord) {
       if (includeDeleted) return ids;
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
       return ids.filter((_, i) => records[i] != null && records[i].deleted !== true);
+    },
+    getDeletionStatus: async (id) => {
+      const record = await cs.loadOneRaw(id);
+      return record ? record.deleted === true : null;
+    },
+    listSeriesIdsForIssues: async (ids) => {
+      const parents = new Set();
+      for (const id of ids) {
+        const issue = await cs.loadOneRaw(id);
+        if (issue) parents.add(issue.seriesId);
+      }
+      return [...parents];
+    },
+    listLiveIssueSeriesIds: async () => [...new Set((await cs.loadAll()).filter((r) => !r.deleted).map((r) => r.seriesId))],
+    listTombstoneIdsBefore: async (beforeMs) => (await cs.loadAll()).filter((r) => isOldTombstone(r, beforeMs)).map((r) => r.id),
+    deleteTombstonesBefore: async (ids, beforeMs) => {
+      const removed = [];
+      for (const id of ids) {
+        await cs.queueRecordWrite(id, async () => {
+          if (!isOldTombstone(await cs.loadOneRaw(id), beforeMs)) return;
+          await cs.deleteOneNow(id);
+          removed.push(id);
+        });
+      }
+      return removed;
     },
     listRaw: async () => {
       const ids = await cs.listIds();
@@ -94,7 +115,7 @@ function makeFileBackend(dir, sanitizeRecord) {
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
       return records.filter((r) => r != null && wanted.has(r.seriesId));
     },
-    writeRaw: (id, record) => cs.saveOneNow(id, record),
+    writeRaw: (id, record) => cs.saveOne(id, record),
     deleteRaw: (id) => cs.deleteOneNow(id),
     verify: () => cs.verifySchemaVersion(),
   };
@@ -108,6 +129,11 @@ function makePgBackend(db, sanitizeRecord) {
       return raw ? sanitizeRecord(raw) : null;
     },
     listIds: db.listIds,
+    getDeletionStatus: db.getDeletionStatus,
+    listLiveIssueSeriesIds: db.listLiveIssueSeriesIds,
+    listSeriesIdsForIssues: db.listSeriesIdsForIssues,
+    listTombstoneIdsBefore: db.listTombstoneIdsBefore,
+    deleteTombstonesBefore: db.deleteTombstonesBefore,
     listRaw: db.listRaw,
     listRawBySeries: db.listRawBySeries,
     listRawBySeriesIds: db.listRawBySeriesIds,
@@ -138,9 +164,8 @@ function createFacade({ dir, sanitizeRecord }) {
   });
 
   // Single-tail type-index queue — mirrors collectionStore.queueTypeIndexWrite.
-  // mergeIssuesFromSync / pruneTombstonedIssues load the whole issue set, mutate,
-  // and write back; they must serialize against themselves for one consistent
-  // merge snapshot.
+  // Retained for collection-store callers. Issue service mutations share the
+  // per-series and per-id tails in issuesShared.
   const queueTypeIndexWrite = createFileWriteQueue();
 
   const saveOneNow = async (id, record) => {
@@ -165,7 +190,16 @@ function createFacade({ dir, sanitizeRecord }) {
     type: 'pipelineIssues',
     getBackendName,
 
+    listSeriesIdsForIssues: async (ids) => (await getBackend()).listSeriesIdsForIssues(ids),
     listIds: async (opts) => (await getBackend()).listIds(opts),
+    getDeletionStatus: async (id) => (await getBackend()).getDeletionStatus(id),
+    listLiveIssueSeriesIds: async () => (await getBackend()).listLiveIssueSeriesIds(),
+    listTombstoneIdsBefore: async (beforeMs) => (await getBackend()).listTombstoneIdsBefore(beforeMs),
+    deleteTombstonesBefore: async (ids, beforeMs) => {
+      const removed = await (await getBackend()).deleteTombstonesBefore(ids, beforeMs);
+      if (removed.length) bumpPipelineMutationEpoch();
+      return removed;
+    },
     loadOne: async (id) => {
       if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
       return (await getBackend()).readOne(id);

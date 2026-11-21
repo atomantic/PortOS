@@ -11,10 +11,10 @@ const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-commit-
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
-  USAGE_FILE, getUsage, loadUsage, resetUsage, recordRunUsage, addDatedUsageBatch,
-  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims
+  USAGE_FILE, getUsage, loadUsage, resetUsage, recordSession, recordRunUsage, addDatedUsageBatch, flushPendingUsageWrites,
+  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims, buildUsageDigest
 } = await import('./usage.js');
-const { __resetUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
+const { __resetUsageClaims, mergeUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const home = join(PATHS.data, 'synthetic-home');
 const workspacePath = '/synthetic/usage-workspace';
 const now = Date.now();
@@ -52,6 +52,163 @@ const failNextLedgerRename = (fail) => rename.mockImplementation((from, to) => {
   return fail();
 });
 const failRename = () => failNextLedgerRename(() => Promise.reject(Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' })));
+
+describe('durable usage batches', () => {
+  it('coalesces 100 overlapping session and completion pairs and only acknowledges the durable save', async () => {
+    const before = getUsage();
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const writes = [];
+    rename.mockImplementation(async (from, to) => {
+      if (to === USAGE_FILE) {
+        writes.push(from);
+        entered.resolve();
+        await release.promise;
+      }
+      return actualRename(from, to);
+    });
+
+    try {
+      const sessions = [];
+      const completions = [];
+      for (let i = 0; i < 100; i++) {
+        sessions.push(recordSession('codex-cli', 'Codex', run.model));
+        completions.push(recordRunUsage({ providerId: 'codex-cli', model: run.model, tokensOut: 3 },
+          { reconciledRunId: `batch-${i}`, siblings: true }));
+      }
+      let acknowledged = false;
+      const saved = Promise.all([...sessions, ...completions]).then(() => { acknowledged = true; });
+      const flushed = flushPendingUsageWrites();
+      await entered.promise;
+      try {
+        expect(acknowledged).toBe(false);
+        expect(getUsage()).toBe(before);
+        expect(await disk()).toEqual(before);
+      } finally {
+        release.resolve();
+        await Promise.all([saved, flushed]);
+      }
+      expect(writes).toHaveLength(1);
+      expect(await Promise.all(sessions)).toEqual(Array.from({ length: 100 }, (_, i) => i + 1));
+      const savedUsage = await disk();
+      expect(savedUsage).toMatchObject({ totalSessions: 100, totalMessages: 100, totalTokens: { output: 300 } });
+      expect(Object.keys(savedUsage.reconciledRuns)).toHaveLength(100);
+      expect(Object.keys(savedUsage.siblingReconciledRuns)).toHaveLength(100);
+      expect(await readFile(USAGE_FILE, 'utf8')).toBe(JSON.stringify(savedUsage));
+    } finally {
+      rename.mockImplementation(actualRename);
+    }
+  });
+
+  it('keeps historical buckets shared and previously published state unchanged', async () => {
+    const historic = { day: '2021-03-04', record: { providerId: 'grok-cli', tokensOut: 20 }, repairId: 'historical-id' };
+    await addDatedUsageBatch([historic]);
+    await recordSession('codex-cli', 'Codex', run.model);
+    await recordRunUsage({ providerId: 'codex-cli', model: run.model, tokensOut: 3 });
+    const before = getUsage();
+    const beforeValue = structuredClone(before);
+    await recordSession('codex-cli', 'Codex', run.model);
+    await recordRunUsage({ providerId: 'codex-cli', model: run.model, tokensOut: 7, repairIds: ['live-id'] });
+    expect(before).toEqual(beforeValue);
+    expect(getUsage().dailyActivity[historic.day]).toBe(before.dailyActivity[historic.day]);
+    expect(getUsage().totalTokens.output).toBe(30);
+
+    await loadUsage();
+    expect(await addDatedUsageBatch([historic])).toEqual([]);
+    expect(getUsage().monthlyActivity['2021-03'].tokens).toBe(20);
+  });
+
+  it('drains a later usage write before reporting an earlier batch failure', async () => {
+    const writeStarted = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const failure = Object.assign(new Error('synthetic usage write failure'), { code: 'EIO' });
+    failNextLedgerRename(() => {
+      rename.mockImplementation(async (from, to) => {
+        if (to === USAGE_FILE) {
+          writeStarted.resolve();
+          await release.promise;
+        }
+        return actualRename(from, to);
+      });
+      return Promise.reject(failure);
+    });
+    const first = recordSession('codex-cli', 'Codex', run.model).catch((error) => error);
+    const later = recordTokens(0, 7);
+    let flushSettled = false;
+    const flushed = flushPendingUsageWrites().catch((error) => error).finally(() => { flushSettled = true; });
+    try {
+      await writeStarted.promise;
+      expect(await first).toBe(failure);
+      expect(flushSettled).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, later, flushed]);
+      rename.mockImplementation(actualRename);
+    }
+    expect(await flushed).toBe(failure);
+    expect((await disk()).totalTokens.output).toBe(7);
+  });
+});
+
+describe('exact Codex boundary compaction', () => {
+  it('removes only covered boundaries and preserves billing for every cutoff after reload', async () => {
+    const old = '2022-11-17T00:00:00.000Z';
+    const middle = '2022-11-18T00:00:00.000Z';
+    const recent = '2022-11-19T00:00:00.000Z';
+    const key = 'codex-id:v1:example';
+    const path = '/example/legacy-rollout.jsonl';
+    const mark = (at, ...codexHighWater) => ({ at, codexHighWater });
+    const covered = [key, { tokensIn: 99, tokensOut: 11, fastTokensIn: 19, fastTokensOut: 2 }];
+    const latest = [key, { messages: 0, tokensIn: 100, tokensOut: 4, cacheReadTokens: 0, cacheWriteTokens: 0, fastTokensOut: 2 }];
+    const middleClaim = [key, { tokensIn: 80, tokensOut: 12, fastTokensIn: 20 }];
+    const legacyClaim = [path, { tokensIn: 3, tokensOut: 2 }];
+    const markers = {
+      'covered-run': mark(old, covered),
+      'mixed-run': mark(old, covered, legacyClaim),
+      'middle-run': mark(middle, middleClaim),
+      'latest-run': mark(recent, latest),
+      'same-time-run': mark(recent, latest),
+      'undated-run': mark('unknown', covered),
+      'legacy-run': old,
+    };
+    const original = { ...(await disk()), reconciledRuns: markers, siblingReconciledRuns: { 'covered-run': old },
+      grokRepairIds: ['historical-repair'] };
+    await writeFile(USAGE_FILE, JSON.stringify(original));
+
+    const mergedClaims = (entries) => {
+      __resetUsageClaims();
+      mergeUsageClaims({ codexHighWater: entries });
+      return Object.fromEntries(snapshotUsageClaims().codexHighWater);
+    };
+    const expectedBoundaries = (since) => Object.values(markers)
+      .filter(marker => Date.parse(marker.at) >= since)
+      .flatMap(marker => marker.codexHighWater);
+
+    await loadUsage();
+    const compacted = await disk();
+    expect(compacted.reconciledRuns).toEqual({
+      ...markers,
+      'covered-run': old,
+      'mixed-run': mark(old, legacyClaim),
+      'same-time-run': recent,
+    });
+    expect(compacted.siblingReconciledRuns).toEqual(original.siblingReconciledRuns);
+    expect(compacted.grokRepairIds).toEqual(original.grokRepairIds);
+    expect(getReconciledUsageRunIds()).toEqual(Object.keys(markers));
+    expect(buildUsageDigest()).toEqual(buildUsageDigest(original));
+
+    for (const since of [0, Date.parse(old) + 1, Date.parse(middle) + 1, Date.parse(recent) + 1]) {
+      expect(mergedClaims(await getRecentCodexUsageClaims(since))).toEqual(mergedClaims(expectedBoundaries(since)));
+    }
+    const allTimeClaims = (runs) => Object.values(runs).flatMap(marker => marker.codexHighWater || []);
+    expect(mergedClaims(allTimeClaims(compacted.reconciledRuns))).toEqual(mergedClaims(allTimeClaims(markers)));
+
+    rename.mockClear();
+    await loadUsage();
+    expect(await disk()).toEqual(compacted);
+    expect(rename).not.toHaveBeenCalled();
+  });
+});
 
 describe('usage commit failure recovery', () => {
   it('releases a failed completion claim and persists its explicit same-process retry exactly once', async () => {

@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiFableLoom.js', () => ({
   addLoomTransition: vi.fn(),
   branchLoomNode: vi.fn(),
   deleteLoomNode: vi.fn(),
@@ -29,8 +29,13 @@ vi.mock('../videoGen/GalleryVideoPicker', () => ({
 }));
 
 import {
-  addLoomTransition, branchLoomNode, deleteLoomNode, deleteLoomTransition, updateLoomNode, updateLoomTransition,
-} from '../../services/api';
+  addLoomTransition,
+  branchLoomNode,
+  deleteLoomNode,
+  deleteLoomTransition,
+  updateLoomNode,
+  updateLoomTransition,
+} from '../../services/apiFableLoom.js';
 import LoomNodeEditor from './LoomNodeEditor';
 
 const loom = { id: 'loom-1', name: 'Example Story', format: 'teleplay', styleNotes: '' };

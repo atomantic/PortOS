@@ -1,6 +1,6 @@
 # Pixal3D CUDA runtime
 
-Install and **Repair install** use `scripts/setup-pixal3d-cuda.py`. It reuses
+Install and **Repair install** use `scripts/ml/setup-pixal3d-cuda.py`. It reuses
 [TRELLIS.2 CUDA](TRELLIS2_CUDA.md)'s artifact/build primitives, not its runtime
 environment or upstream setup script. The initial profile requires native Linux
 x86_64, glibc 2.28+, CUDA toolkit **12.6.3** (nvcc **12.6.85**), GCC/G++
@@ -9,7 +9,7 @@ WSL2 is refused before downloads or environment changes because Pixal3D's NAF
 pipeline has a separate upstream driver failure there. TRELLIS.2 CUDA remains
 the WSL2 option. The bootstrap Python needs `tarfile.data_filter`.
 
-`scripts/pixal3d-cuda-profile.json` records Conda CPython 3.11.16, Torch
+`scripts/ml/pixal3d-cuda-profile.json` records Conda CPython 3.11.16, Torch
 2.14.1+cu126, TorchVision 0.29.1+cu126, 27 Conda artifacts plus micromamba, and
 15 immutable source archives. The separate runtime/build closures contain 88
 and eight wheels respectively. They include utils3d's verified release wheel,
@@ -71,16 +71,16 @@ is **2026-11-04T00:00:00Z**. Shared locks constrain the known Torch/native ABI;
 review their changes together when upgrading it.
 
 ```sh
-uv --no-config pip compile scripts/requirements-pixal3d-cuda.txt \
+uv --no-config pip compile scripts/ml/requirements/requirements-pixal3d-cuda.txt \
   --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   --generate-hashes --only-binary :all: --exclude-newer <UTC-cutoff> \
-  -o scripts/requirements-pixal3d-cuda.lock.txt
-uv --no-config pip compile scripts/requirements-pixal3d-cuda-build.txt \
-  -c scripts/requirements-pixal3d-cuda.lock.txt \
+  -o scripts/ml/requirements/requirements-pixal3d-cuda.lock.txt
+uv --no-config pip compile scripts/ml/requirements/requirements-pixal3d-cuda-build.txt \
+  -c scripts/ml/requirements/requirements-pixal3d-cuda.lock.txt \
   --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   --generate-hashes --only-binary :all: --exclude-newer <UTC-cutoff> \
-  -o scripts/requirements-pixal3d-cuda-build.lock.txt
-python3 scripts/audit-pixal3d-cuda.py
+  -o scripts/ml/requirements/requirements-pixal3d-cuda-build.lock.txt
+python3 scripts/ml/audit-pixal3d-cuda.py
 ```
 
 If direct-wheel metadata endpoints are inaccessible, download the exact wheels,
@@ -113,7 +113,7 @@ indices and embedded PBR textures. Start with 1024 low-VRAM; use sufficient
 VRAM for full-resolution NAF.
 
 ```sh
-python3 scripts/setup-pixal3d-cuda.py "$PWD/.cache/pixal-cuda-validation/pixal3d"
+python3 scripts/ml/setup-pixal3d-cuda.py "$PWD/.cache/pixal-cuda-validation/pixal3d"
 ```
 
 Run `.conda/portos-source/Pixal3D/inference.py` with `.conda/bin/python`,

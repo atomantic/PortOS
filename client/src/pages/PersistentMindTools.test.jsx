@@ -10,7 +10,12 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiAgents.js', () => ({
+  getPersistentMindTools: api.getPersistentMindTools,
+  getMindRecipes: api.getMindRecipes,
+  updateCosConfig: api.updateCosConfig,
+}));
+vi.mock('../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));

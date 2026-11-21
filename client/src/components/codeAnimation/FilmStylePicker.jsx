@@ -1,6 +1,7 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { getFilmStyle, listFilmStyles } from '../../services/api';
+import { getFilmStyle, listFilmStyles } from '../../services/apiCodeAnimation.js';
 
 /**
  * "Film style" select shared by the Code Animation form (#10253), the Launch
@@ -55,7 +56,7 @@ export default function FilmStylePicker({
       <label htmlFor={id} className={labelClass}>Film style <span className="text-gray-600">({hint})</span></label>
       <select id={id} value={selected ? value : ''} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={inputClass}>
         <option value="">{noneLabel}</option>
-        {(styles || []).map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}
+        {sortByLabel(styles || [], (style) => style.label).map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}
       </select>
       {loadError && (
         <p role="alert" className="mt-1 flex items-center gap-1 text-xs text-port-error">

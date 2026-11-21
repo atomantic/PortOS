@@ -8,7 +8,6 @@ import { existsSync } from 'fs';
 import { rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, probeVideoDuration, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -25,6 +24,7 @@ import { mutateProjectRecord } from './projects.js';
 import { ensureSceneTakes } from './takes.js';
 
 const readImageStats = async (path) => {
+  const { default: sharp } = await import('sharp');
   const { data, info } = await sharp(path).rotate().resize(160, 90, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   return measureRgbStats(data, info.width, info.height, info.channels);
 };

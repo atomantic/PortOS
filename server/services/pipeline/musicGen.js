@@ -68,12 +68,12 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // The sidecar scripts live at the repo root — resolve module-relative so the
 // paths are correct regardless of the server process's cwd.
-const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
-const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
-const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/generate_acestep.py');
-const ACESTEP15_SCRIPT = join(__dirname, '../../../scripts/generate_acestep15.py');
-const MINIMAX_MUSIC3_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3.py');
-const MINIMAX_MUSIC3_MLX_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3_mlx.py');
+const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/ml/generate_musicgen.py');
+const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/ml/generate_audioldm2.py');
+const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/ml/generate_acestep.py');
+const ACESTEP15_SCRIPT = join(__dirname, '../../../scripts/ml/generate_acestep15.py');
+const MINIMAX_MUSIC3_SCRIPT = join(__dirname, '../../../scripts/ml/generate_minimax_music3.py');
+const MINIMAX_MUSIC3_MLX_SCRIPT = join(__dirname, '../../../scripts/ml/generate_minimax_music3_mlx.py');
 export const MUSIC_RENDERER_BENCHMARK_GUIDE = 'docs/features/music-renderer-benchmarks.md';
 // Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
@@ -122,7 +122,7 @@ export const ACESTEP15_MODELS = Object.freeze([
 ]);
 export const DEFAULT_ACESTEP15_MODEL_ID = 'ace-step-v1.5';
 // MiniMax Music 3 weights. The HF repo is ~57 GB, but `ModularPipeline`
-// (what scripts/generate_minimax_music3.py loads) reads only the seven
+// (what scripts/ml/generate_minimax_music3.py loads) reads only the seven
 // components named in the repo's modular_model_index.json: condition_encoder,
 // language_model, rvq_depth_decoder, scheduler, tokenizer, transformer,
 // vocoder — about 29 GB. The rest is the sglang-omni serving path: a bundled
@@ -147,7 +147,7 @@ export const MUSIC_VRAM_READINESS = Object.freeze({
 });
 // Measured on an RTX 3090 (24 GB): a fixed-seed, production-shaped full-length
 // render (default 60s ceiling, natural length 41s) passed the technical
-// benchmark (scripts/music_benchmark.py — clean WAV, negligible clipping, no
+// benchmark (scripts/ml/music_benchmark.py — clean WAV, negligible clipping, no
 // truncation) with 18.3-18.7 GB peak reserved VRAM, plus a positive full-length
 // listening review (issue #4359). `minVramGb` is set above the observed peak
 // for desktop/driver headroom; only this card class has been validated, so
@@ -776,7 +776,7 @@ async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAUL
   const outputPath = join(PATHS.music, filename);
   const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, revision: model.revision, prompt: text, lyrics, durationSec: resolvedDuration, outputPath });
 
-  console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s: "${text.slice(0, 60)}"`);
+  console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s`);
   // The default backends use ungated HF weights (facebook/* and cvssp/*), so a
   // token isn't required — but pass it through when the user has one set so the
   // first download doesn't hit anonymous HF rate limits.

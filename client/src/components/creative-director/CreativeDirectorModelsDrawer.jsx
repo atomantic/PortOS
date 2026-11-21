@@ -6,7 +6,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import toast from '../ui/Toast';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
-import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/apiSystem.js';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';

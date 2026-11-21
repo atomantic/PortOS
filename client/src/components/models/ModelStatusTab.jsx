@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import ModelsPanel from './ModelsPanel.jsx';
-import { getTrackedModelInventory } from '../../services/api';
+import { getTrackedModelInventory } from '../../services/apiSystem.js';
 import { useSystemResourceReport } from '../../hooks/useSystemResourceReport.js';
 
 /**

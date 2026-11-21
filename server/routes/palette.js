@@ -73,8 +73,17 @@ const MANIFEST = Object.freeze({
   }),
 });
 
-router.get('/manifest', asyncHandler(async (_req, res) => {
+const manifestQuerySchema = z.object({
+  actionsOnly: z.enum(['0', '1', 'true', 'false']).optional(),
+});
+
+router.get('/manifest', asyncHandler(async (req, res) => {
+  const { actionsOnly } = validateRequest(manifestQuerySchema, req.query ?? {});
   res.set('Cache-Control', 'private, max-age=300');
+  if (actionsOnly === '1' || actionsOnly === 'true') {
+    res.json({ actions: MANIFEST.actions });
+    return;
+  }
   res.json(MANIFEST);
 }));
 

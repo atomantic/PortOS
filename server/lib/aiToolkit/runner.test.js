@@ -48,6 +48,34 @@ describe('AI Toolkit runner service', () => {
     }
   });
 
+  it('stores a host-redacted prompt and preview while sending the original provider input', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const provider = { id: 'example', type: 'api', endpoint: 'https://api.example.com/v1', defaultModel: 'example-model' };
+    const redactStoredPrompt = vi.fn(() => 'Public part plus redaction notice');
+    const onRunCreated = vi.fn();
+    const runner = createRunnerService({ dataDir, providerService: {}, redactStoredPrompt, hooks: { onRunCreated } });
+    const prompt = 'Public part plus private fact';
+    const reader = { read: async () => ({ done: true }), cancel: async () => {}, releaseLock() {} };
+    const providerFetch = vi.fn(async () => ({ ok: true, body: { getReader: () => reader } }));
+    vi.stubGlobal('fetch', providerFetch);
+    try {
+      const { runId, runDir } = await runner.createRun({ providerId: provider.id, provider, prompt, source: 'digital-twin' });
+      const settled = Promise.withResolvers();
+      await runner.executeApiRun({ runId, provider, prompt, onSettled: settled.resolve });
+      await settled.promise;
+
+      expect(JSON.parse(providerFetch.mock.calls[0][1].body).messages[0].content).toBe(prompt);
+      expect(await runner.getRunPrompt(runId)).toBe('Public part plus redaction notice');
+      expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toMatchObject({
+        prompt: 'Public part plus redaction notice', promptLength: prompt.length,
+      });
+      expect(onRunCreated).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Public part plus redaction notice' }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reports settled only after API stream cleanup and asynchronous output hooks', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

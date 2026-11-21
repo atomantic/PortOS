@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { approveTailcatDevice, revokeTailcatDevice, setTailcatDeviceEnforcement } from '../../services/api';
+import { approveTailcatDevice, revokeTailcatDevice, setTailcatDeviceEnforcement } from '../../services/apiSystem.js';
 import { useTailcatServe } from './TailcatServeProvider';
 import { formatCount, timeAgo } from '../../utils/formatters';
 

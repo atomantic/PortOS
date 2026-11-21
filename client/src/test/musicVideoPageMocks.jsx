@@ -278,6 +278,10 @@ vi.mock('../services/apiSystem.js', () => ({
 }));
 vi.mock('../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(async () => []),
+  listMoodBoards: vi.fn(async () => []),
+  createMoodBoard: vi.fn(),
+  addMoodBoardItem: vi.fn(),
+  removeMoodBoardItem: vi.fn(),
 }));
 const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '' }));
 vi.mock('../hooks/useProviderModels', () => ({
@@ -291,8 +295,9 @@ vi.mock('../hooks/useMidiNotes.js', () => ({
   default: () => ({ status: 'idle', data: null, error: null, reload: vi.fn() }),
 }));
 vi.mock('../services/apiImageVideo.js', () => ({
+  listMediaCollections: vi.fn(async () => []),
+  createMediaCollection: vi.fn(),
   listImageModels: vi.fn(async () => []),
-  getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: sharedMedia.generateVideo,
   listOvernightRenders: vi.fn(async () => ({ batches: [] })),
   queueOvernightRenders: vi.fn(),
@@ -312,7 +317,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
     loraCompatKey: 'ltx-video',
     recommendedScale: 1.2,
   }]),
-  getVideoGenStatus: vi.fn(async () => ({
+  getVideoGenModelContext: vi.fn(async () => ({
     connected: true,
     defaultModel: 'ltx23_distilled_q4',
     models: [

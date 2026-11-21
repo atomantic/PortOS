@@ -16,7 +16,19 @@ const api = vi.hoisted(() => ({
   listMoodBoards: vi.fn(), createMoodBoard: vi.fn(),
   addMoodBoardItem: vi.fn(), removeMoodBoardItem: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listMediaCollections: api.listMediaCollections,
+  createMediaCollection: api.createMediaCollection,
+  addMediaCollectionItem: api.addMediaCollectionItem,
+  removeMediaCollectionItem: api.removeMediaCollectionItem,
+}));
+vi.mock('../../services/apiMoodBoard.js', () => ({
+  listMoodBoards: api.listMoodBoards,
+  createMoodBoard: api.createMoodBoard,
+  addMoodBoardItem: api.addMoodBoardItem,
+  removeMoodBoardItem: api.removeMoodBoardItem,
+}));
+vi.mock('../../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 const item = {
   kind: 'image', key: 'image:fixture.png', filename: 'fixture.png',

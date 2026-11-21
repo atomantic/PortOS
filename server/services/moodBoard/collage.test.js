@@ -23,7 +23,7 @@ vi.mock('./db.js', () => ({
     return { board: state.board, added: fresh.length };
   },
 }));
-vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
+vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), autoSubscribeRecordToAllPeers: vi.fn(async () => {}) }));
 
 const { extractItemFrames } = await import('./collage.js');
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');

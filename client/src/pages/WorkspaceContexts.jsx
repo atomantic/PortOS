@@ -12,9 +12,12 @@ import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { pluralize } from '../lib/textUtils';
 import {
-  listWorkspaceContexts, getWorkspaceContext, saveWorkspaceContext,
-  restoreWorkspaceContext, deleteWorkspaceContext
-} from '../services/api';
+  listWorkspaceContexts,
+  getWorkspaceContext,
+  saveWorkspaceContext,
+  restoreWorkspaceContext,
+  deleteWorkspaceContext,
+} from '../services/apiWorkspaceContexts.js';
 
 // Light-weight project switcher (#902): pick a project to see and save/restore
 // its working context — git branch, in-repo shell sessions, scoped tasks.

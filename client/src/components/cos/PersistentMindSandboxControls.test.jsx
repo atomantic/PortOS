@@ -2,7 +2,8 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 const api = vi.hoisted(() => ({ getProviders: vi.fn(), updateCosConfig: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
+vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 import PersistentMindSandboxControls from './PersistentMindSandboxControls.jsx';
 beforeEach(() => {
   vi.clearAllMocks();

@@ -3,7 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 import { useState } from 'react';
 
 const updatePipelineSeries = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   updatePipelineSeries: (...args) => updatePipelineSeries(...args),
 }));
 

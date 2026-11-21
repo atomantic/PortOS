@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'transcribe_muscriptor.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'transcribe_muscriptor.py');
 const python = resolveTestPython();
 
 // Match the published muscriptor 0.4.0 API: transcribe_and_postprocess returns

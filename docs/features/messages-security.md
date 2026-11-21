@@ -114,9 +114,9 @@ Message triage and replies use `email` by default. Channel-aware outreach select
 - `server/services/forgeActorTrust.js`: live repository authority.
 - `server/services/forgeMaintenanceEvidence.js`: full discussion reads and enum-only maintenance evidence.
 - `server/services/messageEvaluator.js`: triage recommendations and reply drafts.
-- `server/services/modelAbuseGuard.js` and `scripts/run_prompt_guard.py`: passive readiness, explicit install/scan, offline classification.
+- `server/services/modelAbuseGuard.js` and `scripts/ml/run_prompt_guard.py`: passive readiness, explicit install/scan, offline classification.
 - `client/src/components/models/ModelAbuseGuardPanel.jsx`: install/repair and source-policy settings.
-- `server/lib/jev.js`, `server/services/jev.js` and `scripts/run_jev.py`: the optional local entailment scorer — pinned contract, sidecar lifecycle, and the abstaining `decide()`.
+- `server/lib/jev.js`, `server/services/jev.js` and `scripts/ml/run_jev.py`: the optional local entailment scorer — pinned contract, sidecar lifecycle, and the abstaining `decide()`.
 - `server/lib/jevDecisions.js`: the frozen hypothesis sets and abstention floors for every routed decision.
 - `server/services/jevRouter.js`: the jev rung — mode resolution, one consultation, and the counts-only agreement store (`data/local-llm/jev-shadow.json`).
 

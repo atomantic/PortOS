@@ -1,8 +1,16 @@
 import ExecutionOptionsAttribution from '../../providers/ExecutionOptionsAttribution.jsx';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
-import * as api from '../../../services/api';
+import {
+  getRuns,
+  deleteRun,
+  stopRun,
+  getRunPrompt,
+  getRunOutput,
+  deleteFailedRuns,
+} from '../../../services/apiRuns.js';
+import { TABS } from '../constants';
 import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -12,6 +20,8 @@ import useListResource from '../../../hooks/useListResource';
 import ProcessLogModal from '../../ui/ProcessLogModal';
 import { writeClipboardSilently } from '../../../lib/clipboard';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
+
+const runEventsPath = TABS.find(({ id }) => id === 'run-events').to;
 
 // Map an AI run's source to the PM2 process whose system log holds the full
 // context for that run. CoS-agent runs are driven by the `portos-cos` process;
@@ -33,7 +43,7 @@ export default function RunsTab() {
   const [logModalRun, setLogModalRun] = useState(null);
 
   const fetchRuns = useCallback(
-    () => api.getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
+    () => getRuns(100, 0, sourceFilter, { silent: true }).then(data => data?.runs || []),
     [sourceFilter]
   );
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
@@ -109,7 +119,7 @@ export default function RunsTab() {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    const deleted = await api.deleteRun(id).catch(() => null);
+    const deleted = await deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
     supersedeRefresh();
     setRuns(prev => prev.filter(run => run.id !== id));
@@ -119,7 +129,7 @@ export default function RunsTab() {
   const handleStop = async (id, e) => {
     e.stopPropagation();
     setStoppingIds((prev) => new Set(prev).add(id));
-    const stopped = await api.stopRun(id).then(() => true).catch(() => false);
+    const stopped = await stopRun(id).then(() => true).catch(() => false);
     if (!stopped) {
       setStoppingIds((prev) => {
         const next = new Set(prev);
@@ -144,8 +154,8 @@ export default function RunsTab() {
     // Load full prompt and output if not already loaded
     if (!expandedDetails[id]) {
       const [prompt, output] = await Promise.all([
-        api.getRunPrompt(id).catch(() => ''),
-        api.getRunOutput(id).catch(() => '')
+        getRunPrompt(id).catch(() => ''),
+        getRunOutput(id).catch(() => '')
       ]);
       setExpandedDetails(prev => ({
         ...prev,
@@ -179,8 +189,8 @@ export default function RunsTab() {
     let details = expandedDetails[run.id];
     if (!details) {
       const [prompt, output] = await Promise.all([
-        api.getRunPrompt(run.id).catch(() => ''),
-        api.getRunOutput(run.id).catch(() => '')
+        getRunPrompt(run.id).catch(() => ''),
+        getRunOutput(run.id).catch(() => '')
       ]);
       details = { prompt, output };
     }
@@ -230,7 +240,7 @@ export default function RunsTab() {
   const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
-    const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
+    const ok = await deleteFailedRuns().then(() => true).catch(() => false);
     if (ok) {
       supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
@@ -452,6 +462,12 @@ export default function RunsTab() {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                             </svg>
                           </button>
+                          {run.source === 'cos-agent' && (
+                            <Link to={`${runEventsPath}?${new URLSearchParams({ run: run.id })}`}
+                              className="inline-flex min-h-11 items-center px-2 text-xs text-port-accent hover:underline">
+                              View run events
+                            </Link>
+                          )}
                         </div>
                       </div>
 

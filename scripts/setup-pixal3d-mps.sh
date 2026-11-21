@@ -25,8 +25,8 @@ fi
 [[ ! -L .venv ]] || { echo 'Refusing to rebuild a symlinked Pixal3D environment.' >&2; exit 1; }
 "$PY" -m venv --clear .venv
 VPY=.venv/bin/python
-"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/requirements-pixal3d-mps.lock.txt"
-"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$SCRIPTS_DIR/requirements-pixal3d-mps-sources.lock.txt"
+"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps.lock.txt"
+"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps-sources.lock.txt"
 
 # Archive Git objects, not the working directory: builds and renders use the
 # same pinned source, even if an earlier checkout has local changes/artifacts.

@@ -3,13 +3,19 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiFableLoom.js', () => ({
   listLooms: vi.fn(),
   createLoom: vi.fn(),
   deleteLoom: vi.fn(),
   generateLoomSeriesPlan: vi.fn(),
+}));
+vi.mock('../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseNames: vi.fn(),
+}));
+vi.mock('../services/apiNavNames.js', () => ({
   listPipelineSeriesNames: vi.fn(),
 }));
 vi.mock('../components/sharing/SyncToPeerButton', () => ({
@@ -22,7 +28,10 @@ vi.mock('react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigate };
 });
 
-import * as api from '../services/api';
+import { listLooms, createLoom, generateLoomSeriesPlan, deleteLoom } from '../services/apiFableLoom.js';
+import { listUniverseNames } from '../services/apiUniverseBuilder.js';
+import { listPipelineSeriesNames } from '../services/apiNavNames.js';
+import { getProviders } from '../services/apiProviders.js';
 import FableLoom from './FableLoom';
 
 // The list endpoint returns summaries, not the episode graphs.
@@ -49,10 +58,10 @@ const renderPage = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listLooms.mockResolvedValue(looms);
-  api.listUniverseNames.mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
-  api.listPipelineSeriesNames.mockResolvedValue([]);
-  api.getProviders.mockResolvedValue({
+  listLooms.mockResolvedValue(looms);
+  listUniverseNames.mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
+  listPipelineSeriesNames.mockResolvedValue([]);
+  getProviders.mockResolvedValue({
     activeProvider: 'codex',
     providers: [{
       id: 'codex', name: 'Codex', enabled: true, command: 'codex',
@@ -74,13 +83,13 @@ describe('FableLoom index', () => {
   });
 
   it('shows the empty state when there are no looms', async () => {
-    api.listLooms.mockResolvedValue([]);
+    listLooms.mockResolvedValue([]);
     await renderPage();
     await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
   });
 
   it('shows a retriable error instead of the empty copy when looms fail to load', async () => {
-    api.listLooms.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
+    listLooms.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
     await renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load branching narratives');
     expect(screen.queryByText(/No branching narratives yet/)).not.toBeInTheDocument();
@@ -89,8 +98,8 @@ describe('FableLoom index', () => {
   });
 
   it('shows independent retry rows when universe or series picker options fail', async () => {
-    api.listUniverseNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
-    api.listPipelineSeriesNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'series-1', name: 'The Crown' }]);
+    listUniverseNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
+    listPipelineSeriesNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'series-1', name: 'The Crown' }]);
     const user = userEvent.setup();
     await renderPage();
     await user.click(screen.getByRole('button', { name: /New loom/ }));
@@ -102,8 +111,8 @@ describe('FableLoom index', () => {
     await user.click(within(alerts.find((alert) => alert.textContent.includes('universes'))).getByRole('button', { name: 'Retry' }));
     await user.click(within(alerts.find((alert) => alert.textContent.includes('series'))).getByRole('button', { name: 'Retry' }));
     await waitFor(() => {
-      expect(api.listUniverseNames).toHaveBeenCalledTimes(2);
-      expect(api.listPipelineSeriesNames).toHaveBeenCalledTimes(2);
+      expect(listUniverseNames).toHaveBeenCalledTimes(2);
+      expect(listPipelineSeriesNames).toHaveBeenCalledTimes(2);
     });
     expect(screen.queryByText(/Could not load universes/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Could not load series/)).not.toBeInTheDocument();
@@ -112,7 +121,7 @@ describe('FableLoom index', () => {
   });
 
   it('opens the creation form from the empty-state action', async () => {
-    api.listLooms.mockResolvedValue([]);
+    listLooms.mockResolvedValue([]);
     const user = userEvent.setup();
     await renderPage();
     await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
@@ -123,7 +132,7 @@ describe('FableLoom index', () => {
   });
 
   it('creates a loom and navigates to its editor', async () => {
-    api.createLoom.mockResolvedValue({ id: 'loom-9' });
+    createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
     await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
@@ -133,18 +142,18 @@ describe('FableLoom index', () => {
     await user.type(screen.getByLabelText('Audience communication medium'), 'A crystal radio.');
     await user.click(screen.getByRole('button', { name: 'Create loom' }));
 
-    await waitFor(() => expect(api.createLoom).toHaveBeenCalledWith({
+    await waitFor(() => expect(createLoom).toHaveBeenCalledWith({
       name: 'Gate of Ash', logline: '', premise: '', styleNotes: '', format: 'prose',
       participationMode: 'helper', audienceCommunicationMedium: 'A crystal radio.',
       universeId: null, seriesId: null,
     }, { silent: true }));
     expect(navigate).toHaveBeenCalledWith('/fableloom/loom-9/plan');
-    expect(api.generateLoomSeriesPlan).not.toHaveBeenCalled();
+    expect(generateLoomSeriesPlan).not.toHaveBeenCalled();
   });
 
   it('creates and drafts the full plan with the chosen provider, model, and effort', async () => {
-    api.createLoom.mockResolvedValue({ id: 'loom-9' });
-    api.generateLoomSeriesPlan.mockResolvedValue({ loom: { id: 'loom-9' }, runId: 'run-draft' });
+    createLoom.mockResolvedValue({ id: 'loom-9' });
+    generateLoomSeriesPlan.mockResolvedValue({ loom: { id: 'loom-9' }, runId: 'run-draft' });
     const user = userEvent.setup();
     await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
@@ -157,14 +166,14 @@ describe('FableLoom index', () => {
     await user.selectOptions(screen.getByLabelText('Thinking effort'), 'high');
     await user.click(screen.getByRole('button', { name: /Create & draft plan/ }));
 
-    await waitFor(() => expect(api.generateLoomSeriesPlan).toHaveBeenCalledWith('loom-9', {
+    await waitFor(() => expect(generateLoomSeriesPlan).toHaveBeenCalledWith('loom-9', {
       providerId: 'codex', model: 'gpt-5.6', effort: 'high',
     }, { silent: true }));
     expect(navigate).toHaveBeenCalledWith('/fableloom/loom-9/plan');
   });
 
   it('deletes a loom after inline confirmation', async () => {
-    api.deleteLoom.mockResolvedValue({});
+    deleteLoom.mockResolvedValue({});
     const user = userEvent.setup();
     await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
@@ -172,7 +181,7 @@ describe('FableLoom index', () => {
     await user.click(screen.getByRole('button', { name: 'Delete The Hollow Crown' }));
     await user.click(screen.getByRole('button', { name: /^Delete$/ }));
 
-    await waitFor(() => expect(api.deleteLoom).toHaveBeenCalledWith('loom-1'));
+    await waitFor(() => expect(deleteLoom).toHaveBeenCalledWith('loom-1'));
     await waitFor(() => expect(screen.queryByText('The Hollow Crown')).not.toBeInTheDocument());
   });
 });

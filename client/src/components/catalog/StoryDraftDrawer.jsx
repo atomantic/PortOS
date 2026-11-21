@@ -1,10 +1,11 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { Loader2, Save, Sparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
-import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } from '../../services/api';
+import { createCatalogIngredient, draftCatalogStoryMember, joinCatalogStory } from '../../services/apiCatalog.js';
 import { formatCount } from '../../utils/formatters';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 import { STORY_DRAFT_LIMITS } from '../../../../server/lib/catalog/catalogStoryDraft.js';
@@ -100,14 +101,14 @@ export default function StoryDraftDrawer({ open, onClose, library, typeMeta, uni
             <label htmlFor="story-draft-universe" className={labelClass}>Universe</label>
             <select id="story-draft-universe" value={universeId} onChange={(e) => { setUniverseId(e.target.value); setStoryChoice(''); }} className={fieldClass}>
               <option value="">Choose a universe…</option>
-              {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
+              {sortByLabel(universes).map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
             </select>
           </div>
           <div>
             <label htmlFor="story-draft-story" className={labelClass}>Joins story</label>
             <select id="story-draft-story" value={storyChoice} onChange={(e) => setStoryChoice(e.target.value)} disabled={!universeId} className={fieldClass}>
               <option value="">No story</option>
-              {universeStories.map((item) => <option key={storyKey(item)} value={storyKey(item)}>{item.name}</option>)}
+              {sortByLabel(universeStories).map((item) => <option key={storyKey(item)} value={storyKey(item)}>{item.name}</option>)}
             </select>
           </div>
         </div>

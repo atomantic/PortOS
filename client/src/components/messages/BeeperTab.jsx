@@ -7,7 +7,7 @@ import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useBeeperRealtime from '../../hooks/useBeeperRealtime';
 import useMounted from '../../hooks/useMounted';
-import { getBeeperStatus } from '../../services/api';
+import { getBeeperStatus } from '../../services/apiBeeper.js';
 import BeeperChatSurface from './beeper/BeeperChatSurface';
 import BeeperSettingsPanel from './beeper/BeeperSettingsPanel';
 

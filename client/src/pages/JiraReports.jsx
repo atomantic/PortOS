@@ -5,7 +5,8 @@ import {FileText,
   RefreshCw,
   Copy,
   Check} from 'lucide-react';
-import * as api from '../services/api';
+import { getJiraReport, getJiraReports, generateJiraReport } from '../services/apiSystem.js';
+import { getApps } from '../services/apiApps.js';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { copyToClipboard } from '../lib/clipboard';
 
@@ -147,7 +148,7 @@ export default function JiraReports() {
     if (!reportApp || !reportDate) { setSelectedReport(null); return; }
     if (selectedReport?.appId === reportApp && selectedReport?.date === reportDate) return;
     let cancelled = false;
-    api.getJiraReport(reportApp, reportDate).then((full) => {
+    getJiraReport(reportApp, reportDate).then((full) => {
       // Clear the selection when the URL names a report that no longer resolves
       // (deleted / bad deep link) so the detail pane falls back to its
       // placeholder instead of stranding the previously-open report.
@@ -166,7 +167,7 @@ export default function JiraReports() {
   };
 
   const loadApps = async () => {
-    const allApps = await api.getApps();
+    const allApps = await getApps();
     const jiraApps = (allApps || []).filter(a => a.jira?.enabled);
     setApps(jiraApps);
   };
@@ -174,7 +175,7 @@ export default function JiraReports() {
   const loadReports = async () => {
     setLoading(true);
     // request() toasts a failure; keep the list we have and leave the loading state.
-    const result = await api.getJiraReports().catch(() => null);
+    const result = await getJiraReports().catch(() => null);
     if (result) setReports(result);
     setLoading(false);
   };
@@ -182,7 +183,7 @@ export default function JiraReports() {
   const handleGenerate = async (appId = null) => {
     setGenerating(true);
     // A failed generation must re-enable the Generate buttons (request() toasts the error).
-    const result = await api.generateJiraReport(appId).catch(() => null);
+    const result = await generateJiraReport(appId).catch(() => null);
     if (result) {
       toast.success(appId ? 'Report generated' : `Generated ${Array.isArray(result) ? result.length : 1} report(s)`);
       await loadReports();

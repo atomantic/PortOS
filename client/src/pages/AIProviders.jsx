@@ -1,42 +1,59 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { getOrchestrationProfiles } from '../services/apiAgents.js';
+import { getApps } from '../services/apiApps.js';
+import {
+  getSampleProviders,
+  getCodexModels,
+  getCodexAccount,
+  getProviderRuntimes,
+  getProviders,
+  getProviderStatuses,
+  getProviderReadiness,
+  recoverProvider,
+  setActiveProvider,
+  testProvider,
+  deleteProvider,
+  addProviderTuiMode,
+  updateProvider,
+  startCodexLogin,
+  cancelCodexLogin,
+  codexLogout,
+  serveProviderModel,
+  refreshProviderModels,
+  createProvider,
+} from '../services/apiProviders.js';
+import { getInstances } from '../services/apiSystem.js';
+import { createRun, stopRun } from '../services/apiRuns.js';
 import socket from '../services/socket';
-import ProviderModelSelector from '../components/ProviderModelSelector';
-import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, isTuiProvider, isApiProvider, isCodexSubscriptionProvider, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { OTHER_HARNESS_GROUP, groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
 import useProviderCatalog from '../hooks/useProviderCatalog';
 import { copyToClipboard } from '../lib/clipboard';
-import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import useMounted from '../hooks/useMounted.js';
 import useListResource from '../hooks/useListResource.js';
-import ListLoadError from '../components/ui/ListLoadError';
 import { useSocketResource } from '../hooks/useSocketResource';
-import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
 import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
-import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
-import ProviderCard from '../components/providers/ProviderCard';
-import ProviderEnvVars from '../components/providers/ProviderEnvVars';
-import ProviderForm from '../components/providers/ProviderForm';
-import CollapsibleSection from '../components/ui/CollapsibleSection';
-import FleetProviderSetup from '../components/providers/FleetProviderSetup';
-import FleetHostSetup from '../components/providers/FleetHostSetup';
-import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
-import RetiredModelPinsPanel from '../components/providers/RetiredModelPinsPanel';
 import { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
-import ProviderHarnessesTab from '../components/providers/ProviderHarnessesTab';
-import ProviderServicesTab from '../components/providers/ProviderServicesTab';
-import ProviderCompatibilityMatrix from '../components/providers/ProviderCompatibilityMatrix';
-import ProviderComposePopover from '../components/providers/ProviderComposePopover';
-import DefaultProviderHelper from '../components/providers/DefaultProviderHelper';
+import { lazyWithReload } from '../utils/lazyWithReload';
+
+// Routed views and heavy drawers/modals stay out of the entry chunk so visiting
+// `/ai/presets` never downloads Harnesses, Services, Fleet Setup, or the form.
+const ProviderPresetsTab = lazyWithReload(() => import('../components/providers/ProviderPresetsTab'));
+const ProviderHarnessesTab = lazyWithReload(() => import('../components/providers/ProviderHarnessesTab'));
+const ProviderServicesTab = lazyWithReload(() => import('../components/providers/ProviderServicesTab'));
+const ProviderForm = lazyWithReload(() => import('../components/providers/ProviderForm'));
+const FleetProviderSetup = lazyWithReload(() => import('../components/providers/FleetProviderSetup'));
+const ProviderComposePopover = lazyWithReload(() => import('../components/providers/ProviderComposePopover'));
+const RuntimeInstallModal = lazyWithReload(() => import('../components/install/RuntimeInstallModal'));
 
 const STATUS_EVENTS = ['provider-status:changed'];
 const READINESS_EVENTS = ['provider-readiness:changed'];
@@ -114,7 +131,7 @@ export default function AIProviders() {
   const [runPrompt, setRunPrompt] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const loadOrchestrationProfiles = useCallback(async () => {
-    const result = await api.getOrchestrationProfiles?.({ silent: true });
+    const result = await getOrchestrationProfiles?.({ silent: true });
     return Array.isArray(result) ? result : result?.profiles || [];
   }, []);
   const {
@@ -125,7 +142,7 @@ export default function AIProviders() {
   } = useListResource(loadOrchestrationProfiles);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const loadApps = useCallback(async () => {
-    const list = await api.getApps({ silent: true });
+    const list = await getApps({ silent: true });
     return Array.isArray(list) ? list : [];
   }, []);
   const appsResource = useListResource(loadApps);
@@ -135,7 +152,7 @@ export default function AIProviders() {
   const [showSamples, setShowSamples] = useState(false);
   // Samples are fetched only once the user asks for them (`showSamples`).
   const loadSamples = useCallback(async () => {
-    const result = await api.getSampleProviders({ silent: true });
+    const result = await getSampleProviders({ silent: true });
     return result?.providers || [];
   }, []);
   const {
@@ -172,7 +189,7 @@ export default function AIProviders() {
   }, []);
 
   const loadCodexModels = useCallback(async (fresh = false) => {
-    const result = await api.getCodexModels({ fresh, silent: true }).catch(() => null);
+    const result = await getCodexModels({ fresh, silent: true }).catch(() => null);
     if (!result || !Object.hasOwn(result, 'models')) return null;
     setCodexModels(result);
     // `null` is never fetched; an empty list is a real catalog. Only merge a
@@ -187,10 +204,10 @@ export default function AIProviders() {
     // Compatibility with a server that predates the account endpoint. The
     // normal client library always has this function; the guard makes a mixed
     // client/server upgrade leave the established provider controls intact.
-    if (typeof api.getCodexAccount !== 'function') return undefined;
+    if (typeof getCodexAccount !== 'function') return undefined;
     const revision = ++observationRevision.current.account;
     setCodexAccountLoading(true);
-    const result = await api.getCodexAccount({ fresh, silent: true }).catch(() => null);
+    const result = await getCodexAccount({ fresh, silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.account) return;
     const readiness = result?.readiness && typeof result.readiness === 'object' ? result.readiness : null;
     setCodexAccount(readiness);
@@ -270,15 +287,15 @@ export default function AIProviders() {
   // the critical path: the page paints from the provider list and the install
   // badges appear when the probes land.
   const loadRuntimes = useCallback(async () => {
-    const data = await api.getProviderRuntimes({ silent: true }).catch(() => null);
+    const data = await getProviderRuntimes({ silent: true }).catch(() => null);
     setRuntimes(data?.runtimes && typeof data.runtimes === 'object' ? data.runtimes : {});
   }, []);
 
   useEffect(() => { loadRuntimes(); }, [loadRuntimes]);
 
   const loadFleetPeers = useCallback(async () => {
-    if (typeof api.getInstances !== 'function') return [];
-    const data = await api.getInstances({ silent: true });
+    if (typeof getInstances !== 'function') return [];
+    const data = await getInstances({ silent: true });
     return Array.isArray(data?.peers) ? data.peers : [];
   }, []);
   const fleetPeersResource = useListResource(loadFleetPeers, { enabled: fleetSetupOpen });
@@ -321,11 +338,11 @@ export default function AIProviders() {
     let providersFailed = false;
     const statusRevision = ++observationRevision.current.status;
     const [providersData, statusData] = await Promise.all([
-      api.getProviders({ fresh: true }).catch(() => {
+      getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),
-      api.getProviderStatuses().catch(() => ({ providers: {} })),
+      getProviderStatuses().catch(() => ({ providers: {} })),
     ]);
     if (!observationMounted.current) return;
     if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
@@ -357,7 +374,7 @@ export default function AIProviders() {
   // passes (the server expires `estimatedRecovery` on read), without a full reload.
   const refreshStatuses = useCallback(async () => {
     const revision = ++observationRevision.current.status;
-    const statusData = await api.getProviderStatuses({ silent: true }).catch(() => null);
+    const statusData = await getProviderStatuses({ silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.status) return;
     setObservationUnavailable(previous => ({ ...previous, status: !statusData?.providers }));
     if (statusData?.providers) setStatuses(statusData.providers);
@@ -369,7 +386,7 @@ export default function AIProviders() {
   // from the Models → Runtimes page clears the card's checklist on its own.
   const loadReadiness = useCallback(async () => {
     const revision = ++observationRevision.current.readiness;
-    const data = await api.getProviderReadiness({ silent: true }).catch(() => null);
+    const data = await getProviderReadiness({ silent: true }).catch(() => null);
     if (!observationMounted.current || revision !== observationRevision.current.readiness) return;
     const valid = data?.readiness && typeof data.readiness === 'object';
     setObservationUnavailable(previous => ({ ...previous, readiness: !valid }));
@@ -392,7 +409,7 @@ export default function AIProviders() {
   // next failure re-benches it — recovery is "try again now", not "fix the cause".
   const handleRecover = async (id) => {
     setRecovering(prev => ({ ...prev, [id]: true }));
-    const result = await api.recoverProvider(id, { silent: true }).catch(() => null);
+    const result = await recoverProvider(id, { silent: true }).catch(() => null);
     if (result) {
       observationRevision.current.status += 1;
       setStatuses(prev => ({ ...prev, [id]: { ...prev[id], available: true, reason: 'ok', message: 'Provider available', timeUntilRecovery: null } }));
@@ -405,7 +422,7 @@ export default function AIProviders() {
 
   const handleSetActive = async (id) => {
     if (!id) return;
-    const result = await api.setActiveProvider(id).catch(() => null);
+    const result = await setActiveProvider(id).catch(() => null);
     if (result) {
       providerListRevision.current.mutation += 1;
       setActiveProviderId(id);
@@ -414,14 +431,14 @@ export default function AIProviders() {
 
   const handleTest = async (id) => {
     setTestResults(prev => ({ ...prev, [id]: { testing: true } }));
-    const result = await api.testProvider(id).catch(err => ({ success: false, error: err.message }));
+    const result = await testProvider(id).catch(err => ({ success: false, error: err.message }));
     setTestResults(prev => ({ ...prev, [id]: result }));
   };
 
   // Removed in place. A mode of a grouped card is the exception: the server owns
   // the grouping (`executionModes`), so removing one re-reads to regroup.
   const handleDelete = async (id) => {
-    await api.deleteProvider(id);
+    await deleteProvider(id);
     const groupedMode = providers.some(p => p.id !== id && (p.executionModes || []).some(mode => mode.id === id));
     if (groupedMode || providers.find(p => p.id === id)?.executionModes?.length > 1) {
       loadData();
@@ -437,7 +454,7 @@ export default function AIProviders() {
   // way to splice a new mode into the list from here.
   const handleAddTuiMode = async (provider) => {
     setAddingTuiMode(prev => ({ ...prev, [provider.id]: true }));
-    const created = await api.addProviderTuiMode(provider.id, { silent: true }).catch(() => null);
+    const created = await addProviderTuiMode(provider.id, { silent: true }).catch(() => null);
     setAddingTuiMode(prev => ({ ...prev, [provider.id]: false }));
     if (!created) {
       toast.error(`Could not add an interactive mode for ${provider.name}`);
@@ -448,7 +465,7 @@ export default function AIProviders() {
   };
 
   const handleToggleEnabled = async (provider) => {
-    const updated = await api.updateProvider(provider.id, {
+    const updated = await updateProvider(provider.id, {
       enabled: !provider.enabled,
     });
     // Only `enabled` is patched: the response is a bare record without the
@@ -458,7 +475,7 @@ export default function AIProviders() {
   };
 
   const handleEnableCodexSubscription = async (provider) => {
-    const updated = await api.updateProvider(provider.id, { textTransportEnabled: true }, { silent: true }).catch(() => null);
+    const updated = await updateProvider(provider.id, { textTransportEnabled: true }, { silent: true }).catch(() => null);
     if (!updated) {
       toast.error('Could not save the ChatGPT subscription transport');
       return;
@@ -472,7 +489,7 @@ export default function AIProviders() {
 
   const handleCodexSignIn = async (deviceCode) => {
     setCodexLoginLoading(true);
-    const result = await api.startCodexLogin(deviceCode, { silent: true }).catch(() => null);
+    const result = await startCodexLogin(deviceCode, { silent: true }).catch(() => null);
     setCodexLoginLoading(false);
     if (!result?.login) {
       toast.error('Could not start ChatGPT sign-in');
@@ -494,7 +511,7 @@ export default function AIProviders() {
 
   const handleCancelCodexLogin = async (loginId) => {
     setCodexLoginLoading(true);
-    const result = await api.cancelCodexLogin(loginId, { silent: true }).catch(() => null);
+    const result = await cancelCodexLogin(loginId, { silent: true }).catch(() => null);
     setCodexLoginLoading(false);
     if (!result?.readiness) {
       toast.error('Could not cancel ChatGPT sign-in');
@@ -506,7 +523,7 @@ export default function AIProviders() {
 
   const handleCodexLogout = async () => {
     setCodexAccountLoading(true);
-    const result = await api.codexLogout({ silent: true }).catch(() => null);
+    const result = await codexLogout({ silent: true }).catch(() => null);
     setCodexAccountLoading(false);
     if (!result?.readiness) {
       toast.error('Could not log out of ChatGPT');
@@ -530,7 +547,7 @@ export default function AIProviders() {
     const models = Array.isArray(provider.models) ? [...provider.models] : [];
     const updates = { defaultModel };
     if (!models.includes(defaultModel)) updates.models = [defaultModel, ...models];
-    const updated = await api.updateProvider(provider.id, updates).catch(() => null);
+    const updated = await updateProvider(provider.id, updates).catch(() => null);
     if (!updated) return;
     providerListRevision.current.mutation += 1;
     setProviders((prev) => prev.map((entry) => (
@@ -549,7 +566,7 @@ export default function AIProviders() {
     setServingModel((prev) => ({ ...prev, [provider.id]: true }));
     // `silent` so the 409 refusal (an externally-started daemon) reads as one
     // toast naming the fix rather than the helper's generic error on top of it.
-    const result = await api.serveProviderModel(provider.id, { silent: true })
+    const result = await serveProviderModel(provider.id, { silent: true })
       .catch((err) => ({ error: err?.message || 'The relaunch failed.' }));
     setServingModel((prev) => ({ ...prev, [provider.id]: false }));
     if (!result?.success) {
@@ -582,7 +599,7 @@ export default function AIProviders() {
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
-      const result = await api.refreshProviderModels(id, { silent: true });
+      const result = await refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
         const modelCatalog = Array.isArray(result.modelCatalog) ? result.modelCatalog : result.models;
@@ -614,7 +631,7 @@ export default function AIProviders() {
     setRunOutput('');
     const workspace = apps.find(a => a.id === selectedWorkspace);
 
-    const result = await api.createRun({
+    const result = await createRun({
       providerId: activeProviderId,
       prompt: runPrompt,
       workspacePath: workspace?.repoPath,
@@ -632,7 +649,7 @@ export default function AIProviders() {
 
   const handleStopRun = async () => {
     if (activeRun) {
-      await api.stopRun(activeRun);
+      await stopRun(activeRun);
       setActiveRun(null);
     }
   };
@@ -647,7 +664,7 @@ export default function AIProviders() {
   const handleAddSample = async (provider) => {
     setAddingSample(prev => ({ ...prev, [provider.id]: true }));
     try {
-      await api.createProvider(provider);
+      await createProvider(provider);
       setSampleProviders(prev => prev.filter(p => p.id !== provider.id));
       await loadData();
       toast.success(`Added ${provider.name}`);
@@ -662,7 +679,7 @@ export default function AIProviders() {
   };
 
   const handleCreateFleetProvider = async (provider) => {
-    const created = await api.createProvider(provider);
+    const created = await createProvider(provider);
     providerListRevision.current.mutation += 1;
     setProviders((current) => [...current, created]);
     toast.success(`${created.name} is connected to the fleet GPU host`);
@@ -672,7 +689,7 @@ export default function AIProviders() {
   // Repoints an existing provider at a fleet host in place, rather than
   // leaving the user to create a duplicate and manually delete the old one.
   const handleUpdateFleetProvider = async (id, patch) => {
-    const updated = await api.updateProvider(id, patch);
+    const updated = await updateProvider(id, patch);
     providerListRevision.current.mutation += 1;
     setProviders((current) => current.map((entry) => (entry.id === id ? updated : entry)));
     toast.success(`${updated.name} is connected to the fleet GPU host`);
@@ -687,7 +704,7 @@ export default function AIProviders() {
 
     for (const provider of addableSamples) {
       try {
-        await api.createProvider(provider);
+        await createProvider(provider);
         succeededIds.push(provider.id);
       } catch (err) {
         console.error(`Failed to add sample provider ${provider.name || provider.id}:`, err);
@@ -908,6 +925,9 @@ export default function AIProviders() {
       )}
 
       <div className={`min-h-0 min-w-0 flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
+      {/* Local boundary rather than the App-level one: a lazy view must not blank
+          the section header and tab bar while its chunk loads. */}
+      <Suspense fallback={<PageSkeleton header="none" label="Loading providers" layout="grid" cards={4} />}>
       {activeTab === 'harnesses' && (
         <ProviderHarnessesTab
           selectedHarnessId={harnessId || null}
@@ -932,468 +952,176 @@ export default function AIProviders() {
       )}
 
       {activeTab === 'presets' && (
-      <>
-      {!loadError && (
-        <DefaultProviderHelper
-          provider={defaultProvider}
-          onScrollToCard={scrollToDefaultCard}
+        <ProviderPresetsTab
+          providers={providers}
+          providersById={providersById}
+          presetSections={presetSections}
+          cardStateByProviderId={cardStateByProviderId}
+          runtimeByProviderId={runtimeByProviderId}
+          readiness={readiness}
+          statuses={statuses}
+          activeProviderId={activeProviderId}
+          defaultProvider={defaultProvider}
+          runnerAllowedCommands={runnerAllowedCommands}
+          testResults={testResults}
+          refreshing={refreshing}
+          recovering={recovering}
+          addingTuiMode={addingTuiMode}
+          servingModel={servingModel}
+          codexAccount={codexAccount}
+          codexModels={codexModels}
+          codexAccountLoading={codexAccountLoading}
+          codexLoginLoading={codexLoginLoading}
+          loadError={loadError}
+          modelPinReloadKey={modelPinReloadKey}
+          showSamples={showSamples}
+          setShowSamples={setShowSamples}
+          loadingSamples={loadingSamples}
+          samplesState={samplesState}
+          samplesError={samplesError}
+          retrySamples={retrySamples}
+          sampleProviders={sampleProviders}
+          addableSamples={addableSamples}
+          addingSample={addingSample}
+          onAddSample={handleAddSample}
+          onAddAllSamples={handleAddAllSamples}
+          showRunPanel={showRunPanel}
+          orchestrationProfiles={orchestrationProfiles}
+          orchestrationProfilesState={orchestrationProfilesState}
+          orchestrationProfilesError={orchestrationProfilesError}
+          retryOrchestrationProfiles={retryOrchestrationProfiles}
+          selectedProfileId={selectedProfileId}
+          setSelectedProfileId={setSelectedProfileId}
+          apps={apps}
+          appsState={appsState}
+          appsError={appsError}
+          retryApps={retryApps}
+          selectedWorkspace={selectedWorkspace}
+          setSelectedWorkspace={setSelectedWorkspace}
+          runPrompt={runPrompt}
+          setRunPrompt={setRunPrompt}
+          activeRun={activeRun}
+          runOutput={runOutput}
+          runProviderIsTui={runProviderIsTui}
+          onExecuteRun={handleExecuteRun}
+          onStopRun={handleStopRun}
+          compositionCatalog={compositionCatalog}
+          onCompose={setComposeInitial}
+          onScrollToDefaultCard={scrollToDefaultCard}
+          onReload={loadData}
+          onTest={handleTest}
+          onRefreshModels={handleRefreshModels}
+          onToggleEnabled={handleToggleEnabled}
+          onSetActive={handleSetActive}
+          onEdit={openForm}
+          onDelete={handleDelete}
+          onAddTuiMode={handleAddTuiMode}
+          onRecover={handleRecover}
+          onInstallRuntime={setInstallingRuntime}
+          onAutoSetupRuntime={setSettingUpRuntime}
+          onUseServedModel={handleUseServedModel}
+          onServeWantedModel={handleServeWantedModel}
+          onCodexCheckAccount={() => loadCodexAccount(true)}
+          onCodexSignIn={handleCodexSignIn}
+          onCodexCancelLogin={handleCancelCodexLogin}
+          onCodexLogout={handleCodexLogout}
+          onCodexRefreshModels={() => loadCodexModels(true)}
+          onCodexCopyCode={handleCopyCodexDeviceCode}
+          onCodexEnable={handleEnableCodexSubscription}
         />
       )}
-
-      {/* A retirement only becomes observable when a catalog refresh lands, so
-          the panel re-reads on every refresh — see RetiredModelPinsPanel. */}
-      <RetiredModelPinsPanel reloadKey={modelPinReloadKey} />
-
-      <LocalPersistentMindSetupCard compact onApplied={loadData} />
-      <FleetHostSetup compact providers={providers} />
-
-      {/* Sample Providers Panel */}
-      {showSamples && (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-white">Sample Providers</h2>
-            <div className="flex gap-2">
-              {addableSamples.length > 1 && (
-                <button
-                  onClick={handleAddAllSamples}
-                  className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors"
-                >
-                  Add All ({addableSamples.length})
-                </button>
-              )}
-              <button
-                onClick={() => setShowSamples(false)}
-                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-
-          {loadingSamples ? (
-            <div className="text-center py-6 text-gray-400">Loading sample providers...</div>
-          ) : samplesState === 'error' ? (
-            <ListLoadError what="sample providers" error={samplesError} onRetry={retrySamples} />
-          ) : addableSamples.length === 0 ? (
-            <div className="text-center py-6 text-gray-500">
-              {sampleProviders.length === 0
-                ? 'All sample providers are already in your configuration.'
-                : 'The remaining sample providers cannot run on this machine’s hardware.'}
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {addableSamples.map(provider => (
-                <div
-                  key={provider.id}
-                  className="bg-port-bg border border-port-border rounded-lg p-3 flex flex-col sm:flex-row sm:items-start justify-between gap-3"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-semibold text-white">{provider.name}</h3>
-                      <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
-                        {provider.type.toUpperCase()}
-                      </span>
-                      {provider.llamaBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                          LLAMA.CPP / DFLASH
-                        </span>
-                      )}
-                      {provider.vllmBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                          vLLM / DFLASH2
-                        </span>
-                      )}
-                      {provider.sglangBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          SGLANG
-                        </span>
-                      )}
-                      {provider.mtplxBacked && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                          MTPLX
-                        </span>
-                      )}
-                      {!provider.enabled && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
-                          DISABLED
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1 text-xs text-gray-400 space-y-0.5">
-                      {isProcessProvider(provider) && (
-                        <p>Command: <code className="text-gray-300">{provider.command} {provider.args?.join(' ')}</code></p>
-                      )}
-                      {isApiProvider(provider) && (
-                        <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
-                      )}
-                      {isApiProvider(provider) && !isLocalEndpoint(provider.endpoint) && (
-                        <p className="text-port-warning">Needs an API key — after adding, use Edit to paste it</p>
-                      )}
-                      {filterSelectableModels(provider.models).length > 0 && (
-                        <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
-                      )}
-                      {/* The card's model line shows the SCOPED list, so say when a
-                          model-access policy is what makes it short — otherwise a
-                          user comparing it against the vendor's catalog reads a
-                          deliberate scope as a failed refresh. */}
-                      {provider.modelAccessHiddenCount > 0 && (
-                        <p className="text-gray-500">
-                          {formatCount(provider.modelAccessHiddenCount)} more hidden by model access
-                          {provider.modelAccessSource && provider.modelAccessSource !== 'own'
-                            ? ` (from ${provider.modelAccessSource})` : ''}
-                        </p>
-                      )}
-                      {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-                        <ProviderEnvVars
-                          envVars={provider.envVars}
-                          secretEnvVars={provider.secretEnvVars}
-                          className="mt-0.5"
-                        />
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleAddSample(provider)}
-                    disabled={Boolean(addingSample[provider.id])}
-                    className="px-4 py-1.5 text-sm bg-port-success/20 text-port-success hover:bg-port-success/30 rounded transition-colors disabled:opacity-50 shrink-0"
-                  >
-                    {addingSample[provider.id] ? 'Adding...' : 'Add'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Run Panel */}
-      {showRunPanel && (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
-          <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-            {/* `activeProvider` is always a PRESET id (epic #7561), so the
-                compose entry is off here — the picker cannot hand it a composite. */}
-            <div className="w-full sm:w-64">
-              <ProviderModelSelector
-                compact
-                compose={false}
-                label="Active provider"
-                providers={providers}
-                selectedProviderId={activeProviderId || ''}
-                emptyProviderOption="Select Provider"
-                onProviderChange={handleSetActive}
-              />
-            </div>
-
-            {orchestrationProfilesState === 'error' ? (
-              <ListLoadError what="orchestration profiles" error={orchestrationProfilesError} onRetry={retryOrchestrationProfiles} />
-            ) : (
-              <select
-                aria-label="Orchestration profile"
-                value={selectedProfileId}
-                onChange={(e) => setSelectedProfileId(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-              >
-                <option value="">No profile (direct)</option>
-                {orchestrationProfiles.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            )}
-
-            {appsState === 'error' && (
-              <ListLoadError what="workspaces" error={appsError} onRetry={retryApps} />
-            )}
-            {appsState !== 'error' && (
-              <select
-                aria-label="Workspace"
-                value={selectedWorkspace}
-                onChange={(e) => setSelectedWorkspace(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-              >
-                <option value="">{appsState === 'ready' && apps.length === 0 ? 'No workspaces found' : 'No workspace'}</option>
-                {apps.map(app => (
-                  <option key={app.id} value={app.id}>{app.name}</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {(() => {
-            const selectedProf = orchestrationProfiles.find(p => p.id === selectedProfileId);
-            if (!selectedProf) return null;
-            return (
-              <div className="text-xs text-gray-300 bg-port-bg/60 border border-port-border/80 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-white flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-port-accent" />
-                    {selectedProf.name}
-                  </span>
-                  {selectedProf.description && <span className="text-gray-400">{selectedProf.description}</span>}
-                </div>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {Object.entries(selectedProf.profile || {}).map(([role, cfg]) => (
-                    <span key={role} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-port-card border border-port-border text-gray-200">
-                      <span className="font-semibold text-port-accent capitalize">{role}:</span>
-                      <span>{cfg?.model || cfg?.provider || 'default'}</span>
-                      {cfg?.effort && <span className="text-amber-400 text-[10px]">({cfg.effort})</span>}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
-          <textarea
-            aria-label="Prompt"
-            value={runPrompt}
-            onChange={(e) => setRunPrompt(e.target.value)}
-            placeholder="Enter your prompt..."
-            rows={3}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:border-port-accent focus:outline-hidden"
-          />
-
-          <div className="flex justify-between items-center">
-            <button
-              onClick={handleExecuteRun}
-              disabled={!runPrompt.trim() || !activeProviderId || activeRun}
-              className="px-6 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {activeRun ? 'Running...' : 'Execute'}
-            </button>
-
-            {activeRun && (
-              <button
-                onClick={handleStopRun}
-                className="px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded-lg transition-colors"
-              >
-                Stop
-              </button>
-            )}
-          </div>
-
-          {runProviderIsTui && (
-            <div className="text-xs text-port-accent bg-port-accent/10 border border-port-accent/20 rounded-lg px-3 py-2">
-              TUI providers spawn a PTY-backed run that streams output here and is stoppable from the run list.
-            </div>
-          )}
-
-          {runOutput && (
-            <div className="bg-port-bg border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
-              <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">{runOutput}</pre>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Every harness × service pair the server would offer, and a click into
-          the compose flow on it. Derived from the same catalog every picker
-          reads, so it can never disagree with what compose lists. */}
-      <ProviderCompatibilityMatrix
-        harnesses={compositionCatalog.harnesses}
-        services={compositionCatalog.services}
-        compatibility={compositionCatalog.compatibility}
-        loading={compositionCatalog.loading}
-        onCompose={setComposeInitial}
-      />
-
-      {/* Preset list, grouped by harness (see PRESET_STATE_ORDER) */}
-      <div className="grid gap-6">
-        {loadError ? (
-          <Banner
-            tone="error"
-            size="md"
-            title="Failed to load AI providers"
-            actions={(
-              <button
-                type="button"
-                onClick={loadData}
-                className="px-3 py-1.5 rounded-lg text-xs bg-port-error/20 hover:bg-port-error/30 text-port-error font-medium transition-colors"
-              >
-                Retry
-              </button>
-            )}
-          >
-            Could not connect to the server to fetch provider configuration.
-          </Banner>
-        ) : (
-          <>
-            {presetSections.map(section => {
-              const sectionProviders = section.providers;
-              return (
-                <CollapsibleSection
-                  key={section.key}
-                  size="lg"
-                  defaultOpen={section.defaultOpen}
-                  buttonClassName="flex-wrap border-b border-port-border/60 pb-1.5"
-                  bodyClassName="grid gap-4 pt-3"
-                  label={(
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${section.dot}`} aria-hidden="true" />
-                      <span className="text-sm font-semibold uppercase tracking-wide text-white">{section.title}</span>
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-port-bg text-gray-400">{sectionProviders.length}</span>
-                      <span className="text-xs text-gray-500">
-                        {section.hint || `${formatCount(section.ready)} of ${formatCount(sectionProviders.length)} can run`}
-                      </span>
-                    </span>
-                  )}
-                  headerActions={section.link ? (
-                    <Link to={section.link} className="text-xs text-port-accent hover:underline">
-                      harness →
-                    </Link>
-                  ) : null}
-                >
-                  {sectionProviders.map(provider => (
-                    <ProviderCard
-                      key={provider.id}
-                      provider={provider}
-                      cardState={cardStateByProviderId[provider.id]}
-                      daemonReadiness={readiness[provider.id]}
-                      runtime={runtimeByProviderId[provider.id]}
-                      status={statuses[provider.id]}
-                      isDefault={provider.id === activeProviderId}
-                      providersById={providersById}
-                      activeProviderId={activeProviderId}
-                      statuses={statuses}
-                      runnerAllowedCommands={runnerAllowedCommands}
-                      testResult={testResults[provider.id]}
-                      refreshing={Boolean(refreshing[provider.id])}
-                      recovering={Boolean(recovering[provider.id])}
-                      onTest={handleTest}
-                      onRefreshModels={handleRefreshModels}
-                      onToggleEnabled={handleToggleEnabled}
-                      onSetActive={handleSetActive}
-                      onEdit={openForm}
-                      onDelete={handleDelete}
-                      onAddTuiMode={handleAddTuiMode}
-                      addingTuiMode={Boolean(addingTuiMode[provider.id])}
-                      onRecover={handleRecover}
-                      onInstallRuntime={setInstallingRuntime}
-                      onAutoSetupRuntime={setSettingUpRuntime}
-                      onUseServedModel={handleUseServedModel}
-                      onServeWantedModel={handleServeWantedModel}
-                      servingModel={Boolean(servingModel[provider.id])}
-                      codexAccount={isCodexSubscriptionProvider(provider) ? codexAccount : undefined}
-                      codexModels={codexModels}
-                      codexAccountLoading={codexAccountLoading}
-                      codexLoginLoading={codexLoginLoading}
-                      onCodexCheckAccount={() => loadCodexAccount(true)}
-                      onCodexSignIn={handleCodexSignIn}
-                      onCodexCancelLogin={handleCancelCodexLogin}
-                      onCodexLogout={handleCodexLogout}
-                      onCodexRefreshModels={() => loadCodexModels(true)}
-                      onCodexCopyCode={handleCopyCodexDeviceCode}
-                      onCodexEnable={() => handleEnableCodexSubscription(provider)}
-                   />
-                  ))}
-                </CollapsibleSection>
-              );
-            })}
-
-            {providers.length === 0 && (
-              <div className="flex flex-col items-center">
-                <EmptyState
-                  title="No presets configured"
-                  message="A preset is a named harness × service combination. Add Preset composes one from a service. Add standalone preset is for a backend no service definition describes."
-                  actionLabel="Add Preset"
-                  onAction={() => setComposeInitial({})}
-                />
-                <button
-                  type="button"
-                  onClick={() => openForm(null)}
-                  className="mb-6 text-sm text-gray-400 underline-offset-2 hover:text-white hover:underline"
-                >
-                  Add standalone preset
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Full run history lives on the Chief of Staff → Runs tab; this page
-          only configures providers. */}
-      <div className="mt-8">
-        <Link to="/cos/runs" className="text-sm text-port-accent hover:underline">
-          View AI run history →
-        </Link>
-      </div>
+      </Suspense>
 
       {/* Provider editor — a deep-linkable slide-in over this page. `key` resets
           the form state when the route swaps one provider for another. */}
-      {editorOpen && (
-        <ProviderForm
-          key={editingProvider?.id || 'new'}
-          provider={editingProvider}
-          daemonReadiness={editingProvider?.id ? readiness[editingProvider.id] : null}
-          allProviders={providers}
-          localModels={localModels}
-          runnerAllowedCommands={runnerAllowedCommands}
-          onEditProvider={openForm}
-          onClose={closeForm}
-          onSave={() => { closeForm(); loadData(); }}
-        />
+      {activeTab === 'presets' && editorOpen && (
+        <Suspense fallback={null}>
+          <ProviderForm
+            key={editingProvider?.id || 'new'}
+            provider={editingProvider}
+            daemonReadiness={editingProvider?.id ? readiness[editingProvider.id] : null}
+            allProviders={providers}
+            localModels={localModels}
+            runnerAllowedCommands={runnerAllowedCommands}
+            onEditProvider={openForm}
+            onClose={closeForm}
+            onSave={() => { closeForm(); loadData(); }}
+          />
+        </Suspense>
       )}
-      {fleetSetupOpen && (
-        <FleetProviderSetup
-          peers={fleetPeers}
-          peersState={fleetPeersState}
-          peersError={fleetPeersError}
-          onRetryPeers={retryFleetPeers}
-          providers={providers}
-          onClose={closeForm}
-          onCreate={handleCreateFleetProvider}
-          onUpdate={handleUpdateFleetProvider}
-          onConfigured={loadData}
-        />
-      )}
-      </>
+      {activeTab === 'presets' && fleetSetupOpen && (
+        <Suspense fallback={null}>
+          <FleetProviderSetup
+            peers={fleetPeers}
+            peersState={fleetPeersState}
+            peersError={fleetPeersError}
+            onRetryPeers={retryFleetPeers}
+            providers={providers}
+            onClose={closeForm}
+            onCreate={handleCreateFleetProvider}
+            onUpdate={handleUpdateFleetProvider}
+            onConfigured={loadData}
+          />
+        </Suspense>
       )}
       </div>
 
       {/* Compose is opened from Presets and from a service card, so it has to
           stay mounted when the Services tab is the one on screen. */}
-      <ProviderComposePopover
-        open={composeInitial !== null}
-        initial={composeInitial}
-        useOnce={false}
-        title="Compose a new preset"
-        onClose={() => setComposeInitial(null)}
-        onPresetSaved={(preset) => {
-          toast.success(`${preset.name} saved as a preset`);
-          loadData();
-          navigate(presetEditPath(preset.id));
-        }}
-      />
+      {composeInitial !== null && (
+        <Suspense fallback={null}>
+          <ProviderComposePopover
+            open
+            initial={composeInitial}
+            useOnce={false}
+            title="Compose a new preset"
+            onClose={() => setComposeInitial(null)}
+            onPresetSaved={(preset) => {
+              toast.success(`${preset.name} saved as a preset`);
+              loadData();
+              navigate(presetEditPath(preset.id));
+            }}
+          />
+        </Suspense>
+      )}
       {/* These streams can be opened from the Harnesses and Services tabs as
           well as Presets, so their renderers must outlive the tab fragment. */}
-      <RuntimeInstallModal
-        open={Boolean(installingRuntime)}
-        runtime={installingRuntime?.id}
-        label={installingRuntime?.label}
-        onClose={() => setInstallingRuntime(null)}
-        onComplete={handleRuntimeInstallComplete}
-        installUrlBase="/api/providers/runtimes/install"
-        streamMethod="POST"
-        flushMs={250}
-        description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
-      />
+      {Boolean(installingRuntime) && (
+        <Suspense fallback={null}>
+          <RuntimeInstallModal
+            open
+            runtime={installingRuntime?.id}
+            label={installingRuntime?.label}
+            onClose={() => setInstallingRuntime(null)}
+            onComplete={handleRuntimeInstallComplete}
+            installUrlBase="/api/providers/runtimes/install"
+            streamMethod="POST"
+            flushMs={250}
+            description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
+          />
+        </Suspense>
+      )}
       {/* The readiness checklist's one-click fix uses the same streaming modal
           and re-derives the daemon endpoint from the provider record. */}
-      <RuntimeInstallModal
-        open={Boolean(settingUpRuntime)}
-        runtime={settingUpRuntime?.runtime}
-        label={settingUpRuntime?.label}
-        title={settingUpRuntime?.actionLabel}
-        params={settingUpRuntime ? { provider: settingUpRuntime.providerId, action: settingUpRuntime.action } : undefined}
-        onClose={() => setSettingUpRuntime(null)}
-        onComplete={handleRuntimeSetupComplete}
-        installUrlBase="/api/providers/readiness/setup"
-        streamMethod="POST"
-        flushMs={250}
-        description={settingUpRuntime?.action === 'pull-start'
-          ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
-          : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
-      />
+      {Boolean(settingUpRuntime) && (
+        <Suspense fallback={null}>
+          <RuntimeInstallModal
+            open
+            runtime={settingUpRuntime?.runtime}
+            label={settingUpRuntime?.label}
+            title={settingUpRuntime?.actionLabel}
+            params={settingUpRuntime ? { provider: settingUpRuntime.providerId, action: settingUpRuntime.action } : undefined}
+            onClose={() => setSettingUpRuntime(null)}
+            onComplete={handleRuntimeSetupComplete}
+            installUrlBase="/api/providers/readiness/setup"
+            streamMethod="POST"
+            flushMs={250}
+            description={settingUpRuntime?.action === 'pull-start'
+              ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
+              : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
+          />
+        </Suspense>
+      )}
     </ModelsSectionLayout>
   );
 }

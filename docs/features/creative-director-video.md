@@ -1,9 +1,10 @@
 # Standalone Video production in Creative Director
 
 Commission a standalone video from **Creative Director → New video draft**.
-Create → Video remains the existing creative-commission video browser. Existing
-Video Gen, remix/continue and Creative Director links continue to work. No Series
-is required. Saving or opening a draft makes no generation calls.
+Creative Director also lists videos from Creative Commissions. Legacy Video
+project links open in Creative Director, and clip generation remains under
+**Media Gen → Video**. No Series is required. Saving or opening a draft makes
+no generation calls.
 
 ## Workflow
 

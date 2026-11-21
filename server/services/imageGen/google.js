@@ -16,7 +16,6 @@
  */
 
 import { readFile } from 'fs/promises';
-import sharp from 'sharp';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { GOOGLE_IMAGE_DEFAULT_MODEL, buildGoogleImageRequest, googleImageFamily } from '../../lib/googleImageModels.js';
@@ -100,6 +99,7 @@ export function googleImageSentPrompt({ family, prompt = '', negativePrompt, inp
 async function encodeInputImage(filePath, reviewedBytes = null) {
   // sharp reports `size` only for Buffer input, so read the bytes before checking the cap.
   const input = reviewedBytes || await readFile(filePath);
+  const { default: sharp } = await import('sharp');
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {

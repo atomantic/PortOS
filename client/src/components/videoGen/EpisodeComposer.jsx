@@ -14,8 +14,10 @@ import {
   CheckCircle2, XCircle, Loader2, Plus, Trash2, Sparkles, Film,
 } from 'lucide-react';
 import {
-  lintContinuousVideoEpisode, generateContinuousVideoEpisode, continuousVideoEpisodeEventsUrl,
-} from '../../services/api';
+  lintContinuousVideoEpisode,
+  generateContinuousVideoEpisode,
+  continuousVideoEpisodeEventsUrl,
+} from '../../services/apiContinuousVideo.js';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import toast from '../ui/Toast';

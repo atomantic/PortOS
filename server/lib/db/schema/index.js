@@ -24,6 +24,7 @@ import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { cosTasksDdl } from './cosTasks.js';
 import { cosAgentsDdl } from './cosAgents.js';
 import { aiGraphDdl } from './aiGraph.js';
+import { usageLedgerDdl } from './usageLedger.js';
 import { peerExecutionDdl } from './peerExecution.js';
 import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
 import { catalogIdentityDdl } from './catalogIdentity.js';
@@ -56,6 +57,7 @@ export {
   cosTasksDdl,
   cosAgentsDdl,
   aiGraphDdl,
+  usageLedgerDdl,
   peerExecutionDdl,
   catalogDdl,
   catalogIdentityDdl,
@@ -100,6 +102,7 @@ export function buildUpgradeDdl() {
     ...cosTasksDdl,
     ...cosAgentsDdl,
     ...aiGraphDdl,
+    ...usageLedgerDdl,
     ...peerExecutionDdl,
   ];
 }

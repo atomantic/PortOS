@@ -62,7 +62,6 @@ vi.mock('./tailcatPeer.js', () => ({ attachTailcatForwardsToPeers: vi.fn(async (
 import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
-vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
 vi.mock('./shell.js', () => ({
   createShellSession: vi.fn(),
   submitToSession: vi.fn(),
@@ -109,6 +108,8 @@ import { logAction } from './history.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
+import { imageGenEvents } from './imageGenEvents.js';
+import { videoGenEvents } from './videoGen/events.js';
 import { detachSocketSessions } from './shell.js';
 import * as shellService from './shell.js';
 import { getProviderById } from './provider/providers.js';
@@ -585,6 +586,8 @@ describe('socket.js — initSocket', () => {
       'loops:unsubscribe',
       'beeper:subscribe',
       'beeper:unsubscribe',
+      'media-jobs:subscribe',
+      'media-jobs:unsubscribe',
       'error:recover',
       'app:update',
       'app:standardize',
@@ -795,6 +798,35 @@ describe('socket.js — initSocket', () => {
     trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
     expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
     expect(io.emitted).toContainEqual(['training:checkpoints:changed', { runId: 'example-run' }]);
+  });
+
+  it('relays render progress only to active queue subscribers', () => {
+    const subscriber = makeSocket('media-queue-sub');
+    const bystander = makeSocket('media-queue-bystander');
+    createdSockets.push(subscriber, bystander);
+    io.connect(subscriber);
+    io.connect(bystander);
+    subscriber.handlers['media-jobs:subscribe']();
+
+    const frame = { id: 'example-job', startedAt: '2026-01-01T00:00:00Z', progress: 0.4, statusMsg: 'Rendering', etaMs: 80_000 };
+    mediaJobEvents.emit('progress', { ...frame, privateRecord: 'excluded' });
+    expect(subscriber.emitted).toContainEqual(['media-jobs:progress', frame]);
+    expect(bystander.emitted).not.toContainEqual(['media-jobs:progress', expect.anything()]);
+    expect(io.emitted.filter(([event]) => event.startsWith('media-jobs:'))).toEqual([]);
+
+    subscriber.handlers['media-jobs:unsubscribe']();
+    mediaJobEvents.emit('progress', { ...frame, progress: 0.8 });
+    expect(subscriber.emitted.filter(([event]) => event === 'media-jobs:progress')).toHaveLength(1);
+  });
+
+  it.each([
+    ['image-gen', imageGenEvents],
+    ['video-gen', videoGenEvents],
+    ['audio-gen', audioGenEvents],
+  ])('keeps %s progress available to existing clients', (channel, events) => {
+    const frame = { generationId: 'example-job', progress: 0.4, message: 'Rendering', etaMs: 80_000 };
+    events.emit('progress', frame);
+    expect(io.emitted).toContainEqual([`${channel}:progress`, frame]);
   });
 
   it('bridges a canceled image job to image-gen:canceled keyed by generationId', () => {

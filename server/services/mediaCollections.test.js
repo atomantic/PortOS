@@ -295,6 +295,16 @@ describe('mediaCollections service', () => {
     }
   });
 
+  it('findOrCreateCommissionCollection keeps one job-named collection per commission and follows renames', async () => {
+    const first = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Daily Video' });
+    const again = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Daily Video' });
+    expect(first).toMatchObject({ id: 'cdc-job-1', name: 'Creative Director: Daily Video', source: 'auto' });
+    expect(again.id).toBe(first.id);
+    const renamed = await svc.findOrCreateCommissionCollection({ commissionId: 'job-1', commissionName: 'Nightly Video' });
+    expect(renamed).toMatchObject({ id: 'cdc-job-1', name: 'Creative Director: Nightly Video' });
+    expect((await svc.listCollections()).filter((c) => c.id.startsWith('cdc-'))).toHaveLength(1);
+  });
+
   it('findOrCreateCollectionByName returns the existing collection on case-insensitive match', async () => {
     const a = await svc.createCollection({ name: 'World: Foo' });
     const reused = await svc.findOrCreateCollectionByName({ name: '  world: foo  ' });
@@ -1322,7 +1332,7 @@ describe('mergeMediaCollectionsFromSync', () => {
     // Defense in depth — a peer can push a collection containing a ref
     // like '../etc/passwd' via the linkedCollection field. sanitizeItem
     // must drop these BEFORE they hit disk so the sender-side
-    // buildAssetManifestForCollection (and any future downstream consumer)
+    // buildCollectionAssetManifest (and any future downstream consumer)
     // never sees an unsafe ref.
     const result = await svc.mergeMediaCollectionsFromSync([{
       id: 'c-evil',

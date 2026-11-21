@@ -222,8 +222,6 @@ export function validateAudioOccupancy(raw) {
   };
 }
 
-export const sanitizeAudioOccupancy = validateAudioOccupancy;
-
 /**
  * Sanitize the path-free visual conditioning manifest attached to a scene or
  * typed playback asset. The playback module owns this shape so the node

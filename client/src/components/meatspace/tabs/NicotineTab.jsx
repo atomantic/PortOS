@@ -1,7 +1,18 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import {
+  getCustomNicotineProducts,
+  getNicotineSummary,
+  getDailyNicotine,
+  logNicotine,
+  removeNicotineEntry,
+  updateNicotineEntry,
+  addCustomNicotineProduct,
+  updateCustomNicotineProduct,
+  removeCustomNicotineProduct,
+} from '../../../services/apiMeatspace.js';
+import { getAppleHealthCorrelation } from '../../../services/apiHealth.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -52,7 +63,7 @@ export default function NicotineTab() {
   // must not land after a newer one.
   const fetchProductButtons = useCallback(async () => {
     const seq = ++buttonsReadSeq.current;
-    const buttons = await api.getCustomNicotineProducts({ silent: true }).catch(() => null);
+    const buttons = await getCustomNicotineProducts({ silent: true }).catch(() => null);
     if (seq !== buttonsReadSeq.current) return;
     const ok = Array.isArray(buttons);
     setProductButtons(ok ? buttons : null);
@@ -66,8 +77,8 @@ export default function NicotineTab() {
 
   const fetchData = useCallback(async () => {
     const [summaryResult, entriesResult] = await Promise.allSettled([
-      api.getNicotineSummary({ silent: true }),
-      api.getDailyNicotine(undefined, undefined, { silent: true })
+      getNicotineSummary({ silent: true }),
+      getDailyNicotine(undefined, undefined, { silent: true })
     ]);
     // A rejected read keeps what is already shown and raises the notice, so a
     // transient failure never renders as an empty history.
@@ -95,7 +106,7 @@ export default function NicotineTab() {
 
   useEffect(() => {
     let active = true;
-    api.getAppleHealthCorrelation(correlationFrom, correlationTo)
+    getAppleHealthCorrelation(correlationFrom, correlationTo)
       .then(data => { if (active) setCorrelationData(data); })
       .catch(() => { if (active) setCorrelationData(null); });
     return () => { active = false; };
@@ -103,7 +114,7 @@ export default function NicotineTab() {
 
   const handleQuickAdd = async (prod) => {
     setLogging(true);
-    await api.logNicotine({
+    await logNicotine({
       product: prod.name,
       mgPerUnit: prod.mgPerUnit,
       count: 1,
@@ -117,7 +128,7 @@ export default function NicotineTab() {
     e.preventDefault();
     if (!mgPerUnit) return;
     setLogging(true);
-    await api.logNicotine({
+    await logNicotine({
       product: product || '',
       mgPerUnit: parseFloat(mgPerUnit),
       count: count || 1,
@@ -131,7 +142,7 @@ export default function NicotineTab() {
   };
 
   const handleRemove = async (entryDate, index, id) => {
-    await api.removeNicotineEntry(entryDate, index, id).catch(() => null);
+    await removeNicotineEntry(entryDate, index, id).catch(() => null);
     setRefreshKey(k => k + 1);
   };
 
@@ -154,7 +165,7 @@ export default function NicotineTab() {
     if (!editingKey) return;
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
-    await api.updateNicotineEntry(entryDate, index, {
+    await updateNicotineEntry(entryDate, index, {
       id: editForm.id,
       product: editForm.product,
       mgPerUnit: parseFloat(editForm.mgPerUnit),
@@ -178,7 +189,7 @@ export default function NicotineTab() {
     e.preventDefault();
     const error = validateProductButton(buttonForm);
     if (error) { toast.error(error); return; }
-    const result = await api.addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
+    const result = await addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to add product button'); return; }
     setButtonForm({ name: '', mgPerUnit: '' });
     // Drop any in-flight list read: it predates this mutation. An unloaded list
@@ -198,7 +209,7 @@ export default function NicotineTab() {
     if (editingButtonIdx === null) return;
     const error = validateProductButton(buttonForm);
     if (error) { toast.error(error); return; }
-    const result = await api.updateCustomNicotineProduct(editingButtonIdx, { name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
+    const result = await updateCustomNicotineProduct(editingButtonIdx, { name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to update product button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', mgPerUnit: '' });
@@ -213,7 +224,7 @@ export default function NicotineTab() {
   };
 
   const handleRemoveButton = async (idx) => {
-    const removed = await api.removeCustomNicotineProduct(idx).catch(() => null);
+    const removed = await removeCustomNicotineProduct(idx).catch(() => null);
     if (!removed) return;
     buttonsReadSeq.current += 1;
     setProductButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));

@@ -7,6 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
+
 const loadMeta = vi.fn();
 const getPrivacyTwinContext = vi.fn();
 
@@ -22,7 +24,7 @@ function metaWith(settings) {
 beforeEach(() => {
   loadMeta.mockReset();
   getPrivacyTwinContext.mockReset();
-  getPrivacyTwinContext.mockResolvedValue('# Identity Facts (Privacy Vault)\n- Legal name — legal_name: Ada Lovelace');
+  getPrivacyTwinContext.mockResolvedValue([PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, '- Legal name — legal_name: Skylar Example'].join('\n'));
 });
 
 describe('getDigitalTwinForPrompt privacy gate', () => {
@@ -38,7 +40,8 @@ describe('getDigitalTwinForPrompt privacy gate', () => {
     const out = await getDigitalTwinForPrompt();
     expect(getPrivacyTwinContext).toHaveBeenCalledTimes(1);
     expect(out).toContain('# Identity Facts (Privacy Vault)');
-    expect(out).toContain('Ada Lovelace');
+    expect(out).toContain('Skylar Example');
+    expect(redactStoredPrivacyPrompt(out)).not.toContain('Skylar Example');
   });
 
   it('degrades to no block (no throw) when the privacy builder fails', async () => {

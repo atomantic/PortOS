@@ -8,7 +8,7 @@
  * arranged against the beat grid".
  */
 
-import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema, musicVideoAudioLayerUploadQuerySchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
@@ -27,6 +27,7 @@ import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
+import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
 import { listProjects, listProjectNames, listProjectPage, listProjectCompletion, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
@@ -274,6 +275,30 @@ router.post('/:id/vocal-stem', vocalStemUpload, asyncHandler(async (req, res) =>
 
 router.delete('/:id/vocal-stem', asyncHandler(async (req, res) => {
   res.json(await detachVocalStem(req.params.id));
+}));
+
+// Timeline audio layers (services/musicVideo/audioLayers.js): an audio file
+// placed over the song at `?startSec=` (default 0:00) and mixed into the
+// preview and the render. Moving, re-levelling, muting and removing a layer
+// is a PATCH of `audioLayers`. The query is checked before the upload is
+// written, so a refused request leaves no temp file behind.
+const audioLayerUpload = uploadSingle('file', {
+  limits: { fileSize: MUSIC_UPLOAD_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (isSupportedMusicUpload(file)) cb(null, true);
+    else cb(new ServerError('Unsupported audio format — accepted: MP3, WAV, M4A, OGG, FLAC', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+router.post('/:id/audio-layers', (req, res, next) => {
+  res.locals.audioLayerQuery = validateRequest(musicVideoAudioLayerUploadQuerySchema, req.query);
+  next();
+}, audioLayerUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No audio file uploaded', { status: 400, code: 'VALIDATION_ERROR' });
+  const { project, layer } = await addAudioLayer(req.params.id, {
+    tempPath: req.file.path, originalName: req.file.originalname, startSec: res.locals.audioLayerQuery.startSec ?? 0,
+  });
+  res.json({ project: await presentProjectForRead(project), layer });
 }));
 
 // Separate the vocal from the song with demucs and attach it as the stem.

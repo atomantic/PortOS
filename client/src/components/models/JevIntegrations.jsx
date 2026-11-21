@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { getJevPolicy, updateJevPolicy, updateInstanceFeature } from '../../services/api';
+import { getJevPolicy, updateJevPolicy } from '../../services/apiLocalLlm.js';
+import { updateInstanceFeature } from '../../services/apiSystem.js';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { publishInstanceFeatures, useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 

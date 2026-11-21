@@ -1,5 +1,7 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
-import { getUniverse, listMoodBoardNames } from '../../services/api';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import MoodBoardStyleSynthesis from '../universeBuilder/MoodBoardStyleSynthesis';
@@ -49,7 +51,7 @@ export default function DeckStyleSources({ deck, onPatch }) {
           <select id="deck-style-board" value={boardId} onChange={(event) => setBoardId(event.target.value)}
             className="w-full min-w-0 rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
             <option value="">Choose a mood board</option>
-            {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
+            {sortByLabel(boards).map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
           </select>
           {boards.length === 0 ? <p className="text-xs text-gray-500">No mood boards yet. <a href="/mood-boards" className="text-port-accent">Create a mood board</a> to collect style references.</p> : null}
           <MoodBoardStyleSynthesis key={boardId} boardId={boardId} universeId={deck.id} targetLabel="deck"

@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
 
-const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
+const SCRIPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'ml');
 const MUSIC_SIDECARS = [
   'generate_acestep.py',
   'generate_acestep15.py',

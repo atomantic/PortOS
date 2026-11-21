@@ -3,12 +3,14 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 vi.mock('./UntrustedContentPolicyPanel.jsx', () => ({ default: () => <div>Content safety policies</div> }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getModelAbuseGuardStatus: vi.fn(),
-  getHfTokenStatus: vi.fn(),
   installModelAbuseGuard: vi.fn(),
   cancelModelAbuseGuardInstall: vi.fn(),
   scanModelAbuseContent: vi.fn(),
+}));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getHfTokenStatus: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -19,11 +21,11 @@ vi.mock('../ui/Toast', () => ({
 
 import {
   cancelModelAbuseGuardInstall,
-  getHfTokenStatus,
   getModelAbuseGuardStatus,
   installModelAbuseGuard,
   scanModelAbuseContent,
-} from '../../services/api';
+} from '../../services/apiLocalLlm.js';
+import { getHfTokenStatus } from '../../services/apiImageVideo.js';
 import socket from '../../services/socket';
 import ModelAbuseGuardPanel from './ModelAbuseGuardPanel';
 

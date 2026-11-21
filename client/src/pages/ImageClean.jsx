@@ -6,7 +6,8 @@ import FilePickerButton from '../components/ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../utils/fileUpload';
 import BrailleSpinner from '../components/BrailleSpinner';
 import IgnoreZonePainter from '../components/media/IgnoreZonePainter';
-import * as api from '../services/api';
+import { getRegenAvailability } from '../services/apiImageVideo.js';
+import { fetchCleanResult, cleanImage, saveCleanResult } from '../services/apiMedia.js';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { formatBytes } from '../utils/formatters';
 
@@ -60,6 +61,9 @@ export default function ImageClean() {
   const [brushSize, setBrushSize] = useState(40);
   const [feather, setFeather] = useState(3);
   const [hasMask, setHasMask] = useState(false);
+  // Failure from the latest clean request, kept in the After pane with a Retry.
+  // `run` holds the exact arguments of the failed call so Retry repeats it.
+  const [cleanFailure, setCleanFailure] = useState(null);
   const painterRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
@@ -73,7 +77,7 @@ export default function ImageClean() {
   // seeds the strength slider bounds/default so it matches server validation.
   useEffect(() => {
     let alive = true;
-    api.getRegenAvailability().then((info) => {
+    getRegenAvailability().then((info) => {
       if (!alive || !info) return;
       setRegen(info);
       setStrength(typeof info.strengthDefault === 'number' ? info.strengthDefault : 0.25);
@@ -103,7 +107,7 @@ export default function ImageClean() {
     // stranding the spinner. The server writes the PNG before emitting the
     // event, so in practice the first attempt succeeds.
     const attempt = (tries) => {
-      api.fetchCleanResult(myJob).then((res) => {
+      fetchCleanResult(myJob).then((res) => {
         if (!alive || myJob !== gpuJobId) return;
         if (res.pending) {
           if (tries > 0) setTimeout(() => { if (alive && myJob === gpuJobId) attempt(tries - 1); }, 600);
@@ -161,6 +165,7 @@ export default function ImageClean() {
     setGpuJobId(null);
     setGpuJob(null);
     setSavedFilename(null);
+    setCleanFailure(null);
     if (resultUrlRef.current) {
       URL.revokeObjectURL(resultUrlRef.current);
       resultUrlRef.current = null;
@@ -189,16 +194,24 @@ export default function ImageClean() {
         payload.feather = feather;
       }
     }
-    const cleaned = await api.cleanImage(file, payload).catch((err) => {
-      toast.error(err.message || 'Failed to clean image');
-      return null;
-    });
-    // Drop responses from a stale click — a newer reclean is in flight.
-    if (myRequestId !== requestIdRef.current) return;
-    if (!cleaned) {
+    let cleaned;
+    try {
+      cleaned = await cleanImage(file, payload);
+    } catch (err) {
+      // Drop errors from a stale click too — a newer reclean owns the pane.
+      if (myRequestId !== requestIdRef.current) return;
+      const message = err.message || 'Failed to clean image';
+      toast.error(message);
       setBusy(false);
+      setCleanFailure({
+        message,
+        gpu: !!selectedSteps.diffusion && mode === 'gpu',
+        run: { file, selectedSteps, mode, opts },
+      });
       return;
     }
+    // Drop responses from a stale click — a newer reclean is in flight.
+    if (myRequestId !== requestIdRef.current) return;
     // GPU path: the server enqueued a job. Track it — the progress effect fetches
     // the bytes on completion. Keep `busy` true (the spinner shows job progress).
     if (cleaned.gpu) {
@@ -268,11 +281,20 @@ export default function ImageClean() {
       // rather than a now-inconsistent preview.
       if (resultUrlRef.current) { URL.revokeObjectURL(resultUrlRef.current); resultUrlRef.current = null; }
       setResult(null);
+      setCleanFailure(null);
       setGpuJobId(null);
       setGpuJob(null);
       setBusy(false);
       return;
     }
+    runClean(file, selectedSteps, mode, opts);
+  };
+
+  // Repeats the failed sync run with the arguments it was given; runClean
+  // clears the failure and makes this the only in-flight request.
+  const retryClean = () => {
+    if (!cleanFailure || busy) return;
+    const { file, selectedSteps, mode, opts } = cleanFailure.run;
     runClean(file, selectedSteps, mode, opts);
   };
 
@@ -317,6 +339,7 @@ export default function ImageClean() {
     }
     setOriginal(null);
     setResult(null);
+    setCleanFailure(null);
     setBusy(false);
     setGpuJobId(null);
     setGpuJob(null);
@@ -326,7 +349,7 @@ export default function ImageClean() {
   const saveToGallery = async () => {
     if (!gpuJobId || saving) return;
     setSaving(true);
-    const saved = await api.saveCleanResult(gpuJobId, { silent: true }).catch((err) => {
+    const saved = await saveCleanResult(gpuJobId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to save to gallery');
       return null;
     });
@@ -686,7 +709,22 @@ export default function ImageClean() {
                     className="max-w-full max-h-[480px] object-contain"
                   />
                 )}
-                {!busy && !result && (
+                {!busy && !result && cleanFailure && (
+                  <div role="alert" className="flex flex-col items-center gap-3 text-center">
+                    <p className="text-sm text-port-error break-words max-w-full">{cleanFailure.message}</p>
+                    {!cleanFailure.gpu && (
+                      <button
+                        type="button"
+                        onClick={retryClean}
+                        disabled={busy}
+                        className="px-3 py-1.5 rounded text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!busy && !result && !cleanFailure && (
                   <span className="text-gray-600 text-sm">Select steps to clean</span>
                 )}
               </div>

@@ -38,7 +38,11 @@ import CapabilityBadges, { CAPABILITY_META } from '../models/CapabilityBadges.js
 import useUrlParams from '../../hooks/useUrlParams';
 import useMounted from '../../hooks/useMounted';
 import { formatDurationMs } from '../../utils/formatters';
-import { runModelCapabilityTest, deleteModelCapabilityTest, getModelCapabilityTestResult } from '../../services/api';
+import {
+  runModelCapabilityTest,
+  deleteModelCapabilityTest,
+  getModelCapabilityTestResult,
+} from '../../services/apiLocalLlm.js';
 
 // Per-test icon and accent. Keyed off the test id the SERVER ships, so a test
 // added there renders with a sensible fallback rather than vanishing.

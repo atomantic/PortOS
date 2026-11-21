@@ -18,7 +18,7 @@ name: CI cancel recovery
 on:
   workflow_run:
     workflows: [CI]
-    types: [requested, completed]
+    types: [completed]
 
 permissions:
   contents: read
@@ -44,15 +44,10 @@ jobs:
       && github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
-    # Must exceed MAX_RUNTIME_MS in scripts/ci-retry-cancelled-run.js — the
-    # deliberate pre-dispatch idle (#7439) PLUS two worst-case guard passes,
-    # ~13.5 minutes in total. A shorter timeout kills the job mid-wait and
-    # silently converts "retried late" into "never retried at all". Pinned
-    # rather than left at the 360-minute default so the relationship is visible
-    # to whoever tunes the delay; the guard test asserts the inequality against
-    # that derived bound, so raising the delay fails the build rather than
-    # quietly eating the margin.
-    timeout-minutes: 20
+    # The 60-second wait and two worst-case guard passes total 10 minutes.
+    # Leave time for checkout, re-dispatch, and its verdict check. The wiring
+    # test verifies the timeout exceeds the script's derived guard bound.
+    timeout-minutes: 12
     steps:
       # No `setup-node` and no `npm ci`: the script imports Node builtins
       # only (enforced by scripts/pre-install-entrypoints.test.js) and every
@@ -77,33 +72,3 @@ jobs:
           CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
           CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: node scripts/ci-retry-cancelled-run.js
-
-  superseded-gate:
-    name: Release a superseded queued aggregate
-    if: >-
-      github.event.action == 'requested'
-      && github.event.workflow_run.event == 'pull_request'
-      && github.event.workflow_run.run_attempt == 1
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: write
-    # Serialize observers for a PR without joining the blocked CI group.
-    concurrency:
-      group: ci-superseded-gate-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
-      cancel-in-progress: false
-    steps:
-      # Deliberately the DEFAULT branch: never execute privileged PR source.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: scripts
-          persist-credentials: false
-      - name: Recover the superseded aggregate
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI_RUN_ID: ${{ github.event.workflow_run.id }}
-          CI_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
-          CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
-          CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: node scripts/ci-recover-superseded-gate.js

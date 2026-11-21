@@ -1,7 +1,6 @@
 /**
- * Text-level primitives shared by the whole-tree source-scan guard suites —
- * `childProcess.guard.test.js`, `timerCallbackConventions.guard.test.js` and
- * `sockets/asyncHandlerGuard.test.js`.
+ * Text-level primitives shared by the whole-tree source-scan guards: the
+ * runtime checks in `server/test/guards/runtime/` and `sockets/asyncHandlerGuard.test.js`.
  *
  * Those guards enforce structural rules no runtime test can reach ("every spawn
  * goes through the wrapper", "every await outside the request lifecycle owns its
@@ -17,7 +16,7 @@
  * Lexer-assisted, not an AST pass: a real parser would be more precise, but
  * these guards run over ~1500 files on every `npm test`, and their false
  * positives are loud and one line to fix. The limits are listed on
- * `unguardedAwaits` and in `timerCallbackConventions.guard.test.js`'s header.
+ * `unguardedAwaits` and in `server/test/guards/runtime/timerCallbackConventions.test.js`'s header.
  */
 
 /**

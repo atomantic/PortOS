@@ -349,7 +349,7 @@ under the run's own key only.
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.
-`scripts/browser-suite-registry.guard.test.js` reads every registered suite and fails
+`server/test/guards/repo/browser-suite-registry.test.js` reads every registered suite and fails
 on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a
@@ -401,7 +401,7 @@ miss is caught by the next completed run.
 
 The gate-tooling suites are the exception (#16798). They spawn git or carry
 `test-memo: never`, so none can ever earn a record, and the rule above would
-select them on nearly every diff. `TOOLING_TESTS` (`scripts/ci-test-plan.js`)
+select them on nearly every diff. `TOOLING_TESTS` (`scripts/lib/ciPlanRules.js`)
 names them: `planTestMemo` drops one from the related walk's result unless a
 changed source is a member of its closure or one of its tracked inputs. The
 planner supplies the rest through `TOOLING_OWNER_RE` (`scripts/**`, `.github/**`,

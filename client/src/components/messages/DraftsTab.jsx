@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
-import * as api from '../../services/api';
+import {
+  reconcileMessageDraft,
+  getMessageDrafts,
+  approveMessageDraft,
+  sendMessageDraft,
+  deleteMessageDraft,
+} from '../../services/apiMessages.js';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
@@ -19,7 +25,7 @@ function DeliveryReconciliation({ draft, onReconciled }) {
     pendingRef.current = true;
     setPending(true);
     setError(null);
-    const result = await api.reconcileMessageDraft(draft.id, {
+    const result = await reconcileMessageDraft(draft.id, {
       attemptId: draft.sendAttemptId, outcome
     }, { silent: true }).catch(err => {
       setError(err.message || 'Could not record delivery. Refresh the draft and try again.');
@@ -84,7 +90,7 @@ export default function DraftsTab({ accounts }) {
     setLoading(true);
     // A failed read keeps whatever drafts are already shown and surfaces an error row;
     // it must not read as "No drafts".
-    const data = await api.getMessageDrafts({}, { silent: true }).catch((err) => {
+    const data = await getMessageDrafts({}, { silent: true }).catch((err) => {
       setLoadError(err instanceof Error ? err : new Error('Request failed'));
       return null;
     });
@@ -100,7 +106,7 @@ export default function DraftsTab({ accounts }) {
   }, [fetchDrafts]);
 
   const handleApprove = async (id) => {
-    const result = await api.approveMessageDraft(id).catch(() => null);
+    const result = await approveMessageDraft(id).catch(() => null);
     if (!result) return;
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'approved' } : d));
     toast.success('Draft approved');
@@ -110,7 +116,7 @@ export default function DraftsTab({ accounts }) {
     if (sendingRef.current.has(id)) return;
     sendingRef.current.add(id);
     setSendingIds(new Set(sendingRef.current));
-    const result = await api.sendMessageDraft(id).catch(() => null).finally(() => {
+    const result = await sendMessageDraft(id).catch(() => null).finally(() => {
       sendingRef.current.delete(id);
       setSendingIds(new Set(sendingRef.current));
     });
@@ -125,7 +131,7 @@ export default function DraftsTab({ accounts }) {
   };
 
   const handleDelete = async (id) => {
-    const ok = await api.deleteMessageDraft(id).then(() => true).catch(() => false);
+    const ok = await deleteMessageDraft(id).then(() => true).catch(() => false);
     if (!ok) return;
     setDrafts(prev => prev.filter(d => d.id !== id));
     toast.success('Draft deleted');

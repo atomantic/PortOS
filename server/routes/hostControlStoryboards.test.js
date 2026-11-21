@@ -50,7 +50,7 @@ const { correctPanel, drawPanel, runPanelNode, startMakeEmpty } = await import('
 const { default: storyboardRoutes } = await import('./storyboards.js');
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; this keeps one refusal (before the provider sink)
+// server/test/guards/modules/hostControlCoverage.test.js; this keeps one refusal (before the provider sink)
 // and the authorized workflow for each agent-run route.
 const mounts = [['/api/storyboards', storyboardRoutes]];
 

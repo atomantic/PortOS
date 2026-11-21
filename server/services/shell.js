@@ -121,7 +121,7 @@ const TERM_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor' };
 /**
  * The non-env half of the `pty.spawn` options both entry points use. `env` is NOT
  * assembled here: each caller wraps its own in `withSpawnCwdEnv` at its spawn call,
- * keeping the #3193 PWD pin visible and `lib/spawnCwd.guard.test.js` counting pins
+ * keeping the #3193 PWD pin visible and `server/test/guards/runtime/spawnCwd.test.js` counting pins
  * one-for-one against spawns.
  */
 function ptyTerminalOptions({ cwd, cols, rows }) {

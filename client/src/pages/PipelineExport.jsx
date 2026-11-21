@@ -4,10 +4,12 @@
  * The shipping step for a prose series: configure per-series export settings
  * (trim size, interior font, title-page fields) and download the compiled
  * manuscript (Markdown), an ePub, or a print-interior PDF. Settings persist on
- * the series record via PATCH; the three downloads are plain <a href> links to
- * server routes that stream the artifact (they read the SAVED settings, so the
+ * the series record via PATCH; the three downloads are fetched from server
+ * routes that stream the artifact (they read the SAVED settings, so the
  * download buttons gate on the form being clean — a dirty form must be saved
- * first, mirroring the "Run Now gates on saved state" rule).
+ * first, mirroring the "Run Now gates on saved state" rule). Fetching lets a
+ * refusal (no drafted prose, server error) show here instead of a canceled
+ * browser download (#17102).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -18,14 +20,12 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getPipelineSeries,
   updatePipelineSeries,
-  proseExportManuscriptUrl,
-  proseExportEpubUrl,
-  proseExportPdfUrl,
-  listMediaCollections,
-  getGalleryImages,
-  listVideoHistory,
-} from '../services/api';
+  fetchProseExport,
+  PROSE_EXPORT_NO_CONTENT,
+} from '../services/apiPipeline.js';
+import { listMediaCollections, getGalleryImages, listVideoHistory } from '../services/apiImageVideo.js';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { downloadBlob } from '../lib/downloadBlob.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import AttributionList from '../components/media/AttributionList';
 import ListLoadError from '../components/ui/ListLoadError';
@@ -150,6 +150,25 @@ export default function PipelineExport() {
     toast.success('Export settings saved');
   }, { errorMessage: 'Failed to save export settings' });
 
+  // Pending kind + last failure for the download actions; the error is
+  // persistent (cleared by the next attempt) so the recovery link stays put.
+  const [downloading, setDownloading] = useState(null);
+  const [downloadError, setDownloadError] = useState(null);
+  const download = async (kind) => {
+    if (dirty) { toast.warning('Save your export settings first'); return; }
+    if (downloading) return;
+    setDownloading(kind);
+    setDownloadError(null);
+    try {
+      const { blob, filename } = await fetchProseExport(seriesId, kind);
+      downloadBlob(blob, filename);
+    } catch (err) {
+      setDownloadError({ noProse: err.code === PROSE_EXPORT_NO_CONTENT, message: err.message || 'Export failed' });
+    } finally {
+      setDownloading(null);
+    }
+  };
+
   const setField = (key) => (e) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
 
   if (loading) {
@@ -169,9 +188,9 @@ export default function PipelineExport() {
   }
 
   const downloads = [
-    { key: 'md', label: 'Manuscript (.md)', desc: 'Compiled Markdown — front matter, volume breaks, chapter headings.', url: proseExportManuscriptUrl(seriesId), Icon: FileText },
-    { key: 'epub', label: 'ePub (.epub)', desc: 'Reflowable e-book — chapters, table of contents, cover.', url: proseExportEpubUrl(seriesId), Icon: BookText },
-    { key: 'pdf', label: 'Print Interior (.pdf)', desc: 'Trade-format interior — trim size, running heads, chapter openers.', url: proseExportPdfUrl(seriesId), Icon: FileType },
+    { key: 'md', label: 'Manuscript (.md)', desc: 'Compiled Markdown — front matter, volume breaks, chapter headings.', Icon: FileText },
+    { key: 'epub', label: 'ePub (.epub)', desc: 'Reflowable e-book — chapters, table of contents, cover.', Icon: BookText },
+    { key: 'pdf', label: 'Print Interior (.pdf)', desc: 'Trade-format interior — trim size, running heads, chapter openers.', Icon: FileType },
   ];
 
   return (
@@ -295,21 +314,38 @@ export default function PipelineExport() {
             Each export stitches the drafted issue prose in arc order (volume breaks + chapter headings).
             Requires at least one issue with drafted prose.
           </p>
-          {downloads.map(({ key, label, desc, url, Icon }) => (
-            <a
+          {downloadError ? (
+            <div role="alert" className="rounded-lg border border-port-error/50 bg-port-error/10 p-3 text-xs text-gray-200">
+              {downloadError.noProse ? (
+                <>
+                  <p>Nothing to export yet — no issue in this series has drafted prose.</p>
+                  <p className="mt-1">
+                    Write or import prose in the{' '}
+                    <Link to={`/pipeline/series/${seriesId}/manuscript`} className="text-port-accent underline">manuscript editor</Link>
+                    , then export again.
+                  </p>
+                </>
+              ) : (
+                <p>Export failed: {downloadError.message}. Try again.</p>
+              )}
+            </div>
+          ) : null}
+          {downloads.map(({ key, label, desc, Icon }) => (
+            <button
               key={key}
-              href={dirty ? undefined : url}
-              download
-              aria-disabled={dirty}
-              onClick={(e) => { if (dirty) { e.preventDefault(); toast.warning('Save your export settings first'); } }}
-              className={`flex items-start gap-3 p-3 rounded-lg border border-port-border bg-port-bg transition ${dirty ? 'opacity-50 cursor-not-allowed' : 'hover:border-port-accent'}`}
+              type="button"
+              aria-disabled={dirty || Boolean(downloading)}
+              onClick={() => download(key)}
+              className={`flex items-start gap-3 p-3 rounded-lg border border-port-border bg-port-bg text-left transition ${dirty || downloading ? 'opacity-50 cursor-not-allowed' : 'hover:border-port-accent'}`}
             >
-              <Icon size={18} className="text-port-accent mt-0.5 shrink-0" />
+              {downloading === key
+                ? <Loader2 size={18} className="text-port-accent mt-0.5 shrink-0 animate-spin" />
+                : <Icon size={18} className="text-port-accent mt-0.5 shrink-0" />}
               <span className="flex flex-col">
                 <span className="text-sm text-white font-medium">{label}</span>
                 <span className="text-xs text-gray-500">{desc}</span>
               </span>
-            </a>
+            </button>
           ))}
         </section>
       </div>

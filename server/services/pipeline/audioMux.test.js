@@ -3,6 +3,9 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { escapeRegExp } from '../../lib/textUtils.js';
+import { EventEmitter } from 'node:events';
+
+const heldEncoder = vi.hoisted(() => ({ child: null, started: null }));
 
 const TEST_HOME = join(tmpdir(), `portos-audiomux-test-${process.pid}-${Date.now()}`);
 
@@ -50,6 +53,10 @@ vi.mock('../../lib/childProcess.js', async () => {
     ...actual,
     spawn: (bin, args, _opts) => {
       spawnCalls.push({ bin, args });
+      if (heldEncoder.child) {
+        heldEncoder.started();
+        return heldEncoder.child;
+      }
       const listeners = {};
       const proc = {
         stderr: { on: (event, cb) => { if (event === 'data') cb(Buffer.from(mockStderr)); } },
@@ -72,9 +79,11 @@ vi.mock('../../lib/childProcess.js', async () => {
 });
 
 const { muxMusicBed, muxVoLines, buildVoMuxArgs, buildCueMuxArgs, muxCueBed, muxStripAudio, selectPlacedVoLines, selectPlacedCues, resolveMusicTrackPath, DEFAULT_MUSIC_GAIN } = await import('./audioMux.js');
+const { FFMPEG_KILL_GRACE_MS } = await import('../../lib/ffmpeg.js');
 const { placeCuesOnTimeline } = await import('./audioCuePlacement.js');
 
 beforeEach(async () => {
+  heldEncoder.child = null;
   spawnCalls.length = 0;
   mockExitCode = 0;
   mockStderr = '';
@@ -89,6 +98,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await rm(TEST_HOME, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -348,6 +358,52 @@ describe('buildVoMuxArgs', () => {
 });
 
 describe('muxVoLines', () => {
+  it('keeps the scratch file owned until a stalled encoder closes after a signal error', async () => {
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    const video = join(TEST_HOME, 'v.mp4');
+    const wav = join(TEST_HOME, 'a.wav');
+    await writeFile(video, 'original');
+    await writeFile(wav, 'wav');
+
+    const child = Object.assign(new EventEmitter(), { pid: 123, stderr: new EventEmitter(), kill: vi.fn() });
+    child.kill.mockImplementationOnce(() => {
+      child.emit('error', Object.assign(new Error('Synthetic signal refusal'), { code: 'EPERM' }));
+      return false;
+    }).mockReturnValue(true);
+    heldEncoder.child = child;
+    const started = new Promise(resolve => { heldEncoder.started = resolve; });
+    const controller = new AbortController();
+    const report = vi.fn();
+    const pending = muxVoLines(video, { voLines: [{ path: wav, offsetSec: 0 }], signal: controller.signal, report });
+    await started;
+    const scratch = spawnCalls[0].args.at(-1);
+    let settled = false;
+    const observed = pending.then(result => { settled = true; return result; });
+    await writeFile(scratch, 'in-progress');
+    vi.useFakeTimers();
+    try {
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(FFMPEG_KILL_GRACE_MS);
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(settled).toBe(false);
+      await expect(readFile(scratch, 'utf8')).resolves.toBe('in-progress');
+    } finally {
+      child.emit('close', 0, null);
+      await observed;
+    }
+    await expect(observed).resolves.toEqual({ ok: false, reason: 'ffmpeg process error: Synthetic signal refusal' });
+    expect(report.mock.calls.filter(([phase]) => phase === 'audio-mux-encode')).toEqual([
+      ['audio-mux-encode'],
+      ['audio-mux-encode', { phase: 'running', pid: 123 }],
+      ['audio-mux-encode', { phase: 'term', pid: 123 }],
+      ['audio-mux-encode', { phase: 'child-error', pid: 123 }],
+      ['audio-mux-encode', { phase: 'kill', pid: 123 }],
+      ['audio-mux-encode', { phase: 'closed', pid: 123 }],
+    ]);
+    await expect(readFile(scratch)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(video, 'utf8')).resolves.toBe('original');
+  });
+
   it('returns ok:false when no VO line is placed (lets caller fall back to music bed)', async () => {
     findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
     const video = join(TEST_HOME, 'v.mp4');

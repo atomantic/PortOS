@@ -6,17 +6,19 @@ import { MockEventSource } from '../test/mockEventSource';
 
 const api = vi.hoisted(() => ({ getDeck: vi.fn(), generateDeckPrompts: vi.fn() }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiDecks.js', () => ({
   deleteDeck: vi.fn(),
   deckPromptsProgressUrl: (id) => `/api/decks/${encodeURIComponent(id)}/generate-prompts/progress`,
   generateDeckPrompts: (...args) => api.generateDeckPrompts(...args),
   getDeck: (...args) => api.getDeck(...args),
-  listUniverseSummaries: vi.fn().mockResolvedValue([]),
   removeDeckSample: vi.fn(),
   renderDeckCard: vi.fn(),
   renderDeckCards: vi.fn(),
   updateDeck: vi.fn(),
   updateDeckCard: vi.fn(),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  listUniverseSummaries: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../services/apiImageVideo', () => ({ getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn() }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));

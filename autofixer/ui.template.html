@@ -774,7 +774,7 @@
       if (!res) return;
       const data = await res.json();
       if (data.success) {
-        showToast('Restarted ' + selectedProcess, 'success');
+        showToast((res.status === 202 ? 'Restart requested for ' : 'Restarted ') + selectedProcess, 'success');
         fetchStatus();
       } else {
         showToast('Failed to restart: ' + (data.error || 'unknown error'), 'error');
@@ -791,7 +791,7 @@
       if (!res) return;
       const data = await res.json();
       if (data.success) {
-        showToast('Stopped ' + selectedProcess, 'success');
+        showToast((res.status === 202 ? 'Stop requested for ' : 'Stopped ') + selectedProcess, 'success');
         fetchStatus();
       } else {
         showToast('Failed to stop: ' + (data.error || 'unknown error'), 'error');

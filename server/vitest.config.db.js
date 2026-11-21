@@ -41,7 +41,7 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  *
  * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` in scripts/lib/dbTestFiles.js — the
  * `*.db.test.js` naming convention is documentation, not a glob match, so a new
- * suite silently never runs until it's listed. db.inventory.guard.test.js fails if a
+ * suite silently never runs until it's listed. server/test/guards/repo/db.inventory.test.js fails if a
  * checkHealth consumer is left out.
  */
 const config = defineConfig({
@@ -59,7 +59,7 @@ const config = defineConfig({
     hookTimeout: 30000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,
-    // The lock comes first so a queued run waits before touching the shared database or temp root.
+    // Acquire the run lock and check PostgreSQL storage before any fixture setup.
     globalSetup: [
       fileURLToPath(new URL('./test/dbRunExclusivity.js', import.meta.url)),
       fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url)),

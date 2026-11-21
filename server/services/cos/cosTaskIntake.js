@@ -16,7 +16,7 @@
  */
 
 import { hasKnownPrefix, PRIORITY_VALUES, toRepresentableTask } from '../../lib/taskParser.js';
-import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosValidation.js';
+import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../../lib/cos/cosTaskMetadata.js';
 import { KEYED_REVIEWER_PINS, REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../../lib/reviewerConfig.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../../lib/prDisposition.js';
@@ -111,6 +111,8 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
     metadata.prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE;
   }
   if (typeof taskData.useAutoMerge === 'boolean') metadata.useAutoMerge = taskData.useAutoMerge;
+  if (typeof taskData.autoApprovePR === 'boolean') metadata.autoApprovePR = taskData.autoApprovePR;
+  if (typeof taskData.adminMerge === 'boolean') metadata.adminMerge = taskData.adminMerge;
   if (taskData.simplify === true) metadata.simplify = true;
   else if (taskData.simplify === false) metadata.simplify = false;
     // Throwaway-worktree posture ("reason/report, never land code"). `false` is not persisted:

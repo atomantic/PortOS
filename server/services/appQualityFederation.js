@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { AUDIT_TASK_TYPE_LIST, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
+import { AUDIT_EXECUTION_TASK_TYPES, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, historicalQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -34,7 +34,7 @@ const historicalMeasurementSchema = measurementSchema.extend({ report: numericSc
 // Everything this install can parse, sent with each request so a peer on a
 // newer catalog withholds categories this one would reject.
 const READABLE_CATEGORY_PARAM = encodeURIComponent([
-  ...AUDIT_TASK_TYPE_LIST, ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES),
+  ...AUDIT_EXECUTION_TASK_TYPES, ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES),
 ].join(','));
 
 const payloadSchema = z.object({
@@ -63,12 +63,43 @@ export const FEDERATION_LEGACY_CATEGORIES = Object.freeze([
 // form used for self-directed calls resolves to this install's checkout.
 const appRepoPath = app => app.repoPath || (app.id === PORTOS_APP_ID ? PATHS.root : null);
 
+// One `git remote get-url` per checkout per window: the Apps page and every peer
+// ask for the same repoPaths repeatedly. The expiry is absolute (set at lookup
+// time, never refreshed on read) so a changed origin is picked up within the
+// window. The in-flight promise is cached so concurrent callers share one spawn;
+// a rejected lookup is dropped so the next caller retries.
+const REPOSITORY_KEY_TTL_MS = 60_000;
+const originLookups = new Map();
+
+// Sweeping on each miss keeps the map to lookups from the last window; without it,
+// a checkout path that is never requested again would stay for the process lifetime.
+export function originLookupCacheSize() {
+  return originLookups.size;
+}
+
+function cachedOriginInfo(repoPath) {
+  const now = Date.now();
+  const cached = originLookups.get(repoPath);
+  if (cached && cached.expiresAt > now) return cached.promise;
+  for (const [key, entry] of originLookups) {
+    if (entry.expiresAt <= now) originLookups.delete(key);
+  }
+  const promise = getOriginInfo(repoPath);
+  const entry = { promise, expiresAt: now + REPOSITORY_KEY_TTL_MS };
+  originLookups.set(repoPath, entry);
+  promise.catch(() => {
+    if (originLookups.get(repoPath) === entry) originLookups.delete(repoPath);
+  });
+  return promise;
+}
+
 // Match repositories without sharing remote URLs, names, credentials or local paths.
 // Independent versions of the same repository intentionally contribute to one score.
 async function repositoryKey(deps, app = { id: PORTOS_APP_ID }) {
   const repoPath = appRepoPath(app);
   if (!repoPath) return null;
-  const origin = await (deps.getOriginInfo || getOriginInfo)(repoPath);
+  // An injected lookup is a test seam; it bypasses the process-wide cache.
+  const origin = await (deps.getOriginInfo ? deps.getOriginInfo(repoPath) : cachedOriginInfo(repoPath));
   return origin.host && origin.fullName ? hash(`${origin.host}/${origin.fullName}`.toLowerCase()) : null;
 }
 

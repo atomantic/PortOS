@@ -13,7 +13,15 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  updateCosTask: api.updateCosTask,
+  deleteCosTask: api.deleteCosTask,
+  approveCosTask: api.approveCosTask,
+  forceSpawnTask: api.forceSpawnTask,
+  resetSpawnBudgetAndRun: api.resetSpawnBudgetAndRun,
+  recheckCosAgentCleanup: api.recheckCosAgentCleanup,
+  resolveCosTaskChallenge: api.resolveCosTaskChallenge,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const TaskItem = (await import('./TaskItem')).default;
@@ -710,6 +718,29 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Confirm discard task edits' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit task' })).toBeInTheDocument();
+  });
+
+  it('keeps the active draft on queue refresh and reopens the latest values after discarding', () => {
+    const onEditingChange = vi.fn();
+    const onRefresh = vi.fn();
+    const renderRow = (row) => (
+      <TaskItem task={row} onRefresh={onRefresh} providers={providers} onEditingChange={onEditingChange} />
+    );
+    const { rerender } = render(renderRow(task));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Task description' }), { target: { value: 'Local draft' } });
+    rerender(renderRow({ ...task, description: 'Refreshed queue description' }));
+    expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('Local draft');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByText('Refreshed queue description')).toBeInTheDocument();
+    expect(onEditingChange.mock.calls).toEqual([[true], [false]]);
+    expect(api.updateCosTask).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    expect(screen.getByRole('textbox', { name: 'Task description' })).toHaveValue('Refreshed queue description');
   });
 
   it('shows an inline confirm row instead of discarding when there are unsaved changes', () => {

@@ -7,7 +7,7 @@
 // is the preferred choice (always installed when image gen is set up); the
 // mflux/legacy pythonPath is the fallback for installs that use only mflux.
 //
-// Wire protocol parses the stdout/stderr lines from scripts/hf_download_repo.py:
+// Wire protocol parses the stdout/stderr lines from scripts/ml/hf_download_repo.py:
 //   STAGE:list                                  -> { type: 'stage', stage: 'list' }
 //   STAGE:download:<n>/<total>:<file>           -> progress at the START of file n
 //   STAGE:bytes:<n>/<total>:<got>/<size>:<file> -> byte progress for file n
@@ -35,7 +35,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { getSettings } from './settings.js';
 
-const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
+const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'hf_download_repo.py');
 
 /**
  * Decode one helper stdout/stderr line into a typed action.
@@ -175,7 +175,7 @@ export async function resolveHfDownloadPython(preferredPython = null) {
   return null;
 }
 
-// Argv for scripts/hf_download_repo.py. Pure and exported so the flag contract
+// Argv for scripts/ml/hf_download_repo.py. Pure and exported so the flag contract
 // is unit-tested without spawning python — the same split as buildSidecarArgs in
 // services/pipeline/musicGen.js. Returns `onlyFiles` too because the caller
 // branches its progress copy on single-file mode.

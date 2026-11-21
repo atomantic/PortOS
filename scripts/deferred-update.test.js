@@ -10,7 +10,9 @@ import { processAbsent, reconcileReusedLaunch } from '../server/lib/maintenanceD
 import { trackedRenderMap } from '../server/services/renderActivity.js';
 import { runDeferredUpdate, settleInterruptedUpdate } from './deferred-update.mjs';
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
+import { installAdmittedUpdateFixture } from './lib/updateContractHarness.js';
 import { portosServiceListeners } from './lib/legacyUpdateActivity.mjs';
+import { POSIX_DETACHED_LAUNCHER } from './lib/posixDetachedLauncher.mjs';
 
 const roots = [];
 const fixture = () => {
@@ -508,7 +510,7 @@ describe('deferred update admission', () => {
     expect(readFileSync(join(control, 'pid'), 'utf8')).toBe('4001');
   });
 
-  it.each(['relative updater', 'surviving npm child'])('waits for a live same-install %s despite a legacy exit file', async kind => {
+  it.each(['relative updater', 'relative Node updater', 'surviving npm child'])('waits for a live same-install %s despite a legacy exit file', async kind => {
     const { root, admission } = fixture();
     const control = join(root, 'data/update-detached');
     mkdirSync(control, { recursive: true });
@@ -526,12 +528,35 @@ describe('deferred update admission', () => {
       ...(alive && kind === 'surviving npm child' ? [{ pid: 5002, ppid: 1, pgid: 5001,
         startedAt: Date.parse('2026-11-01T00:00:00Z'), command: `sh supervisor ${control}` }] : []),
       ...(alive ? [{ pid: 4002, ppid: 1, pgid: 5001,
-        command: kind === 'relative updater' ? 'bash ./update.sh' : 'npm install --no-save' }] : [])];
+        command: { 'relative updater': 'bash ./update.sh', 'relative Node updater': 'node scripts/update.mjs',
+          'surviving npm child': 'npm install --no-save' }[kind] }] : [])];
     const launch = vi.fn(completedLaunch(admission));
     const wait = vi.fn(async () => { expect(launch).not.toHaveBeenCalled(); alive = false; });
     await expect(runDeferredUpdate({ admission, launch, wait, cwd: root, legacySnapshot,
       legacyCwds: async () => new Map([[4002, root]]), absent: () => true, emit: vi.fn() })).resolves.toBe(0);
     expect(wait).toHaveBeenCalledOnce();
+  });
+
+  it.each(['settled shell only', 'real updater child', 'unsettled shell'])('checks legacy work after a prior refusal with %s', async scenario => {
+    const { root, admission } = fixture();
+    const { id } = admission.deferredUpdate.request();
+    admission.deferredUpdate.finish(id, false, { errorCode: 'UPDATE_INTERRUPTION_REQUIRED' });
+    const control = join(root, 'data', 'update-detached', scenario === 'unsettled shell' ? 'other-ticket' : id);
+    const script = join(root, 'scripts', 'deferred-update.mjs');
+    const command = POSIX_DETACHED_LAUNCHER.trim().replaceAll('\n', ' ');
+    const legacySnapshot = async () => [{ pid: process.pid, ppid: 1, command: 'node supervisor' },
+      { pid: 4001, ppid: 1, command: `sh -c ${command} sh ${control} node ${script}` },
+      ...(scenario === 'real updater child' ? [{ pid: 4002, ppid: 4001, command: `node ${script}` }] : [])];
+    const launch = vi.fn(completedLaunch(admission));
+    const result = runDeferredUpdate({ admission, launch, cwd: root, platform: 'linux', policy: 'interrupt',
+      legacySnapshot, legacyCwds: async () => new Map(), absent: () => true, emit: vi.fn() });
+    if (scenario === 'settled shell only') {
+      await expect(result).resolves.toBe(0);
+      expect(launch).toHaveBeenCalledOnce();
+    } else {
+      await expect(result).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(launch).not.toHaveBeenCalled();
+    }
   });
 
   it.each(['no control file', 'current PID'])('detects a legacy updater with %s', async kind => {
@@ -702,18 +727,39 @@ describe('deferred update admission', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('direct update script offline boundary', () => {
-  const start = root => {
+  const start = (root, observe = () => {}) => {
     installUpdateTestSupervisor(root, { standalone: true });
-    const source = readFileSync(new URL('../update.sh', import.meta.url), 'utf8');
-    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
-    writeFileSync(join(root, 'update.sh'), `${header}\ntouch applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    installAdmittedUpdateFixture(root, "writeFileSync('applied', '');");
     // This is a standalone process in a copied disposable install, not a Vitest
     // worker writing the executing checkout's data tree (same as boot smoke).
     const env = { ...process.env, PORTOS_DATA_ROOT: root };
     delete env.VITEST;
     const child = spawn('bash', [join(root, 'update.sh'), '--automatic'], { cwd: root, env, stdio: 'ignore' });
+    observe(child);
     return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   };
+
+  it('cancels a waiting shell launch on a PID-only signal without starting the admitted worker', async () => {
+    const { root, admission } = fixture();
+    const release = admission.admit('agent', 'release-example');
+    let launcher;
+    const done = start(root, child => { launcher = child; });
+    try {
+      await vi.waitFor(() => expect(admission.deferredUpdate.get().operation?.phase).toBe('waiting'), { timeout: 10000 });
+      expect(admission.deferredUpdate.get().operation.ownerPid).toBe(launcher.pid);
+      expect(launcher.kill('SIGTERM')).toBe(true);
+      // Keep the release active until the exact PID exits. If the shim added
+      // an intermediate Node parent, the real supervisor would still wait.
+      expect(await done).toBe(1);
+      expect(admission.deferredUpdate.get().operation).toBeNull();
+      expect(admission.held()).toBe(false);
+    } finally {
+      if (launcher.exitCode === null && launcher.signalCode === null) launcher.kill('SIGTERM');
+      await release.finish();
+      await done;
+    }
+    expect(existsSync(join(root, 'applied'))).toBe(false);
+  }, 20000);
 
   it('does not mutate before a release and its children finish, without requiring a running API', async () => {
     const { root, admission } = fixture();

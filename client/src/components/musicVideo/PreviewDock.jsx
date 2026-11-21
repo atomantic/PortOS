@@ -1,4 +1,6 @@
 import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import useAudioLayerPlayback from './useAudioLayerPlayback.js';
+import usePreviewSounds from './usePreviewSounds.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';
@@ -11,6 +13,7 @@ import { sceneShotName } from '../../lib/musicVideoStages.js';
 import { getMusicVideoCompositionPlayback } from '../../services/apiMusicVideo.js';
 import { hashString } from '../../utils/hashString.js';
 import useSoloPlayback from '../../hooks/useSoloPlayback.js';
+import './PreviewDock.css';
 
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
@@ -141,7 +144,7 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * controls in a column to its right, for a short, wide space (the editor). Each
  * player marks its picture (`data-preview-picture`), its play bar
  * (`data-preview-scrub`) and its other controls (`data-preview-controls`);
- * `.mv-preview-beside` in index.css places them.
+ * `.mv-preview-beside` in PreviewDock.css places them.
  */
 export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false, controlsBeside = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -166,6 +169,9 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   // Whatever source plays here takes turns with any other player on the step that plays the song
   // (the Blender film panel's shot player). Muted media (a shot's clip under the song) has no say.
   const dockRef = useRef(null);
+  // The timeline's audio layers and the shots' clip sound play over the song live; a render already has them mixed in.
+  const previewSounds = usePreviewSounds(project);
+  useAudioLayerPlayback(dockRef, previewSounds, !!source && source.kind !== 'video');
   const solo = useSoloPlayback(() => {
     for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
   });

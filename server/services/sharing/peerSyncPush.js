@@ -31,6 +31,7 @@ import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
   buildAssetManifestForSeries,
+  buildCollectionIntegrityAssets,
   stampImageManifestEntries,
   peerAcceptsAssetStamps,
 } from './peerSyncAssets.js';
@@ -453,6 +454,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
   const schemaRefusal = await recordSchemaVersionRefusal(res, body, sub, peer);
   if (schemaRefusal) return schemaRefusal;
+  if (isLegacyCollectionManifestRefusal(res, body, payload)) {
+    await persistSchemaVersionBlock(sub.id, { reason: 'peer-collection-manifest-limit' });
+    console.log(`⏸️ peerSync: ${peerLabel(peer)} needs a PortOS update to sync media collections with more than 2,000 assets.`);
+    return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+  }
   if (!res) {
     reportPushFailure(sub, peer, 'network', networkError?.message);
     return { pushed: false, reason: 'network' };
@@ -539,6 +545,15 @@ export async function pushRecordToPeer(sub, options = {}) {
 }
 
 const NO_REJECTION = Object.freeze({ stripped: Object.freeze([]), unknownKind: false });
+
+function isLegacyCollectionManifestRefusal(res, body, payload) {
+  if (payload.kind !== 'mediaCollection' || payload.assetManifest.length <= 2000) return false;
+  if (res?.status !== 400 || body?.code !== 'VALIDATION_ERROR') return false;
+  const details = body.context?.details;
+  // Older receivers serialize only the issue path and Zod message, without the maximum or issue code.
+  return Array.isArray(details) && details.some((detail) => detail?.path === 'assetManifest'
+    && /^(Too big: expected array to have <=2000 items|Array must contain at most 2000 element\(s\))$/.test(detail.message));
+}
 
 /**
  * Classify the receiver's response to the envelope we sent. Only a 400 is
@@ -670,9 +685,8 @@ async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersi
       // `schema-version-ahead` = the 409 version-gate path (the peer parsed our
       // envelope but its per-category gate rejected a schema mismatch). `peer-pre-feature`
       // = the 400 unknown-kind path below (the peer's push schema has no arm for
-      // this record kind at all, so it 400s at Zod before the gate runs). Both
-      // surface the same SchemaGapBadge + engage the same cooldown; the marker just
-      // distinguishes them in state/logs.
+      // this record kind at all). `peer-collection-manifest-limit` is the
+      // 400 legacy manifest cap. All surface the same badge and cooldown.
       reason,
       ahead: Array.isArray(ahead) ? ahead : [],
       behind: Array.isArray(behind) ? behind : [],
@@ -773,7 +787,7 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   // Bundle child issues — the series + its issues form one unit of edit
   // for downstream consumers (panels, comic pages), so the receiver
   // applies them atomically per merge cycle.
-  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true });
+  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true, withHistory: false });
   const sanitizedIssues = childIssues
     .map((i) => sanitizeRecordForWire('issue', i))
     .filter(Boolean);
@@ -848,7 +862,7 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
  * manifest -> envelope path, with two post-hooks (musicVideoProject,
  * writersRoomWork) that bundle one extra field onto the generic envelope.
  */
-export async function buildPushPayload(sub, sourceInstanceId) {
+export async function buildPushPayload(sub, sourceInstanceId, { collectionIntegrity = false } = {}) {
   const portosMeta = await buildPortosMeta();
   const desc = RECORD_KINDS[sub.recordKind];
   if (!desc) return null;
@@ -858,6 +872,9 @@ export async function buildPushPayload(sub, sourceInstanceId) {
   if (!record) return null;
   const sanitized = sanitizeRecordForWire(sub.recordKind, record);
   if (!sanitized) return null;
+  if (collectionIntegrity && sub.recordKind === 'mediaCollection' && record.deleted !== true) {
+    return { kind: sub.recordKind, record: sanitized, sourceInstanceId, ...await buildCollectionIntegrityAssets(sanitized) };
+  }
   // Tombstone push ships no assets — the receiver is about to delete the
   // record, so pulling its bytes would be wasteful + privacy-sensitive (same
   // reasoning as the universe/series hooks above).

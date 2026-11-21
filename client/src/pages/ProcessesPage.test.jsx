@@ -6,7 +6,8 @@ const api = vi.hoisted(() => ({
   executeCommand: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiCommands.js', () => ({ executeCommand: api.executeCommand }));
 vi.mock('../components/apps/tabs/ProcessesTab', () => ({
   default: () => <div data-testid="processes-tab">Processes Tab</div>,
 }));

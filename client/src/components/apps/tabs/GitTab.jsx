@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import BrailleSpinner from '../../BrailleSpinner';
-import * as api from '../../../services/api';
+import { createCommit } from '../../../services/apiGit.js';
 import RepositorySourcePanel from './RepositorySourcePanel';
 import useGitRepoData from './git/useGitRepoData';
 import useBranchActions from './git/useBranchActions';
@@ -35,7 +35,7 @@ export default function GitTab({ appId, appName, repoPath }) {
 
   const handleCommit = async (message, clearDraft) => {
     setCommitting(true);
-    await api.createCommit(repoPath, message).catch(() => null);
+    await createCommit(repoPath, message).catch(() => null);
     clearDraft();
     setCommitting(false);
     await loadGitInfo();

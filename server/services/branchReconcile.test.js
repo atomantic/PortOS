@@ -790,20 +790,45 @@ describe('readBranchUnshipped', () => {
 });
 
 describe('gatherBranchState', () => {
-  it('does not turn a ref retired after enumeration into a symbolic commit head', async () => {
-    git.getBranches.mockResolvedValue([{ name: 'feature/finished', isDefault: false, current: false, merged: true }]);
+  it('gathers every candidate tip from enumeration without a per-branch ref lookup', async () => {
+    const branches = ['feature/one', 'feature/two'].map((name, index) => ({
+      name, merged: true, tip: String(index + 1).repeat(40),
+    }));
+    git.getBranches.mockResolvedValue(branches);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockResolvedValue('[]');
-    const previous = execGit.getMockImplementation();
-    execGit.mockImplementation(async (args, ...rest) => {
-      if (args[0] === 'rev-parse' && args.includes('refs/heads/feature/finished^{commit}')) {
-        return { exitCode: 128, stdout: 'feature/finished\n' };
-      }
-      if (args[0] === 'show-ref' && args.includes('refs/heads/feature/finished')) return { exitCode: 1, stdout: '' };
-      return previous(args, ...rest);
+    const gathered = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(gathered.map(row => [row.branch, row.tip])).toEqual(branches.map(row => [row.name, row.tip]));
+    expect(execGit.mock.calls.filter(([args]) => ['rev-parse', 'show-ref'].includes(args[0]))).toEqual([]);
+  });
+
+  it('recomputes divergence at the enumerated commits when the batch target moved', async () => {
+    const target = '1'.repeat(40);
+    const feature = '2'.repeat(40);
+    git.getBranches.mockResolvedValue([{ name: 'feature', merged: true, tip: feature }]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    execGit.mockImplementation(async args => {
+      if (args[0] === 'for-each-ref') return { exitCode: 0, stdout: [
+        ['*', 'main', '', '', 'commit', target, '1 0'],
+        [' ', 'feature', '', '', 'commit', feature, '7 3'],
+      ].map(fields => fields.join('\0')).join('\n') };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '2\t4' };
+      return { exitCode: 0, stdout: '' };
     });
-    try { expect(await gatherBranchState('/repo', { defaultBranch: 'main' })).toEqual([]); }
-    finally { execGit.mockImplementation(previous); }
+    expect(await gatherBranchState('/repo', { defaultBranch: 'main' })).toMatchObject([{ ahead: 4, behind: 2 }]);
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'rev-list' && args.includes(`${target}...${feature}`))).toBe(true);
+  });
+
+  it('holds every branch when the single policy snapshot is unreadable', async () => {
+    const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
+    readBranchCompletionPolicies.mockRejectedValueOnce(new Error('synthetic archive failure'));
+    git.getBranches.mockResolvedValue(['feature/one', 'feature/two'].map(name => ({ name, merged: true, tip: RETIRE_HEAD })));
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    const rows = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(rows.map(row => row.completionPolicyReason)).toEqual(['pr-completion-policy-unavailable', 'pr-completion-policy-unavailable']);
+    expect(readBranchCompletionPolicies).toHaveBeenCalledTimes(1);
   });
 
   it('excludes default/current/protected and folds in worktree + PR facts', async () => {
@@ -1712,7 +1737,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
   // dead agent's worktree, one collision path with the default branch.
   const setupAbandoned = ({ tip = RETIRE_HEAD, replacedByReachable = true, status = DIRTY } = {}) => {
     git.getBranches.mockResolvedValue([
-      { name: BRANCH, isDefault: false, current: false, tracking: 'origin/main', merged: false }
+      { name: BRANCH, tip, isDefault: false, current: false, tracking: 'origin/main', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);
@@ -1813,7 +1838,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     const CLAIM = 'claim/issue-5769';
     const CLAIM_TREE = '/repo/data/cos/worktrees/claim-issue-5769';
     git.getBranches.mockResolvedValue([
-      { name: CLAIM, isDefault: false, current: false, tracking: null, merged: false }
+      { name: CLAIM, tip: RETIRE_HEAD, isDefault: false, current: false, tracking: null, merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([{ head: RETIRE_HEAD, path: CLAIM_TREE, branch: `refs/heads/${CLAIM}` }]);
     git.hasBranchMergeEvidence.mockResolvedValue(false);

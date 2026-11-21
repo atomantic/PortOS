@@ -1,3 +1,4 @@
+import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.js';
 /**
  * Tests for the dry-run eligibility helpers in cosTaskGenerator.js.
  *
@@ -101,12 +102,11 @@ import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from '../taskSchedule.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { createDequeueCapacity } from './cosDequeue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
-const IMP_SRC = readFileSync(join(__dirname, 'cosImprovementTasks.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 // The manual claim / JIRA / replan prompt builders (cosTaskClaimWork.js) share
 // their reviewer + claim-metadata resolution with the scheduled claim-work router

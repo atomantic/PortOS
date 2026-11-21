@@ -25,7 +25,7 @@ vi.mock('../hooks/useCancelableDebounce', async (importOriginal) => {
 });
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn().mockResolvedValue([
     { id: 'col-1', name: 'Alpha', items: [{ kind: 'image', ref: 'img1.png', addedAt: '2024-01-01' }] },
     { id: 'col-2', name: 'Beta', items: [] },
@@ -37,6 +37,8 @@ vi.mock('../services/api', () => ({
     },
   ]),
   createMediaCollection: vi.fn(),
+  joinMediaCollections: vi.fn(),
+  autoOrganizeMediaCollections: vi.fn(),
   deleteMediaCollection: vi.fn(),
   listVideoHistory: vi.fn().mockResolvedValue([]),
   listGalleryCollectionSummaries: vi.fn(async () => [{ id: 'unsorted', total: mockUnsortedItems.length,
@@ -112,6 +114,25 @@ describe('MediaCollections', () => {
     // clearAllMocks resets calls, not implementations — restore the shared
     // fixture so a test that emptied it can't leak into the next one.
     mockUnsortedItems = [{ kind: 'image', ref: 'loose.png', addedAt: '2024-01-02' }];
+  });
+
+  it('runs auto-organize once and refreshes the collection list after it settles', async () => {
+    const { autoOrganizeMediaCollections, listMediaCollections } = await import('../services/apiImageVideo.js');
+    let finish;
+    autoOrganizeMediaCollections.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderPage();
+    await screen.findByText('Alpha');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Auto-organize' }));
+    expect(screen.getByRole('button', { name: 'Organizing…' })).toBeDisabled();
+    expect(autoOrganizeMediaCollections).toHaveBeenCalledTimes(1);
+
+    listMediaCollections.mockResolvedValueOnce([
+      { id: 'deck-example', name: 'Deck: Example', items: [{ kind: 'image', ref: 'card.png' }] },
+    ]);
+    finish({ added: 1, updatedCollections: 1, missingAssets: 0, failedCollections: 0 });
+    expect(await screen.findByText('Example')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-organize' })).toBeEnabled();
   });
 
   it('renders non-empty collection names after loading', async () => {
@@ -232,7 +253,7 @@ describe('MediaCollections', () => {
   });
 
   it('opens the new collection after creating it, even under an active search', async () => {
-    const { createMediaCollection } = await import('../services/api');
+    const { createMediaCollection } = await import('../services/apiImageVideo.js');
     createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
     const user = userEvent.setup();
     // `?q=alpha` is the hostile case: a brand-new collection is always empty
@@ -258,7 +279,7 @@ describe('MediaCollections', () => {
     // detail route back to the list route. Creating a collection must
     // cancel the pending mirror synchronously, before navigating, rather
     // than relying on that unmount race to resolve in its favor.
-    const { createMediaCollection } = await import('../services/api');
+    const { createMediaCollection } = await import('../services/apiImageVideo.js');
     createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
     const user = userEvent.setup();
     // An active search keeps the mirror's debounce genuinely armed (a
@@ -292,7 +313,7 @@ describe('MediaCollections', () => {
   });
 
   it('shows the onboarding copy on a fresh install, not a hidden-empties notice', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     mockUnsortedItems = [];
     renderPage();
@@ -305,7 +326,7 @@ describe('MediaCollections', () => {
   });
 
   it('gives the fresh-install empty state a call to action that focuses the create field', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     mockUnsortedItems = [];
     renderPage();
@@ -317,7 +338,7 @@ describe('MediaCollections', () => {
   });
 
   it('reports a failed search as a failed search, not as a fresh install', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockResolvedValueOnce([]);
     // Loose media but no collections yet — the exact population the onboarding
     // copy is for. With a query active, that copy would answer the search with
@@ -328,7 +349,7 @@ describe('MediaCollections', () => {
   });
 
   it('reports a failed collections fetch instead of claiming there are none', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     renderPage();
     expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
@@ -342,7 +363,7 @@ describe('MediaCollections', () => {
   });
 
   it('owns the failure UI, so the shared request() toast stays silent', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     renderPage();
     await screen.findByRole('button', { name: 'Retry' });
@@ -350,7 +371,7 @@ describe('MediaCollections', () => {
   });
 
   it('recovers the grid when Retry succeeds', async () => {
-    const { listMediaCollections } = await import('../services/api');
+    const { listMediaCollections } = await import('../services/apiImageVideo.js');
     listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
     const user = userEvent.setup();
     renderPage('/media/collections?empty=1');
@@ -360,7 +381,7 @@ describe('MediaCollections', () => {
   });
 
   it('keeps the last good grid when a later refresh fails', async () => {
-    const { listMediaCollections, deleteMediaCollection } = await import('../services/api');
+    const { listMediaCollections, deleteMediaCollection } = await import('../services/apiImageVideo.js');
     const user = userEvent.setup();
     renderPage('/media/collections?empty=1');
     await screen.findByText('Alpha');
@@ -373,7 +394,9 @@ describe('MediaCollections', () => {
     // indexing a match list would silently target whichever row sorted first.
     const alphaCard = screen.getByTitle('Alpha').closest('.bg-port-card');
     await user.click(within(alphaCard).getByRole('button', { name: 'Delete collection' }));
+    await user.click(within(alphaCard).getByRole('button', { name: 'Delete', exact: true }));
     expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
   });
 
@@ -386,7 +409,7 @@ describe('MediaCollections', () => {
   });
 
   it('reveals newly unfiled images after deleting their only collection', async () => {
-    const { listMediaCollections, listGalleryCollectionSummaries, deleteMediaCollection } = await import('../services/api');
+    const { listMediaCollections, listGalleryCollectionSummaries, deleteMediaCollection } = await import('../services/apiImageVideo.js');
     mockUnsortedItems = [];
     listMediaCollections.mockResolvedValueOnce([
       { id: 'col-1', name: 'Alpha', items: [{ kind: 'image', ref: 'img1.png' }] },
@@ -403,10 +426,54 @@ describe('MediaCollections', () => {
     await screen.findByText('Alpha');
     expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Delete collection' }));
+    expect(deleteMediaCollection).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(deleteMediaCollection).not.toHaveBeenCalled();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete collection' }));
+    await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(deleteMediaCollection).toHaveBeenCalledWith('col-1', { silent: true });
     const unsorted = await screen.findByTitle('Unsorted');
     expect(unsorted).toHaveAttribute('href', '/media/collections/unsorted');
-    expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument());
     expect(within(unsorted.closest('.bg-port-card')).getByText('1')).toBeInTheDocument();
     expect(listMediaCollections).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins selected collections under the entered name and opens the result', async () => {
+    const { joinMediaCollections } = await import('../services/apiImageVideo.js');
+    joinMediaCollections.mockResolvedValueOnce({ id: 'joined', name: 'Handpicked media', items: [], removedCollectionIds: [], keptCollectionIds: [] });
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await user.click(await screen.findByRole('button', { name: 'Select collections' }));
+    expect(screen.queryByRole('checkbox', { name: 'Select Unsorted' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Alpha' }));
+    await typeSettled(user, screen.getByLabelText('Joined collection name'), 'Handpicked media');
+    const join = screen.getByRole('button', { name: 'Join collections' });
+    expect(join).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Beta' }));
+    await typeSettled(user, screen.getByLabelText('Search collections'), 'alpha');
+    expect(screen.queryByRole('checkbox', { name: 'Select Beta' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('2 selected');
+    await user.click(join);
+    expect(joinMediaCollections).toHaveBeenCalledWith({
+      name: 'Handpicked media', collectionIds: ['col-1', 'col-2'], keepOriginals: false,
+    }, { silent: true });
+    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/joined'));
+  });
+
+  it('sends keepOriginals when the user keeps the original collections', async () => {
+    const { joinMediaCollections } = await import('../services/apiImageVideo.js');
+    joinMediaCollections.mockResolvedValueOnce({ id: 'col-1', name: 'Alpha', items: [], removedCollectionIds: ['col-2'], keptCollectionIds: [] });
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await user.click(await screen.findByRole('button', { name: 'Select collections' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Alpha' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Beta' }));
+    await user.click(screen.getByLabelText('Keep the original collections'));
+    await typeSettled(user, screen.getByLabelText('Joined collection name'), 'Alpha');
+    await user.click(screen.getByRole('button', { name: 'Join collections' }));
+    expect(joinMediaCollections).toHaveBeenCalledWith({ name: 'Alpha', collectionIds: ['col-1', 'col-2'], keepOriginals: true }, { silent: true });
+    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-1'));
   });
 });

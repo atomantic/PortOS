@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./diagnose_minimax_h3.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/diagnose_minimax_h3.py', import.meta.url));
 const run = (source) => execFileSync(python, ['-c', source, script], { encoding: 'utf8' });
 const load = `
 import importlib.util, sys, tempfile, json

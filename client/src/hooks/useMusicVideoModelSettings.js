@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';
-import { getVideoGenStatus, listLorasFull } from '../services/apiImageVideo.js';
+import { getVideoGenModelContext, listLorasFull } from '../services/apiImageVideo.js';
 import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 
@@ -59,7 +59,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     const current = () => generation === catalogGeneration.current;
     setStatusRead('loading');
     setLoraRead('loading');
-    getVideoGenStatus({ silent: true })
+    getVideoGenModelContext({ silent: true })
       .then((status) => {
         if (!current()) return;
         // Music-video scenes always start from a reference frame. Hide

@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import useReviewerModelOptions from './useReviewerModelOptions';
-import { getLocalLlmStatus, getProviders } from '../services/api';
+import { getLocalLlmStatus } from '../services/apiLocalLlm.js';
+import { getProviders } from '../services/apiProviders.js';
 import { MODEL_SELECTABLE_REVIEWERS } from '../lib/reviewerPins';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiLocalLlm.js', () => ({
   getLocalLlmStatus: vi.fn(),
+}));
+vi.mock('../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 

@@ -1,10 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DeckStyleSources from './DeckStyleSources';
-import { getUniverse, listMoodBoardNames, synthesizeMoodBoardStyle } from '../../services/api';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { listMoodBoardNames, synthesizeMoodBoardStyle } from '../../services/apiMoodBoard.js';
 import toast from '../ui/Toast';
 
-vi.mock('../../services/api', () => ({ getUniverse: vi.fn(), listMoodBoardNames: vi.fn(), synthesizeMoodBoardStyle: vi.fn() }));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
+  getUniverse: vi.fn(),
+}));
+vi.mock('../../services/apiMoodBoard.js', () => ({
+  listMoodBoardNames: vi.fn(),
+  synthesizeMoodBoardStyle: vi.fn(),
+}));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
   providers: [{ id: 'p1', name: 'Example provider', type: 'api', enabled: true }],
   selectedProviderId: 'p1', selectedModel: 'example-model', availableModels: ['example-model'],

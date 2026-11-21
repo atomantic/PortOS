@@ -1,10 +1,8 @@
 import { lstatSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { Linter } from 'eslint';
+import { parse } from '@babel/parser';
 import { execFileSync } from '../lib/childProcess.js';
 
-const { version } = createRequire(import.meta.url)('eslint/package.json');
 const SOURCE_LIMIT = 20;
 const TEST_LIMIT = 5;
 const ERROR_LIMIT = 20;
@@ -13,10 +11,108 @@ const EXCLUDED_DIRS = new Set([
   '.git', '.cache', '.next', 'node_modules', 'vendor', 'vendors', 'third_party', 'third-party',
   'dist', 'build', 'coverage', 'generated', '__generated__', 'migrations', 'db-migrations',
 ]);
-const CONFIG = {
-  languageOptions: { ecmaVersion: 'latest', sourceType: 'module', parserOptions: { ecmaFeatures: { jsx: true } } },
-  rules: { complexity: ['warn', { max: 0, variant: 'classic' }] },
-};
+const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+const PROPERTIES = new Set(['Property', 'MethodDefinition', 'PropertyDefinition']);
+const DECISIONS = new Set([
+  'AssignmentPattern', 'CatchClause', 'ConditionalExpression', 'DoWhileStatement',
+  'ForInStatement', 'ForOfStatement', 'ForStatement', 'IfStatement', 'LogicalExpression',
+  'WhileStatement',
+]);
+const LOGICAL_ASSIGNMENTS = new Set(['&&=', '||=', '??=']);
+
+function isDecision(node) {
+  if (DECISIONS.has(node.type)) return true;
+  if (node.type === 'SwitchCase') return node.test !== null;
+  if (node.type === 'AssignmentExpression') return LOGICAL_ASSIGNMENTS.has(node.operator);
+  if (node.type === 'CallExpression' || node.type === 'MemberExpression') return node.optional === true;
+  return false;
+}
+
+function functionName(node, property) {
+  if (property?.kind === 'constructor') return 'Constructor';
+  const words = [];
+  if (property?.static) words.push('static');
+  if (property?.key.type === 'PrivateIdentifier') words.push('private');
+  if (node.async) words.push('async');
+  if (node.generator) words.push('generator');
+  if (property) {
+    words.push({ get: 'getter', set: 'setter' }[property.kind] ?? 'method');
+  } else {
+    if (node.type === 'ArrowFunctionExpression') words.push('arrow');
+    words.push('function');
+  }
+
+  const key = property?.key;
+  if (key?.type === 'PrivateIdentifier') words.push(`#${key.name}`);
+  else if (key?.type === 'Identifier' && !property.computed) words.push(`'${key.name}'`);
+  else if (key?.type === 'Literal') words.push(`'${key.value}'`);
+  else if (node.id) words.push(`'${node.id.name}'`);
+
+  const name = words.join(' ').replace(/\s+/g, ' ');
+  return name[0].toUpperCase() + name.slice(1);
+}
+
+function arrowLocation(arrows, bodyStart) {
+  let low = 0;
+  let high = arrows.length;
+  // The arrow immediately preceding the body belongs to this function, including
+  // when the parameter list contains a nested arrow or the body is parenthesized.
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (arrows[middle].start < bodyStart) low = middle + 1;
+    else high = middle;
+  }
+  return arrows[low - 1].loc.start;
+}
+
+function measure(source, path) {
+  const { program, tokens } = parse(source, {
+    sourceType: path.toLowerCase().endsWith('.cjs') ? 'commonjs' : 'module',
+    plugins: ['estree', 'jsx'],
+    tokens: true,
+    attachComment: false,
+  });
+  const arrows = tokens.filter(token => token.type.label === '=>');
+  const entries = [];
+
+  function startScope(name, { line, column }) {
+    const entry = { path, line, column: column + 1, name, score: 1 };
+    entries.push(entry);
+    return entry;
+  }
+
+  function visit(node, parent, scope) {
+    // Class field values and static blocks are implicit functions. Computed
+    // property keys execute in the enclosing scope.
+    if (parent?.type === 'PropertyDefinition' && node === parent.value) {
+      scope = startScope('Class field initializer', node.loc.start);
+    }
+    if (node.type === 'StaticBlock') {
+      scope = startScope('Class static block', node.loc.start);
+    }
+    if (FUNCTIONS.has(node.type)) {
+      const property = PROPERTIES.has(parent?.type) && node === parent.value ? parent : null;
+      const location = property?.loc.start ?? (node.type === 'ArrowFunctionExpression'
+        ? arrowLocation(arrows, node.body.start)
+        : node.loc.start);
+      scope = startScope(functionName(node, property), location);
+    }
+    if (scope && isDecision(node)) scope.score += 1;
+
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          if (child?.type) visit(child, node, scope);
+        }
+      } else if (value?.type) {
+        visit(value, node, scope);
+      }
+    }
+  }
+
+  visit(program, null, null);
+  return entries;
+}
 
 function gitLines(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).split('\0').filter(Boolean);
@@ -57,7 +153,6 @@ function run() {
     tests: { files: 0, scanned: 0, count: 0, limit: TEST_LIMIT, entries: [] },
   };
   const failures = [];
-  const linter = new Linter();
 
   for (const path of paths) {
     const section = sections[isTest(path) ? 'tests' : 'source'];
@@ -68,29 +163,22 @@ function run() {
         section.files -= 1;
         continue;
       }
-      const config = path.toLowerCase().endsWith('.cjs') ? { ...CONFIG, languageOptions: { ...CONFIG.languageOptions, sourceType: 'commonjs' } } : CONFIG;
-      const messages = linter.verify(readFileSync(join(root, path), 'utf8'), config, { allowInlineConfig: false });
-      const errors = messages.filter(message => message.ruleId !== 'complexity');
-      if (errors.length) {
-        for (const error of errors) failures.push(`${path}:${error.line || 1}:${error.column || 1} ${error.message}`);
-        continue;
-      }
-      const entries = messages.map(message => {
-        const match = /^(.*?) has a complexity of (\d+)\. Maximum allowed is 0\.$/s.exec(message.message);
-        if (!match) throw new Error(`Unrecognized ESLint complexity message: ${message.message}`);
-        return { path, line: message.line, column: message.column, name: match[1].replace(/\s+/g, ' '), score: Number(match[2]) };
-      });
+      const entries = measure(readFileSync(join(root, path), 'utf8'), path);
       section.entries.push(...entries);
       section.count += entries.length;
       section.entries.sort(compareEntries);
       section.entries.splice(section.limit);
       section.scanned += 1;
     } catch (error) {
-      failures.push(`${path}: ${error.message}`);
+      if (error.loc) {
+        failures.push(`${path}:${error.loc.line}:${error.loc.column + 1} Parsing error: ${error.message}`);
+      } else {
+        failures.push(`${path}: ${error.message}`);
+      }
     }
   }
 
-  console.log(`Cyclomatic complexity: ESLint ${version}, classic variant (report only; a score is not a finding)`);
+  console.log('Cyclomatic complexity: classic variant (report only; a score is not a finding)');
   console.log('Scope: tracked and unignored untracked JS/JSX/MJS/CJS; excludes generated, vendor, build and migration files. Other languages are not scanned.');
   printSection('Source', sections.source, SOURCE_LIMIT);
   printSection('Tests and fixtures', sections.tests, TEST_LIMIT);

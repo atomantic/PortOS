@@ -241,25 +241,35 @@ export async function checkForUpdate({ manual = false } = {}) {
   });
 }
 
+const releaseAdvisory = (state, currentVersion) => {
+  const version = state.latestRelease?.version;
+  return {
+    currentVersion,
+    updateAvailable: typeof version === 'string' && version.length > 0
+      && compareSemver(version, currentVersion) > 0 && !state.ignoredVersions.includes(version),
+  };
+};
+
+export async function getShellUpdateStatus() {
+  const [state, currentVersion, installState] = await Promise.all([
+    loadState(),
+    getCurrentVersion(),
+    getInstallState().catch(() => null),
+  ]);
+  return {
+    ...releaseAdvisory(state, currentVersion),
+    latestRelease: typeof state.latestRelease?.version === 'string' ? { version: state.latestRelease.version } : null,
+    installState: installState && { outOfSync: installState.outOfSync, currentCommit: installState.currentCommit },
+  };
+}
+
 /**
  * Get the current update status without checking GitHub.
- * Includes `remoteInfo` so the UI can render fork-aware messaging.
- * Remote inspection is best-effort — a failure (no git, no origin, etc.)
- * never blocks the status response.
+ * Includes fork-aware remote info when available.
  */
 export async function getUpdateStatus() {
   const state = await loadState();
   const currentVersion = await getCurrentVersion();
-  const latestVersion =
-    state.latestRelease && typeof state.latestRelease.version === 'string'
-      ? state.latestRelease.version
-      : null;
-  const isNewer = latestVersion
-    ? compareSemver(latestVersion, currentVersion) > 0
-    : false;
-  const isIgnored = latestVersion
-    ? state.ignoredVersions.includes(latestVersion)
-    : false;
   const remoteInfo = await getRemoteInfo().catch(() => null);
 
   // Single source of truth for the freshness check — the UI reads this
@@ -286,7 +296,7 @@ export async function getUpdateStatus() {
     ...state,
     deferredUpdate: maintenance.deferredUpdate.operation() ?? null,
     updateInProgress: state.updateInProgress || ['starting', 'running'].includes(maintenance.deferredUpdate.operation()?.phase),
-    updateAvailable: isNewer && !isIgnored,
+    updateAvailable: releaseAdvisory(state, currentVersion).updateAvailable,
     remoteInfo,
     upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
     forkSyncFresh,

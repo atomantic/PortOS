@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { FAL_IMAGE_VIDEO_MODELS } from '../../lib/falVideoModels.js';
 import { RUNWAY_VIDEO_MODELS } from '../../lib/runwayVideoModels.js';
@@ -47,7 +48,7 @@ export default function SceneClipLength({ fieldId, scene, settings = {}, disable
           <select id={fieldId('clip-model')} value={scene.clipModelId || ''} disabled={disabled} onChange={(e) => onChange({ clipModelId: e.target.value || null })}
             className={`max-w-full ${FIELD}`}>
             <option value="">Project default</option>
-            {models.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
+            {sortByLabel(models, (model) => model.label || model.id).map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
           </select>
         </div>
       )}

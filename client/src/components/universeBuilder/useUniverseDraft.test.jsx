@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 
 // These constant stand-ins mirror the REAL values exported from
 // services/apiUniverseBuilder.js (WORLD_CATEGORIES, WORLD_LOCKABLE_FIELDS,
@@ -17,7 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   getUniverse: vi.fn(),
   listImageModels: vi.fn(),
   listLorasFull: vi.fn(),
-  listUniverses: vi.fn(),
+  listUniverseSummaries: vi.fn(),
   listWorldRuns: vi.fn(),
   removeUniverseStyleReference: vi.fn(),
   updateUniverse: vi.fn(),
@@ -33,10 +35,36 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../services/api', () => apiMocks);
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
+  addUniverseStyleReference: apiMocks.addUniverseStyleReference,
+  createUniverse: apiMocks.createUniverse,
+  deleteUniverse: apiMocks.deleteUniverse,
+  getUniverse: apiMocks.getUniverse,
+  listUniverseSummaries: apiMocks.listUniverseSummaries,
+  listWorldRuns: apiMocks.listWorldRuns,
+  removeUniverseStyleReference: apiMocks.removeUniverseStyleReference,
+  updateUniverse: apiMocks.updateUniverse,
+  WORLD_CATEGORY_KEY_MAX: apiMocks.WORLD_CATEGORY_KEY_MAX,
+  WORLD_CATEGORIES: apiMocks.WORLD_CATEGORIES,
+  WORLD_LOCKABLE_FIELDS: apiMocks.WORLD_LOCKABLE_FIELDS,
+  ensureInfluences: apiMocks.ensureInfluences,
+}));
+vi.mock('../../services/apiProviders.js', () => ({ getProviders: apiMocks.getProviders }));
+vi.mock('../../services/apiSystem.js', () => ({ getSettings: apiMocks.getSettings }));
+vi.mock('../../services/apiImageVideo.js', () => ({
+  listImageModels: apiMocks.listImageModels,
+  listLorasFull: apiMocks.listLorasFull,
+}));
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import useUniverseDraft from './useUniverseDraft.js';
+import { UniverseSelector } from './UniverseBuilderPage.jsx';
+
+const request = vi.hoisted(() => vi.fn());
+vi.mock('../../services/apiCore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  request,
+}));
 
 const universe = {
   id: 'u1',
@@ -77,7 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   serverReferences = new Map();
   serverClock = 0;
-  apiMocks.listUniverses.mockResolvedValue([universe]);
+  apiMocks.listUniverseSummaries.mockResolvedValue([universe]);
   apiMocks.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
   apiMocks.listImageModels.mockResolvedValue([]);
   apiMocks.listLorasFull.mockResolvedValue([]);
@@ -147,6 +175,48 @@ const renderSelectable = () => {
 };
 
 describe('useUniverseDraft', () => {
+  it('loads selector summaries and supports searching and creating with those results', async () => {
+    const user = userEvent.setup();
+    const { listUniverseSummaries } = await vi.importActual('../../services/apiUniverseBuilder.js');
+    const goToWorld = vi.fn();
+    apiMocks.listUniverseSummaries.mockImplementationOnce(listUniverseSummaries);
+    request.mockResolvedValueOnce([
+      { id: universe.id, name: universe.name, starterPrompt: universe.starterPrompt },
+      { id: 'u2', name: 'Salt Run', starterPrompt: 'Foundry city' },
+      { id: 'u3', name: 'Choir Awakens', starterPrompt: 'Empty cathedral' },
+    ]);
+    function SelectorHarness() {
+      const state = useUniverseDraft({ selectedId: universe.id, goToWorld });
+      if (state.loading || !state.draftReady) return null;
+      return (
+        <UniverseSelector
+          universes={state.universes}
+          selectedId={universe.id}
+          value={state.draft.name}
+          onChange={(name) => state.updateDraft({ name })}
+          onPick={goToWorld}
+          onCreate={() => state.handleCreateNamed(state.draft.name)}
+        />
+      );
+    }
+
+    render(<MemoryRouter><SelectorHarness /></MemoryRouter>);
+    const input = await screen.findByRole('combobox', { name: 'Universe name' });
+    await user.clear(input);
+    await user.type(input, 'Salt');
+    const results = screen.getByRole('listbox');
+    expect(within(results).getByText('Salt Run')).toBeVisible();
+    expect(within(results).getByText('Foundry city')).toBeVisible();
+    expect(within(results).queryByText('Choir Awakens')).not.toBeInTheDocument();
+    expect(request.mock.calls).toEqual([['/universe-builder/summaries', { silent: true }]]);
+
+    await user.clear(input);
+    await user.type(input, 'Frost Harbor');
+    await user.click(screen.getByText(/Create.*Frost Harbor/));
+    expect(apiMocks.createUniverse).toHaveBeenCalledWith(expect.objectContaining({ name: 'Frost Harbor' }), { silent: true });
+    expect(goToWorld).toHaveBeenCalledWith('u-new');
+  });
+
   it('refuses saving an outgoing draft while the selected universe is loading or failed, then retries', async () => {
     const { result, rerender } = renderSelectable();
     await waitFor(() => expect(result.current.draft.id).toBe('u1'));
@@ -1408,7 +1478,7 @@ describe('imageCfg — universe render pin', () => {
 
   it('folds the universe pin over the install-wide settings default', async () => {
     apiMocks.getSettings.mockResolvedValue({ imageGen: CLOUD_ON });
-    apiMocks.listUniverses.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
+    apiMocks.listUniverseSummaries.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
     apiMocks.getUniverse.mockResolvedValue({ ...universe, imageMode: 'agy' });
     const { result } = renderDraft();
     // readPipelineImageSettings prefers codex when it's enabled, so 'agy' can
@@ -1428,7 +1498,7 @@ describe('imageCfg — universe render pin', () => {
   // form says codex is the inconsistency this whole change is about.
   it('resolves the batch form default mode through the same ladder', async () => {
     apiMocks.getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CLOUD_ON } });
-    apiMocks.listUniverses.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
+    apiMocks.listUniverseSummaries.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
     apiMocks.getUniverse.mockResolvedValue({ ...universe, imageMode: 'agy' });
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.effectiveDefaultMode).toBe('agy'));
@@ -1437,7 +1507,7 @@ describe('imageCfg — universe render pin', () => {
 
   it('ignores a pin whose backend this install no longer has enabled', async () => {
     apiMocks.getSettings.mockResolvedValue({ imageGen: { codex: { enabled: true } } });
-    apiMocks.listUniverses.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
+    apiMocks.listUniverseSummaries.mockResolvedValue([{ ...universe, imageMode: 'agy' }]);
     apiMocks.getUniverse.mockResolvedValue({ ...universe, imageMode: 'agy' });
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.loading).toBe(false));

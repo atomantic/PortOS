@@ -10,20 +10,19 @@ vi.mock('../services/socket', async () => {
   return { default: new EventEmitter() };
 });
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiQuotaBurn.js', () => ({
   getQuotaBurn: vi.fn(),
   getQuotaBurnCatalog: vi.fn(),
-  // The SHARED scheduled-task catalogs a burn step references. Mocked here (and
-  // asserted as never WRITTEN to below) because the whole point of the reference
-  // model is that this page reads that catalog and never edits it.
+  saveQuotaBurn: vi.fn(),
+  runQuotaBurn: vi.fn(),
+  rearmQuotaBurn: vi.fn(),
+}));
+vi.mock('../services/apiAgents.js', () => ({
   getCosSchedule: vi.fn(),
   getCosJobs: vi.fn(),
   updateCosTaskInterval: vi.fn(),
   updateCosJob: vi.fn(),
   deleteCosJob: vi.fn(),
-  saveQuotaBurn: vi.fn(),
-  runQuotaBurn: vi.fn(),
-  rearmQuotaBurn: vi.fn(),
 }));
 
 const toastError = vi.fn();
@@ -37,7 +36,20 @@ vi.mock('../components/ui/Toast', () => {
   return { default: toast };
 });
 
-import * as api from '../services/api';
+import {
+  getQuotaBurn,
+  getQuotaBurnCatalog,
+  saveQuotaBurn,
+  runQuotaBurn,
+  rearmQuotaBurn,
+} from '../services/apiQuotaBurn.js';
+import {
+  getCosSchedule,
+  getCosJobs,
+  updateCosTaskInterval,
+  updateCosJob,
+  deleteCosJob,
+} from '../services/apiAgents.js';
 import { MAINTENANCE_TASK_ORDER } from '../../../server/lib/maintenanceSequence.js';
 
 const NO_OVERRIDES = { providerId: null, model: null, effort: null, params: {} };
@@ -139,13 +151,13 @@ const STASH_KEY = 'quotaBurn:unsavedPatch';
 beforeEach(() => {
   vi.clearAllMocks();
   globalThis.sessionStorage.clear();
-  api.getQuotaBurn.mockResolvedValue({ config, status });
-  api.getQuotaBurnCatalog.mockResolvedValue(catalog);
-  api.getCosSchedule.mockResolvedValue(schedule);
-  api.getCosJobs.mockResolvedValue(cosJobs);
-  api.saveQuotaBurn.mockResolvedValue({ config });
-  api.runQuotaBurn.mockResolvedValue({ result: { dispatched: false, reason: 'nothing to burn' } });
-  api.rearmQuotaBurn.mockResolvedValue({ config, status });
+  getQuotaBurn.mockResolvedValue({ config, status });
+  getQuotaBurnCatalog.mockResolvedValue(catalog);
+  getCosSchedule.mockResolvedValue(schedule);
+  getCosJobs.mockResolvedValue(cosJobs);
+  saveQuotaBurn.mockResolvedValue({ config });
+  runQuotaBurn.mockResolvedValue({ result: { dispatched: false, reason: 'nothing to burn' } });
+  rearmQuotaBurn.mockResolvedValue({ config, status });
 });
 
 afterEach(() => vi.useRealTimers());
@@ -166,20 +178,20 @@ describe('QuotaBurn page', () => {
         ...status,
         families: [{ ...status.families[0], willBurn: false, percentRemaining: null, skipReason: 'reading provider quota…', pending: true }, status.families[1]],
       };
-      api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
+      getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
       renderPage();
 
       expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
       expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
 
       await pastPollWindow();
-      expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
+      expect(getQuotaBurn).toHaveBeenCalledTimes(1);
       expect(screen.getByText(/reading quota…/)).toBeInTheDocument();
       await act(async () => { socket.emit('provider-quota:updated', {}); });
 
       expect(await screen.findByText(/62% left/)).toBeInTheDocument();
       expect(screen.queryByText(/reading quota…/)).not.toBeInTheDocument();
-      expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
+      expect(getQuotaBurn).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -188,21 +200,21 @@ describe('QuotaBurn page', () => {
   it('reconciles once on reconnect and tab show, and removes subscriptions on unmount', async () => {
     const view = renderPage();
     await screen.findByText(/62% left/);
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(1);
     await act(async () => { socket.emit('connect'); });
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(2);
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
     visibility.mockReturnValue('hidden');
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
       socket.emit('provider-quota:updated', {});
     });
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(2);
     visibility.mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(3);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(3);
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(3);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(3);
     view.unmount();
     expect(socket.listenerCount('provider-quota:updated')).toBe(0);
     visibility.mockRestore();
@@ -220,7 +232,7 @@ describe('QuotaBurn page', () => {
     // -1 is the default: the window is still CHARGED (so "1 used" stays useful)
     // but nothing is counting down to a limit, and "1/-1 used" would read as a
     // bug in the ledger.
-    api.getQuotaBurn.mockResolvedValue({
+    getQuotaBurn.mockResolvedValue({
       config: { ...config, families: { ...config.families, grok: { ...config.families.grok, maxDispatchesPerWindow: -1 } } },
       status,
     });
@@ -239,8 +251,8 @@ describe('QuotaBurn page', () => {
     await user.clear(cap);
     await user.type(cap, '0');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalled();
-    expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.maxDispatchesPerWindow).toBe(-1);
+    expect(saveQuotaBurn).toHaveBeenCalled();
+    expect(saveQuotaBurn.mock.calls[0][0].families.grok.maxDispatchesPerWindow).toBe(-1);
   });
 
   it('shows an observed provider refusal, not just the gate that closed', async () => {
@@ -253,7 +265,7 @@ describe('QuotaBurn page', () => {
         status.families[1],
       ],
     };
-    api.getQuotaBurn.mockResolvedValueOnce({ config, status: blocked });
+    getQuotaBurn.mockResolvedValueOnce({ config, status: blocked });
     renderPage();
     expect(await screen.findByText(/provider refused — retrying after/)).toBeInTheDocument();
     expect(screen.getByText('Usage limit exceeded')).toBeInTheDocument();
@@ -266,7 +278,7 @@ describe('QuotaBurn page', () => {
     await screen.findByText(/62% left/);
     // One load on mount, and no timer re-arming behind it.
     await pastPollWindow();
-    expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(getQuotaBurn).toHaveBeenCalledTimes(1);
   });
 
   it('saves the master switch as a partial patch', async () => {
@@ -275,7 +287,7 @@ describe('QuotaBurn page', () => {
     renderPage();
     await user.click(await screen.findByLabelText(/Run the quota-burn loop automatically/));
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledWith({ enabled: true }, { silent: true });
+    expect(saveQuotaBurn).toHaveBeenCalledWith({ enabled: true }, { silent: true });
   });
 
   it('drives the expanded family from the URL, not local state', async () => {
@@ -323,9 +335,9 @@ describe('QuotaBurn page', () => {
     renderPage('/devtools/quota-burn/grok');
     // First click only arms — a stray click on this icon must not spend quota.
     await user.click(await screen.findByLabelText('Run step 1 now'));
-    expect(api.runQuotaBurn).not.toHaveBeenCalled();
+    expect(runQuotaBurn).not.toHaveBeenCalled();
     await user.click(await screen.findByRole('button', { name: 'Run' }));
-    await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
+    await waitFor(() => expect(runQuotaBurn).toHaveBeenCalledWith(
       { familyId: 'grok', jobId: 'j1', force: true }, { silent: true },
     ));
   });
@@ -336,13 +348,13 @@ describe('QuotaBurn page', () => {
       ...status,
       families: [{ ...status.families[0], willBurn: false, skipReason: 'dispatch cap reached (5/5)' }, status.families[1]],
     };
-    api.getQuotaBurn.mockResolvedValue({ config, status: gatedStatus });
+    getQuotaBurn.mockResolvedValue({ config, status: gatedStatus });
     renderPage('/devtools/quota-burn/grok');
 
     const burnButton = await screen.findByTitle('Force-run this family\'s next available job now');
     expect(burnButton).toBeEnabled();
     await user.click(burnButton);
-    await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
+    await waitFor(() => expect(runQuotaBurn).toHaveBeenCalledWith(
       { familyId: 'grok', force: true }, { silent: true },
     ));
   });
@@ -370,7 +382,7 @@ describe('QuotaBurn page', () => {
     renderPage('/devtools/quota-burn/grok');
     await user.selectOptions(await screen.findByLabelText('Add a step'), 'builtin:ux');
     await flushSave();
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     const added = patch.families.grok.jobs.at(-1);
     // A reference, not a copied prompt — and no free-text work of its own.
     expect(added.taskRef).toEqual({ kind: 'builtin', taskType: 'ux', appId: 'a1' });
@@ -389,7 +401,7 @@ describe('QuotaBurn page', () => {
     expect(await screen.findByText(/Runs install-wide/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Target app')).not.toBeInTheDocument();
     await flushSave();
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     expect(patch.families.grok.jobs.at(-1).taskRef).toEqual({ kind: 'builtin', taskType: 'repo-sync', appId: null });
   });
 
@@ -399,7 +411,7 @@ describe('QuotaBurn page', () => {
       ...config,
       families: { ...config.families, grok: { ...config.families.grok, jobs: [step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } })] } },
     };
-    api.getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
+    getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Expand step 1'));
     const target = await screen.findByLabelText('Target app');
@@ -417,7 +429,7 @@ describe('QuotaBurn page', () => {
       ...config,
       families: { ...config.families, grok: { ...config.families.grok, jobs: [step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } })] } },
     };
-    api.getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
+    getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Expand step 1'));
 
@@ -431,11 +443,11 @@ describe('QuotaBurn page', () => {
     // The effective line follows the override immediately, before the save lands.
     expect(await screen.findByText(/does the work/)).toBeInTheDocument();
     await flushSave();
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     expect(patch.families.grok.jobs[0].overrides.params).toEqual({ fileIssues: false });
     // The referenced task is never written to — that is the whole reference model.
-    expect(api.updateCosTaskInterval).not.toHaveBeenCalled();
-    expect(api.updateCosJob).not.toHaveBeenCalled();
+    expect(updateCosTaskInterval).not.toHaveBeenCalled();
+    expect(updateCosJob).not.toHaveBeenCalled();
   });
 
   it('links out to view / edit / create the source scheduled task instead of editing it here', async () => {
@@ -466,7 +478,7 @@ describe('QuotaBurn page', () => {
         },
       },
     };
-    api.getQuotaBurn.mockResolvedValue({ config: stale, status });
+    getQuotaBurn.mockResolvedValue({ config: stale, status });
     renderPage('/devtools/quota-burn/grok');
     expect(await screen.findByText(/scheduled task "deleted-task" is not available on this install/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Run step 1 now')).not.toBeInTheDocument();
@@ -496,11 +508,11 @@ describe('QuotaBurn page', () => {
     await user.click(screen.getByRole('button', { name: 'Remove' }));
     await flushSave();
     // The ONLY call is the plan PUT with the step gone.
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     expect(patch.families.grok.jobs).toEqual([]);
-    expect(api.deleteCosJob).not.toHaveBeenCalled();
-    expect(api.updateCosJob).not.toHaveBeenCalled();
-    expect(api.updateCosTaskInterval).not.toHaveBeenCalled();
+    expect(deleteCosJob).not.toHaveBeenCalled();
+    expect(updateCosJob).not.toHaveBeenCalled();
+    expect(updateCosTaskInterval).not.toHaveBeenCalled();
   });
 
   it('never persists a status field, or an override mirror, alongside the step', async () => {
@@ -514,8 +526,8 @@ describe('QuotaBurn page', () => {
     await user.click(await screen.findByLabelText('Name for step 1'));
     await user.keyboard('!');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalled();
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    expect(saveQuotaBurn).toHaveBeenCalled();
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     const saved = patch.families.grok.jobs[0];
     for (const key of ['pending', 'ranAt', 'model', 'providerId', 'effort', 'params']) {
       expect(saved).not.toHaveProperty(key);
@@ -548,37 +560,37 @@ describe('QuotaBurn run-once steps', () => {
     await user.click(await screen.findByLabelText('Expand step 1'));
     await user.click(await screen.findByLabelText('Run once'));
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalled();
-    expect(api.saveQuotaBurn.mock.calls.at(-1)[0].families.grok.jobs[0].runOnce).toBe(true);
+    expect(saveQuotaBurn).toHaveBeenCalled();
+    expect(saveQuotaBurn.mock.calls.at(-1)[0].families.grok.jobs[0].runOnce).toBe(true);
   });
 
   it('reports a spent step as ran rather than idle', async () => {
     // The server stops probing a spent step, so without this the row's only
     // self-description would be the absence of a pending line.
-    api.getQuotaBurn.mockResolvedValue(spent);
+    getQuotaBurn.mockResolvedValue(spent);
     renderPage('/devtools/quota-burn/grok');
     expect(await screen.findByText(/Ran once/)).toBeInTheDocument();
     expect(screen.getByText(/1 ran once/)).toBeInTheDocument();
   });
 
   it('re-arms one step without dispatching anything', async () => {
-    api.getQuotaBurn.mockResolvedValue(spent);
+    getQuotaBurn.mockResolvedValue(spent);
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByRole('button', { name: /Re-arm$/ }));
-    await waitFor(() => expect(api.rearmQuotaBurn).toHaveBeenCalledWith('grok', 'j1', { silent: true }));
+    await waitFor(() => expect(rearmQuotaBurn).toHaveBeenCalledWith('grok', 'j1', { silent: true }));
     // Re-arming makes a step ELIGIBLE; the next cycle's gates still decide.
-    expect(api.runQuotaBurn).not.toHaveBeenCalled();
+    expect(runQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('re-arms a whole one-shot series in one click', async () => {
     // The case this exists for: a plan configured as a series the user wants to
     // run again as a series.
-    api.getQuotaBurn.mockResolvedValue(spent);
+    getQuotaBurn.mockResolvedValue(spent);
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByRole('button', { name: /Re-arm all/ }));
-    await waitFor(() => expect(api.rearmQuotaBurn).toHaveBeenCalledWith('grok', null, { silent: true }));
+    await waitFor(() => expect(rearmQuotaBurn).toHaveBeenCalledWith('grok', null, { silent: true }));
   });
 
   it('offers no re-arm control while nothing has run', async () => {
@@ -596,8 +608,8 @@ describe('QuotaBurn run-once steps', () => {
  */
 describe('QuotaBurn catalog failure', () => {
   it('names a failed catalog read instead of silently emptying the form', async () => {
-    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
-    api.getCosJobs.mockRejectedValueOnce(new Error('Jobs request failed'));
+    getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
+    getCosJobs.mockRejectedValueOnce(new Error('Jobs request failed'));
     renderPage('/devtools/quota-burn/grok');
 
     expect(await screen.findByText('Job choices could not be loaded')).toBeInTheDocument();
@@ -610,11 +622,11 @@ describe('QuotaBurn catalog failure', () => {
 
   it('re-fetches the catalog from the banner without a page reload', async () => {
     const user = userEvent.setup();
-    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
+    getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
     renderPage('/devtools/quota-burn/grok');
 
     await user.click(await screen.findByRole('button', { name: 'Retry catalog load' }));
-    await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getCosSchedule).toHaveBeenCalledTimes(2));
     // The success clears the banner AND restores the controls it was standing in for.
     await waitFor(() => expect(screen.queryByText('Job choices could not be loaded')).not.toBeInTheDocument());
     expect(screen.getByLabelText('Add a step')).toBeEnabled();
@@ -624,8 +636,8 @@ describe('QuotaBurn catalog failure', () => {
     // Same symptom as a thrown read — an empty picker — but a different cause,
     // so it must not be reported as a successful load. Every task here is
     // ineligible or a shell job.
-    api.getCosSchedule.mockResolvedValueOnce({ tasks: { hidden: { enabled: true, invocation: { userInvokable: false } } } });
-    api.getCosJobs.mockResolvedValueOnce({ jobs: [{ id: 'sh', name: 'Sweep', type: 'shell', enabled: true }] });
+    getCosSchedule.mockResolvedValueOnce({ tasks: { hidden: { enabled: true, invocation: { userInvokable: false } } } });
+    getCosJobs.mockResolvedValueOnce({ jobs: [{ id: 'sh', name: 'Sweep', type: 'shell', enabled: true }] });
     renderPage('/devtools/quota-burn/grok');
     expect(await screen.findByText(/The server returned no scheduled tasks a burn can run\./)).toBeInTheDocument();
   });
@@ -635,9 +647,9 @@ describe('QuotaBurn catalog failure', () => {
     // consumer reads `.length` on these lists — so an older peer or a partial
     // response would take the whole page down with a TypeError instead of
     // reporting an unusable catalog.
-    api.getQuotaBurnCatalog.mockResolvedValueOnce({ apps: null, providers: null });
-    api.getCosSchedule.mockResolvedValueOnce({ tasks: null });
-    api.getCosJobs.mockResolvedValueOnce({ jobs: null });
+    getQuotaBurnCatalog.mockResolvedValueOnce({ apps: null, providers: null });
+    getCosSchedule.mockResolvedValueOnce({ tasks: null });
+    getCosJobs.mockResolvedValueOnce({ jobs: null });
     renderPage('/devtools/quota-burn/grok');
     expect(await screen.findByText(/The server returned no scheduled tasks a burn can run\./)).toBeInTheDocument();
     expect(screen.getByText(/62% left/)).toBeInTheDocument();
@@ -646,7 +658,7 @@ describe('QuotaBurn catalog failure', () => {
   it('announces the banner to assistive tech rather than only drawing it', async () => {
     // It appears after the card is already on screen — the read resolves late,
     // and a retry can put it back — so nothing announces it without a live region.
-    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
+    getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
     renderPage('/devtools/quota-burn/grok');
     // Scope to the banner's own text: the first-paint PageSkeleton is also a
     // `status` region, so a bare role query would race it.
@@ -675,13 +687,13 @@ describe('QuotaBurn save debounce', () => {
 
     // Mid-burst: nothing persisted yet, and every run control is disabled
     // because the server still holds the pre-edit plan.
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(saveQuotaBurn).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled();
     expect(screen.getByLabelText('Run step 1 now')).toBeDisabled();
 
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
-    expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toBe('Bible imagesabc');
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toBe('Bible imagesabc');
     await findEnabledByRole('button', { name: /Evaluate now/ });
   });
 });
@@ -694,7 +706,7 @@ describe('QuotaBurn save races', () => {
     // Without a sequence guard, `setConfig(result.config)` rewinds the
     // controlled input mid-typing and the character is silently lost.
     const gate = deferred();
-    api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
+    saveQuotaBurn.mockReturnValueOnce(gate.promise);
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
@@ -702,7 +714,7 @@ describe('QuotaBurn save races', () => {
     await user.clear(nameInput);
     await user.type(nameInput, 'AB');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(1);
 
     // Type again while the first PUT is still open, then let it land carrying
     // the OLD value the server normalized.
@@ -716,14 +728,14 @@ describe('QuotaBurn save races', () => {
     // the server does not have — dispatching a real quota-spending task with
     // the previous model.
     const gate = deferred();
-    api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
+    saveQuotaBurn.mockReturnValueOnce(gate.promise);
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     const nameInput = await screen.findByLabelText('Name for step 1');
     await user.type(nameInput, 'X');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(1);
     await user.type(nameInput, 'Y');
     gate.resolve({ config });
 
@@ -735,38 +747,38 @@ describe('QuotaBurn save races', () => {
   it('retains the patch when the save fails so one bad field cannot eat the rest', async () => {
     // `pendingRef` was cleared before the request, so a 400 discarded every
     // edit coalesced into that body, unrecoverably.
-    api.saveQuotaBurn.mockRejectedValueOnce(new Error('400'));
+    saveQuotaBurn.mockRejectedValueOnce(new Error('400'));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(1);
 
     // Still unsaved, and the next flush re-sends the retained edit.
     await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled());
     await user.type(screen.getByLabelText('Name for step 1'), '!');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2);
-    expect(api.saveQuotaBurn.mock.calls[1][0].families.grok.jobs[0].label).toContain('Z!');
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(2);
+    expect(saveQuotaBurn.mock.calls[1][0].families.grok.jobs[0].label).toContain('Z!');
   });
 
   it('stops claiming it is saving once the retry budget is spent', async () => {
     // The header indicator is the page's only persistent statement about
     // persistence (there is no Save button). Leaving it on "Saving changes…"
     // after both attempts failed asserts progress that is not happening.
-    api.saveQuotaBurn.mockRejectedValue(new Error('400'));
+    saveQuotaBurn.mockRejectedValue(new Error('400'));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
     await flushSave();
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2);
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(2);
     expect(await screen.findByText('Not saved — edit a field to retry')).toBeInTheDocument();
 
     // The next edit re-arms the debounce, so the give-up no longer applies.
-    api.saveQuotaBurn.mockResolvedValue({ config });
+    saveQuotaBurn.mockResolvedValue({ config });
     await user.type(screen.getByLabelText('Name for step 1'), '!');
     expect(screen.getByText('Saving changes…')).toBeInTheDocument();
     await flushSave();
@@ -780,14 +792,14 @@ describe('QuotaBurn save races', () => {
     const { unmount } = renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Q');
     unmount();
-    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
-    expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toContain('Q');
+    await waitFor(() => expect(saveQuotaBurn).toHaveBeenCalledTimes(1));
+    expect(saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toContain('Q');
   });
 
   it('reports a failed unmount flush and stashes the patch for the next visit', async () => {
     // The page is gone, so no header indicator is left to say the save failed:
     // swallowing it turned "Saving changes…" into permanently lost edits.
-    api.saveQuotaBurn.mockRejectedValue(new Error('Network request failed'));
+    saveQuotaBurn.mockRejectedValue(new Error('Network request failed'));
     const user = userEvent.setup();
     const { unmount } = renderPage('/devtools/quota-burn/grok');
     await user.type(await screen.findByLabelText('Name for step 1'), 'Q');
@@ -808,21 +820,21 @@ describe('QuotaBurn save races', () => {
     // user retyped the field.
     expect(await screen.findByDisplayValue('45')).toBeInTheDocument();
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
-    expect(api.saveQuotaBurn.mock.calls[0][0].checkIntervalMinutes).toBe(45);
+    expect(saveQuotaBurn).toHaveBeenCalledTimes(1);
+    expect(saveQuotaBurn.mock.calls[0][0].checkIntervalMinutes).toBe(45);
     expect(globalThis.sessionStorage.getItem(STASH_KEY)).toBeNull();
   });
 
   it('keeps a stashed patch when the visit could not read a plan', async () => {
     // Replaying the patch onto a page with no config would render a plan with
     // no families; the recovery belongs on the next visit that gets one.
-    api.getQuotaBurn.mockRejectedValue(new Error('Network request failed'));
+    getQuotaBurn.mockRejectedValue(new Error('Network request failed'));
     globalThis.sessionStorage.setItem(STASH_KEY, JSON.stringify({ checkIntervalMinutes: 45 }));
     renderPage();
 
     expect(await screen.findByText('Quota burn is unavailable')).toBeInTheDocument();
     expect(globalThis.sessionStorage.getItem(STASH_KEY)).not.toBeNull();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(saveQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('ignores a stash that is not a patch object', async () => {
@@ -838,7 +850,7 @@ describe('QuotaBurn save races', () => {
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
     await pastSaveWindow();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(saveQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('ignores an empty stash rather than announcing a restore of nothing', async () => {
@@ -848,7 +860,7 @@ describe('QuotaBurn save races', () => {
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
     await pastSaveWindow();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(saveQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('names why the first load failed and recovers from the Retry button', async () => {
@@ -856,7 +868,7 @@ describe('QuotaBurn save races', () => {
     // plan" with the header — and its Refresh — unrendered, so the only way
     // out was reloading the browser tab.
     const user = userEvent.setup();
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
     renderPage();
 
     expect(await screen.findByText('Quota burn is unavailable')).toBeInTheDocument();
@@ -876,8 +888,8 @@ describe('QuotaBurn save races', () => {
     // back with nothing saying they were stale.
     const user = userEvent.setup();
     let rejectRefresh;
-    api.getQuotaBurn.mockImplementationOnce(() => Promise.resolve({ config, status }));
-    api.getQuotaBurn.mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject; }));
+    getQuotaBurn.mockImplementationOnce(() => Promise.resolve({ config, status }));
+    getQuotaBurn.mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject; }));
     renderPage();
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
@@ -900,8 +912,8 @@ describe('QuotaBurn save races', () => {
 
   it('clears the failed-refresh banner on the next successful read', async () => {
     const user = userEvent.setup();
-    api.getQuotaBurn.mockResolvedValueOnce({ config, status });
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Quota scrape timed out'));
+    getQuotaBurn.mockResolvedValueOnce({ config, status });
+    getQuotaBurn.mockRejectedValueOnce(new Error('Quota scrape timed out'));
     renderPage();
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
@@ -922,8 +934,8 @@ describe('QuotaBurn save races', () => {
         ...status,
         families: [{ ...status.families[0], pending: true }, status.families[1]],
       };
-      api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
-      api.getQuotaBurn.mockRejectedValueOnce(new Error('Provider CLI is not responding'));
+      getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
+      getQuotaBurn.mockRejectedValueOnce(new Error('Provider CLI is not responding'));
       renderPage();
 
       expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
@@ -948,19 +960,19 @@ describe('QuotaBurn save races', () => {
     // With no plan on screen the banner owns the error surface — a toast on top
     // of it would report the same failure twice.
     const user = userEvent.setup();
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
     renderPage();
 
     await user.click(await screen.findByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(api.getQuotaBurn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getQuotaBurn).toHaveBeenCalledTimes(2));
     expect(toastError).not.toHaveBeenCalled();
   });
 
   it('still offers a retry when the server answers without a plan', async () => {
     // No error to name — but the page is just as stuck, so the way out has to
     // be the same one.
-    api.getQuotaBurn.mockResolvedValueOnce({ config: null, status: null });
+    getQuotaBurn.mockResolvedValueOnce({ config: null, status: null });
     renderPage();
     expect(await screen.findByText('The server did not return a plan.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
@@ -971,8 +983,8 @@ describe('QuotaBurn save races', () => {
     // on falsiness would leave the first attempt's network error on screen
     // describing what is now a server that simply answered with no plan.
     const user = userEvent.setup();
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
-    api.getQuotaBurn.mockResolvedValueOnce(null);
+    getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    getQuotaBurn.mockResolvedValueOnce(null);
     renderPage();
 
     expect(await screen.findByText('Network request failed')).toBeInTheDocument();
@@ -988,7 +1000,7 @@ describe('QuotaBurn save races', () => {
       renderPage('/devtools/quota-burn/grok');
       await user.clear(await screen.findByLabelText(/Dispatch cap per window/));
       await act(async () => { await vi.advanceTimersByTimeAsync(700); });
-      expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+      expect(saveQuotaBurn).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -1030,7 +1042,7 @@ describe('QuotaBurn collapsible steps', () => {
         },
       },
     };
-    api.getQuotaBurn.mockResolvedValue({ config: twoStepConfig, status });
+    getQuotaBurn.mockResolvedValue({ config: twoStepConfig, status });
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
 
@@ -1077,8 +1089,8 @@ describe('QuotaBurn per-invocation overrides', () => {
   });
 
   it('pins model and effort into the overrides bag, never the top-level mirrors', async () => {
-    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
-    api.getQuotaBurnCatalog.mockResolvedValue(claudeProviders);
+    getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
+    getQuotaBurnCatalog.mockResolvedValue(claudeProviders);
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
 
@@ -1091,7 +1103,7 @@ describe('QuotaBurn per-invocation overrides', () => {
 
     await user.selectOptions(effortSelect, 'medium');
     await flushSave();
-    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const [patch] = saveQuotaBurn.mock.calls.at(-1);
     const saved = patch.families.claude.jobs[0];
     expect(saved.overrides).toMatchObject({ model: 'claude-sonnet-4', effort: 'medium' });
     expect(saved).not.toHaveProperty('effort');
@@ -1100,11 +1112,11 @@ describe('QuotaBurn per-invocation overrides', () => {
   it('names what an unset override inherits rather than showing an empty box', async () => {
     // Presence, not truthiness: an unset override INHERITS the task's saved
     // setting, and the control has to say which value that is.
-    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig(NO_OVERRIDES), status });
-    api.getQuotaBurnCatalog.mockResolvedValue({
+    getQuotaBurn.mockResolvedValue({ config: claudeConfig(NO_OVERRIDES), status });
+    getQuotaBurnCatalog.mockResolvedValue({
       ...claudeProviders,
     });
-    api.getCosSchedule.mockResolvedValue({
+    getCosSchedule.mockResolvedValue({
       tasks: { ...schedule.tasks, ux: { ...schedule.tasks.ux, providerId: 'claude-code', model: 'claude-opus-4' } },
     });
     const user = userEvent.setup();
@@ -1130,7 +1142,7 @@ describe('QuotaBurn per-invocation overrides', () => {
   });
 
   it('displays the referenced task and its pins in the collapsed summary', async () => {
-    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
+    getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
     renderPage('/devtools/quota-burn/claude');
     expect(await screen.findByText(/ux · App One · claude-sonnet-4 · high/)).toBeInTheDocument();
   });
@@ -1140,21 +1152,21 @@ it('saves and enables the maintenance sequence before starting, and never runs a
   const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(type => [type, {
     enabled: true, perpetual: type === 'claim-issue', appOverrides: { a1: { enabled: true } },
   }]));
-  api.getCosSchedule.mockResolvedValue({ tasks });
+  getCosSchedule.mockResolvedValue({ tasks });
   const empty = { ...config, families: { ...config.families, grok: { ...config.families.grok, jobs: [] } } };
-  api.getQuotaBurn.mockResolvedValue({ config: empty, status });
+  getQuotaBurn.mockResolvedValue({ config: empty, status });
   renderPage('/devtools/quota-burn/grok');
   const user = userEvent.setup();
   await screen.findByLabelText('Maintenance sequence app');
   await user.selectOptions(screen.getByLabelText('Maintenance sequence app'), 'a1');
-  api.saveQuotaBurn.mockRejectedValueOnce(new Error('save unavailable'));
+  saveQuotaBurn.mockRejectedValueOnce(new Error('save unavailable'));
   await user.click(screen.getByRole('button', { name: 'Populate and start sequence' }));
   await waitFor(() => expect(toastError).toHaveBeenCalledWith('Could not save sequence: save unavailable'));
-  expect(api.runQuotaBurn).not.toHaveBeenCalled();
-  api.saveQuotaBurn.mockResolvedValueOnce({ config: empty });
+  expect(runQuotaBurn).not.toHaveBeenCalled();
+  saveQuotaBurn.mockResolvedValueOnce({ config: empty });
   await user.click(screen.getByRole('button', { name: 'Populate and start sequence' }));
-  await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith({ familyId: 'grok' }, { silent: true }));
-  const patch = api.saveQuotaBurn.mock.calls.at(-1)[0];
+  await waitFor(() => expect(runQuotaBurn).toHaveBeenCalledWith({ familyId: 'grok' }, { silent: true }));
+  const patch = saveQuotaBurn.mock.calls.at(-1)[0];
   expect(patch.enabled).toBe(true);
   expect(patch.families.grok).toMatchObject({ enabled: true, sequence: true });
   expect(patch.families.grok.jobs).toHaveLength(13);

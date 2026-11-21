@@ -5,14 +5,21 @@ import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailedState from '../ui/LoadFailedState';
-import * as api from '../../services/api';
+import {
+  getSoftwareInventory,
+  updateNodeRuntime,
+  updatePm2Runtime,
+  installManagedBlender,
+} from '../../services/apiSystem.js';
+import { updateYtDlp } from '../../services/apiVideoDownload.js';
+import { upgradeLocalLlmBackend } from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { usePortosRestartWatch } from '../../hooks/usePortosRestartWatch';
 import { formatDateTime } from '../../utils/formatters';
 
 const EVENTS = ['portos:node-runtime:changed', 'review:queue:changed', 'software:changed'];
-const readInventory = () => api.getSoftwareInventory({ silent: true });
+const readInventory = () => getSoftwareInventory({ silent: true });
 
 const STATE_ORDER = ['security', 'attention', 'update', 'unknown', 'current', 'missing', 'unsupported'];
 const STATES = {
@@ -30,11 +37,11 @@ const HIDDEN_BY_DEFAULT = new Set(['missing', 'unsupported']);
 // pinned formula, unsupported platform) behave exactly as they do there.
 // `opts` carries `silent` and the owner's `acknowledgeBusy` override.
 const ACTIONS = {
-  'node-update': (action, opts) => api.updateNodeRuntime(action.version, opts),
-  'pm2-sync': (_action, opts) => api.updatePm2Runtime(opts),
-  'ytdlp-update': (_action, { silent }) => api.updateYtDlp({ silent }),
-  'ollama-upgrade': (_action, { silent }) => api.upgradeLocalLlmBackend('ollama', { silent }),
-  'blender-install': (_action, opts) => api.installManagedBlender(opts),
+  'node-update': (action, opts) => updateNodeRuntime(action.version, opts),
+  'pm2-sync': (_action, opts) => updatePm2Runtime(opts),
+  'ytdlp-update': (_action, { silent }) => updateYtDlp({ silent }),
+  'ollama-upgrade': (_action, { silent }) => upgradeLocalLlmBackend('ollama', { silent }),
+  'blender-install': (_action, opts) => installManagedBlender(opts),
 };
 
 // Actions whose request answers `started` while the work continues on the server,
@@ -181,7 +188,7 @@ export default function SoftwareTab() {
 
   const refresh = async () => {
     setRefreshing(true);
-    const fresh = await api.getSoftwareInventory({ fresh: true }).catch(() => null);
+    const fresh = await getSoftwareInventory({ fresh: true }).catch(() => null);
     if (fresh) updateData(fresh);
     setRefreshing(false);
   };

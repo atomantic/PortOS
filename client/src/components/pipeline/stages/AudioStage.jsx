@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { musicEngineReadinessMessage } from '../../../../../server/lib/generationModes.js';
 import { Loader2, Sparkles, Wand2, Mic, Music, Upload, Trash2, ListMusic } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
@@ -36,7 +37,7 @@ import {
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
 // The whole-episode audio strategy (#863). 'per-clip' keeps each stitched
 // clip's own soundtrack (today's default); 'silent' strips it; 'generated'
@@ -48,6 +49,14 @@ const AUDIO_MODES = [
   { id: 'generated', label: 'Generated cues', hint: 'Arc-driven music cues laid across the episode timeline.' },
   { id: 'uploaded-track', label: 'Single track', hint: 'Loop one attached/uploaded music track under the whole episode.' },
 ];
+
+function generatorUnavailableReason(engine, modelId = engine?.defaultModelId) {
+  if (!engine) return 'unknown-engine';
+  const byModel = engine.unavailableReasonByModelId;
+  if (byModel && Object.hasOwn(byModel, modelId)) return byModel[modelId];
+  // Older generator endpoints used ready only for runtime health.
+  return engine.unavailableReason ?? (engine.ready ? null : 'runtime-unavailable');
+}
 
 export default function AudioStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.audio || { status: 'empty', lines: [], music: null };
@@ -92,8 +101,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const [pendingLibraryDelete, setPendingLibraryDelete] = useState(null);
 
   // Local-OSS music generation (Phase 4c.2). The generators list is fetched
-  // lazily when the user opens the Generate panel; `ready` gates the prompt box
-  // behind an install hint so a 503 never surprises them mid-prompt.
+  // when the panel opens or the stage shows generated cues.
   const [genPanelOpen, setGenPanelOpen] = useState(false);
   const [generators, setGenerators] = useState(null);
   // Sentinel discipline (AGENTS.md "distinguish not-fetched from failed"):
@@ -121,9 +129,12 @@ export default function AudioStage({ issue, onStageUpdate }) {
         maxDurationSec: generators.maxDurationSec,
         installEnv: 'INSTALL_MUSICGEN',
         ready: generators.ready,
+        unavailableReason: generators.unavailableReason,
       }]
     : []);
   const activeEngine = genEngines.find((e) => e.id === genEngineId) || genEngines[0] || null;
+  const selectedModelId = genModelId || activeEngine?.defaultModelId || activeEngine?.models?.[0]?.id;
+  const activeEngineReason = generatorUnavailableReason(activeEngine, selectedModelId);
 
   // Per-line VO start-offset drafts (seconds into the stitched episode). Kept
   // separate from text drafts; committed on blur via the same patch queue.
@@ -214,13 +225,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
   };
 
   const handleGenerateMusic = async () => {
-    const prompt = genPrompt.trim();
-    if (!prompt) { toast.error('Describe the music you want first'); return; }
+    if (activeEngineReason) return;
+    if (!genPrompt.trim()) { toast.error('Describe the music you want first'); return; }
     setGenerating(true);
     // Owns its own error toast → silent so the helper doesn't double-toast.
     const result = await generatePipelineMusic(
       issue.id,
-      { prompt, engine: genEngineId || undefined, durationSec: genDuration, modelId: genModelId || undefined },
+      { prompt: genPrompt, engine: activeEngine.id, durationSec: genDuration, modelId: selectedModelId },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Music generation failed');
@@ -242,21 +253,16 @@ export default function AudioStage({ issue, onStageUpdate }) {
     || generators?.engines?.[0]?.id
     || 'musicgen';
   const cueEngine = genEngines.find((e) => e.id === defaultEngineId) || genEngines[0] || null;
-  const cueEngineReady = !!cueEngine?.ready;
+  const cueEngineReason = generatorUnavailableReason(cueEngine);
   const enginesLoaded = generators !== null;
-  // A cue renders on its OWN engine (cue.engine) when stamped, else the default
-  // — so gate each cue's Render on the engine it will actually use. Returns the
-  // engine descriptor (or the default) for a given cue.
-  const engineForCue = (cue) => {
-    const id = cue?.engine || defaultEngineId;
-    return genEngines.find((e) => e.id === id) || cueEngine;
-  };
-  // Render-all is enabled when at least one cue has a renderable prompt (a typed
-  // draft counts) AND its own engine is installed — matching what the handler
-  // actually iterates, so the gate doesn't block valid non-default/draft cases.
-  const hasRenderableCue = cues.some((c, i) => {
-    const p = cuePromptDrafts[i] !== undefined ? cuePromptDrafts[i] : (c.prompt || '');
-    return p.trim() && engineForCue(c)?.ready;
+  // The render route uses the engine's default checkpoint when no model ID
+  // is sent. A stamped engine must be present in the route's allowed set.
+  const engineForCue = (cue) => cue?.engine
+    ? genEngines.find((engine) => engine.id === cue.engine)
+    : cueEngine;
+  const hasRenderableCue = cues.some((cue, i) => {
+    const prompt = cuePromptDrafts[i] ?? cue.prompt ?? '';
+    return prompt.trim() && !generatorUnavailableReason(engineForCue(cue));
   });
 
   // Persist a new whole-episode audio mode via the existing issue PATCH route,
@@ -374,12 +380,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
       // No new draft — still drain any in-flight save for this cue.
       await cueSaveTailRef.current;
     }
-    const engine = latestCuesRef.current[cueIdx]?.engine || defaultEngineId;
+    const engine = engineForCue(latestCuesRef.current[cueIdx]);
+    if (generatorUnavailableReason(engine)) return false;
     setRenderingCues((prev) => new Set(prev).add(cueIdx));
     const result = await renderPipelineAudioCue(
       issue.id,
       cueIdx,
-      { engine },
+      { engine: engine.id },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || `Cue ${cueIdx + 1} render failed`);
@@ -411,9 +418,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
       for (let i = 0; i < cues.length; i += 1) {
         const effectivePrompt = cuePromptDrafts[i] !== undefined ? cuePromptDrafts[i] : (cues[i]?.prompt || '');
         if (!effectivePrompt.trim()) continue;
-        // Skip cues whose engine isn't installed — the per-cue button would block
-        // them, so render-all should too rather than firing a doomed request.
-        if (!engineForCue(cues[i])?.ready) continue;
+        if (generatorUnavailableReason(engineForCue(cues[i]))) continue;
         const ok = await renderOneCue(i, cuePromptDrafts[i]);
         if (ok) rendered += 1;
       }
@@ -753,8 +758,8 @@ export default function AudioStage({ issue, onStageUpdate }) {
                     : !enginesLoaded
                       ? 'Checking generator engine…'
                       : (hasRenderableCue
-                        ? 'Render every cue that has a prompt on an installed engine'
-                        : "No cue has a prompt on an installed engine yet")}
+                        ? 'Render every cue with a prompt and a ready engine'
+                        : 'No cue has both a prompt and a ready engine')}
                   className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
                 >
                   {renderingAllCues ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -775,10 +780,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
                 Retry
               </button>
             </p>
-          ) : enginesLoaded && !cueEngineReady ? (
+          ) : enginesLoaded && cueEngineReason ? (
             <p className="text-xs text-port-warning">
-              {cueEngine?.name || 'The music engine'} isn't installed yet — you can derive and edit cue
-              prompts, but rendering is disabled until its runtime is bootstrapped.
+              {musicEngineReadinessMessage(cueEngine, cueEngineReason)} You can still derive and edit cue prompts.
             </p>
           ) : null}
 
@@ -794,7 +798,8 @@ export default function AudioStage({ issue, onStageUpdate }) {
                 const cuePromptSaving = savingCueIdxs.has(i);
                 const placed = Number.isFinite(cue.startSec) && Number.isFinite(cue.endSec);
                 const thisCueEngine = engineForCue(cue);
-                const thisCueEngineReady = !!thisCueEngine?.ready;
+                const thisCueEngineReason = generatorUnavailableReason(thisCueEngine);
+                const cueReadinessMessage = enginesLoaded && musicEngineReadinessMessage(thisCueEngine, thisCueEngineReason);
                 return (
                   <li key={cue.id || i} className="p-3 bg-port-bg border border-port-border rounded-lg">
                     <div className="flex items-start gap-3">
@@ -828,6 +833,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
                           placeholder="e.g. warm ambient pads, slow build"
                           className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                         />
+                        {cueReadinessMessage && thisCueEngine !== cueEngine ? (
+                          <p className="mt-1 text-xs text-port-warning">{cueReadinessMessage}</p>
+                        ) : null}
                         {cue.trackFilename ? (
                           <audio
                             controls
@@ -842,14 +850,12 @@ export default function AudioStage({ issue, onStageUpdate }) {
                         <button
                           type="button"
                           onClick={() => handleRenderCue(i)}
-                          disabled={isRendering || renderingAllCues || derivingCues || cuePromptSaving || !thisCueEngineReady || !promptValue.trim()}
+                          disabled={isRendering || renderingAllCues || derivingCues || cuePromptSaving || !!thisCueEngineReason || !promptValue.trim()}
                           title={generatorsError
                             ? "Couldn't check the music engine — Retry above"
                             : !enginesLoaded
                               ? 'Checking generator engine…'
-                              : (!thisCueEngineReady
-                                ? `${thisCueEngine?.name || 'The music engine'} isn't installed — render is unavailable`
-                                : (promptValue.trim() ? 'Render this cue as music' : 'Add a prompt first'))}
+                              : (cueReadinessMessage || (promptValue.trim() ? 'Render this cue as music' : 'Add a prompt first'))}
                           className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
                         >
                           {isRendering ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
@@ -1019,7 +1025,18 @@ export default function AudioStage({ issue, onStageUpdate }) {
 
         {genPanelOpen ? (
           <div className="mb-3 p-3 bg-port-bg border border-port-border rounded-lg">
-            {generators === null ? (
+            {generatorsError ? (
+              <p className="flex items-center gap-2 text-xs text-port-error">
+                Couldn’t check the music engine.
+                <button
+                  type="button"
+                  onClick={() => void loadGenerators(true)}
+                  className="rounded border border-port-border px-2 py-0.5 text-gray-300 hover:border-port-accent/50"
+                >
+                  Retry
+                </button>
+              </p>
+            ) : generators === null ? (
               <p className="text-xs text-gray-500">Loading generators…</p>
             ) : (
               <div className="space-y-3">
@@ -1034,20 +1051,22 @@ export default function AudioStage({ issue, onStageUpdate }) {
                     >
                       {genEngines.map((eng) => (
                         <option key={eng.id} value={eng.id}>
-                          {eng.name}{eng.ready ? '' : ' (not installed)'}
+                          {eng.name}
                         </option>
                       ))}
                     </select>
                   </div>
                 ) : null}
 
-                {!activeEngine?.ready ? (
-                  <p className="text-xs text-gray-400">
-                    {activeEngine?.name || 'This engine'} isn't installed yet. Run{' '}
-                    <code className="text-gray-300">{activeEngine?.installEnv || `INSTALL_${(activeEngine?.id || 'musicgen').toUpperCase()}`}=1 bash scripts/setup-image-video.sh</code>{' '}
-                    to bootstrap its runtime, then reopen this panel.
+                {activeEngineReason ? (
+                  <p className="text-xs text-port-warning">
+                    {musicEngineReadinessMessage(activeEngine, activeEngineReason)}
+                    {activeEngineReason === 'runtime-unavailable' && activeEngine.installEnv ? (
+                      <> Run <code className="text-gray-300">{activeEngine.installEnv}=1 bash scripts/setup-image-video.sh</code> to install its runtime.</>
+                    ) : null}
                   </p>
-                ) : (
+                ) : null}
+                {activeEngine ? (
                   <>
                     <div>
                       <label htmlFor="musicgen-prompt" className="block text-xs text-gray-400 mb-1">Describe the music</label>
@@ -1066,7 +1085,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
                         <label htmlFor="musicgen-model" className="block text-xs text-gray-400 mb-1">Model</label>
                         <select
                           id="musicgen-model"
-                          value={genModelId}
+                          value={selectedModelId || ''}
                           onChange={(e) => setGenModelId(e.target.value)}
                           className="px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                         >
@@ -1100,7 +1119,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
                       <button
                         type="button"
                         onClick={handleGenerateMusic}
-                        disabled={generating || !genPrompt.trim()}
+                        disabled={generating || !!activeEngineReason || !genPrompt.trim()}
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
                       >
                         {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -1111,7 +1130,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
                       Runs on-device — up to {activeEngine.maxDurationSec ?? 30}s. The track lands in your music library and is attached to this issue.
                     </p>
                   </>
-                )}
+                ) : null}
               </div>
             )}
           </div>

@@ -43,14 +43,15 @@ import {
 import { prepareSourceImage } from './sourceKeying.js';
 import * as store from './db.js';
 
+import { activeOperations } from './operations.js';
+
 const MAX_RUNS = 30;
-const activeOperations = new Set();
 // operationId → the runner's SIGTERM handle for an in-flight render, so deleting a
 // record mid-render can terminate its subprocess promptly. Populated when the render
 // spawns (executeRender) and drained in its `finally`.
 const activeRenders = new Map();
 
-export const getActiveModelOperationCount = () => activeOperations.size;
+export { getActiveModelOperationCount } from './operations.js';
 
 /** Injectable existence probe — `access` resolves/rejects rather than returning. */
 const pathExists = (p) => access(p).then(() => true, () => false);
@@ -587,10 +588,4 @@ export async function getModelUsdz(id, { exists = pathExists } = {}) {
   return { path, filename: `${slugifyForFilename(model.name)}.usdz` };
 }
 
-export async function recoverInterruptedModels() {
-  const result = await store.recoverInterruptedModels();
-  if (result.recovered > 0) {
-    console.log(`🧊 Recovered ${result.recovered} interrupted image-to-3D render(s)`);
-  }
-  return result;
-}
+export { recoverInterruptedImageTo3dModels as recoverInterruptedModels } from '../modelRecovery.js';

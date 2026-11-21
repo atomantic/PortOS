@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const progress = vi.hoisted(() => ({ latest: null, frames: [] }));
 vi.mock('../hooks/usePipelineProgress', () => ({ usePipelineProgress: () => progress }));
-vi.mock('../services/api', async (importOriginal) => ({
+vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getPipelineConfig: vi.fn(async () => ({ arcRoles: [] })),
   getPipelineIssue: vi.fn(),
@@ -32,7 +32,12 @@ vi.mock('../components/pipeline/ArcRolePicker', () => ({ default: () => null }))
 vi.mock('../components/CatalogCastPanel', () => ({ default: () => null }));
 vi.mock('../components/pipeline/stages/VisualGenSettings', () => ({ VisualGenSettingsPanel: () => <div>Visual settings form</div> }));
 
-import * as api from '../services/api';
+import {
+  getPipelineIssue,
+  getPipelineSeries,
+  startPipelineAutoRunText,
+  cancelPipelineAutoRunText,
+} from '../services/apiPipeline.js';
 import PipelineIssue from './PipelineIssue';
 
 const issueWith = (stages) => ({
@@ -46,8 +51,8 @@ function LocationProbe() {
 }
 
 const renderIssue = async (issue, path = '/pipeline/issues/issue-example/idea') => {
-  api.getPipelineIssue.mockResolvedValue(issue);
-  api.getPipelineSeries.mockResolvedValue({ id: 'series-example', name: 'Example series', targetFormat: 'video' });
+  getPipelineIssue.mockResolvedValue(issue);
+  getPipelineSeries.mockResolvedValue({ id: 'series-example', name: 'Example series', targetFormat: 'video' });
   render(
     <MemoryRouter initialEntries={[path]}>
       <LocationProbe />
@@ -75,13 +80,13 @@ describe('PipelineIssue status line', () => {
 
   it('describes a running auto-run in words and cancels it from the status line', async () => {
     const user = userEvent.setup();
-    api.startPipelineAutoRunText.mockResolvedValue({});
+    startPipelineAutoRunText.mockResolvedValue({});
     await renderIssue(issueWith({ idea: 'ready', prose: 'empty' }));
     progress.latest = { type: 'stage:start', stage: 'prose' };
     await user.click(screen.getByRole('button', { name: /Auto-run text/ }));
     expect(statusLine()).toHaveTextContent('Auto-run in progress · Generating Prose…');
     await user.click(within(statusLine().parentElement).getByRole('button', { name: 'Cancel auto-run' }));
-    expect(api.cancelPipelineAutoRunText).toHaveBeenCalledWith('issue-example', { silent: true });
+    expect(cancelPipelineAutoRunText).toHaveBeenCalledWith('issue-example', { silent: true });
   });
 
   it('reports a failed stage with its reason', async () => {

@@ -3,10 +3,10 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ models: [] })) }));
-vi.mock('../services/api', () => ({
-  captureBrainThought: vi.fn(),
-  getYoutubeIngestSettings: vi.fn(),
+vi.mock('../services/apiApps.js', () => ({
   getApps: vi.fn(),
+}));
+vi.mock('../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 // The ingest hook reaches for apiBrain directly (not through the `api` barrel),
@@ -16,6 +16,8 @@ vi.mock('../services/apiBrain.js', () => ({
   startYoutubeIngest: vi.fn(),
   cancelYoutubeIngest: vi.fn(),
   youtubeIngestEventsUrl: (jobId) => `/api/brain/youtube/ingest/${jobId}/events`,
+  captureBrainThought: vi.fn(),
+  getYoutubeIngestSettings: vi.fn(),
 }));
 const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
 vi.mock('../lib/clipboard', () => clipboard);
@@ -43,8 +45,9 @@ class StubEventSource {
 }
 globalThis.EventSource = StubEventSource;
 
-import { captureBrainThought, getApps, getProviders, getYoutubeIngestSettings } from '../services/api';
-import { startYoutubeIngest } from '../services/apiBrain.js';
+import { getApps } from '../services/apiApps.js';
+import { getProviders } from '../services/apiProviders.js';
+import { startYoutubeIngest, captureBrainThought, getYoutubeIngestSettings } from '../services/apiBrain.js';
 import toast from './ui/Toast';
 import QuickBrainCapture from './QuickBrainCapture';
 

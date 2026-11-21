@@ -10,11 +10,14 @@ const mock = vi.hoisted(() => ({
   updateEidoverseWorldsSource: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => mock);
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getInstanceFeatures: mock.getInstanceFeatures,
+  updateInstanceFeature: mock.updateInstanceFeature,
+  updateInstanceFeatureGroup: mock.updateInstanceFeatureGroup,
+  installEidoverseFeature: mock.installEidoverseFeature,
+  updateEidoverseWorldsSource: mock.updateEidoverseWorldsSource,
 }));
 
 import { INSTANCE_FEATURES_CHANGED } from '../../constants/events.js';

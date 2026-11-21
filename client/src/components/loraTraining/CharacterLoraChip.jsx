@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { Sparkles } from 'lucide-react';
-import { getCharacterLoras } from '../../services/api';
+import { getCharacterLoras } from '../../services/apiLoraTraining.js';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 

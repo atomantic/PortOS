@@ -7,7 +7,10 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/fileUtils.js', async (actual) => makePathsProxy(await actual(), { dataRoot: () => lazyTempDataRoot('portos-shot-download-test-') }));
 const state = vi.hoisted(() => ({ project: null }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async () => state.project) }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => [{ id: 'clip', filename: 'clip.mp4', numFrames: 96, fps: 24, width: 64, height: 64, trimmedFrom: 'original', trimStartSec: 1 }]) }));
+vi.mock('../videoGen/history.js', async (actual) => ({
+  ...await actual(),
+  loadHistory: vi.fn(async () => [{ id: 'clip', filename: 'clip.mp4', numFrames: 96, fps: 24, width: 64, height: 64, trimmedFrom: 'original', trimStartSec: 1 }]),
+}));
 vi.mock('./performanceShot.js', () => ({ assertCurrentPerformanceTakes: vi.fn(async () => {}) }));
 
 const available = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();

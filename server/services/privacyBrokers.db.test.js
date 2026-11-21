@@ -7,9 +7,12 @@
  * refuse writes to a non-test DB.
  */
 
-import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+
+// DB tests exercise real row transactions; artifact fixtures live in privacyPromptScrub.test.js.
+vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: vi.fn() }));
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';

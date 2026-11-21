@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, LoaderCircle, Music2 } from 'lucide-react';
 import CodeAnimationCodeScore from './CodeAnimationCodeScore';
@@ -7,7 +8,8 @@ import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
-import { generateCodeAnimationSoundtrack, listMusicEngines, previewMusicPrompt } from '../../services/api';
+import { generateCodeAnimationSoundtrack } from '../../services/apiCodeAnimation.js';
+import { listMusicEngines, previewMusicPrompt } from '../../services/apiMusic.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 
 // The last mode (music model or coding model) and each mode's picks, reused for
@@ -158,7 +160,7 @@ export default function CodeAnimationSoundtrack({ job, jobId, soundtrack, audioU
               <label htmlFor="ca-soundtrack-model" className={labelClass}>Checkpoint</label>
               <select id="ca-soundtrack-model" value={modelId} disabled={live}
                 onChange={(event) => updateChoice({ modelId: event.target.value })} className={inputClass}>
-                {models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+                {sortByLabel(models, (model) => model.name || model.id).map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
               </select>
             </div>
           )}

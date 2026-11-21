@@ -9,7 +9,7 @@ let loadPlacements;
 beforeEach(() => {
   vi.useFakeTimers();
   loadPlacements = vi.fn(async () => []);
-  filing.__setUniverseFilingDepsForTests({ loadPlacements, isGalleryImage: () => true });
+  filing.__setUniverseFilingDepsForTests({ loadPlacements, loadTypePlacements: vi.fn(async () => []), isGalleryImage: () => true });
   filing.__testing.reset();
   filing.initCatalogUniverseFiling();
 });

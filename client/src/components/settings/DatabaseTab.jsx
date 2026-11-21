@@ -4,10 +4,18 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount, formatDurationMs } from '../../utils/formatters';
 import {
-  getDatabaseStatus, setupNativeDatabase, exportDatabase, fixDatabase,
-  syncDatabase, startDatabase, stopDatabase, destroyDatabase,
-  getDatabaseMaintenanceStatus, cutoverDatabase, recoverDatabaseCutover
-} from '../../services/api';
+  getDatabaseStatus,
+  setupNativeDatabase,
+  exportDatabase,
+  fixDatabase,
+  syncDatabase,
+  startDatabase,
+  stopDatabase,
+  destroyDatabase,
+  getDatabaseMaintenanceStatus,
+  cutoverDatabase,
+  recoverDatabaseCutover,
+} from '../../services/apiDatabase.js';
 import socket from '../../services/socket';
 import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '../../lib/safeStorage';
 

@@ -18,12 +18,15 @@ vi.mock('../ThemeContext', () => ({
   useThemeContext: () => ({ theme: { mode: themeMode.current } }),
 }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiCalendar.js', () => ({
   getCalendarEvents: vi.fn(),
+}));
+vi.mock('../../services/apiGoals.js', () => ({
   getChronotypeEnergySchedule: vi.fn(),
 }));
 
-import * as api from '../../services/api';
+import { getCalendarEvents } from '../../services/apiCalendar.js';
+import { getChronotypeEnergySchedule } from '../../services/apiGoals.js';
 import { chipColors, parseColor } from '../../lib/chipContrast';
 import MonthView from './MonthView';
 import WeekView from './WeekView';
@@ -70,7 +73,7 @@ it('keeps all-day membership consistent across Day, Week, and Month views', asyn
     startTime: new Date(2026, 8, start).toISOString(),
     endTime: new Date(2026, 8, end).toISOString(),
   });
-  api.getCalendarEvents.mockResolvedValue(calendarPage([
+  getCalendarEvents.mockResolvedValue(calendarPage([
     allDay('previous', 'Previous day only', 22, 23),
     allDay('spanning', 'Spanning days', 21, 25),
     allDay('tomorrow', 'Tomorrow only', 24, 25),
@@ -150,10 +153,10 @@ const expectTitleInheritsGrading = (chip, title) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getCalendarEvents.mockReset();
+  getCalendarEvents.mockReset();
   themeMode.current = 'night';
-  api.getCalendarEvents.mockResolvedValue(calendarPage([ALL_DAY, TIMED]));
-  api.getChronotypeEnergySchedule.mockResolvedValue(null);
+  getCalendarEvents.mockResolvedValue(calendarPage([ALL_DAY, TIMED]));
+  getChronotypeEnergySchedule.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -228,14 +231,14 @@ describe.each([
   };
 
   it('keeps all 24 hours when the only event is during ordinary hours', async () => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage([event('Ordinary meeting', at(10), at(11))]));
+    getCalendarEvents.mockResolvedValue(calendarPage([event('Ordinary meeting', at(10), at(11))]));
     await renderView(<View accounts={ACCOUNTS} />);
     expectFullDayGrid();
     expect(positions('Ordinary meeting')).toEqual([{ top: 800, height: 80 }]);
   });
 
   it('positions early and late events inside the grid and opens their details', async () => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage([
+    getCalendarEvents.mockResolvedValue(calendarPage([
       event('Early meeting', at(5), at(5, 30)),
       event('Late meeting', at(23, 30), at(23, 45)),
       event('Midnight finish', at(22), at(0, 0, 1)),
@@ -254,7 +257,7 @@ describe.each([
   });
 
   it('clips overnight portions to each intersecting day and treats midnight as exclusive', async () => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage([
+    getCalendarEvents.mockResolvedValue(calendarPage([
       event('Overnight arrival', at(22, 0, -1), at(1)),
       event('Overnight departure', at(23), at(2, 0, 1)),
       event('Already ended', at(23, 0, -1), at(0)),
@@ -282,7 +285,7 @@ describe.each([
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 8, 12));
     requests = [];
-    api.getCalendarEvents.mockImplementation(params => new Promise(resolve => {
+    getCalendarEvents.mockImplementation(params => new Promise(resolve => {
       requests.push({ params, resolve });
     }));
   });
@@ -357,9 +360,9 @@ describe.each([
 it('requests the next local midnight on a daylight-saving transition day', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(2026, 2, 8, 12));
-  api.getCalendarEvents.mockResolvedValue(calendarPage([]));
+  getCalendarEvents.mockResolvedValue(calendarPage([]));
   await renderView(<DayView accounts={ACCOUNTS} />);
-  expect(api.getCalendarEvents).toHaveBeenCalledWith({
+  expect(getCalendarEvents).toHaveBeenCalledWith({
     startDate: new Date(2026, 2, 8).toISOString(),
     endDate: new Date(2026, 2, 9).toISOString(),
     limit: 200, offset: 0,
@@ -376,7 +379,7 @@ describe('ChronotypeOverlay zone labels', () => {
 
   it.each(['day', 'night'])('grades the label ink for the %s theme mode', async (mode) => {
     themeMode.current = mode;
-    api.getChronotypeEnergySchedule.mockResolvedValue(ZONES);
+    getChronotypeEnergySchedule.mockResolvedValue(ZONES);
     await renderView(<ChronotypeOverlay startHour={6} pxPerHour={60} />);
 
     // The amber zone is ~2.1:1 on a day card — the live AA failure this fixes.
@@ -386,7 +389,7 @@ describe('ChronotypeOverlay zone labels', () => {
   });
 
   it('keeps the band fill on the zone\'s own raw color', async () => {
-    api.getChronotypeEnergySchedule.mockResolvedValue(ZONES);
+    getChronotypeEnergySchedule.mockResolvedValue(ZONES);
     const { container } = render(<ChronotypeOverlay startHour={6} pxPerHour={60} />);
     await act(async () => {});
     // The band is a large tint, not text — grading it would shift the wash the
@@ -408,7 +411,7 @@ function MonthHistory() {
 
 describe('MonthView overflow navigation', () => {
   beforeEach(() => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage([
+    getCalendarEvents.mockResolvedValue(calendarPage([
       { ...TIMED, id: 'late', title: 'Example late appointment', startTime: new Date(2027, 0, 12, 18).toISOString(), endTime: new Date(2027, 0, 12, 19).toISOString() },
       { ...ALL_DAY, id: 'day', title: 'Example all-day entry', startTime: new Date(2027, 0, 12).toISOString(), endTime: new Date(2027, 0, 13).toISOString() },
       { ...TIMED, id: 'early', title: 'Example early appointment', startTime: new Date(2027, 0, 12, 8).toISOString(), endTime: new Date(2027, 0, 12, 9).toISOString() },
@@ -471,7 +474,7 @@ describe('MonthView overflow navigation', () => {
 
   it('waits for bookmarked event data before exposing a dismissible drawer', async () => {
     let finish;
-    api.getCalendarEvents.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    getCalendarEvents.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=2027-01-12&event=acct-1:hidden']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await act(async () => finish(calendarPage([{ ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString(), endTime: new Date(2027, 0, 12, 13).toISOString() }])));
@@ -488,7 +491,7 @@ describe('MonthView overflow navigation', () => {
   });
 
   it('falls back from an invalid month and keeps a short day directly actionable', async () => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage([ALL_DAY, TIMED]));
+    getCalendarEvents.mockResolvedValue(calendarPage([ALL_DAY, TIMED]));
     render(<MemoryRouter initialEntries={['/calendar/month?month=2027-99']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
     await act(async () => {});
     expect(screen.queryByRole('button', { name: /View all/ })).not.toBeInTheDocument();
@@ -517,9 +520,9 @@ describe('Calendar window completeness', () => {
   it.each([['Day', DayView], ['Week', WeekView], ['Month', MonthView]])(
     '%s loads the 201st event with capped requests and opens its details', async (name, View) => {
       const rows = [...firstPage(), exampleEvent('last', 'Example last event')];
-      api.getCalendarEvents.mockImplementation(({ offset }) => Promise.resolve({ events: rows.slice(offset, offset + 200), total: rows.length }));
+      getCalendarEvents.mockImplementation(({ offset }) => Promise.resolve({ events: rows.slice(offset, offset + 200), total: rows.length }));
       await mount(View);
-      expect(api.getCalendarEvents.mock.calls.map(([params]) => [params.limit, params.offset])).toEqual([[200, 0], [200, 200]]);
+      expect(getCalendarEvents.mock.calls.map(([params]) => [params.limit, params.offset])).toEqual([[200, 0], [200, 200]]);
       expect(screen.queryByText(/Empty times may still be busy/)).not.toBeInTheDocument();
       if (name === 'Month') {
         openDay();
@@ -533,13 +536,13 @@ describe('Calendar window completeness', () => {
   it.each([['Day', DayView], ['Week', WeekView], ['Month', MonthView]])('%s day list preserves partial events, retries the failed offset and deduplicates within each account', async (name, View) => {
     const first = firstPage();
     let finishRetry;
-    api.getCalendarEvents
+    getCalendarEvents
       .mockResolvedValueOnce({ events: first, total: 203 })
       .mockRejectedValueOnce(new Error('Example page failure'))
       .mockImplementationOnce(() => new Promise(resolve => { finishRetry = resolve; }));
     await mount(View);
     expect(screen.getByRole('alert')).toHaveTextContent(/incomplete.*empty times may still be busy/);
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(2);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(2);
     if (name === 'Month') openDay();
     else fireEvent.click(screen.getByRole('button', { name: name === 'Day' ? 'View day events' : `View day events for ${formatDateFull(new Date(2026, 8, 23))}` }));
     let drawer = screen.getByRole('dialog');
@@ -559,18 +562,18 @@ describe('Calendar window completeness', () => {
     expect(within(drawer).getByRole('button', { name: /Example other account$/ })).toBeInTheDocument();
     expect(within(drawer).getByRole('button', { name: /Example recovered event$/ })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(api.getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 200, 200]);
+    expect(getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 200, 200]);
   });
 
   it.each([['day', DayView], ['week', WeekView], ['month', MonthView]])(
     'discards a pending page after rapid %s navigation', async (name, View) => {
       let finishOld;
-      api.getCalendarEvents
+      getCalendarEvents
         .mockResolvedValueOnce({ events: firstPage(), total: 201 })
         .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
         .mockImplementation(({ startDate }) => Promise.resolve(calendarPage([exampleEvent('current', 'Example current window', new Date(startDate))])));
       await mount(View);
-      const oldSignal = api.getCalendarEvents.mock.calls[1][1].signal;
+      const oldSignal = getCalendarEvents.mock.calls[1][1].signal;
       fireEvent.click(screen.getByRole('button', { name: `Next ${name}` }));
       fireEvent.click(screen.getByRole('button', { name: `Next ${name}` }));
       await act(async () => {});
@@ -585,7 +588,7 @@ describe('Calendar window completeness', () => {
 
   it('resets the same window on sync and ignores its obsolete later page', async () => {
     let finishOld;
-    api.getCalendarEvents
+    getCalendarEvents
       .mockResolvedValueOnce({ events: firstPage(), total: 201 })
       .mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }))
       .mockResolvedValueOnce(calendarPage([exampleEvent('synced', 'Example synced event')]));
@@ -596,15 +599,15 @@ describe('Calendar window completeness', () => {
     expect(screen.getByRole('button', { name: /Example synced event/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Example obsolete page/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /View all/ })).not.toBeInTheDocument();
-    expect(api.getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 200, 0]);
+    expect(getCalendarEvents.mock.calls.map(([params]) => params.offset)).toEqual([0, 200, 0]);
   });
 
   it('shows Retry for an empty page before the advertised total instead of claiming completion or looping', async () => {
-    api.getCalendarEvents.mockResolvedValue({ events: [], total: 201 });
+    getCalendarEvents.mockResolvedValue({ events: [], total: 201 });
     await mount(DayView);
     expect(screen.getByRole('alert')).toHaveTextContent(/incomplete/);
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-    expect(api.getCalendarEvents).toHaveBeenCalledTimes(1);
+    expect(getCalendarEvents).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -635,7 +638,7 @@ describe.each([
   }));
 
   it('opens every short overlapping appointment and retains day and calendar context through reload and Back', async () => {
-    api.getCalendarEvents.mockResolvedValue(calendarPage(events));
+    getCalendarEvents.mockResolvedValue(calendarPage(events));
     const mounted = render(<MemoryRouter initialEntries={[`/calendar/${name}?${context}`]}><CalendarHistory View={View} /></MemoryRouter>);
     await act(async () => {});
     if (heading) expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
@@ -670,7 +673,7 @@ describe.each([
 });
 
 it('exposes a sparse Month date separately while preserving direct chip activation', async () => {
-  api.getCalendarEvents.mockResolvedValue(calendarPage([{
+  getCalendarEvents.mockResolvedValue(calendarPage([{
     ...TIMED, startTime: new Date(2027, 0, 12, 10).toISOString(), endTime: new Date(2027, 0, 12, 10, 15).toISOString(),
   }]));
   await act(async () => render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>));

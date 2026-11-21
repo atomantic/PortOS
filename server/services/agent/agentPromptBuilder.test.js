@@ -110,7 +110,7 @@ import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashd
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
 import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen } from '../promptSections/claimOnDemand.js';
-import { sanitizeTaskMetadata } from '../../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
@@ -253,10 +253,17 @@ describe('composable skill template routing', () => {
     const missing = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'absent' }] });
     expect(missing).toContain('source checkout has no installed dependencies to link');
     expect(missing).toContain('Install dependencies inside this worktree');
-    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked' }] });
-    expect(linked).toContain('linked or provisioned: node_modules');
+    const linked = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'linked-match' }] });
+    expect(linked).toContain('node_modules linked (matches lockfile)');
     expect(linked).toContain('Never install through dependency paths linked to the source checkout');
     expect(linked).not.toContain('CLAIM_DEPENDENCY_PROVISIONING_STATUS');
+    const stale = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'stale', manager: 'pnpm' }] });
+    expect(stale).toContain('node_modules stale in source');
+    expect(stale).toContain('After verifying the dependency paths are local to this worktree, install here with `pnpm install --frozen-lockfile`');
+    const unverified = await buildAgentPrompt(task, {}, '/workspace/app', null, { providerType, claimDependencies: [{ path: 'node_modules', status: 'unverified', manager: 'npm', hasInstalledChildren: true }] });
+    expect(unverified).toContain('source lockfile match unverified');
+    expect(unverified).toContain('install here with `npm ci`');
+    expect(unverified).toContain('Install independently locked packages from their own worktree directories');
   });
 
   it('uses provider merge authority in both prompt paths and carries recovery evidence', async () => {
@@ -4035,11 +4042,16 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     const { buildQueuedTask } = await import('../cos/cosTaskIntake.js');
     const source = await readFile(join(PATHS.root, 'client/src/components/apps/tabs/GitRecoveryAction.jsx'), 'utf8');
     const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
+    const apiImport = ast.program.body.find(node => node.type === 'ImportDeclaration'
+      && node.source.value.endsWith('/services/apiAgents.js'));
+    const taskBinding = apiImport?.specifiers.find(specifier => specifier.type === 'ImportSpecifier'
+      && specifier.imported.name === 'addCosTask')?.local.name;
+    expect(taskBinding).toBeDefined();
     let request;
     const walk = node => {
       if (!node || typeof node !== 'object') return;
-      if (node.type === 'CallExpression' && node.callee?.object?.name === 'api'
-        && node.callee?.property?.name === 'addCosTask') request = node.arguments[0];
+      if (node.type === 'CallExpression' && node.callee.type === 'Identifier'
+        && node.callee.name === taskBinding) request = node.arguments[0];
       Object.values(node).forEach(value => {
         if (Array.isArray(value)) value.forEach(walk);
         else if (value && typeof value === 'object') walk(value);

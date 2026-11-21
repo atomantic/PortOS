@@ -14,7 +14,16 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }));
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiSystem.js', () => ({ getSettings: api.getSettings, updateSettings: api.updateSettings }));
+vi.mock('../../../services/apiBeeper.js', () => ({
+  getBeeperStatus: api.getBeeperStatus,
+  checkBeeperConnection: api.checkBeeperConnection,
+  startBeeperOAuth: api.startBeeperOAuth,
+  saveBeeperToken: api.saveBeeperToken,
+  disconnectBeeper: api.disconnectBeeper,
+  getBeeperAttachmentSummary: api.getBeeperAttachmentSummary,
+  backfillBeeperAttachments: api.backfillBeeperAttachments,
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 const BeeperSettingsPanel = (await import('./BeeperSettingsPanel')).default;

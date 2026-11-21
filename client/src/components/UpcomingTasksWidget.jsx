@@ -6,7 +6,7 @@ import {
   CheckCircle,
   Timer
 } from 'lucide-react';
-import * as api from '../services/api';
+import { getCosUpcomingTasks } from '../services/apiAgents.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo, timeUntil } from '../utils/formatters';
@@ -19,7 +19,7 @@ const RESOURCE_EVENTS = ['cos:schedule:changed', 'cos:scheduler:changed', 'cos:t
  */
 const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   const { data: upcoming, loading, error } = useSocketResource(
-    () => api.getCosUpcomingTasks(6, { silent: true }),
+    () => getCosUpcomingTasks(6, { silent: true }),
     { namespace: 'cos', events: RESOURCE_EVENTS }
   );
 

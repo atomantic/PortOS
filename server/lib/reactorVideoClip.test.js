@@ -74,16 +74,16 @@ describe('reactorVideoClip', () => {
   });
 });
 
-// scripts/reactor-render.py opens the session and cannot import this module, so
+// scripts/ml/reactor-render.py opens the session and cannot import this module, so
 // its canvas table is a hand-written copy — the "kept in sync by a comment"
 // shape. A canvas added here and not there fails at `set_canvas` AFTER a paid
 // session is already open; one removed here and not there renders on a canvas
 // the picker no longer offers.
 describe('reactorVideoClip renderer mirror', () => {
-  it('matches the canvas table in scripts/reactor-render.py', async () => {
-    const source = await readFile(fileURLToPath(new URL('../../scripts/reactor-render.py', import.meta.url)), 'utf8');
+  it('matches the canvas table in scripts/ml/reactor-render.py', async () => {
+    const source = await readFile(fileURLToPath(new URL('../../scripts/ml/reactor-render.py', import.meta.url)), 'utf8');
     const table = source.match(/^CANVASES = \{(.+)\}$/m);
-    expect(table, 'CANVASES table not found in scripts/reactor-render.py').toBeTruthy();
+    expect(table, 'CANVASES table not found in scripts/ml/reactor-render.py').toBeTruthy();
     const entries = [...table[1].matchAll(/"([^"]+)": \((\d+), (\d+)\)/g)]
       .map(([, aspect, width, height]) => ({ aspect, width: Number(width), height: Number(height) }));
     expect(entries).toEqual(REACTOR_CANVASES.map(({ aspect, width, height }) => ({ aspect, width, height })));

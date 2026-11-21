@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Play, ChevronDown, ChevronRight } from 'lucide-react';
-import * as api from '../../services/api';
+import { getFeatureAgentRuns } from '../../services/apiAgents.js';
 import BrailleSpinner from '../BrailleSpinner';
 import { timeAgo } from './constants';
 
@@ -18,7 +18,7 @@ export default function RunsTab({ agent }) {
     setRuns([]);
     setExpanded({});
     setLoading(true);
-    api.getFeatureAgentRuns(agent.id, 50).then(data => {
+    getFeatureAgentRuns(agent.id, 50).then(data => {
       if (cancelled) return;
       setRuns(data || []);
       setLoading(false);

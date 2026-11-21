@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { FormField } from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import ResolutionField from '../media/ResolutionField';
-import { checkHiggsfieldNewModels } from '../../services/api';
+import { checkHiggsfieldNewModels } from '../../services/apiImageVideo.js';
 import { formatUsd } from '../../utils/formatters';
 import { VIDEO_RESOLUTIONS } from '../../lib/videoGenResolutions';
 import { VIDEO_EDGE_BOUNDS } from '../../lib/videoGenParams.js';

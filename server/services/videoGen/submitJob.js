@@ -352,6 +352,7 @@ const submissionTagParams = (body) => ({
   ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
   ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
   ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
+  ...(body.collectionName ? { collectionName: body.collectionName } : {}),
   ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
 });
 
@@ -360,6 +361,7 @@ const submitRemoteLane = async ({ body, prepared, enqueue }) => {
   const { jobId, position, status } = await enqueue({
     prompt: body.prompt, remoteMedia, ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
+    ...(body.collectionName ? { collectionName: body.collectionName } : {}),
     ...(body.musicVideo && prepared.sourceImagePath ? { sourceImagePath: prepared.sourceImagePath } : {}),
     ...(body.musicVideo ? { ...remoteMedia.request } : {}),
     ...(audio ? { audioConditioning: audio.audioConditioning, uploadedTempPaths: [audio.audioFilePath],

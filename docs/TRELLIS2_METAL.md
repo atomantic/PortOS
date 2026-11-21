@@ -22,7 +22,7 @@ weights or starts inference; those remain part of an explicit Generate action.
 
 ## Immutable inputs
 
-`scripts/trellis2-mps-profile.json` records the full revisions, archive URLs and
+`scripts/ml/trellis2-mps-profile.json` records the full revisions, archive URLs and
 SHA-256 hashes for all nine inputs:
 
 | Input | Revision |
@@ -64,10 +64,10 @@ From the repository root, use the hash-verified uv **0.13.7**:
 
 ```sh
 MACOSX_DEPLOYMENT_TARGET=26.0 uv --no-config pip compile \
-  scripts/requirements-trellis2-mps.txt --python-version 3.13 \
+  scripts/ml/requirements/requirements-trellis2-mps.txt --python-version 3.13 \
   --python-platform aarch64-apple-darwin --generate-hashes --only-binary :all: \
   --exclude-newer <UTC-cutoff-at-least-seven-days-old> --no-header --no-annotate \
-  -o scripts/requirements-trellis2-mps.lock.txt
+  -o scripts/ml/requirements/requirements-trellis2-mps.lock.txt
 ```
 
 Update the cutoff in the profile with the lock. Inspect each changed source's

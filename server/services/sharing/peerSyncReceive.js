@@ -49,6 +49,7 @@ import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 import { getLocalIngredientRefOwnership } from '../catalog/catalogDB.js';
 import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
 import { mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
+import { loadCollectionVideoFilenames } from '../collectionVideoFiles.js';
 
 
 async function isPostgresBackend() {
@@ -334,16 +335,15 @@ async function mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source,
  * Record them for the static-mount fallback instead of copying. Other record
  * assets (including universe/series art) keep their existing copy behavior.
  */
-async function takeHostedRecordAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets }) {
+async function takeHostedRecordAssets({ kind, record, desc, issues, collection, linkedTrack, sourceInstanceId, missingAssets, videoFilenames }) {
   const senderPeer = await findPeerById(sourceInstanceId);
   if (senderPeer?.mediaSyncMode !== 'host') return missingAssets;
   if (kind === 'moodBoard') {
     const keys = new Set((await desc.referencedAssets(record)).map(entry => `${entry.kind}:${entry.filename}`));
     return takeHostedAssets(sourceInstanceId, missingAssets, keys);
   }
-  const collection = kind === 'mediaCollection' ? record : linkedCollection;
   const assetKey = (entry) => `${entry.kind}:${entry.filename}`;
-  const collectionKeys = new Set(isPlainObject(collection) ? referenceCollectionAssetManifest(collection).map(assetKey) : []);
+  const collectionKeys = new Set(referenceCollectionAssetManifest(collection, videoFilenames).map(assetKey));
   if (kind !== 'mediaCollection' && desc.referencedAssets) {
     // Assets the record itself references stay copies even when the linked
     // collection also holds them.
@@ -446,18 +446,20 @@ async function applyLinkedBundles({ bundlesMergeable, linkedCollection, catalogB
  * "still syncing" UI for a record we refused).
  */
 async function diffIncomingAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, assetManifest, applied, bundlesMergeable, sourceInstanceId }) {
-  const references = bundlesMergeable && desc.referencedAssets
-    ? await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack })
-    : [];
+  if (!bundlesMergeable || !desc.referencedAssets || !Array.isArray(assetManifest) || assetManifest.length === 0) return [];
+  const collection = kind === 'mediaCollection' ? record : linkedCollection;
+  // The sender's manifest is evidence of bytes. Only separate, locally
+  // admitted video history can bind a collection item to an alternate name.
+  const videoFilenames = await loadCollectionVideoFilenames(collection?.items);
+  const references = await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack, videoFilenames });
   const referencedKeys = new Set(references.map((entry) => `${entry.kind}:${entry.filename}`));
-  const incomingAssets = Array.isArray(assetManifest) ? assetManifest : [];
-  const ownAssets = incomingAssets.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
-  if (ownAssets.length < incomingAssets.length) {
-    console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
+  const ownAssets = assetManifest.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
+  if (ownAssets.length < assetManifest.length) {
+    console.warn(`⚠️ peerSync: ignored ${assetManifest.length - ownAssets.length} unreferenced push assets`);
   }
   const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: applied, senderInstanceId: sourceInstanceId });
-  if (missingAssets.length === 0 || !bundlesMergeable) return missingAssets;
-  return takeHostedRecordAssets({ kind, record, desc, issues, linkedCollection, linkedTrack, sourceInstanceId, missingAssets });
+  if (missingAssets.length === 0) return missingAssets;
+  return takeHostedRecordAssets({ kind, record, desc, issues, collection, linkedTrack, sourceInstanceId, missingAssets, videoFilenames });
 }
 
 /**

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => ({
   config: null,
@@ -50,6 +50,15 @@ describe('meatspace config write serialization (#4913)', () => {
   beforeEach(() => {
     store.config = initialConfig();
     store.goals = null;
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports genome auto-detection without logging the detected sex', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(meatspace.getConfig()).resolves.toMatchObject({ sex: 'female', sexSource: 'genome' });
+    expect(log).toHaveBeenCalledWith('🧬 Sex auto-detected from genome');
+    expect(log.mock.calls.flat().join('\n')).not.toContain('female');
   });
 
   it('invalidates the death clock only after its changed inputs persist', async () => {

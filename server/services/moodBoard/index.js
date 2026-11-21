@@ -75,10 +75,21 @@ export { importXPost } from './xPost.js';
 export { localizeBoardMedia } from './localize.js';
 
 // Collage compilation + video frame extraction (fires its own federation emits).
-export { composeBoardCollage, extractItemFrames } from './collage.js';
+export async function composeBoardCollage(boardId, options) {
+  const renderer = await import('./collage.js');
+  return renderer.composeBoardCollage(boardId, options);
+}
+
+export async function extractItemFrames(boardId, itemId, options) {
+  const renderer = await import('./collage.js');
+  return renderer.extractItemFrames(boardId, itemId, options);
+}
 
 // Render a text note into an image (#10531); the completion hook converts it.
-export { renderBoardItem } from './renderItem.js';
+export async function renderBoardItem(boardId, itemId, route) {
+  const renderer = await import('./renderItem.js');
+  return renderer.renderBoardItem(boardId, itemId, route);
+}
 
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe

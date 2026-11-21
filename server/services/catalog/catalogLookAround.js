@@ -17,7 +17,6 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import {
@@ -252,6 +251,7 @@ async function analyzeClip(row, videoPath, geometry, { thumbs }) {
     if (!frames.length) refuse(422, 'LOOK_AROUND_CLIP_UNREADABLE', 'No frames could be read from the clip');
     const analysis = analyzeLookAroundFrames(frames, { motion: row.lookAround.motion, durationSec: geometry.durationSec, width: SCAN_WIDTH });
     const strip = pickLookAroundStrip(analysis.frames.filter((frame) => frame.usable), { minSharpness: MIN_SUGGESTED_SHARPNESS });
+    const { default: sharp } = await import('sharp');
     const stripWithThumbs = thumbs ? await Promise.all(strip.map(async (frame) => ({
       ...frame, thumb: `data:image/jpeg;base64,${(await sharp(frame.path).resize({ width: THUMB_WIDTH }).jpeg({ quality: 72 }).toBuffer()).toString('base64')}`,
     }))) : strip;

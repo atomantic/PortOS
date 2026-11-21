@@ -11,7 +11,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // Every write here is gated by the default-deny policy (#16018); the refusal and
-// principal matrix live in services/authGate.test.js and hostControlCoverage.test.js.
+// principal matrix live in services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js.
 // This suite proves each mounted media router still runs behind the real gates
 // for a local operator and a delegated agent session. Host-process services are doubled.
 const auth = vi.hoisted(() => ({ enabled: false }));
@@ -46,13 +46,12 @@ vi.mock('../services/mediaCollections.js', async (importOriginal) => ({
   getCollection: vi.fn(async (id) => ({ id, items: [{ kind: 'video', ref: 'example-video' }] })),
 }));
 vi.mock('../services/peerHostedMedia.js', () => ({
-  resolveMediaLocations: vi.fn(async (items) => items.map(() => ({ location: 'remote', hostPeerId: 'example-peer' }))),
+  resolveMediaLocations: vi.fn(async (items) => items.map((item) => ({ location: 'remote', hostPeerId: 'example-peer', filename: `${item.ref}.mp4` }))),
   findHostPeer: vi.fn(async (id) => ({ id })),
   unmarkHosted: vi.fn(),
 }));
 vi.mock('../services/sharing/peerSyncAssets.js', () => ({
   pullMissingAssetsFromPeer: effects.pull,
-  collectionVideoRefToFilename: (ref) => `${ref}.mp4`,
 }));
 vi.mock('../services/moodBoard/index.js', () => ({ composeBoardCollage: effects.collage }));
 vi.mock('../services/sprites/walk.js', () => ({ rerunWalkPostprocess: effects.postprocess }));

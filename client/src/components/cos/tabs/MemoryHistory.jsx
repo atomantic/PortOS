@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import * as api from '../../../services/api';
+import { getMemoryVersions, getMemoryVersion } from '../../../services/apiMemory.js';
 import { useSocketResource } from '../../../hooks/useSocketResource';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import { formatCount, formatDateTime } from '../../../utils/formatters';
@@ -11,7 +11,7 @@ const HISTORY_EVENTS = ['cos:memory:updated', 'cos:memory:deleted'];
 export default function MemoryHistory({ memory }) {
   const fetchPage = useCallback(async ({ cursor, signal }) => {
     const offset = cursor ?? 0;
-    const { versions } = await api.getMemoryVersions(memory.id, offset, { signal, silent: true });
+    const { versions } = await getMemoryVersions(memory.id, offset, { signal, silent: true });
     return { items: versions.map(item => ({ ...item, id: item.version })),
       nextCursor: versions.length === 20 ? offset + versions.length : null };
   }, [memory.id]);
@@ -37,7 +37,7 @@ export default function MemoryHistory({ memory }) {
     setSnapshot(null);
     setError(null);
     if (selectedVersion !== null) {
-      api.getMemoryVersion(memory.id, selectedVersion, { silent: true })
+      getMemoryVersion(memory.id, selectedVersion, { silent: true })
         .then(value => { if (active) setSnapshot(value); })
         .catch(err => { if (active) setError(err.message); });
     }

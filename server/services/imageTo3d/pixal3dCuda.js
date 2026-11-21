@@ -76,7 +76,7 @@ export function isPixal3dCudaInstalled({ base, exists = existsSync, env } = {}) 
 
 /** Rebuild only this lane's private environment, preserving downloaded model assets. */
 export function installPixal3dCuda({ base, onEvent, env, spawnImpl = spawn } = {}) {
-  const script = fileURLToPath(new URL('../../../scripts/setup-pixal3d-cuda.py', import.meta.url));
+  const script = fileURLToPath(new URL('../../../scripts/ml/setup-pixal3d-cuda.py', import.meta.url));
   return runInstallSteps({
     steps: [{ stage: 'bootstrap', command: 'python3', args: [script, pixal3dRoot(base)] }],
     label: LABEL,

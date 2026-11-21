@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AutoUpdatePanel from './AutoUpdatePanel';
 
 const { mockPatch, mockGetStatus } = vi.hoisted(() => ({ mockPatch: vi.fn(), mockGetStatus: vi.fn() }));
-vi.mock('../../../services/api', () => ({ patchSettingsSlice: mockPatch, getAutoUpdateStatus: mockGetStatus }));
+vi.mock('../../../services/apiSystem.js', () => ({
+  patchSettingsSlice: mockPatch,
+  getAutoUpdateStatus: mockGetStatus,
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 const handlers = new Map();
 vi.mock('../../../services/socket', () => ({

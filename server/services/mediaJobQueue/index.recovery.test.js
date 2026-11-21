@@ -1,8 +1,8 @@
-// mediaJobQueue suite (#16215 split): Segment launch refusals, debounced progress persistence, cancellation, boot recovery and the job watchdog.
+// mediaJobQueue suite (#16215 split): Segment launch refusals, live progress, cancellation, boot recovery and the job watchdog.
 // Shared mocks, stubs and per-test lifecycle live in ./index.test.fixture.js,
 // which must stay the first import that can resolve a mocked module.
 import { describe, it, expect, vi } from 'vitest';
-import { tempDataDir, atomicWriteSpy, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, importFresh, flush, waitFor } from './index.test.fixture.js';
+import { tempDataDir, atomicWriteSpy, queueSnapshotJobs, stubs, mediaJobQueue, videoGenEvents, imageGenEvents, importFresh, flush, waitFor } from './index.test.fixture.js';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -23,7 +23,7 @@ describe('mediaJobQueue', () => {
     const realWrite = atomicWriteSpy.getMockImplementation();
     let rejectReceipt = true;
     atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
-      if (rejectReceipt && data.jobs?.some(job => job.videoExecutions?.length)) {
+      if (rejectReceipt && queueSnapshotJobs(file, data).some(job => job.videoExecutions?.length)) {
         rejectReceipt = false;
         throw new Error('Synthetic segment receipt write refusal');
       }
@@ -131,7 +131,7 @@ describe('mediaJobQueue', () => {
     const realWrite = atomicWriteSpy.getMockImplementation();
     let rejectDiagnostic = true;
     atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
-      if (rejectDiagnostic && data.jobs?.some(job => job.id === jobId && job.videoExecution?.diagnostics?.termination)) {
+      if (rejectDiagnostic && queueSnapshotJobs(file, data).some(job => job.id === jobId && job.videoExecution?.diagnostics?.termination)) {
         rejectDiagnostic = false;
         throw new Error('synthetic final evidence disk failure');
       }
@@ -158,7 +158,7 @@ describe('mediaJobQueue', () => {
     const realWrite = atomicWriteSpy.getMockImplementation();
     let rejectReceipt = true;
     atomicWriteSpy.mockImplementation(async (file, data, ...args) => {
-      if (rejectReceipt && data.jobs?.some(j => j.status === 'running' && j.videoExecution)) {
+      if (rejectReceipt && queueSnapshotJobs(file, data).some(j => j.status === 'running' && j.videoExecution)) {
         rejectReceipt = false;
         throw Object.assign(new Error('synthetic receipt disk failure'), { code: 'EACCES' });
       }
@@ -177,119 +177,50 @@ describe('mediaJobQueue', () => {
     atomicWriteSpy.mockImplementation(realWrite);
   });
 
-  it('debounce-persists live progress before a terminal transition', async () => {
+  it('serves live progress and ETA without writes or queue invalidation until shutdown flush', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
-    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'live render' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
-
-    // Use a message synthesizeMessage() could NOT produce (it would emit
-    // "Rendering step 37/100" from step/totalSteps) so this pins the
-    // explicit-message passthrough, not the synthesized fallback.
-    videoGenEvents.emit('progress', {
-      generationId: job.jobId,
-      progress: 0.37,
-      step: 37,
-      totalSteps: 100,
-      message: 'Rendering step 37/100 (upscaling)',
-    });
-
-    await waitFor(() => {
-      const data = JSON.parse(readFileSync(file, 'utf-8'));
-      const persisted = data.jobs.find((j) => j.id === job.jobId);
-      return persisted?.status === 'running'
-        && persisted.progress === 0.37
-        && persisted.statusMsg === 'Rendering step 37/100 (upscaling)';
-    }, { timeoutMs: 2000 });
-
-    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
-    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
-  });
-
-  it('debounce coalesces a burst of progress events into a single persist write', async () => {
-    // Companion to the snapshot test above: that one proves the *value*
-    // reaches disk; this one proves the debounce, by counting writes. Without
-    // it the test above would still pass if scheduleProgressPersist regressed
-    // to a naive per-event persist() — the high-frequency-write antipattern
-    // AGENTS.md forbids. We pin the coalescing by counting atomicWrite calls
-    // under a burst of N progress events (must be ≪ N within one window).
-    const file = join(tempDataDir, 'media-jobs.json');
-    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'burst' } });
-    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
-
-    // Let the enqueue + 'running'-transition writes land first, then zero the
-    // counter so we measure only the progress burst. Waiting on the persisted
-    // 'running' status guarantees both prior writes have flushed.
-    await waitFor(() => {
-      if (!existsSync(file)) return false;
-      const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
-      return persisted?.status === 'running';
-    });
+    await flush();
+    const runningSnapshot = readFileSync(file, 'utf8');
     atomicWriteSpy.mockClear();
 
-    // Fire a tight synchronous burst. emit() is synchronous, so all N handlers
-    // run in one tick: the first arms the 250ms debounce timer, the rest only
-    // mark the buffer dirty. A regression to per-event persist() would turn
-    // this into N atomicWrite calls instead of one debounced flush.
-    const BURST = 12;
-    for (let i = 1; i <= BURST; i++) {
-      videoGenEvents.emit('progress', {
-        generationId: job.jobId,
-        progress: i / BURST,
-        message: `Rendering step ${i}/${BURST}`,
-      });
-    }
-
-    // Wait for the debounce flush to land the LAST burst value — proves at
-    // least one progress write happened (so the bound below is non-vacuous).
-    await waitFor(() => {
-      const persisted = JSON.parse(readFileSync(file, 'utf-8')).jobs.find((j) => j.id === job.jobId);
-      return persisted?.statusMsg === `Rendering step ${BURST}/${BURST}`;
-    }, { timeoutMs: 2000 });
-
-    // The "value landed" wait above is NOT a safe count checkpoint on its own:
-    // job.statusMsg is mutated to the final "12/12" synchronously during the
-    // burst, so a naive per-event persist() regression would write the final
-    // value on its FIRST chained flush while the other 11 are still draining —
-    // counting here could read 1 and pass vacuously. So settle first: hold
-    // until the write count stops climbing across a quiet window. The single
-    // debounced flush stabilizes at 1; a per-event regression keeps climbing
-    // to ≈ BURST and only then stabilizes, so the bound below catches it.
-    let prevCount = -1;
-    await waitFor(() => {
-      const c = atomicWriteSpy.mock.calls.length;
-      const settled = c > 0 && c === prevCount;
-      prevCount = c;
-      return settled;
-    }, { intervalMs: 60, timeoutMs: 2000 });
-
-    // One debounce window ⇒ one flush (allow tiny slack for a trailing
-    // reschedule). The naive-per-event regression would settle at ≈ BURST (12).
-    expect(atomicWriteSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(atomicWriteSpy.mock.calls.length).toBeLessThanOrEqual(2);
-
-    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
-    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
-  });
-
-  it('reports a failed debounced progress write to stderr with the job id', async () => {
-    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress persistence failure' } });
-    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
-    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
-    const realWrite = atomicWriteSpy.getMockImplementation();
-    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
-    atomicWriteSpy.mockImplementation(async (path, data) => {
-      if (data?.jobs?.some((entry) => entry.id === job.jobId && entry.progress === 0.25)) throw new Error('synthetic progress disk failure');
-      return realWrite(path, data);
-    });
+    const changed = vi.fn();
+    const progressEvents = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('changed', changed);
+    mediaJobQueue.mediaJobEvents.on('progress', progressEvents);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
-      videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25, message: 'working' });
-      await waitFor(() => errorLog.mock.calls.some(([message]) => String(message).includes('persist on progress failed')));
-      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(`[${job.jobId.slice(0, 8)}] mediaJobQueue persist on progress failed: synthetic progress disk failure`));
-      expect(mediaJobQueue.getJob(job.jobId)).toMatchObject({ status: 'running', progress: 0.25 });
+      videoGenEvents.emit('progress', { generationId: jobId, progress: 0.25, message: 'Rendering', etaMs: 90_000 });
+      videoGenEvents.emit('progress', { generationId: jobId, progress: 0.37, message: 'Upscaling', etaMs: 80_000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(atomicWriteSpy).not.toHaveBeenCalled();
+      expect(changed).not.toHaveBeenCalled();
+      expect(readFileSync(file, 'utf8')).toBe(runningSnapshot);
+
+      const { startedAt } = mediaJobQueue.getJob(jobId);
+      const expected = { id: jobId, startedAt, progress: 0.37, statusMsg: 'Upscaling', etaMs: 80_000 };
+      expect(mediaJobQueue.getJob(jobId)).toMatchObject(expected);
+      expect(progressEvents).toHaveBeenLastCalledWith(expected);
+
+      const response = { writeHead: vi.fn(), write: vi.fn(), req: { on: vi.fn() } };
+      expect(mediaJobQueue.attachSseClient(jobId, response)).toBe(true);
+      expect(response.write).toHaveBeenCalledWith('data: ' + JSON.stringify({
+        type: 'progress', progress: 0.37, message: 'Upscaling', etaMs: 80_000,
+      }) + '\n\n');
     } finally {
-      atomicWriteSpy.mockImplementation(realWrite);
-      errorLog.mockRestore();
+      vi.useRealTimers();
+      mediaJobQueue.mediaJobEvents.off('changed', changed);
+      mediaJobQueue.mediaJobEvents.off('progress', progressEvents);
     }
+
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toMatchObject({ ok: true });
+    const saved = readFileSync(file, 'utf8');
+    const snapshot = JSON.parse(saved);
+    expect(saved).toBe(JSON.stringify(snapshot));
+    expect(snapshot.jobs).toContainEqual(expect.objectContaining({
+      id: jobId, status: 'running', progress: 0.37, statusMsg: 'Upscaling', etaMs: 80_000,
+    }));
   });
 
   it('refuses a canceled suffix repair at provider dispatch without paying again', async () => {

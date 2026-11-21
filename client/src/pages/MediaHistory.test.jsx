@@ -7,9 +7,20 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
-vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
 const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), cancelImagePendingDelete: vi.fn(), getInstances: vi.fn() }));
-vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, stitchVideos, ...deleteApi }));
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: fetchPage,
+  getGalleryImages,
+  getVideoHistoryItem,
+  listImageVariants,
+  deleteImage,
+  stitchVideos,
+  deleteVideoHistoryItem: deleteApi.deleteVideoHistoryItem,
+  cancelVideoPendingDelete: deleteApi.cancelVideoPendingDelete,
+  cancelImagePendingDelete: deleteApi.cancelImagePendingDelete,
+}));
+vi.mock('../services/apiSystem.js', () => ({ getInstances: deleteApi.getInstances }));
+vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
 vi.mock('../services/socket', () => ({ default: { on: (event, fn) => socketHandlers.set(event, fn), off: (event) => socketHandlers.delete(event) } }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));
@@ -66,6 +77,29 @@ describe('bounded media history', () => {
     await screen.findByText('Picture 0');
     fireEvent.click(screen.getByRole('button', { name: 'Favorite 0.png' }));
     await waitFor(() => expect(saveAnnotation).toHaveBeenCalledWith('image:0.png', { starred: true }));
+  });
+
+  it('filters the whole history to this machine and restores all media when toggled off', async () => {
+    const listAll = fetchPage.getMockImplementation();
+    fetchPage.mockImplementation(async filters => {
+      if (!filters.localOnly) return listAll(filters);
+      return { items: [rows[60]], total: 1, limit: 60, offset: filters.offset, counts: { all: 1, image: 1, video: 0 } };
+    });
+    open();
+    await screen.findByText('Picture 0');
+    const toggle = screen.getByRole('button', { name: 'On this machine' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(await screen.findByText('Picture 60')).toBeInTheDocument();
+    expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ localOnly: true, offset: 0 }), { silent: true });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Images 1' })).toBeInTheDocument();
+    expect(screen.queryByText('Picture 0')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show more/ })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(await screen.findByText('Picture 0')).toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Images 61' })).toBeInTheDocument();
   });
 
   it('keeps the previously unseen last item reachable after deletion shifts offsets', async () => {

@@ -11,8 +11,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
  *
  * Not a barrel: consumers import `initSpawner` (`bootstrap.js`) and `loadSlashdoCommand` (CoS agent prompts) from
  * here and everything else from the module that defines it, or `agentOrchestrator.js` for a lifecycle transition.
- * Two barrels naming the same transition invites importing the wrong one. With no barrel, nothing in the
- * orchestrator facade's closure imports this file, so it can take a static `agentOrchestrator.js` import.
+ * Load the transition implementation only when a runner or task event requires it.
  *
  * NOTE: importing this module is side-effect-free — `initSpawner()` must be called explicitly (see
  * `server/index.js`), so test imports don't re-arm event listeners and timers on every suite.
@@ -29,7 +28,6 @@ import { PATHS, rmGuarded } from '../lib/fileUtils.js';
 import { loadSlashdoFile } from '../lib/slashdoLoader.js';
 import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agent/agentRunnerOutputBatchers.js';
 import { syncRunnerAgents } from './agent/agentRunnerSync.js';
-import { handleAgentCompletion } from './agent/agentLifecycle.js';
 import { cleanupOrphanedAgents } from './agent/agentManagement.js';
 import { completeAgentRun } from './agent/agentRunTracking.js';
 import { appendRunEvent } from './agent/agentRunEventLog.js';
@@ -38,13 +36,9 @@ import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { loadState } from './cos/cosState.js';
 import { acquireLocalEndpointSpawnSlot } from './cos/cosLocalEndpointSlots.js';
-import { forgeSpawnHoldReason } from './cos/cosForgeSpawnGate.js';
 import { checkoutOwnerHoldReason } from './checkoutOwnership.js';
 import { acquireCosGlobalSlot } from './cos/cosAdmissionReservations.js';
 import { releaseAgentReservation } from './agent/agentMaintenanceReservations.js';
-// The three lifecycle transitions this wiring drives come from the facade, not the leaves implementing them.
-// Nothing the facade imports imports this module back, so the edge stays one-directional.
-import { completeAgent, spawnAgentForTask } from './agent/agentOrchestrator.js';
 import { parseRunnerSecurityScanEvidence } from '../lib/securityScanEvidence.js';
 
 const RUNS_DIR = PATHS.runs;
@@ -153,6 +147,7 @@ async function handleTaskReady(task) {
   // 3. Forge unreachable, for a task that cannot finish without it. An agent promising a change request fails to
     //    push and finalizes non-actionable `forge-unreachable`, so each retry re-runs the whole agent against the
     //    same dead network. See cosForgeSpawnGate.js for the narrowings that keep a wrong hold from becoming a wedge.
+  const { forgeSpawnHoldReason } = await import('./cos/cosForgeSpawnGate.js');
   const forgeHold = await forgeSpawnHoldReason(task);
   if (forgeHold) return holdTask(task, forgeHold);
   // 3b. Checkout recovery while the operator's own interactive agent session owns that checkout: every run could
@@ -179,9 +174,10 @@ async function handleTaskReady(task) {
     if (!localSlot.ok) return holdTask(task, localSlot.reason);
     if (isHostShuttingDown()) return holdTask(task, HOST_SHUTDOWN_HOLD);
     try {
+      const { spawnAgentForTask } = await import('./agent/agentOrchestrator.js');
       await spawnAgentForTask(task);
     } catch (err) {
-      if (isMaintenanceHold(err)) return holdTask(task, 'maintenance is holding new work');
+      if (isMaintenanceHold(err)) return holdTask(task, err.message);
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {
@@ -345,6 +341,7 @@ async function runInitSpawner() {
     // Drain pending output before completion so the final lines land in
     // state before handleAgentCompletion writes the terminal record.
     await flushRunnerOutputBatcher(agentId);
+    const { handleAgentCompletion } = await import('./agent/agentLifecycle.js');
     await handleAgentCompletion(agentId, exitCode, success, duration);
   });
 
@@ -358,6 +355,7 @@ async function runInitSpawner() {
         clearTimeout(agent.initializationTimeout);
       }
       await flushRunnerOutputBatcher(orphan.agentId);
+      const { handleAgentCompletion } = await import('./agent/agentLifecycle.js');
       await handleAgentCompletion(orphan.agentId, orphan.exitCode, orphan.success, 0);
     }
   });
@@ -372,6 +370,7 @@ async function runInitSpawner() {
       clearTimeout(agent.initializationTimeout);
       // Runner-level error before the run could produce work: no success criterion was evaluated, so validation is
             // the null sentinel, never a false that would look like a declared-and-failed run.
+      const { completeAgent } = await import('./agent/agentOrchestrator.js');
       await completeAgent(agentId, { success: false, validationPassed: null, error });
       await releaseAgentReservation(agentId);
       await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });

@@ -41,7 +41,7 @@ import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { TOOLING_TESTS, getAlwaysRunTests } from '../ci-test-plan.js';
+import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
@@ -238,7 +238,14 @@ export function fileResultsFromReport(reportPath) {
     return report.testResults.map((suite) => {
       const assertions = Array.isArray(suite.assertionResults) ? suite.assertionResults : [];
       const count = (status) => assertions.filter((assertion) => assertion?.status === status).length;
-      return { file: String(suite.name ?? ''), status: suite.status, durationMs: Number.isFinite(suite.endTime - suite.startTime) ? suite.endTime - suite.startTime : null, passed: count('passed'), failed: count('failed'), skipped: assertions.length - count('passed') - count('failed') };
+      // Summed test time per top-level describe: a structural guard runner's checks (#16996).
+      const checks = {};
+      for (const { ancestorTitles, duration } of assertions) {
+        if (Array.isArray(ancestorTitles) && ancestorTitles.length > 0 && Number.isFinite(duration)) {
+          checks[ancestorTitles[0]] = (checks[ancestorTitles[0]] ?? 0) + duration;
+        }
+      }
+      return { file: String(suite.name ?? ''), status: suite.status, durationMs: Number.isFinite(suite.endTime - suite.startTime) ? suite.endTime - suite.startTime : null, checks, passed: count('passed'), failed: count('failed'), skipped: assertions.length - count('passed') - count('failed') };
     }).filter((result) => result.file);
   } catch {
     return [];
@@ -433,15 +440,18 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
     }
     const meta = { test, workspace: scope, source, commit };
     const modules = dependencies?.get(test) ?? null;
-    const after = plan.freshAnalyze(test, modules);
+    // Re-read inputs only if the floor or recorded key could be written.
+    // Still compute the recorded candidate from Vitest's actual modules.
+    let after;
+    const fresh = () => (after ??= plan.freshAnalyze(test, modules));
     const refused = [];
     if (!info.floor.memoizable) refused.push(`floor key: ${info.floor.reason}`);
-    else if (after.floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
+    else if (fresh().floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
     else { writeEntry(memoDir, info.floor.key, meta); written += 1; }
     const recorded = modules ? plan.analyze(test, modules).recorded : null;
     if (!modules) refused.push(`recorded key: ${dependencies ? 'Vitest recorded no modules for this file' : 'no readable Vitest dependency file'}`);
     else if (!recorded?.memoizable) refused.push(`recorded key: ${recorded?.reason ?? 'not computed'}`);
-    else if (after.recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
+    else if (fresh().recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
     else {
       // A case-filtered run loaded only what its cases reached: the list keys this
       // filter's entry, but digests would let it narrow selection for any other run.

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, GitCompare } from 'lucide-react';
-import { getInsightNarrative, refreshInsightNarrative } from '../../services/api';
+import { getInsightNarrative, refreshInsightNarrative } from '../../services/apiSystem.js';
 import { formatDate, timeAgo } from '../../utils/formatters';
 import InlineDiff from '../ui/InlineDiff';
 

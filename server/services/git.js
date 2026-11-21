@@ -1,12 +1,13 @@
-import { existsSync, realpathSync } from 'fs';
+import { existsSync } from 'fs';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { mkdtemp } from 'fs/promises';
+import { mkdtemp, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
-import { safeJSONParse, sleep, rmGuarded } from '../lib/fileUtils.js';
+import { safeJSONParse, sleep, rmGuarded, pathExists } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
+import { readRepoBranchSnapshot, repoObservationEnv } from './repoBranchSnapshot.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
@@ -14,7 +15,6 @@ export { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import {
   parseStatus,
   parseDiffStat,
-  parseBranchVerboseLine,
   extractAgentSummary,
   isBenignConcurrentFetchRefRace
 } from '../lib/gitOutputParsers.js';
@@ -48,30 +48,45 @@ export {
 const checkoutMutations = new Map();
 const checkoutMutationContext = new AsyncLocalStorage();
 
-// Existing writers register so an exclusive rebase/push cannot overlap them.
-// Nested calls retain their own publication lifetime, even if they outlive a parent.
-async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
+// Key resolution (realpath + ancestor walk) is async so it never blocks the event
+// loop, but admission must still happen in call order: a caller that starts one
+// mutation and immediately starts another has to see the first registered. Each
+// call therefore joins this chain; resolving its key and registering it is one
+// step, and the next call's resolution only begins after that registration.
+let admissionTail = Promise.resolve();
+
+async function resolveCheckoutKey(dir) {
   let key;
-  try { key = realpathSync(dir); }
+  try { key = await realpath(dir); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
     key = resolve(dir);
   }
   // API paths may name a subdirectory or a symlink into the same checkout.
   for (let root = key; ; root = dirname(root)) {
-    if (existsSync(join(root, '.git'))) { key = root; break; }
-    if (dirname(root) === root) break;
+    if (await pathExists(join(root, '.git'))) return root;
+    if (dirname(root) === root) return key;
   }
-  const active = checkoutMutations.get(key);
+}
+
+// Existing writers register so an exclusive rebase/push cannot overlap them.
+// Nested calls retain their own publication lifetime, even if they outlive a parent.
+async function withCheckoutMutation(dir, work, { exclusive = false } = {}) {
   const parent = checkoutMutationContext.getStore();
-  const inherited = parent?.active && parent.key === key && parent.state === active;
-  if (!inherited && (active?.exclusive || (exclusive && active))) {
-    throw new ServerError('A Git operation is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
-  }
-  const state = active || { count: 0, exclusive };
-  state.count++;
-  checkoutMutations.set(key, state);
-  const context = { key, state, active: true };
+  const admission = admissionTail.then(async () => {
+    const key = await resolveCheckoutKey(dir);
+    const active = checkoutMutations.get(key);
+    const inherited = parent?.active && parent.key === key && parent.state === active;
+    if (!inherited && (active?.exclusive || (exclusive && active))) {
+      throw new ServerError('A Git operation is already running for this checkout', { status: 409, code: 'GIT_BUSY' });
+    }
+    const state = active || { count: 0, exclusive };
+    state.count++;
+    checkoutMutations.set(key, state);
+    return { key, state, context: { key, state, active: true } };
+  });
+  admissionTail = admission.catch(() => {});
+  const { key, state, context } = await admission;
   try {
     return await withGitMutationLifetime(() => checkoutMutationContext.run(context, work));
   } finally {
@@ -798,6 +813,12 @@ export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) 
   return firstLine.trim().substring(0, 100) || 'CoS automated task';
 }
 
+async function getLocalBranchNames(dir) {
+  // Read branch refs directly so worktree markers and ambiguous short refs cannot change their names.
+  const { stdout } = await execGitSafe(['for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/'], dir);
+  return stdout?.split(/\r?\n/).filter(Boolean) ?? [];
+}
+
 export async function getDefaultBranch(dir, { allowRemote = true, strict = false } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
@@ -819,8 +840,7 @@ export async function getDefaultBranch(dir, { allowRemote = true, strict = false
   }
 
   // Fall back to local branch detection
-  const result = await execGitSafe(['branch', '--list'], dir);
-  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
+  const branches = await getLocalBranchNames(dir);
   if (branches.includes('main')) return 'main';
   if (branches.includes('master')) return 'master';
 
@@ -844,7 +864,7 @@ export async function getDefaultBranch(dir, { allowRemote = true, strict = false
  * Computes the branch list once and reuses it for both base and dev detection.
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
-export async function getRepoBranches(dir) {
+export async function getRepoBranches(dir, knownBranches) {
   // Check origin/HEAD first (fast, local-only)
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   let baseBranch = null;
@@ -858,8 +878,7 @@ export async function getRepoBranches(dir) {
   }
 
   // Get local branches once — reused for both base fallback and dev detection
-  const result = await execGitSafe(['branch', '--list'], dir);
-  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
+  const branches = knownBranches ?? await getLocalBranchNames(dir);
 
   if (!baseBranch) {
     if (branches.includes('main')) baseBranch = 'main';
@@ -898,25 +917,12 @@ async function getLocalMergedBranchNames(dir, defaultBranch) {
   return new Set(result.stdout.trim().split('\n').filter(Boolean));
 }
 
-/**
- * Get all local branches with tracking info
- * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean, worktree: boolean}>>}
- */
-export async function getBranches(dir, { strict = false } = {}) {
-  // Get branches with verbose info (includes tracking)
-  const [result, { baseBranch }, worktreeBranches] = await Promise.all([
-    execGit(
-      ['branch', '-vv', '--format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)'],
-      dir,
-      { ignoreExitCode: true }
-    ),
-    getRepoBranches(dir),
-    getWorktreeBranches(dir)
-  ]);
-
-  if (strict && result.exitCode !== 0) {
-    throw new Error(result.stderr || `git branch -vv failed with exit code ${result.exitCode}`);
-  }
+/** Local branches enriched for display and reconciliation. A sweep can supply
+ * the same ref and worktree inventory it uses for the rest of its observations. */
+export async function getBranches(dir, { strict = false, snapshot } = {}) {
+  const { branches, worktrees } = await (snapshot ?? readRepoBranchSnapshot(dir, { strict }));
+  const { baseBranch } = await getRepoBranches(dir, branches.map(branch => branch.name));
+  const worktreeBranches = new Set(worktrees.map(wt => wt.branch?.replace(/^refs\/heads\//, '')));
 
   const defaultBranch = baseBranch || 'main';
   const protectedSet = new Set(PROTECTED_BRANCHES);
@@ -924,18 +930,16 @@ export async function getBranches(dir, { strict = false } = {}) {
 
   const mergedSet = await getLocalMergedBranchNames(dir, defaultBranch);
 
-  return result.stdout.trim().split('\n').filter(Boolean)
-    .map(parseBranchVerboseLine)
-    .map(b => ({
-      ...b,
-      isDefault: b.name === defaultBranch,
-      // A branch checked out in another worktree can't be `git branch -d`'d, so
-      // cleanup-merged skips it. Flag it so the UI doesn't advertise it as
-      // deletable (otherwise the "Clean N merged" button promises deletions the
-      // server correctly refuses, and the user gets "No merged branches to clean up").
-      worktree: !b.current && worktreeBranches.has(b.name),
-      merged: !b.current && !protectedSet.has(b.name) && mergedSet.has(b.name)
-    }));
+  return branches.map(b => ({
+    ...b,
+    isDefault: b.name === defaultBranch,
+    // A branch checked out in another worktree can't be `git branch -d`'d, so
+    // cleanup-merged skips it. Flag it so the UI doesn't advertise it as
+    // deletable (otherwise the "Clean N merged" button promises deletions the
+    // server correctly refuses, and the user gets "No merged branches to clean up").
+    worktree: !b.current && worktreeBranches.has(b.name),
+    merged: !b.current && !protectedSet.has(b.name) && mergedSet.has(b.name)
+  }));
 }
 
 function gitResultOutput(result) {
@@ -1721,19 +1725,23 @@ export async function readBranchPublished(dir, branch) {
  * @param {string} target - Branch it should be merged into (e.g. 'main')
  * @returns {Promise<boolean>}
  */
-export async function hasBranchMergeEvidence(dir, branch, target) {
+export async function hasBranchMergeEvidence(dir, branch, target, observedTips) {
   // Equal immutable commits prove inclusion; equal symbolic branch names do
   // not prove that a feature branch landed anywhere else.
   if (!branch || !target || (branch === target && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(branch))) return false;
 
-  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' };
-  // An inherited writer's quarantine/object override must not redirect a
-  // repository inspection away from this checkout's own common object store.
-  delete env.GIT_OBJECT_DIRECTORY;
-  const readOptions = { ignoreExitCode: true, env };
-  const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, readOptions)
-    .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
-    .catch(() => null);
+  const readOptions = { ignoreExitCode: true, env: repoObservationEnv() };
+  const resolve = ref => {
+    if (observedTips?.has(ref)) return observedTips.get(ref);
+    // A single-branch checkout can resolve the target outside refs/heads.
+    // Resolve that shared target once for this scan. Mutation callers omit
+    // the inventory and always read the current names.
+    const read = execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, readOptions)
+      .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
+      .catch(() => null);
+    observedTips?.set(ref, read);
+    return read;
+  };
 
   const [branchSha, targetSha] = await Promise.all([resolve(branch), resolve(target)]);
   if (!branchSha || !targetSha) return false;

@@ -12,7 +12,7 @@ import { EXTENDED_AUDIT_WORKFLOW } from './auditWorkflow.js';
  * before the next audit; fix mode resolves in each audit with one final drain; issue-only runs can skip drains. The step shape is the quota-burn job shape (`quotaBurnTaskRef.js`).
  */
 
-import { AUDIT_DEFINITIONS } from './auditCatalog.js';
+import { AUDIT_EXECUTION_PROFILES } from './auditCatalog.js';
 
 /** The audits, in run order. */
 export const MAINTENANCE_TASK_ORDER = Object.freeze([
@@ -40,7 +40,7 @@ export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskTy
 // Build the ladder as run-once steps for `appId`, pinned to the chosen provider/model/effort (`effort: null` inherits each task's saved effort). Ids are `${idPrefix}-${index}`.
 // An optional claimHandler replaces the provider/model/effort bundle for drains only.
 export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
-  if (taskTypes !== null && (!Array.isArray(taskTypes) || !taskTypes.length || taskTypes.some(type => !Object.hasOwn(AUDIT_DEFINITIONS, type)))) {
+  if (taskTypes !== null && (!Array.isArray(taskTypes) || !taskTypes.length || taskTypes.some(type => !Object.hasOwn(AUDIT_EXECUTION_PROFILES, type)))) {
     throw new Error('Quality checks must name known audit categories');
   }
   // An explicit quality selection runs only those audits, without backlog drains.

@@ -7,7 +7,7 @@ human listen are separate gates.
 
 ## What a benchmark records
 
-`scripts/music_benchmark.py` writes a small JSON report containing:
+`scripts/ml/music_benchmark.py` writes a small JSON report containing:
 
 - prompt and lyrics shape only (character, word, and line counts); the text is
   never copied into the report;
@@ -27,7 +27,7 @@ Run the analyzer after a fixed-seed render. Replace the example values with the
 profile and environment being tested:
 
 ```bash
-python scripts/music_benchmark.py \
+python scripts/ml/music_benchmark.py \
   --audio /path/to/example.wav \
   --output /path/to/example-report.json \
   --prompt-file /path/to/example-prompt.txt \
@@ -52,7 +52,7 @@ Install/Repair and hash-lock regeneration for the CUDA runtime are documented in
 For CUDA Diffusers MiniMax Music 3, `--seed` is a sidecar-only benchmark hook:
 
 ```bash
-python scripts/generate_minimax_music3.py \
+python scripts/ml/generate_minimax_music3.py \
   --model MiniMaxAI/MiniMax-Music3 \
   --text "Example instrumental prompt" \
   --lyrics "[intro]\n[instrumental]\n[outro]" \

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   PIPELINE_STAGE_LABELS: { audio: 'Audio' },
   PIPELINE_STAGE_STATUS_LABEL: { empty: 'Empty', ready: 'Ready' },
   PIPELINE_STAGE_STATUS_COLOR: {},
@@ -34,9 +34,10 @@ import toast from '../../ui/Toast';
 import {
   updatePipelineIssue,
   generatePipelineAudioCues,
+  generatePipelineMusic,
   renderPipelineAudioCue,
   listPipelineMusicGenerators,
-} from '../../../services/api';
+} from '../../../services/apiPipeline.js';
 
 const READY_ENGINE = {
   engines: [
@@ -57,6 +58,7 @@ const NOT_READY_ENGINE = {
   engines: [{
     id: 'musicgen', name: 'MusicGen', models: [], defaultModelId: 'm',
     defaultDurationSec: 12, minDurationSec: 1, maxDurationSec: 30, ready: false,
+    unavailableReason: 'runtime-unavailable', installEnv: 'INSTALL_MUSICGEN',
   }],
   defaultEngine: 'musicgen',
 };
@@ -293,5 +295,86 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     const cueItem = screen.getByText('Act I').closest('li');
     await waitFor(() => expect(within(cueItem).getByRole('button', { name: /Render/i })).toBeDisabled());
     expect(renderPipelineAudioCue).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('AudioStage generator readiness', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const openGenerator = () => userEvent.click(screen.getByRole('button', { name: 'Generate music' }));
+
+  it.each([
+    ['vram-insufficient', /requires at least 20 GB of VRAM/i],
+    ['vram-unknown-size', /VRAM requirement.*has not been measured/i],
+    ['cuda-absent', /requires an available NVIDIA CUDA GPU/i],
+    ['platform-unsupported', /requires macOS on Apple Silicon/i],
+  ])('blocks Generate and cue render for %s without suggesting the installer', async (unavailableReason, warning) => {
+    const engine = {
+      ...READY_ENGINE.engines[0],
+      id: 'blocked-engine', name: 'Blocked engine',
+      ready: false, unavailableReason, minVramGb: 20, maxVramGb: 12,
+      platformLabel: 'macOS on Apple Silicon', installEnv: 'INSTALL_EXAMPLE',
+    };
+    listPipelineMusicGenerators.mockResolvedValue({
+      defaultEngine: 'musicgen', engines: [...READY_ENGINE.engines, engine],
+    });
+    const cues = [{ id: 'cue-1', label: 'Act I', prompt: 'warm pads', engine: engine.id }];
+    render(<AudioStage issue={makeIssue({ audioMode: 'generated', cues })} />);
+
+    await openGenerator();
+    await userEvent.selectOptions(await screen.findByLabelText('Engine'), engine.id);
+    await userEvent.type(screen.getByLabelText('Describe the music'), 'warm pads');
+    expect(screen.getAllByText(warning)).toHaveLength(2);
+    expect(screen.queryByText(/scripts\/setup-image-video.sh/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
+    const cue = screen.getByRole('button', { name: 'Render' });
+    expect(cue).toBeDisabled();
+    expect(cue.title).toMatch(warning);
+    expect(screen.getByRole('button', { name: 'Render all cues' })).toBeDisabled();
+    expect(generatePipelineMusic).not.toHaveBeenCalled();
+    expect(renderPipelineAudioCue).not.toHaveBeenCalled();
+  });
+
+  it('allows generation with the cached checkpoint when the default checkpoint is missing', async () => {
+    const engine = {
+      ...READY_ENGINE.engines[0],
+      id: 'fixed-engine', name: 'Fixed engine',
+      models: [{ id: 'm', name: 'Default' }, { id: 'cached', name: 'Cached' }],
+      ready: false, unavailableReason: 'model-unavailable',
+      unavailableReasonByModelId: { m: 'model-unavailable', cached: null },
+    };
+    listPipelineMusicGenerators.mockResolvedValue({ defaultEngine: engine.id, engines: [engine] });
+    generatePipelineMusic.mockResolvedValue({ modelId: 'cached' });
+    render(<AudioStage issue={makeIssue()} />);
+
+    await openGenerator();
+    const prompt = '  warm pads\n';
+    await userEvent.type(await screen.findByLabelText('Describe the music'), prompt);
+    const generate = screen.getByRole('button', { name: 'Generate' });
+    expect(generate).toBeDisabled();
+    expect(screen.getByText(/selected Fixed engine model weights are not installed/i)).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Model'), 'cached');
+    expect(generate).toBeEnabled();
+    await userEvent.click(generate);
+    expect(generatePipelineMusic).toHaveBeenCalledWith('iss-1', {
+      prompt, engine: engine.id, durationSec: 12, modelId: 'cached',
+    }, { silent: true });
+  });
+
+  it('retries a failed generator lookup from the single-track panel', async () => {
+    listPipelineMusicGenerators.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(READY_ENGINE);
+    render(<AudioStage issue={makeIssue()} />);
+    await openGenerator();
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Describe the music')).toBeInTheDocument();
+  });
+
+  it('shows the runtime installation command when the runtime is unavailable', async () => {
+    listPipelineMusicGenerators.mockResolvedValue(NOT_READY_ENGINE);
+    render(<AudioStage issue={makeIssue()} />);
+    await openGenerator();
+    expect(await screen.findByText('INSTALL_MUSICGEN=1 bash scripts/setup-image-video.sh')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
   });
 });

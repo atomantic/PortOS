@@ -15,14 +15,14 @@ import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, videoReferenceImageSlots } from './requestFields.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, PREVIEW_UPLOAD_FIELDS, videoReferenceImageSlots } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
 
-export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
+export { PREVIEW_UPLOAD_FIELDS };
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
 
 const asWritten = (body, extra = {}) => ({

@@ -77,7 +77,7 @@ import { renderDeckCards } from '../services/deckRender.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
 // The refusal/principal matrix lives in services/authGate.test.js and
-// hostControlCoverage.test.js; backend choice never changes authority, so each
+// server/test/guards/modules/hostControlCoverage.test.js; backend choice never changes authority, so each
 // route keeps one refusal-or-allow case, not one per provider or render mode.
 const mounts = [['/api/decks', decksRoutes], ['/api/tracks', tracksRoutes]];
 const cliPick = { providerId: 'example-cli-provider', model: 'example-model' };

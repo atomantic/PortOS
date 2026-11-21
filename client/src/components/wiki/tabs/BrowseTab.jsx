@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
-import * as api from '../../../services/api';
+import { deleteNote, getNotesVaultTags } from '../../../services/apiNotes.js';
 import {FileText, FolderOpen,
   ChevronDown, ChevronRight, ArrowLeft, Tag, Link2} from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -73,7 +73,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const handleDeleteNote = async (notePath) => {
     if (selectedNote?.path !== notePath) return;
     const sequence = noteSequence.current;
-    const deleted = await api.deleteNote(vaultId, notePath).then(() => true).catch(() => false);
+    const deleted = await deleteNote(vaultId, notePath).then(() => true).catch(() => false);
     if (!deleted || !mountedRef.current || sequence !== noteSequence.current) return;
     toast.success('Note deleted');
     setConfirmDelete(null);
@@ -83,7 +83,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   };
 
   const loadTags = async () => {
-    const data = await api.getNotesVaultTags(vaultId).catch(() => null);
+    const data = await getNotesVaultTags(vaultId).catch(() => null);
     if (!mountedRef.current) return;
     if (data?.tags) setTags(data.tags);
     setSkippedTagNotes(data?.skippedUnavailable || 0);

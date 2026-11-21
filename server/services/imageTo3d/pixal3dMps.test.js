@@ -45,12 +45,12 @@ const makeChild = () => {
 describe('pixal3dMps path and install plan', () => {
   it('keeps the adapter and hashed installer on a patched Torch runtime', () => {
     const read = name => readFileSync(new URL(`../../../scripts/${name}`, import.meta.url), 'utf8');
-    const lock = read('requirements-pixal3d-mps.lock.txt');
+    const lock = read('ml/requirements/requirements-pixal3d-mps.lock.txt');
     expect(lock).toContain(`torch==${PIXAL3D_MPS_TORCH_VERSION}`);
     expect(lock).toContain(`torchvision==${PIXAL3D_MPS_TORCHVISION_VERSION}`);
     expect(PIXAL3D_MPS_TORCH_VERSION.split('.').slice(0, 2).map(Number)).toEqual([2, expect.any(Number)]);
     expect(Number(PIXAL3D_MPS_TORCH_VERSION.split('.')[1])).toBeGreaterThanOrEqual(13);
-    const sources = read('requirements-pixal3d-mps-sources.lock.txt');
+    const sources = read('ml/requirements/requirements-pixal3d-mps-sources.lock.txt');
     expect(sources).toContain(`natten==${PIXAL3D_MPS_NATTEN_VERSION}`);
     expect(read('setup-pixal3d-mps.sh')).toContain(`sys.version_info[:2] == (${PIXAL3D_MPS_PYTHON_VERSION.replace('.', ', ')})`);
     expect(IMAGE_TO_3D_TARGETS.pixal3dMps.requires.python).toBe(PIXAL3D_MPS_PYTHON_VERSION);

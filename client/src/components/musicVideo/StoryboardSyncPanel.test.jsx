@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const syncMusicVideoShots = vi.fn(async () => ({ project: { id: 'mv-1', scenes: [], storyboardSync: true }, counts: {} }));
-vi.mock('../../services/api', () => ({ syncMusicVideoShots, setMusicVideoShotSync: vi.fn() }));
+vi.mock('../../services/apiStoryboards.js', () => ({
+  syncMusicVideoShots,
+  setMusicVideoShotSync: vi.fn(),
+}));
 const { default: StoryboardSyncPanel } = await import('./StoryboardSyncPanel.jsx');
 
 const panel = (id, seconds) => ({ id: `panel-${id}`, action: `Panel ${id}`, seconds, castIds: [], environmentIds: [], objectIds: [], takes: [] });

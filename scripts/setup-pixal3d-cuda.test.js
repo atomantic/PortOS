@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./setup-pixal3d-cuda.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/setup-pixal3d-cuda.py', import.meta.url));
 
 // Real Install/Repair orchestration with tiny source archives and fake processes.
 const boundary = String.raw`
@@ -17,9 +17,9 @@ actual = json.loads(pathlib.Path(sys.argv[1]).with_name('pixal3d-cuda-profile.js
 with tempfile.TemporaryDirectory() as directory:
     temp = pathlib.Path(directory)
     m.SCRIPTS = m.cuda.SCRIPTS = temp / 'scripts'
-    m.SCRIPTS.mkdir()
+    (m.SCRIPTS / 'requirements').mkdir(parents=True)
     for name in ['requirements-pixal3d-cuda.lock.txt', 'requirements-pixal3d-cuda-build.lock.txt']:
-        (m.SCRIPTS / name).write_text('fixture==1 --hash=sha256:' + 'a' * 64)
+        (m.SCRIPTS / 'requirements' / name).write_text('fixture==1 --hash=sha256:' + 'a' * 64)
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w:bz2') as archive:
         item = tarfile.TarInfo('bin/micromamba')

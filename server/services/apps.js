@@ -1,8 +1,8 @@
 import { join } from 'path';
-import { statSync } from 'fs';
+import { stat } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
-import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, pathExists, PATHS } from '../lib/fileUtils.js';
 import {
   containsPortosRootToken,
   expandPortosRootInApp,
@@ -10,20 +10,32 @@ import {
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { NON_PM2_TYPES } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
-import { sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTS } from '../lib/ports.js';
-import { hasTailscaleCert } from '../../lib/tailscale-https.js';
+import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { certPaths } from '../../lib/certPaths.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
 
-function isExistingDirectory(p) {
+async function isExistingDirectory(p) {
   if (typeof p !== 'string' || !p) return false;
-  try { return statSync(p).isDirectory(); } catch { return false; }
+  return stat(p).then((st) => st.isDirectory(), () => false);
+}
+
+// Once the server has booted, HTTPS-active-at-boot is the authoritative answer
+// (a cert provisioned after boot is not being served until restart) and costs no
+// fs call on loadApps' 2-second cache-miss path. Before boot has recorded it
+// (scripts, early callers) fall back to checking the cert pair on disk.
+async function isTlsActive() {
+  const boot = getHttpsEnabledAtBoot();
+  if (boot.initialized) return boot.value;
+  const { cert, key } = certPaths(PATHS.data);
+  const [hasCert, hasKey] = await Promise.all([pathExists(cert), pathExists(key)]);
+  return hasCert && hasKey;
 }
 
 // Stable ID for the PortOS app — always present, never deletable. Defined in
@@ -35,10 +47,10 @@ export { PORTOS_APP_ID };
 /**
  * Build the baseline PortOS app entry with repoPath resolved to the actual project root.
  */
-function buildPortosApp() {
-  // tlsPort reflects whether the Tailscale cert is actually on disk; if not,
+async function buildPortosApp() {
+  // tlsPort reflects whether HTTPS is actually active; if not,
   // don't advertise HTTPS so the Launch button doesn't target a broken scheme.
-  const certPresent = hasTailscaleCert(certPaths(PATHS.data).dir);
+  const certPresent = await isTlsActive();
   return {
     name: 'PortOS',
     description: 'Local App OS portal for dev machines',
@@ -57,7 +69,6 @@ function buildPortosApp() {
       'portos-server',
       'portos-cos',
       'portos-autofixer',
-      'portos-autofixer-ui',
       'portos-browser'
     ],
     processes: [
@@ -66,8 +77,7 @@ function buildPortosApp() {
       // there and Overview would otherwise show a dead port.
       { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
       { name: 'portos-cos', port: PORTS.COS, ports: { api: PORTS.COS } },
-      { name: 'portos-autofixer', port: PORTS.AUTOFIXER, ports: { api: PORTS.AUTOFIXER } },
-      { name: 'portos-autofixer-ui', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
+      { name: 'portos-autofixer', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
       { name: 'portos-browser', port: PORTS.CDP, ports: { cdp: PORTS.CDP, health: PORTS.CDP_HEALTH } }
     ],
     envFile: '.env',
@@ -135,7 +145,7 @@ async function loadApps() {
   }
 
   // Ensure PortOS baseline app is always present and up-to-date
-  const baseline = buildPortosApp();
+  const baseline = await buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
     data.apps[PORTOS_APP_ID] = baseline;
     await atomicWrite(APPS_FILE, data);
@@ -167,7 +177,7 @@ async function loadApps() {
     // path. A repoPath that is not an existing directory cannot be a working
     // override, so rebind to the running checkout (#12483).
     const storedRepoPath = data.apps[PORTOS_APP_ID].repoPath;
-    if (storedRepoPath !== baseline.repoPath && !isExistingDirectory(storedRepoPath)) {
+    if (storedRepoPath !== baseline.repoPath && !(await isExistingDirectory(storedRepoPath))) {
       console.warn(`⚠️ PortOS app repoPath ${storedRepoPath} is not a directory; resetting to ${baseline.repoPath}`);
       data.apps[PORTOS_APP_ID].repoPath = baseline.repoPath;
       dirty = true;
@@ -325,6 +335,8 @@ async function createAppUnlocked(appData) {
     ...(Number.isSafeInteger(appData.mergeHandoffMinQueuedRuns) && appData.mergeHandoffMinQueuedRuns > 0
       ? { mergeHandoffMinQueuedRuns: appData.mergeHandoffMinQueuedRuns } : {}),
     ...(typeof appData.useAutoMerge === 'boolean' ? { useAutoMerge: appData.useAutoMerge } : {}),
+    ...(typeof appData.autoApprovePR === 'boolean' ? { autoApprovePR: appData.autoApprovePR } : {}),
+    ...(typeof appData.adminMerge === 'boolean' ? { adminMerge: appData.adminMerge } : {}),
     ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
       ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
       : {}),

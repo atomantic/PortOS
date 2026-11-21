@@ -7,15 +7,15 @@ vi.mock('../../../services/socket', () => ({ default: {
   on: vi.fn((event, handler) => { if (event === 'genome:clinvar-progress') mocks.listeners.add(handler); }),
   off: vi.fn((event, handler) => { if (event === 'genome:clinvar-progress') mocks.listeners.delete(handler); })
 } }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getGenomeSummary: vi.fn(async () => ({ uploaded: true, markers: [] })),
   getClinvarStatus: vi.fn(async () => ({ synced: false })),
-  syncClinvar: mocks.sync
+  syncClinvar: mocks.sync,
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: mocks.success } }));
 vi.mock('../EpigeneticTracker', () => ({ default: () => null }));
 import GenomeTab from './GenomeTab';
-import * as api from '../../../services/api';
+import { getGenomeSummary } from '../../../services/apiMeatspace.js';
 
 const emit = (frame) => act(() => { for (const handler of mocks.listeners) handler(frame); });
 const begin = async () => {
@@ -68,18 +68,18 @@ describe('ClinVar progress interaction', () => {
 
 describe('genome load failure vs empty', () => {
   it('shows a retry notice and no upload drop zone when the summary read rejects', async () => {
-    api.getGenomeSummary.mockRejectedValueOnce(new Error('boom'));
+    getGenomeSummary.mockRejectedValueOnce(new Error('boom'));
     render(<GenomeTab />);
     expect(await screen.findByText(/Could not load genome data\. Retry before uploading/)).toBeInTheDocument();
     expect(screen.queryByText(/Upload your 23andMe raw data export/)).not.toBeInTheDocument();
-    expect(api.getGenomeSummary).toHaveBeenLastCalledWith({ silent: true });
-    api.getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
+    expect(getGenomeSummary).toHaveBeenLastCalledWith({ silent: true });
+    getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/Upload your 23andMe raw data export/)).toBeInTheDocument();
   });
 
   it('still shows the upload prompt for a successful empty summary', async () => {
-    api.getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
+    getGenomeSummary.mockResolvedValueOnce({ uploaded: false });
     render(<GenomeTab />);
     expect(await screen.findByText(/Upload your 23andMe raw data export/)).toBeInTheDocument();
     expect(screen.queryByText(/Could not load genome data/)).not.toBeInTheDocument();

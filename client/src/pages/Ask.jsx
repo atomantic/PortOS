@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink, ListTodo, CheckCircle2 } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  promoteAskTurn,
+  listAskConversations,
+  getAskConversation,
+  deleteAskConversation,
+  promoteAskConversation,
+  streamAskTurn,
+} from '../services/apiAsk.js';
+import { getGoals } from '../services/apiGoals.js';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -136,7 +144,7 @@ function PromoteBar({ conversationId, turn, goals, onPromoted }) {
 
   const promote = useCallback(async (payload) => {
     setPending(payload.target);
-    const data = await api.promoteAskTurn(conversationId, turn.id, payload, { silent: true }).catch((err) => {
+    const data = await promoteAskTurn(conversationId, turn.id, payload, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Promote failed');
       return null;
     });
@@ -317,7 +325,7 @@ export default function Ask() {
 
   const refreshList = useCallback(async () => {
     setLoadingList(true);
-    const data = await api.listAskConversations().catch(() => null);
+    const data = await listAskConversations().catch(() => null);
     setLoadingList(false);
     if (data?.conversations) setConversations(data.conversations);
   }, []);
@@ -329,7 +337,7 @@ export default function Ask() {
   // picker empty (the user just won't see options) so we don't toast here.
   useEffect(() => {
     let cancelled = false;
-    api.getGoals().then((data) => {
+    getGoals().then((data) => {
       if (cancelled) return;
       const list = Array.isArray(data?.goals) ? data.goals : [];
       // Pre-sort so the dropdown is alphabetical without forcing PromoteBar
@@ -361,7 +369,7 @@ export default function Ask() {
     setActiveConv(null);
     setLoadingConv(!!conversationId);
     if (!conversationId) return undefined;
-    api.getAskConversation(conversationId).then((data) => {
+    getAskConversation(conversationId).then((data) => {
       if (cancelled) return;
       if (data?.conversation) {
         setActiveConv(data.conversation);
@@ -441,7 +449,7 @@ export default function Ask() {
     // Only mutate local state if the server confirms the delete — otherwise
     // a transient failure would hide a row that's still on disk and would
     // pop back on the next list refresh.
-    const ok = await api.deleteAskConversation(id, { silent: true }).then(() => true, (err) => {
+    const ok = await deleteAskConversation(id, { silent: true }).then(() => true, (err) => {
       toast.error(err?.message || 'Failed to delete conversation');
       return false;
     });
@@ -453,7 +461,7 @@ export default function Ask() {
   const handlePromote = useCallback(async () => {
     if (!activeConv) return;
     const next = !activeConv.promoted;
-    const data = await api.promoteAskConversation(activeConv.id, next).catch(() => null);
+    const data = await promoteAskConversation(activeConv.id, next).catch(() => null);
     if (data?.conversation) {
       setActiveConv(data.conversation);
       setConversations((prev) => prev.map((c) => c.id === activeConv.id ? { ...c, promoted: next } : c));
@@ -513,7 +521,7 @@ export default function Ask() {
     // when the server bails after streaming some deltas (provider 5xx, etc.).
     let sseErrorMessage = null;
 
-    await api.streamAskTurn(
+    await streamAskTurn(
       { conversationId: persistedConvId, question: trimmed, mode },
       {
         signal: controller.signal,

@@ -25,7 +25,8 @@
  */
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { lstat } from 'node:fs/promises';
+import { PATHS, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
@@ -36,9 +37,10 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { parseTsMs } from '../lib/lwwTimestamp.js';
 import { isPairedPeer } from '../lib/peerPairing.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { loadHistory, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
-import { readHeldImage, localInstanceId } from './imageGen/imageRecords.js';
+import { readImagePrimary, localInstanceId } from './imageGen/imageRecords.js';
 import { emitMediaHistoryChanged, emitMediaHoldersChanged, announceLocalHolding } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 
@@ -49,17 +51,29 @@ const KIND_DIR = { video: () => PATHS.videos, image: () => PATHS.images };
 const KIND_MOUNT = { video: '/data/videos/', image: '/data/images/' };
 const MEDIA_RELEASE_QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 15_000;
+const VERIFIED_COMMAND_TIMEOUT_MS = 120_000;
+const IMAGE_PRIMARY_READ_CONCURRENCY = 16;
 const storeWrite = createFileWriteQueue();
 
 const peerLabel = (peer) => peer?.name || peer?.id || 'peer';
 const usablePeer = (peer) => Boolean(peer) && peer.enabled !== false && isPairedPeer(peer) && isNonBlankStr(peer.instanceId);
+const validHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const validName = (filename) => isNonBlankStr(filename) && sanitizeAssetFilename(filename) === filename;
 const fileKey = (kind, filename) => `${kind}:${filename}`;
 const localPath = (kind, filename) => join(KIND_DIR[kind](), filename);
 const holdsHere = (kind, filename) => existsSync(localPath(kind, filename));
 
+async function heldHash(kind, filename) {
+  const path = localPath(kind, filename);
+  return lstat(path).then((info) => info.isFile() && info.size > 0 ? sha256File(path) : null).catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+}
+
 const isRelease = (e) => isPlainObject(e) && KINDS.includes(e.kind) && validName(e.filename) && isNonBlankStr(e.peerId)
-  && isNonBlankStr(e.primaryInstanceId) && parseTsMs(e.primaryAt) !== null && Number.isFinite(Date.parse(e.queuedAt));
+  && isNonBlankStr(e.primaryInstanceId) && parseTsMs(e.primaryAt) !== null && Number.isFinite(Date.parse(e.queuedAt))
+  && (e.sha256 === undefined || validHash(e.sha256));
 
 // STRICT: an unreadable store rejects rather than being rewritten as empty.
 const isReport = (r) => isPlainObject(r) && isPlainObject(r.mtimes) && Array.isArray(r.checked) && Number.isFinite(Date.parse(r.at));
@@ -84,7 +98,7 @@ async function readStore() {
     }
   }
   const releases = (Array.isArray(raw?.releases) ? raw.releases : []).filter(isRelease)
-    .map(({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt }) => ({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt }));
+    .map(({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt, sha256 }) => ({ peerId, kind, filename, primaryInstanceId, primaryAt, queuedAt, sha256 }));
   return { holdings, reports, releases };
 }
 const readStoreOrEmpty = () => readStore().catch(() => ({ holdings: {}, reports: {}, releases: [] }));
@@ -230,8 +244,8 @@ async function setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt) {
 /** This machine's recorded designation for a file: `{ instanceId, at }`, or null. */
 async function currentPrimary(kind, filename) {
   if (kind === 'image') {
-    const held = await readHeldImage(filename);
-    return held?.primaryInstanceId ? { instanceId: held.primaryInstanceId, at: held.primaryAt ?? null } : null;
+    const primary = await readImagePrimary(filename);
+    return primary ? { instanceId: primary.primaryInstanceId, at: primary.primaryAt } : null;
   }
   const history = await loadHistory();
   let newest = null;
@@ -247,7 +261,8 @@ async function currentPrimary(kind, filename) {
  * just verified to hold the bytes): the hosted index points at it first, then
  * the local file goes to the trash.
  */
-async function releaseLocalCopy(kind, filename, primary, primaryAt) {
+async function releaseLocalCopy(kind, filename, primary, primaryAt, sha256) {
+  if (sha256 && await heldHash(kind, filename) !== sha256) throw differentBytes();
   const { hostFileOn } = await import('./peerHostedMedia.js');
   await hostFileOn(kind, filename, primary.instanceId);
   await trashFiles([localPath(kind, filename)]);
@@ -265,13 +280,13 @@ const RETRYABLE_CODES = new Set(['PRIMARY_UNREACHABLE', 'MEDIA_BUSY']);
  * there), `unreachable` (worth retrying) or `error`
  * (a refusal retrying will not change, e.g. an older peer without the route).
  */
-async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, primaryAt }) {
+async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, primaryAt, sha256 }) {
   let res;
   try {
-    res = await withAbortTimeout(COMMAND_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}/api/peer-media/release`, {
+    res = await withAbortTimeout(sha256 ? VERIFIED_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS, (signal) => peerFetch(`${peerBaseUrl(peer)}/api/peer-media/release`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, filename, primaryInstanceId, primaryAt }),
+      body: JSON.stringify({ kind, filename, primaryInstanceId, primaryAt, sha256 }),
       signal,
     }, peer));
   } catch (err) {
@@ -281,6 +296,7 @@ async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, pri
   if (res.ok && body?.ok === true) return { outcome: 'ok' };
   if (res.status === 404 && body?.code === 'MEDIA_NOT_HELD') return { outcome: 'not-held' };
   if (res.status === 403 && body?.code === 'MEDIA_DELETE_FORBIDDEN') return { outcome: 'forbidden' };
+  if (res.status === 409 && body?.code === 'MEDIA_CONTENT_DIFFERS') return { outcome: 'different' };
   if (res.status === 409 && body?.code === 'PRIMARY_SUPERSEDED') return { outcome: 'superseded' };
   const detail = `http-${res.status}${body?.code ? ` ${body.code}` : ''}`;
   // The holder could not reach the primary, or is mid-change on the same file: retry later.
@@ -290,11 +306,12 @@ async function sendReleaseCommand(peer, { kind, filename, primaryInstanceId, pri
 }
 
 /** Holder instance ids per `<kind>:<filename>` with at least one other machine, plus this machine's id. */
-async function collectHolders() {
+async function collectHolders({ strict = false } = {}) {
   const { getPeers } = await import('./instances.js');
   const { listHostedEntries } = await import('./peerHostedMedia.js');
+  const peersRead = getPeers();
   const [self, peers, store, hosted] = await Promise.all([
-    localInstanceId(), getPeers().catch(() => []), readStoreOrEmpty(), listHostedEntries(),
+    localInstanceId(), strict ? peersRead : peersRead.catch(() => []), strict ? readStore() : readStoreOrEmpty(), listHostedEntries(),
   ]);
   const registered = new Map(peers.filter((p) => isNonBlankStr(p?.instanceId)).map((p) => [p.instanceId, p]));
   const remote = new Map();
@@ -322,7 +339,15 @@ async function collectHolders() {
  */
 export async function listMediaHolders() {
   const { self, registered, remote, releases } = await collectHolders();
-  const history = remote.size > 0 && [...remote.keys()].some((k) => k.startsWith('video:')) ? await loadHistory().catch(() => []) : [];
+  const remoteKeys = [...remote.keys()];
+  const [imagePrimaryEntries, history] = await Promise.all([
+    mapWithConcurrency(remoteKeys.filter((key) => key.startsWith('image:')), IMAGE_PRIMARY_READ_CONCURRENCY, async (key) => {
+      const primary = await readImagePrimary(key.slice('image:'.length));
+      return [key, primary?.primaryInstanceId ?? null];
+    }),
+    remoteKeys.some((key) => key.startsWith('video:')) ? loadHistory().catch(() => []) : [],
+  ]);
+  const imagePrimary = new Map(imagePrimaryEntries);
   const videoPrimary = new Map();
   const videoIds = new Map();
   for (const r of Array.isArray(history) ? history : []) {
@@ -343,7 +368,7 @@ export async function listMediaHolders() {
   for (const [key, instanceIds] of remote) {
     const kind = key.slice(0, key.indexOf(':'));
     const filename = key.slice(kind.length + 1);
-    const primaryInstanceId = kind === 'video' ? videoPrimary.get(filename) ?? null : (await readHeldImage(filename))?.primaryInstanceId ?? null;
+    const primaryInstanceId = (kind === 'video' ? videoPrimary.get(filename) : imagePrimary.get(key)) ?? null;
     const ids = [...(holdsHere(kind, filename) ? [self] : []), ...instanceIds];
     const pending = pendingByKey.get(key) ?? new Set();
     items[key] = {
@@ -384,6 +409,7 @@ async function withFileBusy(kind, filename, busyError, fn) {
 
 const KEPT_REASONS = {
   forbidden: 'media delete is turned off there',
+  different: 'this copy has different bytes',
   superseded: 'a newer primary is recorded there',
 };
 
@@ -400,11 +426,11 @@ export async function makeMediaPrimary({ kind, filename, instanceId }) {
   return withFileBusy(kind, filename, busy, () => designatePrimary(kind, filename, instanceId));
 }
 
-async function designatePrimary(kind, filename, instanceId) {
-  const { self, registered, remote } = await collectHolders();
-  const others = [...(remote.get(fileKey(kind, filename)) ?? [])];
+async function designatePrimary(kind, filename, instanceId, holders, sha256, discovered = []) {
+  const { self, registered, remote } = holders ?? await collectHolders();
+  const others = new Set([...(remote.get(fileKey(kind, filename)) ?? []), ...discovered]);
   const selfHolds = holdsHere(kind, filename);
-  if (instanceId === self ? !selfHolds : !others.includes(instanceId)) {
+  if (instanceId === self ? !selfHolds : !sha256 && !others.has(instanceId)) {
     throw new ServerError('That machine does not hold this media', { status: 409, code: 'NOT_A_HOLDER' });
   }
 
@@ -414,7 +440,7 @@ async function designatePrimary(kind, filename, instanceId) {
     if (!usablePeer(primary)) {
       throw new ServerError(`Pair with ${peerLabel(primary)} to make it primary`, { status: 409, code: 'PRIMARY_NOT_PAIRED' });
     }
-    const verdict = await peerHoldsFile(primary, kind, filename);
+    const verdict = sha256 ? null : await peerHoldsFile(primary, kind, filename);
     if (verdict === 'unreachable') {
       throw new ServerError(`${peerLabel(primary)} is unreachable; it can be made primary once it is online`, { status: 409, code: 'PRIMARY_UNREACHABLE' });
     }
@@ -425,8 +451,8 @@ async function designatePrimary(kind, filename, instanceId) {
   }
 
   const primaryAt = new Date().toISOString();
-  const command = { kind, filename, primaryInstanceId: instanceId, primaryAt };
-  if (primary && selfHolds) {
+  const command = { kind, filename, primaryInstanceId: instanceId, primaryAt, sha256 };
+  if (primary && (selfHolds || sha256)) {
     // Before this machine gives up its copy, the primary confirms it keeps its
     // own under its busy guard (the release route, addressed to the primary):
     // two machines naming each other at once both answer busy, so neither lets go.
@@ -439,7 +465,8 @@ async function designatePrimary(kind, filename, instanceId) {
   await setPrimaryOnRow(kind, filename, instanceId, primaryAt);
   const result = { primaryInstanceId: instanceId, released: [], pending: [], kept: [] };
   const queued = [];
-  for (const holderId of others.filter((id) => id !== instanceId)) {
+  for (const holderId of others) {
+    if (holderId === instanceId) continue;
     const peer = registered.get(holderId);
     const name = peerLabel(peer);
     if (!usablePeer(peer)) {
@@ -449,7 +476,7 @@ async function designatePrimary(kind, filename, instanceId) {
     const sent = peer.status === 'offline' ? { outcome: 'unreachable' } : await sendReleaseCommand(peer, command);
     if (sent.outcome === 'ok' || sent.outcome === 'not-held') {
       await notePeerHolding(holderId, kind, filename, false);
-      result.released.push({ instanceId: holderId, name });
+      if (sent.outcome === 'ok' || !sha256) result.released.push({ instanceId: holderId, name });
     } else if (sent.outcome === 'unreachable') {
       queued.push({ peerId: peer.id, ...command, queuedAt: primaryAt });
       result.pending.push({ instanceId: holderId, name });
@@ -463,9 +490,19 @@ async function designatePrimary(kind, filename, instanceId) {
     store.releases = [...store.releases.filter((e) => !(e.kind === kind && e.filename === filename)), ...queued];
     return queued.length > 0 || store.releases.length !== before;
   });
+  if (!primary && sha256) {
+    const { unmarkHosted } = await import('./peerHostedMedia.js');
+    await unmarkHosted(kind, filename);
+  }
   if (primary && selfHolds) {
-    await releaseLocalCopy(kind, filename, primary, primaryAt);
-    result.released.push({ instanceId: self, name: 'This machine' });
+    try {
+      if (sha256 && await peerCopyHash(primary, { kind, filename }) !== sha256) throw differentBytes();
+      await releaseLocalCopy(kind, filename, primary, primaryAt, sha256);
+      result.released.push({ instanceId: self, name: 'This machine' });
+    } catch (err) {
+      if (!sha256 || !(err instanceof ServerError)) throw err;
+      result.kept.push({ instanceId: self, name: 'This machine', reason: err.message });
+    }
   } else if (primary) {
     // No copy here: stream from the primary rather than a holder that released.
     const { hostFileOn } = await import('./peerHostedMedia.js');
@@ -476,6 +513,129 @@ async function designatePrimary(kind, filename, instanceId) {
   return result;
 }
 
+const differentBytes = () => new ServerError('The media copies have different bytes; the copy was kept', {
+  status: 409, code: 'MEDIA_CONTENT_DIFFERS',
+});
+const mediaBusy = () => new ServerError('This machine is changing that media; retry later', { status: 409, code: 'MEDIA_BUSY' });
+
+async function peerCopyHash(peer, { kind, filename, sha256 }) {
+  const { VERIFIED_MEDIA_COPY_TIMEOUT_MS } = await import('./sharing/peerSyncAssets.js');
+  const res = await withAbortTimeout(sha256 ? VERIFIED_MEDIA_COPY_TIMEOUT_MS + VERIFIED_COMMAND_TIMEOUT_MS : VERIFIED_COMMAND_TIMEOUT_MS, (signal) =>
+    peerFetch(`${peerBaseUrl(peer)}/api/peer-media/copy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      maxBytes: 64 * 1024,
+      body: JSON.stringify({ kind, filename, sha256 }),
+      signal,
+    }, peer)).catch(() => {
+    throw new ServerError(`${peerLabel(peer)} could not be reached`, { status: 409, code: 'PRIMARY_UNREACHABLE' });
+  });
+  const body = await readPeerBody(res, 'json', { maxBytes: 64 * 1024, idleTimeoutMs: 5000 }).catch(() => null);
+  if (res.ok && validHash(body?.sha256)) return body.sha256;
+  if (res.status === 404 && body?.code === 'MEDIA_NOT_HELD') return null;
+  if (res.status === 409 && body?.code === 'MEDIA_BUSY') throw mediaBusy();
+  if (res.status === 409 && body?.code === 'MEDIA_CONTENT_DIFFERS') throw differentBytes();
+  throw new ServerError(`${peerLabel(peer)} could not verify a copy (HTTP ${res.status}). Check its PortOS version and peer settings.`, {
+    status: 409, code: 'MEDIA_COPY_FAILED',
+  });
+}
+
+async function pullVerifiedCopy(peer, { kind, filename, sha256 }) {
+  const { pullVerifiedMediaCopy } = await import('./sharing/peerSyncAssets.js');
+  await pullVerifiedMediaCopy(peer, { kind, filename, sha256 });
+  const hash = await heldHash(kind, filename);
+  if (hash && hash !== sha256) throw differentBytes();
+  return hash;
+}
+
+/** Inspect local bytes or fill a missing file from the authenticated caller. */
+export async function executePeerMediaCopy(senderPeerId, { kind, filename, sha256 }) {
+  const { getPeers, peerMayDeleteMedia } = await import('./instances.js');
+  const sender = (await getPeers()).find((peer) => peer.id === senderPeerId);
+  if (!usablePeer(sender)) throw new ServerError('A paired peer credential is required', { status: 403, code: 'PEER_CREDENTIAL_REQUIRED' });
+  const { isTransferMediaFilename } = await import('./sharing/peerSyncAssets.js');
+  if (!KINDS.includes(kind) || !validName(filename) || !isTransferMediaFilename(kind, filename) || (sha256 !== undefined && !validHash(sha256))) {
+    throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (sha256 && (sender.syncEnabled === false ||
+    (sender.directions?.length && !sender.directions.includes('inbound')))) {
+    throw new ServerError('Incoming media transfers are turned off for this peer', { status: 403, code: 'PEER_SYNC_NOT_ADMITTED' });
+  }
+  if (sha256 && !peerMayDeleteMedia(sender)) {
+    throw new ServerError('Media delete is turned off for this peer', { status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
+  }
+
+  // Read-only verification is also called from a holder while the operator
+  // keeps its own file busy. Only the writing path acquires the busy guard.
+  const hash = sha256 ? await withFileBusy(kind, filename, mediaBusy, async () => {
+    const current = await heldHash(kind, filename) ?? await pullVerifiedCopy(sender, { kind, filename, sha256 });
+    if (current && current !== sha256) throw differentBytes();
+    return current;
+  }) : await heldHash(kind, filename);
+  if (!hash) throw new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
+  return { sha256: hash };
+}
+
+export async function listMediaPrimaryMachines() {
+  const { getPeers } = await import('./instances.js');
+  const { peerAllowsOutbound } = await import('./sharing/peerSyncShared.js');
+  const [self, peers] = await Promise.all([localInstanceId(), getPeers()]);
+  return [
+    ...(self ? [{ instanceId: self, name: 'This machine' }] : []),
+    ...peers.filter((peer) => usablePeer(peer) && peerAllowsOutbound(peer) && peer.instanceId !== self)
+      .map((peer) => ({ instanceId: peer.instanceId, name: peerLabel(peer) })),
+  ];
+}
+
+/** Snapshot the known holders once for a batch; each release still checks live bytes. */
+export async function prepareMediaConsolidation(instanceId) {
+  const holders = await collectHolders({ strict: true });
+  const { isTransferMediaFilename } = await import('./sharing/peerSyncAssets.js');
+  const { peerAllowsOutbound } = await import('./sharing/peerSyncShared.js');
+  const { self, registered, remote } = holders;
+  const primary = instanceId === self ? null : registered.get(instanceId);
+  if (instanceId !== self && (!usablePeer(primary) || !peerAllowsOutbound(primary))) {
+    throw new ServerError('Choose this machine or an enabled, paired peer', { status: 400, code: 'PRIMARY_NOT_PAIRED' });
+  }
+
+  return ({ kind, filename }) => {
+    if (!KINDS.includes(kind) || !validName(filename) || !isTransferMediaFilename(kind, filename)) {
+      throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    return withFileBusy(kind, filename, mediaBusy, async () => {
+      const entry = { kind, filename };
+      const known = remote.get(fileKey(kind, filename)) ?? new Set();
+      // A file can arrive since the last inventory. Verify online peers that
+      // have not reported it before assuming their copies need no cleanup.
+      const discovered = (await Promise.all([...registered.values()]
+        .filter((peer) => peer.instanceId !== instanceId && !known.has(peer.instanceId) && usablePeer(peer) && peer.status === 'online')
+        .map(async (peer) => await peerHoldsFile(peer, kind, filename) === 'held' ? peer.instanceId : null)))
+        .filter(Boolean);
+      let sha256 = primary ? await peerCopyHash(primary, entry) : await heldHash(kind, filename);
+      if (!sha256) {
+        let sourceHash = await heldHash(kind, filename);
+        let sourceError;
+        for (const id of [...known, ...discovered]) {
+          if (sourceHash) break;
+          const peer = registered.get(id);
+          if (id === instanceId || !usablePeer(peer) || peer.status === 'offline') continue;
+          try {
+            const hash = await peerCopyHash(peer, entry);
+            if (hash) sourceHash = await pullVerifiedCopy(peer, { ...entry, sha256: hash });
+          } catch (err) {
+            sourceError = err;
+          }
+        }
+        if (!sourceHash && sourceError) throw sourceError;
+        if (!sourceHash) throw new ServerError('No reachable machine supplied a verified copy', { status: 409, code: 'MEDIA_COPY_UNAVAILABLE' });
+        sha256 = primary ? await peerCopyHash(primary, { ...entry, sha256: sourceHash }) : sourceHash;
+        if (sha256 !== sourceHash) throw new ServerError('The selected machine could not store a verified copy', { status: 409, code: 'MEDIA_COPY_FAILED' });
+      }
+      return designatePrimary(kind, filename, instanceId, holders, sha256, discovered);
+    });
+  };
+}
+
 /**
  * Receiver side of `POST /api/peer-media/release`. `senderPeerId` is the
  * registry id authGate verified from the pair credential. Releasing a copy
@@ -484,7 +644,7 @@ async function designatePrimary(kind, filename, instanceId) {
  * the bytes (checked before anything is trashed); this machine keeps the row and
  * streams the item from the primary afterwards.
  */
-export async function executePeerMediaRelease(senderPeerId, { kind, filename, primaryInstanceId, primaryAt }) {
+export async function executePeerMediaRelease(senderPeerId, { kind, filename, primaryInstanceId, primaryAt, sha256 }) {
   const { getPeers, peerMayDeleteMedia } = await import('./instances.js');
   const peers = await getPeers();
   const sender = peers.find((p) => p.id === senderPeerId) ?? null;
@@ -496,12 +656,12 @@ export async function executePeerMediaRelease(senderPeerId, { kind, filename, pr
     throw new ServerError('Media delete is turned off for this peer', { status: 403, code: 'MEDIA_DELETE_FORBIDDEN' });
   }
   if (!KINDS.includes(kind) || !validName(filename)) throw new ServerError('Unknown media', { status: 400, code: 'VALIDATION_ERROR' });
-  const busy = () => new ServerError('This machine is changing that media; retry later', { status: 409, code: 'MEDIA_BUSY' });
-  return withFileBusy(kind, filename, busy, () => releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt }));
+  return withFileBusy(kind, filename, mediaBusy, () => releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt, sha256 }));
 }
 
-async function releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt }) {
+async function releaseForPeer(peers, sender, { kind, filename, primaryInstanceId, primaryAt, sha256 }) {
   if (!holdsHere(kind, filename)) throw new ServerError('This machine does not hold that media', { status: 404, code: 'MEDIA_NOT_HELD' });
+  if (sha256 && await heldHash(kind, filename) !== sha256) throw differentBytes();
   // A delayed (queued) release must not undo a newer designation recorded here.
   const recorded = await currentPrimary(kind, filename);
   if (recorded && recorded.instanceId !== primaryInstanceId && (parseTsMs(recorded.at) ?? -Infinity) >= parseTsMs(primaryAt)) {
@@ -510,6 +670,10 @@ async function releaseForPeer(peers, sender, { kind, filename, primaryInstanceId
   }
   if (primaryInstanceId === await localInstanceId()) {
     // This machine is the primary: it keeps its copy.
+    if (sha256) {
+      const { unmarkHosted } = await import('./peerHostedMedia.js');
+      await unmarkHosted(kind, filename);
+    }
     await setPrimaryOnRow(kind, filename, primaryInstanceId, primaryAt);
     return { ok: true, released: false };
   }
@@ -517,13 +681,17 @@ async function releaseForPeer(peers, sender, { kind, filename, primaryInstanceId
   if (!usablePeer(primary)) {
     throw new ServerError('The primary is not a paired peer of this machine, so its copy could not be streamed from here', { status: 409, code: 'PRIMARY_NOT_PAIRED' });
   }
-  const verdict = await peerHoldsFile(primary, kind, filename);
-  if (verdict !== 'held') {
-    throw new ServerError(`${peerLabel(primary)} ${verdict === 'unreachable' ? 'is unreachable from here' : 'does not hold this media'}; the copy here was kept`, {
-      status: 409, code: verdict === 'unreachable' ? 'PRIMARY_UNREACHABLE' : 'PRIMARY_NOT_HOLDING',
-    });
+  if (sha256) {
+    if (await peerCopyHash(primary, { kind, filename }) !== sha256) throw differentBytes();
+  } else {
+    const verdict = await peerHoldsFile(primary, kind, filename);
+    if (verdict !== 'held') {
+      throw new ServerError(`${peerLabel(primary)} ${verdict === 'unreachable' ? 'is unreachable from here' : 'does not hold this media'}; the copy here was kept`, {
+        status: 409, code: verdict === 'unreachable' ? 'PRIMARY_UNREACHABLE' : 'PRIMARY_NOT_HOLDING',
+      });
+    }
   }
-  await releaseLocalCopy(kind, filename, primary, primaryAt);
+  await releaseLocalCopy(kind, filename, primary, primaryAt, sha256);
   await notePeerHolding(primary.instanceId, kind, filename, true);
   console.log(`🗂️ ${kind} ${filename} released at the request of ${peerLabel(sender)}`);
   return { ok: true, released: true };
@@ -571,24 +739,9 @@ export async function drainMediaReleases(peer) {
     const mine = (await readStore()).releases.filter((e) => e.peerId === peer.id);
     if (!usablePeer(current) || mine.length === 0) return 0;
     for (const entry of mine) {
-      const sent = await sendReleaseCommand(current, entry);
-      if (sent.outcome === 'unreachable') {
-        console.log(`🔌 Queued release of ${entry.kind} ${entry.filename} still waiting on ${peerLabel(current)}`);
-        continue;
-      }
-      await updateStore((store) => {
-        const next = store.releases.filter((e) => !(e.peerId === entry.peerId && e.kind === entry.kind && e.filename === entry.filename && e.queuedAt === entry.queuedAt));
-        const changed = next.length !== store.releases.length;
-        store.releases = next;
-        return changed;
-      });
-      if (sent.outcome === 'ok' || sent.outcome === 'not-held') {
-        await notePeerHolding(current.instanceId, entry.kind, entry.filename, false);
-        done++;
-        console.log(`🗂️ Queued release of ${entry.kind} ${entry.filename} completed on ${peerLabel(current)}`);
-      } else {
-        console.log(`🚫 ${peerLabel(current)} refused queued release of ${entry.kind} ${entry.filename}: ${sent.outcome}${sent.detail ? ` ${sent.detail}` : ''}`);
-      }
+      if (busyFiles.has(fileKey(entry.kind, entry.filename))) continue;
+      const released = await withFileBusy(entry.kind, entry.filename, mediaBusy, () => drainRelease(current, entry));
+      if (released) done++;
     }
     emitMediaHoldersChanged();
   } catch (err) {
@@ -597,6 +750,31 @@ export async function drainMediaReleases(peer) {
     draining.delete(peer.id);
   }
   return done;
+}
+
+async function drainRelease(peer, entry) {
+  const matches = (other) => other.peerId === entry.peerId && other.kind === entry.kind
+    && other.filename === entry.filename && other.queuedAt === entry.queuedAt;
+  if (!(await readStore()).releases.some(matches)) return false;
+
+  const sent = await sendReleaseCommand(peer, entry);
+  if (sent.outcome === 'unreachable') {
+    console.log(`🔌 Queued release of ${entry.kind} ${entry.filename} still waiting on ${peerLabel(peer)}`);
+    return false;
+  }
+  await updateStore((store) => {
+    const next = store.releases.filter((other) => !matches(other));
+    if (next.length === store.releases.length) return false;
+    store.releases = next;
+    return true;
+  });
+  if (sent.outcome === 'ok' || sent.outcome === 'not-held') {
+    await notePeerHolding(peer.instanceId, entry.kind, entry.filename, false);
+    console.log(`🗂️ Queued release of ${entry.kind} ${entry.filename} completed on ${peerLabel(peer)}`);
+    return true;
+  }
+  console.log(`🚫 ${peerLabel(peer)} refused queued release of ${entry.kind} ${entry.filename}: ${sent.outcome}${sent.detail ? ` ${sent.detail}` : ''}`);
+  return false;
 }
 
 let disarm = null;

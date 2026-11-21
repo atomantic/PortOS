@@ -4,7 +4,13 @@ const api = vi.hoisted(() => ({
   listSignalConversations: vi.fn(), getSignalBlocklist: vi.fn(), setSignalBlocklist: vi.fn(),
   purgeSignalConversation: vi.fn(), blockSignalConversation: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSignal.js', () => ({
+  listSignalConversations: api.listSignalConversations,
+  getSignalBlocklist: api.getSignalBlocklist,
+  setSignalBlocklist: api.setSignalBlocklist,
+  purgeSignalConversation: api.purgeSignalConversation,
+  blockSignalConversation: api.blockSignalConversation,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn() } }));
 import SignalManager from './SignalManager';
 beforeEach(() => {

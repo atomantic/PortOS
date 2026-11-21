@@ -8,7 +8,7 @@ vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataR
 vi.mock('./productionReview.js', async load => ({ ...await load(), assertProductionApproval: vi.fn() }));
 vi.mock('../../lib/ffmpeg.js', async load => ({ ...await load(), generateThumbnail: vi.fn(async () => 'thumb.jpg') }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'test-instance') }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()), loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
 // History is synthetic here; media-retirement ownership is covered by renderCleanup.test.js.
 vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () => ({})) }));
 vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
@@ -26,7 +26,7 @@ const projects = await import('./projects.js');
 const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { encodeEidoverseComposition } = await import('./eidoverseRender.js');
-const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { mutateVideoHistory } = await import('../videoGen/history.js');
 const { appendStatsOutro } = await import('./statsOutro.js');
 const { musicVideoEvents } = await import('./events.js');
 afterEach(waitForMusicVideoRenderDrain);

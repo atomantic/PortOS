@@ -5,7 +5,7 @@ import { resolveTestPython } from '../server/lib/testHelper.js';
 import { normalizeModelAbuseGuardResult } from '../server/lib/modelAbuseGuard.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./run_prompt_guard.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/run_prompt_guard.py', import.meta.url));
 
 describe.skipIf(!python)('Prompt Guard Python wire contract', () => {
   it('classifies every token in overlapping batched windows without the broken overflow API', () => {

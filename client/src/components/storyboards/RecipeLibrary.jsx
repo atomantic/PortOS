@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { BookmarkPlus, FolderOpen, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
-import { deleteStoryboardRecipe, listStoryboardRecipes, saveStoryboardRecipe } from '../../services/api';
+import { deleteStoryboardRecipe, listStoryboardRecipes, saveStoryboardRecipe } from '../../services/apiStoryboards.js';
 import { RECIPE_LIMITS } from '../../../../server/lib/storyboardRecipe.js';
 
 const iconActionButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';

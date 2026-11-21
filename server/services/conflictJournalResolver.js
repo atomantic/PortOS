@@ -13,7 +13,7 @@
  */
 
 import { existsSync } from 'fs';
-import { ABSENT_MEANS_FALSE_FIELDS, conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
+import { ABSENT_MEANS_FALSE_FIELDS, conflictJournalStore, RESTORABLE_FIELDS, WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND } from '../lib/conflictJournal.js';
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
@@ -21,12 +21,12 @@ import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues
 import { updateProject } from './creativeDirector/local.js';
 import { updateProject as updateMusicVideoProject } from './musicVideo/projects.js';
 import { restoreBoard } from './moodBoard/index.js';
-import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
+import { updateWork, saveDraftBody, restoreFolder, restoreExercise } from './writersRoom/local.js';
 import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
 import { restoreCommission } from './creativeCommissions/store.js';
 import { restoreDeck } from './decks.js';
 import { restoreStoryboard } from './storyboards/index.js';
-import { restoreLoom } from './fableLoom/index.js';
+import { restoreLoom } from './fableLoom/records.js';
 import { codedError } from '../lib/codedError.js';
 import { isSafeRecordId } from '../lib/zodCompat.js';
 
@@ -112,6 +112,12 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     const { restoreWorkBible, BIBLE_CONFLICT_KINDS } = await import('./writersRoom/bibleSync.js');
     const bibleKind = Object.keys(BIBLE_CONFLICT_KINDS).find((key) => BIBLE_CONFLICT_KINDS[key] === kind);
     await restoreWorkBible(recordId, bibleKind, patch).catch(translateGone);
+  } else if (kind === WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND) {
+    const [workId, draftId, ...rest] = recordId.split('/');
+    if (!workId || !draftId || rest.length > 0 || typeof patch.body !== 'string') {
+      throw codedError('Invalid Writers Room draft-body conflict', ERR_VALIDATION);
+    }
+    await saveDraftBody(workId, patch.body, { draftId }).catch(translateGone);
   } else if (kind === 'writersRoomWork') {
     // updateWork applies the RESTORABLE_FIELDS set through its allow-list and liveMode partial merge.
     // Draft-version structure and prose bodies are file-primary + lineage-managed, so not restorable here.

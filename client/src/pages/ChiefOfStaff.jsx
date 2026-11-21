@@ -1,7 +1,7 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useEffect, lazy, Suspense } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router';
+import { Link, useLocation, useParams, useNavigate, useSearchParams } from 'react-router';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useValidTab } from '../hooks/useValidTab';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -48,18 +48,37 @@ const HealthTab = lazy(() => import('../components/cos/tabs/HealthTab'));
 const ConfigTab = lazy(() => import('../components/cos/tabs/ConfigTab'));
 const BriefingTab = lazy(() => import('../components/cos/tabs/BriefingTab'));
 
+const LOCAL_VIEWS = {
+  briefing: ['digest'],
+  tasks: ['jobs', 'gsd'],
+  runs: ['run-events'],
+  schedule: ['workflow'],
+  memory: ['learning'],
+  config: ['health'],
+};
+const parentByView = new Map(Object.entries(LOCAL_VIEWS)
+  .flatMap(([parent, views]) => views.map((view) => [view, parent])));
+const primaryViewLabels = { runs: 'History', schedule: 'List', briefing: 'Daily' };
+
 function TabLoadFallback({ label }) {
   return <div className="flex items-center justify-center py-12"><BrailleSpinner text={`Loading ${label}`} /></div>;
 }
 
 export default function ChiefOfStaff() {
   const { tab } = useParams();
+  const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
   const selectedTask = searchParams.get('task') || undefined;
   const navigate = useNavigate();
-  const activeTab = useValidTab(TABS, 'tasks');
+  const routeTab = useValidTab(TABS, 'tasks');
+  const requestedView = TABS.find(({ to }) => to === pathname.replace(/\/$/, ''))?.id;
+  const activeTab = parentByView.get(requestedView) === routeTab ? requestedView : routeTab;
+  const primaryTab = parentByView.get(activeTab) || activeTab;
   const { isFeatureEnabled } = useInstanceFeatures();
   const visibleTabs = filterNavByFeatures(TABS, isFeatureEnabled);
+  const primaryTabs = visibleTabs.filter(({ id }) => !parentByView.has(id));
+  const localViews = visibleTabs.filter(({ id }) => parentByView.get(id) === primaryTab);
+  const primaryView = primaryTabs.find(({ id }) => id === primaryTab);
   const cos = useCosPageData({ activeTab, selectedTask });
   const {
     status, loading, agentState, insights, tasks, agents, agentsLoaded, agentsError, liveOutputs,
@@ -77,18 +96,18 @@ export default function ChiefOfStaff() {
   // Verified animated records for the avatar selector and rigged playback (#5894).
   const { records: riggedAvatars } = useAvatarCapabilities();
 
-  // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
+  // Redirect unknown tab IDs to the default tab — `routeTab !== tab` only
   // when the param failed validation and fell back.
   useEffect(() => {
-    if (tab && tab !== activeTab) {
+    if (tab && tab !== routeTab) {
       navigate('/cos/tasks', { replace: true });
     }
-  }, [tab, activeTab, navigate]);
+  }, [tab, routeTab, navigate]);
 
   const navigation = (
     <TabPills
-      tabs={visibleTabs}
-      activeTab={activeTab}
+      tabs={primaryTabs}
+      activeTab={primaryTab}
       onChange={(id) => navigate(`/cos/${id}`)}
       mobileCompact
       ariaLabel="Chief of Staff sections"
@@ -164,113 +183,107 @@ export default function ChiefOfStaff() {
           <CosStatsCards cos={cos} variant="bar" />
         </div>
 
-        {/* Tab Content */}
-        {activeTab === 'briefing' && (
-          <div role="tabpanel" id="tabpanel-briefing" aria-labelledby="tab-briefing">
+        <div
+          role="tabpanel"
+          id={`tabpanel-${primaryTab}`}
+          aria-labelledby={`tab-${primaryTab}`}
+          className={activeTab === 'mind' ? 'flex min-h-0 flex-col xl:flex-1' : undefined}
+        >
+          {localViews.length > 0 && (
+            <nav aria-label={`${primaryView.label} views`} className="mb-3 flex flex-wrap gap-2">
+              {[primaryView, ...localViews].map(({ id, to, label }) => (
+                <Link
+                  key={id}
+                  to={to}
+                  aria-current={activeTab === id ? 'page' : undefined}
+                  className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-sm ${activeTab === id
+                    ? 'border-port-accent/40 bg-port-accent/10 text-port-accent'
+                    : 'border-port-border text-gray-400 hover:text-white'}`}
+                >
+                  {id === primaryTab ? primaryViewLabels[id] || label : label}
+                </Link>
+              ))}
+            </nav>
+          )}
+          {activeTab === 'briefing' && (
             <Suspense fallback={<TabLoadFallback label="briefing" />}>
               <BriefingTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'tasks' && (
-          <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
-            <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
-            <Suspense fallback={<TabLoadFallback label="tasks" />}>
-              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} agentsLoaded={agentsLoaded} agentsError={agentsError} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
-            </Suspense>
-          </div>
-        )}
-        {activeTab === 'agents' && (
-          <div role="tabpanel" id="tabpanel-agents" aria-labelledby="tab-agents">
+          )}
+          {activeTab === 'tasks' && (
+            <>
+              <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
+              <Suspense fallback={<TabLoadFallback label="tasks" />}>
+                <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} agentsLoaded={agentsLoaded} agentsError={agentsError} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              </Suspense>
+            </>
+          )}
+          {activeTab === 'agents' && (
             <Suspense fallback={<TabLoadFallback label="agents" />}>
               <AgentsTab agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'jobs' && (
-          <div role="tabpanel" id="tabpanel-jobs" aria-labelledby="tab-jobs">
+          )}
+          {activeTab === 'jobs' && (
             <Suspense fallback={<TabLoadFallback label="jobs" />}>
               <JobsTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'runs' && (
-          <div role="tabpanel" id="tabpanel-runs" aria-labelledby="tab-runs">
+          )}
+          {activeTab === 'runs' && (
             <Suspense fallback={<TabLoadFallback label="runs" />}>
               <RunsTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'run-events' && (
-          <div role="tabpanel" id="tabpanel-run-events" aria-labelledby="tab-run-events">
+          )}
+          {activeTab === 'run-events' && (
             <Suspense fallback={<TabLoadFallback label="run events" />}>
               <RunEventsTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'mind' && (
-          <div role="tabpanel" id="tabpanel-mind" aria-labelledby="tab-mind" className="flex min-h-0 flex-col xl:flex-1">
+          )}
+          {activeTab === 'mind' && (
             <Suspense fallback={<TabLoadFallback label="mind" />}>
               <MindTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'schedule' && (
-          <div role="tabpanel" id="tabpanel-schedule" aria-labelledby="tab-schedule">
+          )}
+          {activeTab === 'schedule' && (
             <Suspense fallback={<TabLoadFallback label="schedule" />}>
               <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} providersLoaded={providersLoaded} daemonRunning={status?.running} />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'workflow' && (
-          <div role="tabpanel" id="tabpanel-workflow" aria-labelledby="tab-workflow">
+          )}
+          {activeTab === 'workflow' && (
             <Suspense fallback={<TabLoadFallback label="workflow" />}>
               <WorkflowTab apps={apps} providers={providers} providersLoaded={providersLoaded} />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'digest' && (
-          <div role="tabpanel" id="tabpanel-digest" aria-labelledby="tab-digest">
+          )}
+          {activeTab === 'digest' && (
             <Suspense fallback={<TabLoadFallback label="digest" />}>
               <DigestTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'gsd' && (
-          <div role="tabpanel" id="tabpanel-gsd" aria-labelledby="tab-gsd">
+          )}
+          {activeTab === 'gsd' && (
             <Suspense fallback={<TabLoadFallback label="GSD" />}>
               <GsdTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'learning' && (
-          <div role="tabpanel" id="tabpanel-learning" aria-labelledby="tab-learning">
+          )}
+          {activeTab === 'learning' && (
             <Suspense fallback={<TabLoadFallback label="learning" />}>
               <LearningTab />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'memory' && (
-          <div role="tabpanel" id="tabpanel-memory" aria-labelledby="tab-memory">
+          )}
+          {activeTab === 'memory' && (
             <Suspense fallback={<TabLoadFallback label="memory" />}>
               <MemoryTab apps={apps} />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'health' && (
-          <div role="tabpanel" id="tabpanel-health" aria-labelledby="tab-health">
+          )}
+          {activeTab === 'health' && (
             <Suspense fallback={<TabLoadFallback label="health" />}>
               <HealthTab health={health} healthLoading={!healthLoaded} healthError={healthError} onCheck={handleHealthCheck} />
             </Suspense>
-          </div>
-        )}
-        {activeTab === 'config' && (
-          <div role="tabpanel" id="tabpanel-config" aria-labelledby="tab-config">
+          )}
+          {activeTab === 'config' && (
             <Suspense fallback={<TabLoadFallback label="configuration" />}>
               <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} riggedAvatars={riggedAvatars} />
             </Suspense>
-          </div>
-        )}
+          )}
+        </div>
         </div>
       </div>
     </div>

@@ -12,7 +12,13 @@ import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
 import { formatBytes, recommendedRamGb, timeUntil } from '../utils/formatters';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities';
-import { compareLocalLlmModels, getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import {
+  compareLocalLlmModels,
+  getLoadedLlmModels,
+  getLocalLlmCatalog,
+  getLocalLlmStatus,
+  streamLocalLlmTest,
+} from '../services/apiLocalLlm.js';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
 const LOADED_EVENTS = ['loaded-models:changed'];

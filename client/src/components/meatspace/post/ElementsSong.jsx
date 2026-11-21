@@ -1,7 +1,12 @@
 import { shuffle } from '../../../../../server/lib/arrayUtils.js';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, RotateCw, ShieldCheck } from 'lucide-react';
-import { submitMemoryPractice, getMemoryMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
+import {
+  submitMemoryPractice,
+  getMemoryMastery,
+  getMemoryItem,
+  attestMemoryMastery,
+} from '../../../services/apiMeatspace.js';
 import { RapidReaderModal } from '../../RapidReader';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import PostCompletionActions from './PostCompletionActions';

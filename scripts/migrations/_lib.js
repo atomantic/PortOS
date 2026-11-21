@@ -29,7 +29,7 @@
  *   9. Plain document reads — `readJsonOrNull` is the "absent or unparseable
  *      → null, anything else throws" reader that thirty-odd applied migrations
  *      each declared as a local `readJson`. Those stay frozen;
- *      `migrationConventions.guard.test.js` stops a new migration from
+ *      `server/test/guards/repo/migrationConventions.test.js` stops a new migration from
  *      declaring its own copy of any helper exported here.
  *
  * Families 5, 7, and 7b all target `data/providers.json` and share its
@@ -385,7 +385,7 @@ export const md5 = (str) => {
  * Both sides resolve under `prompts/stages/`: 003 and 005 are the only
  * callers left. Every migration that used this for the swap alone was deleted
  * in #16827, because `reconcileShippedPrompts` makes that swap after each full
- * pass; a new one is refused by `shippedPromptHashes.guard.test.js`.
+ * pass; a new one is refused by `server/test/guards/repo/shippedPromptHashes.test.js`.
  *
  * "Current" is the live reference body, not the migration's declared
  * `current` hash (#16090): a later template edit would otherwise make this

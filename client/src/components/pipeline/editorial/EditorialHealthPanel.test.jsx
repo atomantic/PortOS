@@ -5,7 +5,7 @@ import EditorialHealthPanel from './EditorialHealthPanel';
 
 const getEditorialHealth = vi.fn();
 const setEditorialReadinessGate = vi.fn();
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   getEditorialHealth: (...a) => getEditorialHealth(...a),
   setEditorialReadinessGate: (...a) => setEditorialReadinessGate(...a),
 }));

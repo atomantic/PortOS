@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { listImageGalleryPage } from '../services/api';
+import { listImageGalleryPage } from '../services/apiImageVideo.js';
 
 const HIDDEN_PAGE_SIZE = 60;
 

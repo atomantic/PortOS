@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import FilmLookControls from '../media/FilmLookControls.jsx';
@@ -69,7 +70,7 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
           {FILM_LOOK_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
           {savedLooks.length > 0 && (
             <optgroup label="Your looks">
-              {savedLooks.map((preset) => <option key={preset.id} value={`saved:${preset.id}`}>{preset.label}</option>)}
+              {sortByLabel(savedLooks, (preset) => preset.label).map((preset) => <option key={preset.id} value={`saved:${preset.id}`}>{preset.label}</option>)}
             </optgroup>
           )}
         </select>

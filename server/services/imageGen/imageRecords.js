@@ -13,18 +13,18 @@ import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
-import { stripImageSidecarLocalFields, imageLiveStamp } from '../../lib/assetHash.js';
-import { isSafeFilename } from '../../lib/pathSafety.js';
+import { stripImageSidecarLocalFields, imageLiveStamp, sidecarPathForImage } from '../../lib/assetHash.js';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../../lib/pathSafety.js';
 import { isTombstoned } from '../../lib/tombstones.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { mergeMediaTombstones, listMediaTombstones, clearMediaTombstone } from '../mediaTombstones.js';
 
 // The check assertGalleryFilename applies, as a predicate for peer-supplied keys.
-const isGalleryName = (filename) => isSafeFilename(filename, ['.png']);
+const isGalleryName = (filename) => isSafeFilename(filename, GALLERY_IMAGE_EXTENSIONS);
 
 const sidecarPaths = (filename) => [
-  join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+  sidecarPathForImage(filename),
   join(PATHS.images, `${filename}.metadata.json`),
 ];
 
@@ -35,6 +35,17 @@ async function readSidecar(filename) {
     return isPlainObject(parsed) ? parsed : {};
   }
   return null;
+}
+
+/** Read the primary designation without consulting the image bytes or origin. */
+export async function readImagePrimary(filename) {
+  if (!isGalleryName(filename)) return null;
+  const sidecar = await readSidecar(filename);
+  if (!isNonBlankStr(sidecar?.primaryInstanceId)) return null;
+  return {
+    primaryInstanceId: sidecar.primaryInstanceId,
+    primaryAt: isNonBlankStr(sidecar.primaryAt) ? sidecar.primaryAt : null,
+  };
 }
 
 /**
@@ -112,9 +123,8 @@ export async function withLocalImageOrigin(meta) {
  * Call inside the writer's backup lease.
  */
 export async function writeLocalImageSidecarIfMissing(filename, { replace = false, preserveMetadata = false } = {}) {
-  if (!isSafeFilename(filename, ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])) return false;
-  const stem = filename.replace(/\.[^.]+$/, '');
-  const paths = [join(PATHS.images, `${stem}.metadata.json`), join(PATHS.images, `${filename}.metadata.json`)];
+  if (!isGalleryName(filename)) return false;
+  const paths = sidecarPaths(filename);
   const existing = paths.filter((path) => existsSync(path));
   if (existing.length && !replace) return false;
   const metadata = preserveMetadata && existing.length ? await readJSONFile(existing[0], {}, { strict: true }) : {};

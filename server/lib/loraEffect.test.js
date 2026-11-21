@@ -248,7 +248,7 @@ describe('formatLoraEffect', () => {
 
 describe('loraEffect — JS vs the Python probe', () => {
   const probeSource = () => readFileSync(
-    join(import.meta.dirname, '..', '..', 'scripts', 'lora_effect_probe.py'),
+    join(import.meta.dirname, '..', '..', 'scripts', 'ml', 'lora_effect_probe.py'),
     'utf-8',
   );
 
@@ -257,7 +257,7 @@ describe('loraEffect — JS vs the Python probe', () => {
     // reads as stale, so the sidecar cache stops working and each render
     // re-reads the whole adapter with nothing logged anywhere.
     const match = probeSource().match(/^PROBE_VERSION = (\d+)$/m);
-    expect(match, 'scripts/lora_effect_probe.py must declare PROBE_VERSION').not.toBeNull();
+    expect(match, 'scripts/ml/lora_effect_probe.py must declare PROBE_VERSION').not.toBeNull();
     expect(Number(match[1])).toBe(LORA_EFFECT_PROBE_VERSION);
   });
 

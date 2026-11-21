@@ -26,7 +26,6 @@ export const PORTS = Object.freeze({
   CDP: 5556,        // Chrome DevTools Protocol (browser automation)
   CDP_HEALTH: 5557, // Browser health check endpoint
   COS: 5558,        // Chief of Staff agent runner (portos-cos)
-  AUTOFIXER: 5559,  // Autofixer API
   AUTOFIXER_UI: 5560, // Autofixer UI
   POSTGRES_DOCKER: 5561, // PostgreSQL Docker container (host port mapping)
   WHISPER: 5562,    // Loopback whisper.cpp speech-to-text server

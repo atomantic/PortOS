@@ -340,10 +340,10 @@ remediation text; the review never mutates canon or promotes a replacement
 asset.
 
 The character/environment canon-reference design and rationale is specified in
-[`docs/plans/2026-08-29-fableloom-visual-continuity.md`](../plans/2026-08-29-fableloom-visual-continuity.md).
+[`docs/plans/archive/2026-08-29-fableloom-visual-continuity.md`](../plans/archive/2026-08-29-fableloom-visual-continuity.md).
 The character voice, production provenance, playback-asset, QR join, and
 two-device hosted-mode contracts are specified in
-[`docs/plans/2026-08-29-fableloom-character-voice-hosted-production.md`](../plans/2026-08-29-fableloom-character-voice-hosted-production.md).
+[`docs/plans/archive/2026-08-29-fableloom-character-voice-hosted-production.md`](../plans/archive/2026-08-29-fableloom-character-voice-hosted-production.md).
 Implementation is tracked under
 [epic #5377](https://github.com/atomantic/PortOS/issues/5377).
 

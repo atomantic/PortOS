@@ -4,15 +4,19 @@
  * Use when: Show actionable agent-run completion feedback.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';
 import { getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
-import OutputBlocks from '../components/cos/OutputBlocks';
+import { lazyWithReload } from '../utils/lazyWithReload';
 import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
 import { agentIssueLinkifier } from '../lib/issueRefs';
+
+// OutputBlocks pulls in MarkdownOutput; load it only when a user expands an
+// agent completion toast so the cold-load shell stays free of markdown rendering.
+const OutputBlocks = lazyWithReload(() => import('../components/cos/OutputBlocks'));
 
 const AUTO_DISMISS_MS = 15000;
 
@@ -102,7 +106,9 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
               Loading output...
             </div>
           ) : output.length > 0 ? (
-            <OutputBlocks output={output} linkifyText={agentIssueLinkifier(agentData)} />
+            <Suspense fallback={<div className="flex items-center gap-2 text-gray-500 text-xs"><Loader2 size={12} className="animate-spin" />Loading output...</div>}>
+              <OutputBlocks output={output} linkifyText={agentIssueLinkifier(agentData)} />
+            </Suspense>
           ) : (
             <div className="text-xs text-gray-500">No output captured</div>
           )}

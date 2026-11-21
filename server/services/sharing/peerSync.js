@@ -41,7 +41,7 @@ import { listTracks } from '../tracks/index.js';
 import { listProjects } from '../creativeDirector/local.js';
 import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.js';
 import { listBoards } from '../moodBoard/index.js';
-import { listLooms } from '../fableLoom/index.js';
+import { listLooms } from '../fableLoom/records.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listDecksForSync } from '../decks.js';
@@ -729,16 +729,17 @@ export async function forcePushRecord(peerId, recordKind, recordId) {
  * peer-facing `GET /api/peer-sync/record` endpoint so a peer can PULL this
  * record (and its assets) from us. Returns null when the record doesn't exist
  * locally. Same shape `pushRecordToPeer` sends, so the puller reuses
- * `applyIncomingPush` verbatim.
+ * `applyIncomingPush` verbatim. The opt-in collection integrity response
+ * instead reports files for comparison and is never passed to the receiver.
  */
-export async function getRecordPayloadForPeer(recordKind, recordId) {
+export async function getRecordPayloadForPeer(recordKind, recordId, options) {
   // Mirror pushRecordToPeer's identity guard: if our self-identity can't be read
   // or isn't initialized yet, do NOT emit a payload — a missing/UNKNOWN
   // sourceInstanceId would 500 here or poison the puller (applyIncomingPush
   // rejects sourceInstanceId='unknown'). Return null → the route 404s.
   const instanceId = await getInstanceId().catch(() => null);
   if (!isNonBlankStr(instanceId) || instanceId === UNKNOWN_INSTANCE_ID) return null;
-  return buildPushPayload({ recordKind, recordId }, instanceId);
+  return buildPushPayload({ recordKind, recordId }, instanceId, options);
 }
 
 /**

@@ -74,6 +74,10 @@ export function emitMediaHoldersChanged() {
   safeEmit('media-holders-changed', {});
 }
 
+export function emitCollectionPrimaryChanged(id) {
+  safeEmit('collection-primary-changed', { id });
+}
+
 async function localInstanceId() {
   const identity = await import('./instanceIdentity.js');
   const id = await identity.getInstanceId().catch(() => null);

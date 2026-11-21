@@ -2,16 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiApps.js', () => ({
   getAppAgents: vi.fn(),
-  getProviders: vi.fn(),
   getApps: vi.fn(),
+}));
+vi.mock('../../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 
 vi.mock('../../cos/TaskAddForm', () => ({ default: () => <div data-testid="task-add-form" /> }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => <div>Loading agent history</div> }));
 
-import * as api from '../../../services/api';
+import { getAppAgents, getApps } from '../../../services/apiApps.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import TasksTab from './TasksTab';
 
 const AGENT = {
@@ -35,12 +38,12 @@ function renderTab() {
 
 describe('TasksTab layout', () => {
   beforeEach(() => {
-    api.getAppAgents.mockResolvedValue({
+    getAppAgents.mockResolvedValue({
       agents: [AGENT],
       summary: { total: 1, running: 0, succeeded: 1 },
     });
-    api.getProviders.mockResolvedValue({ providers: [] });
-    api.getApps.mockResolvedValue([]);
+    getProviders.mockResolvedValue({ providers: [] });
+    getApps.mockResolvedValue([]);
   });
 
   it('lets the recent-task table use the full desktop width instead of clipping Duration and When', async () => {
@@ -61,12 +64,12 @@ describe('TasksTab layout', () => {
 
 describe('TasksTab read failure', () => {
   beforeEach(() => {
-    api.getProviders.mockResolvedValue({ providers: [] });
-    api.getApps.mockResolvedValue([]);
+    getProviders.mockResolvedValue({ providers: [] });
+    getApps.mockResolvedValue([]);
   });
 
   it('shows an error row with Retry instead of zero stats and the empty copy, then recovers', async () => {
-    api.getAppAgents.mockRejectedValueOnce(new Error('boom'));
+    getAppAgents.mockRejectedValueOnce(new Error('boom'));
     renderTab();
 
     const alert = await screen.findByRole('alert');
@@ -74,7 +77,7 @@ describe('TasksTab read failure', () => {
     expect(screen.queryByText('Success Rate')).toBeNull();
     expect(screen.queryByText(/No agent tasks found/)).toBeNull();
 
-    api.getAppAgents.mockResolvedValue({ agents: [AGENT], summary: { total: 1 } });
+    getAppAgents.mockResolvedValue({ agents: [AGENT], summary: { total: 1 } });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await screen.findByRole('table');
     expect(screen.getByText('Success Rate')).toBeInTheDocument();
@@ -82,7 +85,7 @@ describe('TasksTab read failure', () => {
   });
 
   it('renders the real-empty copy when the read succeeds with no agents', async () => {
-    api.getAppAgents.mockResolvedValue({ agents: [], summary: {} });
+    getAppAgents.mockResolvedValue({ agents: [], summary: {} });
     renderTab();
     expect(await screen.findByText(/No agent tasks found/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();

@@ -55,6 +55,8 @@ const METADATA_SAMPLES = {
   openPR: true,
   prCompletion: PR_COMPLETIONS.LEAVE_OPEN,
   useAutoMerge: true,
+  autoApprovePR: true,
+  adminMerge: true,
   simplify: true,
   worktreeChangesExpected: false,
   reviewLoop: true,

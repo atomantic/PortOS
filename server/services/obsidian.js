@@ -7,11 +7,10 @@
  */
 
 import { homedir } from 'os';
-import { readdir, stat } from 'fs/promises';
-import { existsSync, realpathSync } from 'fs';
+import { readdir, stat, realpath } from 'fs/promises';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, readJSONFile, PATHS, writeFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, pathExists, PATHS, writeFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isSuspectedDataless, materializeAndWait, readIfMaterialized } from '../lib/icloudFile.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
@@ -42,7 +41,7 @@ async function saveVaults(vaults) {
 export async function addVault({ name, path }) {
   const vaults = await getVaults();
 
-  if (!existsSync(path)) {
+  if (!await pathExists(path)) {
     return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${path}` };
   }
 
@@ -81,7 +80,7 @@ export async function updateVault(id, updates) {
 
   if (updates.name) vault.name = updates.name;
   if (updates.path) {
-    if (!existsSync(updates.path)) {
+    if (!await pathExists(updates.path)) {
       return { error: 'PATH_NOT_FOUND', message: `Directory not found: ${updates.path}` };
     }
     vault.path = updates.path;
@@ -97,24 +96,16 @@ export async function updateVault(id, updates) {
 // prefix-match tricks like `/vault-evil`, or absolute/UNC inputs). When the
 // target doesn't exist yet (createNote), realpath the parent directory so a
 // new file path can still be validated.
-function resolveVaultPath(vault, notePath) {
+async function resolveVaultPath(vault, notePath) {
   const rootResolved = resolve(vault.path);
-  const rootReal = (() => {
-    try { return realpathSync(rootResolved); } catch { return rootResolved; }
-  })();
+  const rootReal = await realpath(rootResolved).catch(() => rootResolved);
   const fullPath = resolve(join(vault.path, notePath));
-  const real = (() => {
-    try { return realpathSync(fullPath); } catch {
-      // Non-existent target: realpath the parent (which MUST already exist
-      // for the path to be meaningful) and re-append the basename.
-      try {
-        const parentReal = realpathSync(dirname(fullPath));
-        return join(parentReal, basename(fullPath));
-      } catch {
-        return fullPath;
-      }
-    }
-  })();
+  const real = await realpath(fullPath).catch(async () => {
+    // Non-existent target: realpath the parent (which MUST already exist
+    // for the path to be meaningful) and re-append the basename.
+    const parentReal = await realpath(dirname(fullPath)).catch(() => null);
+    return parentReal === null ? fullPath : join(parentReal, basename(fullPath));
+  });
   const rel = relative(rootReal, real);
   if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return real;
   return null;
@@ -141,9 +132,7 @@ function isWithinVaultLexically(vault, notePath) {
 // Returns false (creating nothing further) the moment a segment escapes.
 async function ensureVaultDir(vault, dirPath) {
   const rootResolved = resolve(vault.path);
-  const rootReal = (() => {
-    try { return realpathSync(rootResolved); } catch { return rootResolved; }
-  })();
+  const rootReal = await realpath(rootResolved).catch(() => rootResolved);
   const relDir = relative(rootResolved, resolve(dirPath));
   if (relDir === '') return true; // the vault root itself always exists
   if (relDir.startsWith('..') || isAbsolute(relDir)) return false;
@@ -151,10 +140,8 @@ async function ensureVaultDir(vault, dirPath) {
   let current = rootResolved;
   for (const segment of relDir.split(/[\\/]+/).filter(Boolean)) {
     current = join(current, segment);
-    if (existsSync(current)) {
-      const real = (() => {
-        try { return realpathSync(current); } catch { return current; }
-      })();
+    if (await pathExists(current)) {
+      const real = await realpath(current).catch(() => current);
       const rel = relative(rootReal, real);
       if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) return false;
     } else {
@@ -170,14 +157,14 @@ export async function getVaultById(id) {
 }
 
 export async function detectVaults(baseDir = DEFAULT_ICLOUD_OBSIDIAN) {
-  if (!existsSync(baseDir)) return [];
+  if (!await pathExists(baseDir)) return [];
 
   const entries = await readdir(baseDir, { withFileTypes: true });
   const detected = [];
   for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
       const vaultPath = join(baseDir, entry.name);
-      if (existsSync(join(vaultPath, '.obsidian'))) {
+      if (await pathExists(join(vaultPath, '.obsidian'))) {
         detected.push({ name: entry.name, path: vaultPath });
       }
     }
@@ -225,7 +212,7 @@ const newSkipTally = () => ({ count: 0 });
 export async function scanVault(vaultId, { folder } = {}) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
-  if (!existsSync(vault.path)) return { error: 'PATH_NOT_FOUND' };
+  if (!await pathExists(vault.path)) return { error: 'PATH_NOT_FOUND' };
 
   const notes = [];
   const skipped = newSkipTally();
@@ -283,14 +270,14 @@ export async function getNote(vaultId, notePath, { includeBacklinks = true } = {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
 
-  const fullPath = resolveVaultPath(vault, notePath);
+  const fullPath = await resolveVaultPath(vault, notePath);
   if (!fullPath) {
     return { error: 'INVALID_PATH', message: 'Path traversal not allowed' };
   }
   if (extname(fullPath) !== '.md') {
     return { error: 'INVALID_PATH', message: 'Only .md notes can be read' };
   }
-  if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
+  if (!await pathExists(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   const content = await readNoteContent(fullPath);
   // Evicted, not missing — a distinct code so the UI can say "iCloud hasn't
@@ -335,10 +322,10 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
 
-  const fullPath = resolveVaultPath(vault, notePath);
+  const fullPath = await resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
   if (extname(fullPath) !== '.md') return { error: 'INVALID_PATH' };
-  if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
+  if (!await pathExists(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   // Overwriting an EVICTED note would block exactly like reading one — measured,
   // not assumed: `writeFile`'s O_TRUNC does NOT skip materialization (822ms
@@ -434,13 +421,13 @@ export async function createNote(vaultId, notePath, content = '') {
   // escape is refused before anything is created through it (#9007).
   const dirOk = await ensureVaultDir(vault, dirname(join(vault.path, notePath)));
   if (!dirOk) return { error: 'INVALID_PATH' };
-  const fullPath = resolveVaultPath(vault, notePath);
+  const fullPath = await resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
-  if (existsSync(fullPath)) {
+  if (await pathExists(fullPath)) {
     return { error: 'NOTE_EXISTS', message: 'A note with this name already exists' };
   }
 
-  // No dataless screen here, deliberately (#3706): the `existsSync` above means
+  // No dataless screen here, deliberately (#3706): the `pathExists` above means
   // this only ever writes a file that does NOT exist, and a path with no file at
   // it cannot be a dataless vnode — there is nothing offloaded to materialize.
   // The overwrite case is `updateNote`, which is guarded. Don't add a screen here
@@ -448,7 +435,7 @@ export async function createNote(vaultId, notePath, content = '') {
   //
   // The modern APFS dataless vnode is the ONLY eviction representation there is
   // to handle (#3716). macOS' pre-APFS mechanism instead replaced the note with a
-  // sibling `.<name>.md.icloud` stub, which `existsSync(fullPath)` cannot see — so
+  // sibling `.<name>.md.icloud` stub, which `pathExists(fullPath)` cannot see — so
   // this would create a fresh file beside it and shadow the offloaded note. That
   // representation was measured as non-occurring (zero placeholders across 223
   // iCloud containers holding 373 evicted files, macOS 26 / APFS), and the probe
@@ -490,7 +477,7 @@ export async function createNote(vaultId, notePath, content = '') {
  */
 export async function upsertNote(vaultId, notePath, content) {
   const vault = await getVaultById(vaultId);
-  if (!vault || !existsSync(vault.path)) return null;
+  if (!vault || !await pathExists(vault.path)) return null;
 
   const created = await createNote(vaultId, notePath, content);
   if (!created?.error) return notePath;
@@ -504,10 +491,10 @@ export async function deleteNote(vaultId, notePath) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
 
-  const fullPath = resolveVaultPath(vault, notePath);
+  const fullPath = await resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
   if (extname(fullPath) !== '.md') return { error: 'INVALID_PATH' };
-  if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
+  if (!await pathExists(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   // No dataless screen here, deliberately (#3713): `unlink` does NOT materialize
   // an evicted vnode. That is measured, not inferred from POSIX — `link` is pure
@@ -532,7 +519,7 @@ export async function deleteNote(vaultId, notePath) {
 export async function searchNotes(vaultId, query) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
-  if (!existsSync(vault.path)) return { error: 'PATH_NOT_FOUND' };
+  if (!await pathExists(vault.path)) return { error: 'PATH_NOT_FOUND' };
 
   const results = [];
   const queryLower = query.toLowerCase();
@@ -614,7 +601,7 @@ async function searchDir(rootPath, currentPath, query, countRe, results, skipped
 export async function getVaultGraph(vaultId) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
-  if (!existsSync(vault.path)) return { error: 'PATH_NOT_FOUND' };
+  if (!await pathExists(vault.path)) return { error: 'PATH_NOT_FOUND' };
 
   const nodes = [];
   const edges = [];
@@ -812,7 +799,7 @@ async function findBacklinksInDir(rootPath, currentPath, targetLower, results) {
 export async function getVaultTags(vaultId) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
-  if (!existsSync(vault.path)) return { error: 'PATH_NOT_FOUND' };
+  if (!await pathExists(vault.path)) return { error: 'PATH_NOT_FOUND' };
 
   const tagCounts = new Map();
   const skipped = newSkipTally();
@@ -848,7 +835,7 @@ async function collectTags(rootPath, currentPath, tagCounts, skipped) {
 export async function getVaultFolders(vaultId) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
-  if (!existsSync(vault.path)) return { error: 'PATH_NOT_FOUND' };
+  if (!await pathExists(vault.path)) return { error: 'PATH_NOT_FOUND' };
 
   const folders = [];
   await collectFolders(vault.path, vault.path, folders);

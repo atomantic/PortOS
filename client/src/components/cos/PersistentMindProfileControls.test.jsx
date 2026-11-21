@@ -14,7 +14,7 @@ const providerHook = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 vi.mock('../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../hooks/useProviderModels', () => ({
   default: () => ({

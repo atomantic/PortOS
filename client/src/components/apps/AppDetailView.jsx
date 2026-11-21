@@ -11,7 +11,18 @@ import EditAppDrawer from './EditAppDrawer';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
-import * as api from '../../services/api';
+import {
+  getApp,
+  startApp,
+  launchNativeApp,
+  stopApp,
+  restartApp,
+  handleSelfRestart,
+  buildApp,
+  getAppViteHostStatus,
+  fixAppViteHosts,
+} from '../../services/apiApps.js';
+import { PORTOS_APP_ID } from '../../services/apiCore.js';
 import { getLaunchUrls } from '../../services/appUrls';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
@@ -91,7 +102,7 @@ function AppDetail() {
 
   // The route key remounts per app, so appId is stable for this resource. A 404
   // is "no such app" (null), distinct from a failed read (error).
-  const readApp = useCallback(() => api.getApp(appId, { includeQuality: true, silent: true })
+  const readApp = useCallback(() => getApp(appId, { includeQuality: true, silent: true })
     .catch(error => { if (error.status === 404) return null; throw error; }), [appId]);
   const matchesAppEvent = useCallback((change) => {
     // Unscoped events invalidate the fleet; scoped events affect only one app.
@@ -135,7 +146,7 @@ function AppDetail() {
 
   const handleStart = async () => {
     setActionLoading('start');
-    const result = await api.startApp(appId).catch(() => null);
+    const result = await startApp(appId).catch(() => null);
     // A desktop app's start command builds and imports assets before a window
     // appears, so the POST returning tells the user almost nothing. Open the live
     // log panel so the slow launch is visibly progressing rather than hung — but
@@ -147,7 +158,7 @@ function AppDetail() {
 
   const handleNativeLaunch = async () => {
     setNativeLaunchLoading(true);
-    const result = await api.launchNativeApp(appId).catch(() => null);
+    const result = await launchNativeApp(appId).catch(() => null);
     setNativeLaunchLoading(false);
     if (!result?.processName) return;
     setLaunchProcess(result.processName);
@@ -167,7 +178,7 @@ function AppDetail() {
 
   const handleStop = async () => {
     setActionLoading('stop');
-    await api.stopApp(appId).catch(() => null);
+    await stopApp(appId).catch(() => null);
     // The stream would keep tailing a dead process; drop the panel with the app.
     setLaunchProcess(null);
     setActionLoading(null);
@@ -175,9 +186,9 @@ function AppDetail() {
 
   const handleRestart = async () => {
     setActionLoading('restart');
-    const result = await api.restartApp(appId).catch(() => null);
+    const result = await restartApp(appId).catch(() => null);
     if (result?.selfRestart) {
-      api.handleSelfRestart();
+      handleSelfRestart();
       return;
     }
     setActionLoading(null);
@@ -185,8 +196,8 @@ function AppDetail() {
 
   const handleBuild = async () => {
     setBuildLoading(true);
-    const isSelfBuild = appId === api.PORTOS_APP_ID;
-    const result = await api.buildApp(appId, { silent: true }).catch(err => {
+    const isSelfBuild = appId === PORTOS_APP_ID;
+    const result = await buildApp(appId, { silent: true }).catch(err => {
       // Self-build may cause a socket hangup as the server restarts — that's
       // expected, so treat it as "triggered" rather than a failure. Narrow to
       // transport failures only: request() stamps `status` on an HTTP error but
@@ -210,12 +221,12 @@ function AppDetail() {
   const devUiPort = app?.devUiPort;
   const isOnline = app?.overallStatus === 'online';
   useEffect(() => {
-    if (!devUiPort || !isOnline || appId === api.PORTOS_APP_ID) {
+    if (!devUiPort || !isOnline || appId === PORTOS_APP_ID) {
       setViteHostStatus(null);
       return;
     }
     let cancelled = false;
-    api.getAppViteHostStatus(appId, window.location.hostname)
+    getAppViteHostStatus(appId, window.location.hostname)
       .then((status) => { if (!cancelled) setViteHostStatus(status); })
       .catch(() => { if (!cancelled) setViteHostStatus(null); });
     return () => { cancelled = true; };
@@ -223,7 +234,7 @@ function AppDetail() {
 
   const handleFixViteHosts = async (mode) => {
     setViteFixing(mode);
-    const result = await api.fixAppViteHosts(appId, { mode, host: window.location.hostname })
+    const result = await fixAppViteHosts(appId, { mode, host: window.location.hostname })
       .catch((err) => { toast.error(`Host fix failed: ${err.message}`); return null; });
     setViteFixing(null);
     if (!result) return;
@@ -335,7 +346,7 @@ function AppDetail() {
       case 'submodules':
         return <SubmodulesTab repoPath={app.repoPath} />;
       case 'update':
-        if (app.id !== api.PORTOS_APP_ID) {
+        if (app.id !== PORTOS_APP_ID) {
           return (
             <div className="p-6 text-center">
               <p className="text-lg text-gray-400 mb-4">Update is not available for this app</p>

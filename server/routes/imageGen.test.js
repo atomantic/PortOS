@@ -43,7 +43,7 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
-import { writeFile, rm } from 'fs/promises';
+import { access, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join as pathJoin } from 'path';
 
@@ -248,7 +248,7 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
-  it('removes multipart uploads when queue submission fails after staging', async () => {
+  it('removes both the multipart upload and its staged copy when queue submission fails', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'codex', codex: { enabled: true } } });
     mediaJobQueue.enqueueJob.mockRejectedValueOnce(new Error('Synthetic queue failure'));
     const unlink = vi.spyOn(fileUtils, 'unlinkGuarded');
@@ -260,13 +260,43 @@ describe('Image Gen Routes', () => {
       const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
       expect(response.status).toBe(500);
       await response.json();
-      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
-      expect(unlink).toHaveBeenCalled();
-      const uploadPath = unlink.mock.calls[0][0];
-      await expect(import('fs/promises').then(({ access }) => access(uploadPath))).rejects.toMatchObject({ code: 'ENOENT' });
+      const stagedPath = mediaJobQueue.enqueueJob.mock.calls[0][0].params.initImagePath;
+      expect(stagedPath).toBe(pathJoin(fileUtils.PATHS.imageRefs, basename(stagedPath)));
+      const uploadPath = unlink.mock.calls.map(([path]) => path).find(path => path !== stagedPath);
+      expect(uploadPath).toBeTruthy();
+      await expect(access(uploadPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
       unlink.mockRestore();
+      await closeLoopbackServer(server);
+    }
+  });
+
+  it('removes a staged reference after local model validation fails and preserves the gallery reference', async () => {
+    const galleryName = 'dispatch-owned-by-gallery.png';
+    await mkdir(fileUtils.PATHS.images, { recursive: true });
+    const galleryPath = pathJoin(fileUtils.PATHS.images, galleryName);
+    await writeFile(galleryPath, 'synthetic gallery image');
+    getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } } });
+    const copy = vi.spyOn(fileUtils, 'copyFileGuarded');
+    const server = await startLoopbackServer(app);
+    try {
+      const form = new FormData();
+      form.set('prompt', 'a red cube');
+      form.set('modelId', 'unknown-fixture-model');
+      form.set('referenceImageFiles', galleryName);
+      form.set('referenceImage1', new Blob(['synthetic reference'], { type: 'image/png' }), 'uploaded.png');
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
+      expect([response.status, (await response.json()).code]).toEqual([400, 'IMAGE_GEN_UNKNOWN_MODEL']);
+      expect(copy).toHaveBeenCalledOnce();
+      const [uploadPath, stagedPath] = copy.mock.calls[0];
+      await expect(access(uploadPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(galleryPath)).resolves.toBeUndefined();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
       await closeLoopbackServer(server);
     }
   });
@@ -457,6 +487,16 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    it('filters the gallery to original files on this machine when requested', async () => {
+      const items = [{ filename: 'local-filter.png' }, { filename: 'hosted-filter.png' }];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      await mkdir(fileUtils.PATHS.images, { recursive: true });
+      await writeFile(pathJoin(fileUtils.PATHS.images, items[0].filename), 'local image');
+      const page = await request(app).get('/api/image-gen/gallery?localOnly=true&summary=true');
+      expect(page.status).toBe(200);
+      expect(page.body).toMatchObject({ items: [items[0]], total: 1, hiddenTotal: 0 });
+    });
+
     // #8292: migrated consumers opt into compact card rows; search and visible
     // counts still read the full stored metadata, and older callers keep full records.
     it('projects compact visible rows on request while searching the full prompt', async () => {
@@ -492,7 +532,7 @@ describe('Image Gen Routes', () => {
       expect(oversized.status).toBe(400);
     });
 
-    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename='])('rejects invalid paging: %s', async query => {
+    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename=', 'localOnly=yes'])('rejects invalid paging: %s', async query => {
       const response = await request(app).get('/api/image-gen/gallery?' + query);
       expect(response.status).toBe(400);
       expect(imageGen.local.listGallery).not.toHaveBeenCalled();
@@ -735,6 +775,51 @@ describe('Image Gen Routes', () => {
       const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
       expect(params.referenceImagePaths.map(path => basename(path))).toEqual(references);
       expect(preview.body.referenceImages.map(item => item.filename)).toEqual(references);
+    });
+
+    it.each([
+      ['flux3-klein-q4', 10, 'FLUX3_INPUT_UNSUPPORTED'],
+      ['minimax-h3-image-bf16', 16, 'MINIMAX_H3_IMAGE_INPUT_UNSUPPORTED'],
+    ])('previews and queues canon and request references at the %s limit', async (modelId, referenceCap, inputError) => {
+      const canonNames = ['example-neutral.png', 'example-profile.png', 'example-full-body.png', 'example-hall.png'];
+      const references = Array.from({ length: referenceCap - canonNames.length + 1 }, (_, index) => `example-${modelId}-${index}.png`);
+      await Promise.all(references.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = {
+        prompt: 'The scout arrives', mode: 'local', modelId, referenceImageFiles: references.slice(1),
+        fableLoom: { loomId: canonLoom.id, episodeId: 'ep-1', nodeId: 'node-1' },
+      };
+      const settings = { imageGen: { mode: 'local' } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+
+      expect([preview.status, preview.body.error, submit.status, submit.body.error]).toEqual([200, undefined, 200, undefined]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      const expected = [...canonNames, ...body.referenceImageFiles];
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual(expected);
+      expect(preview.body.referenceImages.map(item => item.filename)).toEqual(expected);
+      expect(preview.body.sentPrompt).toBe(params.prompt);
+      expect(preview.body.sentNegativePrompt).toBeUndefined();
+      expect(params.negativePrompt).toBe('');
+      expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ label: 'Visual exclusions', text: expect.stringContaining('wrong face') }));
+      expect(params.prompt).toContain('wrong face');
+      expect(params.visualConditioning.compiledNegativePrompt).toBe('');
+      expect(params.visualConditioning.capability.referenceBudget).toBe(referenceCap);
+
+      const { assertFlux3Inputs } = await import('../services/imageGen/flux3Runtime.js');
+      const { assertMinimaxH3ImageInputs } = await import('../services/imageGen/minimaxH3ImageRuntime.js');
+      const assertRunnerInputs = modelId.startsWith('flux3') ? assertFlux3Inputs : assertMinimaxH3ImageInputs;
+      expect(() => assertRunnerInputs({ ...params, referenceCount: params.referenceImagePaths.length })).not.toThrow();
+
+      getSettings.mockResolvedValueOnce(settings);
+      const overflow = await request(app).post('/api/image-gen/generate').send({ ...body, referenceImageFiles: references });
+      expect([overflow.status, overflow.body.code]).toEqual([400, 'FABLELOOM_INPUT_BUDGET_EXCEEDED']);
+
+      getSettings.mockResolvedValueOnce(settings);
+      const negative = await request(app).post('/api/image-gen/prompt-preview').send({ ...body, negativePrompt: 'blur' });
+      expect([negative.status, negative.body.code]).toEqual([400, inputError]);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledOnce();
     });
 
     it.each(['fal'])('retains more than four authored references on %s', async mode => {

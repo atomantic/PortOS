@@ -1,4 +1,5 @@
-import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
+import { loadedObservation } from '../services/localModelObservations.js';
+import { observeModelMutations } from '../services/modelObservation.js';
 /**
  * Local LLM Routes
  *
@@ -82,7 +83,6 @@ import {
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall, runModelAbuseScan } from '../services/modelAbuseGuard.js'
 import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
 import { readJevDecisionStats } from '../services/jevRouter.js'
-import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
 import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelAssessmentSweep.js'
@@ -98,14 +98,10 @@ import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
 import { awaitWritableDrain } from '../lib/streamBackpressure.js'
 import {
-  getLastLoadedModelsError as getOllamaResidencyError,
-  getLoadedModels as getLoadedOllamaModels,
   unloadModel as unloadOllamaModel,
 } from '../services/ollamaManager.js'
 import {
   controlLmStudioServer,
-  getLastLoadedModelsError as getLmStudioResidencyError,
-  getLoadedModels as getLoadedLmStudioModels,
 } from '../services/lmStudioManager.js'
 
 // The head store and the trainer are DEFERRED into their handlers, not
@@ -665,24 +661,6 @@ router.post('/migrate', asyncHandler(async (req, res) => {
 // reclaimed a model it can't even see. The `disabled` field names the backends
 // the user opted out of availability warnings for, so the panel stays quiet
 // about them WITHOUT weakening that cleanup guard.
-const loadedObservation = observeModelResource('loaded-models', async () => {
-  const settings = await getSettings().catch(() => ({}))
-  const ollamaDisabled = Boolean(settings.localLlm?.ollama?.disabled)
-  const lmStudioDisabled = Boolean(settings.localLlm?.lmstudio?.disabled)
-  const [ollama, lmstudio] = await Promise.all([
-    getLoadedOllamaModels(),
-    getLoadedLmStudioModels(true),
-   ])
-  const sourceErrors = [
-     ...(getOllamaResidencyError() ? ['ollama'] : []),
-     ...(getLmStudioResidencyError() ? ['lmstudio'] : []),
-   ]
-  const disabled = [
-     ...(ollamaDisabled ? ['ollama'] : []),
-     ...(lmStudioDisabled ? ['lmstudio'] : []),
-   ]
-  return { ollama, lmstudio, sourceErrors, disabled }
-}, 2000);
 router.get('/loaded', asyncHandler(async (req, res) => {
   const { fresh } = validateRequest(loadedQuerySchema, req.query)
   res.json(await loadedObservation.read({ fresh: fresh === '1' }));

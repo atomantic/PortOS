@@ -34,7 +34,7 @@
  *     human clears it.
  *
  * No AI drafting and no AI review (#8 decision 8), and no agent reach: no
- * `cosToolRegistry` entry, no voice tool, no scheduler. `beeperOutboxHumanGate.guard.test.js`
+ * `cosToolRegistry` entry, no voice tool, no scheduler. `server/test/guards/runtime/beeperOutboxHumanGate.test.js`
  * and `beeperOutboxHumanGate.test.js` assert that structurally rather than by convention.
  */
 

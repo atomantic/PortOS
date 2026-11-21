@@ -71,6 +71,7 @@ describe('UpdateBanners', () => {
     const { container } = renderBanners();
     await flush();
     expect(container).toBeEmptyDOMElement();
+    expect(getSystemActivity).not.toHaveBeenCalled();
     expect(toastFn).not.toHaveBeenCalled();
   });
 
@@ -253,6 +254,21 @@ describe('UpdateBanners', () => {
     expect(ignoreUpdateVersion).toHaveBeenCalledTimes(1);
     expect(ignoreUpdateVersion).toHaveBeenCalledWith('1.1.0');
     await waitFor(() => expect(screen.queryByText(/Update available/)).toBeNull());
+  });
+
+  it('waits for fresh activity when an advisory returns after the last subscriber left', async () => {
+    const firstUpdate = { currentVersion: '1.0.0', latestVersion: '1.1.0' };
+    renderBanners();
+    await act(async () => handlers.get('portos:update:available')(firstUpdate));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }));
+    expect(screen.queryByText(/Update available/)).toBeNull();
+
+    let resolveActivity;
+    getSystemActivity.mockReturnValueOnce(new Promise(resolve => { resolveActivity = resolve; }));
+    await act(async () => handlers.get('portos:update:available')({ ...firstUpdate, latestVersion: '1.2.0' }));
+    expect(screen.queryByText(/Update available/)).toBeNull();
+    await act(async () => resolveActivity(busyActivity()));
+    expect(screen.queryByText(/Update available/)).toBeNull();
   });
 
   it('raises the update advisory from a live socket event', async () => {

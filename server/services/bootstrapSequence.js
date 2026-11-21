@@ -74,8 +74,8 @@ export const gateStepsForSmokeBoot = (steps, phase, smokeBoot) => {
  *   1. `applyDataMigrations` runs FIRST and is awaited — the toolkit reads
  *      stage-config.json / providers.json, so a pull-and-restart that skipped
  *      `npm run migrations` must still land new prompt stages before then.
- *   2. `loadUsage` runs after migrations so both operations cannot race while
- *      updating the same usage snapshot.
+ *   2. `loadUsage` runs after file migrations so it sees the normalized
+ *      legacy ledger when importing it.
  *   3. `verifyCollections` runs before anything can serve a request, and only
  *      logs: a hard exit on a schema mismatch is worse than a noisy log.
  *   4. `createToolkit` → `registerToolkitShims` → `warmProviders`: the shims
@@ -303,13 +303,13 @@ export const warmMandatoryStores = async ({
   onWarmFailure = () => process.exit(1)
 }) => {
   try {
-    await warmUniverses();
-    await warmSeries();
-    await warmIssues();
-    await warmStoryBuilder();
-    await warmWritersRoom();
-    await warmCatalogUserTypes();
-    await warmCreativeDirector();
+    await Promise.all([
+      warmUniverses(),
+      warmSeries().then(() => warmIssues()).then(() => warmStoryBuilder()),
+      warmWritersRoom(),
+      warmCatalogUserTypes(),
+      warmCreativeDirector(),
+    ]);
     await pruneLegacyFiles();
   } catch (err) {
     console.error(`❌ Mandatory store warmup failed at boot — refusing to start: ${err?.stack ?? err.message}`);

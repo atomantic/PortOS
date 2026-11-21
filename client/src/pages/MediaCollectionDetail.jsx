@@ -1,3 +1,4 @@
+import CollectionPrimaryControl from '../components/media/CollectionPrimaryControl';
 import MediaBatchImport from '../components/media/MediaBatchImport';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
@@ -16,12 +17,16 @@ import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { verifyImageNow } from '../services/apiImageVerifier';
 import {
-  getMediaCollection, updateMediaCollection,
+  getMediaCollection,
+  updateMediaCollection,
   listMediaCollections,
-  addMediaCollectionItem, removeMediaCollectionItem,
-  deleteImage, deleteVideoHistoryItem,
-  pullMissingMetadata, localizeMediaCollection,
-} from '../services/api';
+  addMediaCollectionItem,
+  removeMediaCollectionItem,
+  deleteImage,
+  deleteVideoHistoryItem,
+  localizeMediaCollection,
+} from '../services/apiImageVideo.js';
+import { pullMissingMetadata } from '../services/apiPeerSync.js';
 import socket from '../services/socket';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -148,8 +153,8 @@ function MediaCollectionDetailContent() {
     const result = await localizeMediaCollection(id, remoteKeys, { silent: true });
     toast.success(`Copying ${result?.started ?? remoteKeys.length} hosted item(s) to this machine…`);
   });
-  // A copied file lands as `peerSync:asset-arrived`; re-read the annotations
-  // (and gallery rows) instead of polling. Debounced — a batch fires many.
+  // Re-read location annotations and gallery rows when bytes or video
+  // history arrive. Debounce batches of socket events.
   useEffect(() => {
     if (isUnsorted) return undefined;
     let active = true;
@@ -161,8 +166,20 @@ function MediaCollectionDetailContent() {
         page.refresh();
       }, 500);
     };
+    const onPrimaryChanged = (event) => { if (event.id === id) onArrived(); };
+    const onHistoryChanged = (event) => { if (event.kind === 'video') onArrived(); };
     socket.on('peerSync:asset-arrived', onArrived);
-    return () => { active = false; clearTimeout(timer); socket.off('peerSync:asset-arrived', onArrived); };
+    socket.on('media:collection-primary:changed', onPrimaryChanged);
+    socket.on('media:holders:changed', onArrived);
+    socket.on('media:history:changed', onHistoryChanged);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      socket.off('peerSync:asset-arrived', onArrived);
+      socket.off('media:collection-primary:changed', onPrimaryChanged);
+      socket.off('media:holders:changed', onArrived);
+      socket.off('media:history:changed', onHistoryChanged);
+    };
   }, [id, isUnsorted, page.refresh]);
   const resolvePreview = useGalleryPreviewResolver({ collectionId: id });
   const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
@@ -554,6 +571,8 @@ function MediaCollectionDetailContent() {
           </div>
         )}
       </div>
+
+      {!isUnsorted && <CollectionPrimaryControl collectionId={id} />}
 
       <MediaBatchImport key={id} collectionId={isUnsorted ? undefined : id} onImported={(item, updated) => {
         // Mutation responses omit GET-only peer locations. Keep those for

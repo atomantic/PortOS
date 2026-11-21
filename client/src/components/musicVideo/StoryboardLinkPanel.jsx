@@ -1,7 +1,13 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, LayoutPanelLeft, Loader2, Unlink } from 'lucide-react';
-import { createStoryboard, getStoryboard, listStoryboards, makeStoryboardFromMusicVideo } from '../../services/api';
+import {
+  createStoryboard,
+  getStoryboard,
+  listStoryboards,
+  makeStoryboardFromMusicVideo,
+} from '../../services/apiStoryboards.js';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { selectedTake, takeSrc } from '../storyboards/storyboardArt';
 
@@ -134,7 +140,7 @@ export default function StoryboardLinkPanel({ project, onLink, openPath, refresh
         <select id="mv-storyboard-link" value="" onFocus={loadBoards} onPointerDown={loadBoards} onChange={(e) => e.target.value && onLink(e.target.value)}
           className="min-h-[44px] min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 text-sm text-white">
           <option value="">{boards === undefined ? 'Reading storyboards…' : boards && !boards.length ? 'No storyboards yet' : 'Link a storyboard…'}</option>
-          {(boards || []).map((row) => <option key={row.id} value={row.id}>{row.name} ({plural(row.panelCount, 'panel')})</option>)}
+          {sortByLabel(boards || []).map((row) => <option key={row.id} value={row.id}>{row.name} ({plural(row.panelCount, 'panel')})</option>)}
         </select>
         {(project.scenes || []).length > 0 && (
           <button type="button" onClick={makeFromVideo} disabled={making} className={actionButton}>

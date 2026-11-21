@@ -36,7 +36,7 @@
  * `PipelineSeries.jsx` caps its inputs at the numbers the PATCH route enforces),
  * so this module must reach no Node built-in — ids come from `uuid.js`, which
  * reads the global WebCrypto (the browser never mints one) — and
- * `scripts/client-server-import-purity.guard.test.js` walks its import graph.
+ * `server/test/guards/modules/client-server-import-purity.test.js` walks its import graph.
  */
 
 import { BIBLE_LIMITS } from './bibleLimits.js';

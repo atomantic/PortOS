@@ -9,9 +9,14 @@ import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import BeeperOutboxBreakerBanner from './BeeperOutboxBreakerBanner';
 import { formatBytes, formatClockTime } from '../../../utils/formatters';
 import {
-  getBeeperStatus, checkBeeperConnection, startBeeperOAuth, saveBeeperToken, disconnectBeeper,
-  getBeeperAttachmentSummary, backfillBeeperAttachments,
-} from '../../../services/api';
+  getBeeperStatus,
+  checkBeeperConnection,
+  startBeeperOAuth,
+  saveBeeperToken,
+  disconnectBeeper,
+  getBeeperAttachmentSummary,
+  backfillBeeperAttachments,
+} from '../../../services/apiBeeper.js';
 
 // The Beeper connection story (#30 + #31, fork issue #1): ingestion settings,
 // the tri-state status card, the connect flow, token expiry, and the read-only

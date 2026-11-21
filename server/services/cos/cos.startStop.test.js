@@ -23,7 +23,7 @@ vi.mock('../eventScheduler.js', async (importOriginal) => ({
 const completionWake = vi.hoisted(() => ({ held: false, run: vi.fn(async () => ({ checked: 3 })) }));
 vi.mock('../../lib/maintenanceAdmission.js', async original => {
   const actual = await original();
-  return { ...actual, maintenance: { ...actual.maintenance, held: () => completionWake.held } };
+  return { ...actual, maintenance: { ...actual.maintenance, held: () => completionWake.held, agentDiskPressure: () => null } };
 });
 vi.mock('../agent/agentRepoStateVerification.js', () => ({
   sweepRepoStateVerifications: (...args) => completionWake.run(...args),

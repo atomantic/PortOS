@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, Grid3x3, RefreshCw } from 'lucide-react';
-import { getMorseProgress } from '../../../services/api';
+import { getMorseProgress } from '../../../services/apiMeatspace.js';
 
 // Windows offered by the days selector. `0` = all-time (the route treats
 // days<=0 as "no cutoff").

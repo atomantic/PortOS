@@ -96,8 +96,17 @@ describe('sweepOrphanShells', () => {
     const ser = await seriesSvc.createSeries({ name: 'WithIssues S', universeId: uni.id, ephemeral: true, importDraft: true });
     await issuesSvc.createIssue({ seriesId: ser.id, title: 'A', arcPosition: 1 });
 
+    const sibling = await seriesSvc.createSeries({ name: 'Abandoned', universeId: uni.id, ephemeral: true, importDraft: true });
+    const tomb = await issuesSvc.createIssue({ seriesId: sibling.id, title: 'Removed' });
+    await issuesSvc.deleteIssue(tomb.id);
+    const store = issuesSvc.issueStore();
+    const fullRead = vi.spyOn(store, 'loadAll');
+    const membership = vi.spyOn(store, 'listLiveIssueSeriesIds');
     const { deletedSeries, deletedUniverses } = await sweepOrphanShells({ now: FUTURE });
     expect(deletedSeries).not.toContain(ser.id);
+    expect(deletedSeries).toContain(sibling.id);
+    expect(membership).toHaveBeenCalledOnce();
+    expect(fullRead).not.toHaveBeenCalled();
     // Universe must be spared too — it still has a live series.
     expect(deletedUniverses).not.toContain(uni.id);
   });

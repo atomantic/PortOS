@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
-const script = join(dirname(fileURLToPath(import.meta.url)), 'hf_download_repo.py');
+const script = join(dirname(fileURLToPath(import.meta.url)), 'ml', 'hf_download_repo.py');
 const pyBin = resolveTestPython();
 const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
   encoding: 'utf8',

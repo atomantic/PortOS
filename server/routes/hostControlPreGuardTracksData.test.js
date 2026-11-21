@@ -7,7 +7,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // Every write here is gated by the default-deny policy (#16018); the refusal and
-// principal matrix live in services/authGate.test.js and hostControlCoverage.test.js.
+// principal matrix live in services/authGate.test.js and server/test/guards/modules/hostControlCoverage.test.js.
 // This suite proves each mounted router still runs behind the real gates for a
 // local operator and a delegated agent session, and keeps the refusal/allow pair
 // for the Signal setup check, a HOST_CONTROL_GET_ROUTES read of the keychain

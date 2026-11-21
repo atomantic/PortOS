@@ -11,6 +11,7 @@
  * (local + the cloud lanes) apply: the completion hook rides the media queue.
  */
 
+import { basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { promptAddition } from '../../lib/modelInput.js';
@@ -117,8 +118,24 @@ export async function renderBoardItem(boardId, itemId, route = {}) {
 /** Completion: turn the note into the rendered image. Null when the job was stale. */
 export async function attachRenderedItem({ boardId, itemId, jobId, filename, prompt }) {
   const item = await store.applyBoardItemRender(boardId, itemId, { jobId, filename, prompt });
-  if (item) announce(boardId, itemId, 'done');
+  if (item) {
+    announce(boardId, itemId, 'done');
+    await fileIntoBoardCollection(boardId, filename);
+  }
   return item;
+}
+
+// Best-effort: a collection problem never fails the render attach.
+async function fileIntoBoardCollection(boardId, filename) {
+  if (typeof filename !== 'string' || !filename) return;
+  try {
+    const { findOrCreateMoodBoardCollection, bulkUpdateCollectionItems } = await import('../mediaCollections.js');
+    const board = await store.getBoard(boardId);
+    const collection = await findOrCreateMoodBoardCollection({ boardId, boardName: board?.name });
+    await bulkUpdateCollectionItems(collection.id, { add: [{ kind: 'image', ref: basename(filename) }] });
+  } catch (err) {
+    console.error(`❌ Mood board ${boardId} collection filing failed: ${err?.message || err}`);
+  }
 }
 
 /** A failed or canceled job puts the note back to text with the reason. */

@@ -11,4 +11,4 @@ else
   PY="$(command -v "$PY" 2>/dev/null || true)"
 fi
 [[ -n "$PY" && -x "$PY" ]] || { echo 'TRELLIS.2 Metal requires Python 3.13. Install python@3.13 or set PYTHON_BIN.' >&2; exit 1; }
-exec "$PY" "$SCRIPTS_DIR/setup-trellis2-mps.py" "$@"
+exec "$PY" "$SCRIPTS_DIR/ml/setup-trellis2-mps.py" "$@"

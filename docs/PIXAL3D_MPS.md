@@ -26,7 +26,7 @@ Setup does not download models or run inference.
 
 ## Dependency resolution and audit
 
-`scripts/requirements-pixal3d-mps.txt` records the wheel closure. Its generated
+`scripts/ml/requirements/requirements-pixal3d-mps.txt` records the wheel closure. Its generated
 lock hashes every artifact; the header documents regeneration with patched uv
 and `--exclude-newer` at least seven days before the update. The initial resolve
 used uv 0.13.6 offline against a verified wheelhouse after an online source fetch
@@ -70,7 +70,7 @@ render options and output path; it accepts no Python code to compile. That
 does not establish exploit reachability through every dependency. The runtime
 is upgraded regardless of that reachability limit.
 
-`scripts/verify-pixal3d-mps.py` runs the harmless upstream bare-container
+`scripts/ml/verify-pixal3d-mps.py` runs the harmless upstream bare-container
 regression and a correctly typed positive control, imports the native modules,
 then checks the generated GLB for nonempty, finite, indexed triangle geometry.
 It compiles only its own fixed functions, never input/model text.
@@ -84,7 +84,7 @@ portos_root="$PWD"  # Start in the PortOS checkout.
 cd ~/.portos/pixal3d-mps
 .venv/bin/python .venv/portos-source/generate_mps.py /tmp/synthetic.png --device mps \
   --pipeline-type 1024_cascade --steps 4 --seed 7 --output /tmp/pixal3d-smoke.glb
-.venv/bin/python "$portos_root/scripts/verify-pixal3d-mps.py" /tmp/pixal3d-smoke.glb
+.venv/bin/python "$portos_root/scripts/ml/verify-pixal3d-mps.py" /tmp/pixal3d-smoke.glb
 ```
 
 For an offline check, set `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1` on Generate

@@ -30,6 +30,8 @@
 
 import { readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../../lib/pathSafety.js';
+import { sidecarPathForImage } from '../../lib/assetHash.js';
 import { query, withTransaction } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
@@ -185,15 +187,22 @@ const rowShape = (compact, projected) => !compact ? data => data
 // rather than using stale video rows or downloading either full list to the client.
 // A compact source (#9676) carries only card/filter fields of either kind, so
 // neither the bound parameter nor the materialized CTE holds full detail bodies.
-function assetSource(params, videos, { materialized = false, compact = false } = {}) {
+function assetSource(params, videos, { materialized = false, compact = false, localImages } = {}) {
   const data = compact ? `${compactSourceSql('data')} AS data` : 'data';
-  if (videos === undefined) return { cte: '', table: 'media_assets', data };
+  let imageScope = "kind = 'image'";
+  if (localImages !== undefined) {
+    params.push(localImages);
+    imageScope += ` AND ref = ANY($${params.length}::text[])`;
+  }
+  if (videos === undefined) return localImages === undefined
+    ? { cte: '', table: 'media_assets', data }
+    : { cte: `WITH gallery_assets AS (SELECT * FROM media_assets WHERE ${imageScope}) `, table: 'gallery_assets', data };
   params.push(toPgJson(videos.map(video => ({ data: compact ? compactSource(video) : video,
     createdAt: Number.isFinite(Date.parse(video.createdAt)) ? new Date(video.createdAt).toISOString() : new Date(0).toISOString() }))));
   return {
     data: 'data',
     cte: `WITH gallery_assets AS ${materialized ? 'MATERIALIZED ' : ''}(
-      SELECT media_key, kind, ref, ${data}, created_at FROM media_assets WHERE kind = 'image'
+      SELECT media_key, kind, ref, ${data}, created_at FROM media_assets WHERE ${imageScope}
       UNION ALL
       SELECT 'video:' || (value->'data'->>'id'), 'video', value->'data'->>'id', value->'data',
         (value->>'createdAt')::timestamptz
@@ -204,10 +213,10 @@ function assetSource(params, videos, { materialized = false, compact = false } =
 }
 
 /** List index rows. Omitting limit retains the legacy array contract. */
-export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, compact = false, ...filters } = {}) {
+export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, compact = false, localImages, ...filters } = {}) {
   const projected = projectsCompact(compact, filters.q);
   const { params, where } = assetFilter(filters);
-  const { cte, table, data } = assetSource(params, videos, { compact: projected });
+  const { cte, table, data } = assetSource(params, videos, { compact: projected, localImages });
   let order = 'created_at DESC, media_key ASC';
   if (orderedKeys) {
     params.push(orderedKeys);
@@ -226,20 +235,20 @@ export async function listAssets({ limit, offset = 0, videos, typed = false, ord
 }
 
 /** Count matching rows without materializing their JSONB payloads. */
-export async function countAssets({ videos, compact = false, ...filters } = {}) {
+export async function countAssets({ videos, compact = false, localImages, ...filters } = {}) {
   const { params, where } = assetFilter(filters);
-  const { cte, table } = assetSource(params, videos, { compact: projectsCompact(compact, filters.q) });
+  const { cte, table } = assetSource(params, videos, { compact: projectsCompact(compact, filters.q), localImages });
   const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${table}${where}`, params);
   return parseInt(result.rows[0].count, 10);
 }
 
 /** One snapshot expansion serves the mixed page and every summary count. */
 export async function listMixedGalleryPage({
-  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, ...filters
+  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, compact = false, localImages, ...filters
 } = {}) {
   const params = [];
   const projected = projectsCompact(compact, filters.q);
-  const { cte, table } = assetSource(params, videos, { materialized: true, compact: projected });
+  const { cte, table } = assetSource(params, videos, { materialized: true, compact: projected, localImages });
   const predicate = options => assetFilter(options, params).where.slice(' WHERE '.length) || 'TRUE';
   const totalFilter = predicate(filters);
   const hiddenFilter = predicate({ ...filters, hidden: true });
@@ -378,13 +387,13 @@ async function readGalleryForRestore() {
   try { files = await readdir(PATHS.images); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const images = [];
-  for (const filename of files.filter(name => /\.png$/i.test(name))) {
+  for (const filename of files.filter(name => isSafeFilename(name, GALLERY_IMAGE_EXTENSIONS))) {
     const info = await stat(join(PATHS.images, filename));
     if (!info.isFile()) throw new Error('Media gallery contains a non-file image');
     let metadata = {};
-    for (const sidecar of [filename.replace(/\.png$/i, '.metadata.json'), `${filename}.metadata.json`]) {
+    for (const sidecar of [sidecarPathForImage(filename), join(PATHS.images, `${filename}.metadata.json`)]) {
       let raw;
-      try { raw = await readFile(join(PATHS.images, sidecar), 'utf8'); }
+      try { raw = await readFile(sidecar, 'utf8'); }
       catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       metadata = JSON.parse(raw);
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {

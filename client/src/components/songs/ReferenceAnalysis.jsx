@@ -29,7 +29,7 @@ import {
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ScoreSheet from './ScoreSheet.jsx';
-import { uploadFile, getUploadUrl } from '../../services/api';
+import { uploadFile, getUploadUrl } from '../../services/apiMedia.js';
 import { TEMP_ID_RE } from '../../lib/roundDraft.js';
 import {
   transcribeReferenceMidi,

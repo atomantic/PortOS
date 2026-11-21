@@ -4,7 +4,6 @@
   * fast-h3 renders at ONE resolution per session (the `set_canvas` aspect the session opened with, `reactorVideoClip.js#REACTOR_CANVASES`) and the API only promises "common formats decode; the frame is fitted to the session canvas", a fit invisible to the caller (a 3024×4032 phone photo into a 1344×768 session conditioned a portrait input into a clip with clean audio and no usable picture). So PortOS fits deterministically and reports which canvas it fitted TO: the canvas is chosen from the frame's own shape when none was requested (a portrait photo opens a portrait session), then the frame is cover-cropped from the centre to the canvas's exact pixel size so reactor's fit is a no-op. A frame sharp can't decode passes through untouched with the default canvas (reactor accepts more containers; refusing what PortOS merely failed to measure is worse). EXIF orientation is load-bearing: a phone writes its sensor buffer unrotated with an EXIF tag (a portrait iPhone photo is stored 4032x3024 with `orientation: 6`) and `sharp.metadata()` reports the raw dimensions, so measuring without the tag derives a landscape canvas for a portrait photo and cropping without applying it centre-crops a sideways buffer. Both halves honour it: `readImageSize` swaps the axes and the resize decodes through `autoOrient`.
  */
 import { rm } from 'node:fs/promises';
-import sharp from 'sharp';
 import {
   REACTOR_DEFAULT_ASPECT, nearestReactorAspect, reactorCanvas,
 } from './reactorVideoClip.js';
@@ -14,6 +13,7 @@ const EXIF_SWAPS_AXES = (orientation) => Number(orientation) >= 5 && Number(orie
 
 /** An image's DISPLAYED size `{ width, height, oriented }`, or `null` when unmeasurable; `oriented` is true when EXIF asks for a transform (the bytes on disk aren't what a viewer sees). */
 export const readImageSize = async (path) => {
+  const { default: sharp } = await import('sharp');
   const meta = await sharp(path).metadata().catch(() => null);
   const raw = { width: Number(meta?.width), height: Number(meta?.height) };
   if (!Number.isFinite(raw.width) || !Number.isFinite(raw.height) || raw.width <= 0 || raw.height <= 0) return null;
@@ -43,6 +43,7 @@ export async function prepareReactorStartingFrame(sourceImagePath, requestedAspe
   // Unmeasurable, or already exactly the canvas: nothing to gain from a re-encode. An image awaiting an EXIF transform is NOT "already the canvas" even when its displayed size matches (it would hand reactor a sideways frame).
   if (!size || (!size.oriented && size.width === canvas.width && size.height === canvas.height)) return passthrough;
   const fittedPath = `${outputPath}.start.png`;
+  const { default: sharp } = await import('sharp');
   const written = await sharp(sourceImagePath, { autoOrient: true })
     .resize({ width: canvas.width, height: canvas.height, fit: 'cover', position: 'centre' })
     .png()

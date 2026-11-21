@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
   integrityCalls: [],
 }));
 
-vi.mock('../services/api.js', () => ({
+vi.mock('../services/apiGames.js', () => ({
   listGames: vi.fn(async () => [
     {
       id: 'verified-game',
@@ -61,10 +61,6 @@ vi.mock('../services/api.js', () => ({
       updatedAt: '2026-07-28T12:00:00.000Z',
     },
   ]),
-  getApps: vi.fn(async () => [{ id: 'app-1', name: 'Example App' }]),
-  listSpriteRecords: vi.fn(async () => [{ id: 'hero', name: 'Hero', kind: 'character', status: 'ready' }]),
-  listTracks: vi.fn(async () => []),
-  getGalleryImages: vi.fn(async () => []),
   getGameIntegrity: vi.fn(async (id) => {
     api.integrityCalls.push(id);
     return api.integrityByGame[id] ?? null;
@@ -81,8 +77,20 @@ vi.mock('../services/api.js', () => ({
   unbindGameSprite: vi.fn(),
   unbindGameMusic: vi.fn(),
   unbindGameArtwork: vi.fn(),
+}));
+vi.mock('../services/apiApps.js', () => ({
+  getApps: vi.fn(async () => [{ id: 'app-1', name: 'Example App' }]),
   startApp: vi.fn(),
   launchNativeApp: vi.fn(),
+}));
+vi.mock('../services/apiSprites.js', () => ({
+  listSpriteRecords: vi.fn(async () => [{ id: 'hero', name: 'Hero', kind: 'character', status: 'ready' }]),
+}));
+vi.mock('../services/apiTracks.js', () => ({
+  listTracks: vi.fn(async () => []),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
+  getGalleryImages: vi.fn(async () => []),
 }));
 
 const { default: Game } = await import('./Game.jsx');
@@ -186,7 +194,7 @@ describe('Game page', () => {
     // Start game must stay shut rather than inherit `canLaunch: true`.
     let release;
     const pending = new Promise((resolve) => { release = resolve; });
-    const { getGameIntegrity } = await import('../services/api.js');
+    const { getGameIntegrity } = await import('../services/apiGames.js');
     getGameIntegrity.mockImplementationOnce(async () => {
       await pending;
       return api.integrityByGame['unbuilt-game'];
@@ -207,7 +215,7 @@ describe('Game page', () => {
     // that left the panel on "Checking…" with Build and Start disabled.
     let release;
     const pending = new Promise((resolve) => { release = resolve; });
-    const { getGameIntegrity } = await import('../services/api.js');
+    const { getGameIntegrity } = await import('../services/apiGames.js');
     getGameIntegrity.mockImplementationOnce(async () => {
       await pending;
       return api.integrityByGame['verified-game'];
@@ -231,7 +239,7 @@ describe('Game page', () => {
     // The compile's follow-up refresh belongs to the game it was started on.
     // Once the route has moved on it must not take over the newest-read slot.
     let finishCompile;
-    const { compileGameAssets, getGame, listGames } = await import('../services/api.js');
+    const { compileGameAssets, getGame, listGames } = await import('../services/apiGames.js');
     const [verified] = await listGames();
     compileGameAssets.mockImplementationOnce(() => new Promise((resolve) => { finishCompile = resolve; }));
     getGame.mockResolvedValueOnce(verified);
@@ -250,7 +258,7 @@ describe('Game page', () => {
   });
 
   it('does not show one game\'s failed build on another game', async () => {
-    const { compileGameAssets } = await import('../services/api.js');
+    const { compileGameAssets } = await import('../services/apiGames.js');
     compileGameAssets.mockRejectedValueOnce(new Error('Example build failure'));
 
     renderAt('/game/verified-game');
@@ -264,7 +272,7 @@ describe('Game page', () => {
   });
 
   it('shows a failed studio read with Retry, not an empty studio or a deleted game', async () => {
-    const { listGames } = await import('../services/api.js');
+    const { listGames } = await import('../services/apiGames.js');
     listGames.mockRejectedValueOnce(new Error('Games unavailable'));
 
     renderAt('/game/verified-game');
@@ -277,7 +285,7 @@ describe('Game page', () => {
   });
 
   it('renders ListLoadError with retry when gallery images fail to load', async () => {
-    const { getGalleryImages } = await import('../services/api.js');
+    const { getGalleryImages } = await import('../services/apiImageVideo.js');
     getGalleryImages.mockReset();
     getGalleryImages.mockRejectedValueOnce(new Error('Gallery unavailable'));
 

@@ -4,14 +4,19 @@
  * files it never imports, so only an always-run registration can reach it.
  *
  * The registration is the filename (#16553): the planner selects every
- * `*.guard.test.js` by suffix and reads no test source. The content detectors
- * below no longer select anything. They are a one-way check
- * (scripts/repo-scan-guards.guard.test.js): a test they recognise as a scanner
- * must carry the suffix, so a new scanner cannot ride no plan unnoticed.
+ * `*.guard.test.js` by suffix and reads no test source. Almost every check is
+ * not a test file of its own but a module in a runner's guard directory
+ * (GUARD_CHECK_DIRS, #16996), which that runner loads into one worker over one
+ * shared corpus (guardCorpus.js); the directory is its registration. The content
+ * detectors below no longer select anything. They are a one-way check
+ * (server/test/guards/repo/repo-scan-guards.test.js): a test they recognise as a
+ * scanner must carry the suffix or live in a guard directory, so a new scanner
+ * cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
@@ -23,6 +28,78 @@ import { trackedFiles } from './trackedFiles.js';
  */
 export const GUARD_TEST_RE = /\.guard\.test\.jsx?$/;
 export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
+
+/**
+ * The structural guard runners and the directory each loads its checks from
+ * (#16996). A check is a `*.test.js` module in one of those directories; the
+ * Vitest configs exclude them, so a check runs only inside its runner, in one
+ * worker over one shared corpus (guardCorpus.js). The server checks are split by
+ * subject into three runners of similar cost, so they fill the pool's workers in
+ * parallel (three locally under the agent budget, four on hosted CI); the client
+ * pool has two workers and two runners. A new check goes in the directory whose
+ * subject it scans, and its placement is its registration.
+ */
+export const GUARD_CHECK_DIRS = Object.freeze([
+  // Conventions over runtime source: rejection ownership, logging, spawning, timers, parameters,
+  // environment reads, data directories and send authority.
+  { dir: 'server/test/guards/runtime', runner: 'server/test/guards/runtime.guard.test.js' },
+  // Module structure and contracts: import boundaries and cycles, single-owner tables, inventories, mock factories.
+  { dir: 'server/test/guards/modules', runner: 'server/test/guards/modules.guard.test.js' },
+  // Repository text and test-suite hygiene: docs, scripts, CI, migrations, instruction files, test conventions.
+  { dir: 'server/test/guards/repo', runner: 'server/test/guards/repo.guard.test.js' },
+  // Accessibility conventions over client markup, touch input included.
+  { dir: 'client/src/test/guards/a11y', runner: 'client/src/test/guards/a11y.guard.test.js' },
+  // Client UI conventions: layout and styling, effects and data fetching, module contracts, test timeouts.
+  { dir: 'client/src/test/guards/ui', runner: 'client/src/test/guards/ui.guard.test.js' },
+].map(Object.freeze));
+
+const checkDirOf = (relPath) => GUARD_CHECK_DIRS.find(({ dir }) => relPath.startsWith(`${dir}/`)
+  && /^[^/]+\.test\.jsx?$/.test(relPath.slice(dir.length + 1)));
+/** A repo-relative path names a check module a guard runner loads. */
+export const isGuardCheck = (relPath) => checkDirOf(relPath) !== undefined;
+/** The runner (repo-relative) that loads the check module at `relPath`, or null for any other path. */
+export const guardRunnerFor = (relPath) => checkDirOf(relPath)?.runner ?? null;
+/** The check module filenames in a guard directory (an absolute path or file URL), sorted: what its runner loads. */
+export const guardCheckModules = (dir) => readdirSync(dir).filter((name) => /\.test\.jsx?$/.test(name)).sort();
+
+/**
+ * Register every check in `dir` (a file URL) with the calling runner's Vitest
+ * `describe`/`it` and its `load(name)` import (all passed in: this module stays
+ * builtins-only, and the runner owns the computed `import()` that moduleGraph.js
+ * bounds to its directory). Each check is a describe named after its module, so a
+ * failure reads `<runner> > <check> > …` and `-t <check>` runs one check. A check
+ * that throws while loading fails as its own `loads` test, so one broken module
+ * cannot hide the others' results.
+ *
+ * Loading a check runs its imports and module-scope work, which no test duration
+ * covers. When `PORTOS_GUARD_LOAD_LOG` names a file (scripts/run-ci-tests.js sets
+ * it), each load appends `{ runner, check, ms }` there, so the guard budget charges
+ * that time to the check (guardBudget.js).
+ */
+export function registerGuardChecks(dir, { describe, it, load, env = process.env }) {
+  const runner = runnerOfDir(fileURLToPath(dir));
+  for (const name of guardCheckModules(dir)) {
+    const check = name.replace(/\.test\.jsx?$/, '');
+    describe(check, async () => {
+      const started = performance.now();
+      try {
+        await load(name);
+      } catch (error) {
+        it('loads', () => { throw error; });
+      }
+      if (env.PORTOS_GUARD_LOAD_LOG && runner) {
+        appendFileSync(env.PORTOS_GUARD_LOAD_LOG, `${JSON.stringify({ runner, check, ms: performance.now() - started })}\n`);
+      }
+    });
+  }
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** The runner (repo-relative) whose check directory is `absDir`, or null. */
+const runnerOfDir = (absDir) => {
+  const rel = relative(REPO_ROOT, absDir).split(sep).join('/').replace(/\/$/, '');
+  return GUARD_CHECK_DIRS.find(({ dir }) => dir === rel)?.runner ?? null;
+};
 
 /** Tracked guard tests (relative paths), by suffix alone: no source is read. */
 export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();
@@ -37,7 +114,7 @@ const GIT_ENUMERATION = /['"](?:ls-files|grep)['"]/;
  * imports it as './trackedFiles.js' — a scanner the narrower pattern missed
  * entirely, so it registered as a non-scanner and this whole file passed on it.
  */
-const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?trackedFiles\.js['"]/;
+const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?(?:trackedFiles|guardCorpus)\.js['"]/;
 
 /**
  * A recursive directory walk (#8723): a call to one of the shared source
@@ -219,11 +296,11 @@ export const isTreeScanner = (source, relPath) => scansTrackedTree(source) || re
 
 /**
  * The one-way check: paths in `sources` (`{ path: source }`) the detectors
- * recognise as scanners that neither carry the guard suffix nor appear in
- * `exempt`. A scanner named here is selected by nothing.
+ * recognise as scanners that neither carry the guard suffix, nor live in a
+ * guard directory, nor appear in `exempt`. A scanner named here is selected by nothing.
  */
 export const findUnsuffixedScanners = (sources, exempt = new Set()) => Object.keys(sources)
-  .filter((path) => !isGuardTest(path) && !exempt.has(path) && isTreeScanner(sources[path], path))
+  .filter((path) => !isGuardTest(path) && !isGuardCheck(path) && !exempt.has(path) && isTreeScanner(sources[path], path))
   .sort();
 
 /** Tracked test files (relative paths) the detectors recognise as scanners, whatever their name. */

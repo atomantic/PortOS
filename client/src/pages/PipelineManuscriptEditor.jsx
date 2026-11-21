@@ -24,7 +24,7 @@
  * Data: GET /pipeline/series/:id/manuscript (sections) + .../manuscript/review
  * (comments). Section saves reuse PATCH /pipeline/issues/:id; fixes go through
  * the manuscript-review fix/accept routes. See the design record at
- * docs/plans/2026-06-06-manuscript-editor-inline-feedback.md.
+ * docs/plans/archive/2026-06-06-manuscript-editor-inline-feedback.md.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -56,12 +56,20 @@ import ManuscriptReadAloud from '../components/pipeline/manuscript/ManuscriptRea
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import { acceptedSectionsOf } from '../components/pipeline/manuscript/ManuscriptCommentCard';
 import {
-  getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
-  savePipelineManuscriptSection, reformatPipelineManuscriptText, restorePipelineStageVersion,
-  analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
-  cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
+  getPipelineSeries,
+  updatePipelineSeries,
+  getPipelineManuscript,
+  getPipelineManuscriptReview,
+  savePipelineManuscriptSection,
+  reformatPipelineManuscriptText,
+  restorePipelineStageVersion,
+  analyzePipelineManuscriptCompleteness,
+  startPipelineManuscriptCompleteness,
+  cancelPipelineManuscriptCompleteness,
+  getPipelineManuscriptCompletenessStatus,
   pipelineManuscriptCompletenessSseUrl,
-} from '../services/api';
+} from '../services/apiPipeline.js';
+import { getProviders } from '../services/apiProviders.js';
 
 // Stable empty array so sections that gain no comments/spans don't get a fresh
 // `[]` identity every render.

@@ -5,7 +5,7 @@ import RecordRenderPinRow from '../imageGen/RecordRenderPinRow';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
-import { getStoryboardPanelMake } from '../../services/api';
+import { getStoryboardPanelMake } from '../../services/apiStoryboards.js';
 import { formatCount } from '../../utils/formatters';
 import { newStoryboardEntityId } from '../../../../server/lib/storyboardVocabulary.js';
 import {

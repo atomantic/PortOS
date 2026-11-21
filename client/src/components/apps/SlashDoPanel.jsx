@@ -7,7 +7,7 @@ import { slashdoLabel, slashdoWorkflowsForApp } from '../../lib/slashdoCatalog';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useRunWithPicker from '../../hooks/useRunWithPicker.js';
 import SlashDoRunDrawer from './SlashDoRunDrawer';
-import * as api from '../../services/api';
+import { createSlashdoTask } from '../../services/apiAgents.js';
 
 // The launchable set comes from `client/src/lib/slashdoCatalog.js` — the mirror of
 // the server catalog that also backs the CoS quick templates and the
@@ -40,7 +40,7 @@ export default function SlashDoPanel({ appId, appName, appType }) {
     }
     const label = slashdoLabel(command.command);
     setLoading(command.command);
-    const result = await api.createSlashdoTask(command.command, appId, picker.pin, { silent: true }).catch(err => {
+    const result = await createSlashdoTask(command.command, appId, picker.pin, { silent: true }).catch(err => {
       toast.error(err.message || `Failed to queue ${label}`);
       return null;
     });

@@ -11,6 +11,7 @@
 import { useMemo, useRef } from 'react';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
 import useAnchorReveal from '../../../hooks/useAnchorReveal';
+import './manuscriptAnchorFlash.css';
 import { SEVERITY_TONE } from './constants';
 
 export default function ManuscriptHighlightedProse({ content, spans, openCommentId, onOpenComment, inlineCard }) {

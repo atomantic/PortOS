@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { requireDbOrSkip } from '../server/lib/dbTestGate.js';
 
 const { Client } = createRequire(new URL('../server/package.json', import.meta.url))('pg');
-const script = fileURLToPath(new URL('./recover-synced-test-fixtures.mjs', import.meta.url));
+const script = fileURLToPath(new URL('./ops/recover-synced-test-fixtures.mjs', import.meta.url));
 const connection = {
   database: 'portos_test', host: process.env.PGHOST || 'localhost',
   port: Number(process.env.PGPORT || 5432), user: process.env.PGUSER || 'portos',

@@ -42,6 +42,7 @@ const api = vi.hoisted(() => ({
   retryImporterIssues: vi.fn(),
   IMPORTER_CONTENT_TYPES: ['short-story', 'novel', 'screenplay', 'comic-script'],
   getProviders: vi.fn(),
+  getProviderCatalog: vi.fn(),
   getSettings: vi.fn(),
   generateImage: vi.fn(),
   updateUniverse: vi.fn(),
@@ -49,7 +50,45 @@ const api = vi.hoisted(() => ({
   updatePipelineSeries: vi.fn(),
   listCatalogIngredientsByIds: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiStoryBuilder.js', () => ({
+  getStoryBuilderSteps: api.getStoryBuilderSteps,
+  listStorySessions: api.listStorySessions,
+  getStorySession: api.getStorySession,
+  createStorySession: api.createStorySession,
+  updateStorySession: api.updateStorySession,
+  setStoryCurrentStep: api.setStoryCurrentStep,
+  lockStoryStep: api.lockStoryStep,
+  unlockStoryStep: api.unlockStoryStep,
+  generateStoryStep: api.generateStoryStep,
+  refineStoryStep: api.refineStoryStep,
+  setStorySessionSync: api.setStorySessionSync,
+  reconcileStorySession: api.reconcileStorySession,
+  storyStepProgressSseUrl: api.storyStepProgressSseUrl,
+  setStoryIssueLock: api.setStoryIssueLock,
+  generateStoryIssues: api.generateStoryIssues,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  getUniverse: api.getUniverse,
+  updateUniverse: api.updateUniverse,
+  patchUniverseCanonEntry: api.patchUniverseCanonEntry,
+}));
+vi.mock('../services/apiPipeline.js', () => ({
+  getPipelineSeries: api.getPipelineSeries,
+  listPipelineIssues: api.listPipelineIssues,
+  updatePipelineSeries: api.updatePipelineSeries,
+}));
+vi.mock('../services/apiImporter.js', () => ({
+  analyzeImport: api.analyzeImport,
+  commitImport: api.commitImport,
+  retryImporterIssues: api.retryImporterIssues,
+  IMPORTER_CONTENT_TYPES: api.IMPORTER_CONTENT_TYPES,
+}));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: api.getProviders,
+  getProviderCatalog: api.getProviderCatalog,
+}));
+vi.mock('../services/apiSystem.js', () => ({ getSettings: api.getSettings, generateImage: api.generateImage }));
+vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredientsByIds: api.listCatalogIngredientsByIds }));
 
 // Some descendants import Socket.IO directly rather than via the shared
 // service. Keep the test boundary closed for either form of that dependency.
@@ -112,6 +151,7 @@ vi.mock('../components/pipeline/ArcCanvas', () => ({
 }));
 
 import StoryBuilder, { composeSeedFromIngredients } from './StoryBuilder';
+import { __resetProviderCatalogCache } from '../hooks/useProviderCatalog';
 
 const renderAt = (entry) => render(
   <MemoryRouter initialEntries={[entry]}>
@@ -124,11 +164,16 @@ const renderAt = (entry) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetProviderCatalogCache();
   unexpectedRequests.length = 0;
   vi.stubGlobal('fetch', vi.fn(rejectUnexpectedRequest));
   api.getStoryBuilderSteps.mockResolvedValue({ steps: STEPS });
   api.listStorySessions.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }] });
+  api.getProviderCatalog.mockResolvedValue({
+    harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {},
+    presets: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }],
+  });
   api.updateStorySession.mockResolvedValue({});
   api.getSettings.mockResolvedValue({});
   api.generateImage.mockResolvedValue({ jobId: 'job-1' });

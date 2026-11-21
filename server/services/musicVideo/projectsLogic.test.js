@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, beforeSave, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
+import { captureMusicVideoEvidence, musicVideoRenderDependencyState } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 import { productionReviewBasis } from './productionReview.js';
@@ -453,6 +454,16 @@ describe('applyProjectPatch', () => {
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
     });
+  });
+
+  it('backfills renderer defaults when patching legacy settings and preserves stored selections', () => {
+    const videoSettings = { backend: 'runway', finalResolution: '1080p' };
+    const legacy = { ...baseProject(), videoSettings };
+    const patch = { modelId: 'ltx23_distilled_q4' };
+    const created = buildProjectRecord({ name: 'A', videoSettings: { ...videoSettings, ...patch } }, { id: 'mv-2', now: 'n' });
+    const patched = applyProjectPatch(legacy, { videoSettings: patch });
+
+    expect(patched.videoSettings).toEqual(created.videoSettings);
   });
 });
 
@@ -1089,6 +1100,33 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     const r = mergeProjectRecord(local, remote);
     expect(r.remoteWins).toBe(true);
     expect(r.next.deleted).toBe(true);
+  });
+
+  it('retains matched legacy final-layer baselines over older peer edits without accepting changed inputs', () => {
+    const local = { ...baseProject(), updatedAt: '2026-11-05T12:00:00Z', status: 'complete', renderHistoryId: 'final', scenes: [
+      { sceneId: 's1', startSec: 0, endSec: 5, visualLayer: 'card' },
+      { sceneId: 's2', startSec: 5, endSec: 10, visualLayer: 'card' },
+    ] };
+    local.renderDependencies = captureMusicVideoEvidence(local);
+    local.scenes[0].lyricText = 'Already in the final';
+    const remote = { ...structuredClone(local), updatedAt: '2026-11-19T12:00:00Z', name: 'Peer rename' };
+    const first = mergeProjectRecord(local, remote).next;
+    expect(musicVideoRenderDependencyState(first).status).toBe('current');
+    const later = { ...structuredClone(remote), updatedAt: '2026-11-19T13:00:00Z' };
+    const retained = mergeProjectRecord(first, later).next;
+    expect(retained.renderDependencies).toEqual(first.renderDependencies);
+    expect(musicVideoRenderDependencyState(retained).status).toBe('current');
+    later.scenes[0].lyricText = null;
+    later.scenes[1].lyricText = 'Newly added';
+    const changed = mergeProjectRecord(first, later).next;
+    expect(musicVideoRenderDependencyState(changed).status).toBe('stale');
+    expect(musicVideoRenderDependencyState(mergeProjectRecord(local, later).next).status).toBe('stale');
+    const differentRender = mergeProjectRecord(first, { ...later, renderHistoryId: 'different' }).next;
+    expect(differentRender.renderDependencies).toEqual(remote.renderDependencies);
+    later.renderDependencies.references.find((ref) => ref.sceneId === 's1' && ref.role === 'layer').revision = 'other';
+    const differentRevision = mergeProjectRecord(first, later).next;
+    expect(differentRevision.renderDependencies.references.find((ref) => ref.sceneId === 's1' && ref.role === 'layer'))
+      .not.toHaveProperty('legacyLayerTreatmentBaseline');
   });
 
   // Uniquely catches an older peer's newer body dropping castInputs from a take it still sends, or resurrecting a take it dropped.

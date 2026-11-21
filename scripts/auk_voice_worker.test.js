@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./auk_voice_worker.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/auk_voice_worker.py', import.meta.url));
 
 // Run the resident protocol with synthetic audio dependencies, never a model or hardware.
 const fixture = String.raw`

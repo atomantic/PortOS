@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useMemo, useState } from 'react';
 import { RotateCcw, Save, Trash2, Type, Upload } from 'lucide-react';
 import {
@@ -166,7 +167,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
                     <label htmlFor={idFor('style')} className="block text-[11px] text-port-text-muted">Saved styles</label>
                     <select id={idFor('style')} value={chosenStyle?.key || ''} onChange={(e) => setPickedStyle(e.target.value)} className={control}>
                       <option value="" disabled>Choose an artist</option>
-                      {styles.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
+                      {sortByLabel(styles).map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
                     </select>
                   </div>
                   <button type="button" onClick={() => publishKit.saveCoverDesign(chosenStyle.design)} disabled={busy || !chosenStyle} className={button}>

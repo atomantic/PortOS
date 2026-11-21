@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   getJevStatus: vi.fn(),
   getJevDecisionStats: vi.fn(),
   installJev: vi.fn(),
@@ -27,9 +27,17 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import {
-  adoptJevHead, cancelJevInstall, discardJevHead, getJevDecisionStats, getJevHeads,
-  getJevStatus, installJev, scoreJev, trainJevHead, unloadJev,
-} from '../../services/api';
+  adoptJevHead,
+  cancelJevInstall,
+  discardJevHead,
+  getJevDecisionStats,
+  getJevHeads,
+  getJevStatus,
+  installJev,
+  scoreJev,
+  trainJevHead,
+  unloadJev,
+} from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
 import { MemoryRouter, Routes, Route } from 'react-router';

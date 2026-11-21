@@ -19,10 +19,7 @@ import { resolveAppForgeTarget } from '../../lib/workTracker.js';
 import {
   PERSISTENT_MIND_VALIDATION_CHECKS,
 } from '../../lib/persistent/persistentMindCapabilities.js';
-import {
-  isCliReviewer,
-  isReviewer,
-} from '../../lib/cos/cosValidation.js';
+import { isCliReviewer, isReviewer } from '../../lib/reviewerConfig.js';
 import { satisfiesVersionRequirement } from '../../../scripts/checkNodeVersion.js';
 import * as codeReview from '../codeReview.js';
 

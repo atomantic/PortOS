@@ -1,5 +1,7 @@
 # Owner-coordinated catalog identity
 
+Status: Active
+
 ## Scope
 
 Consolidate two same-type catalog ingredients owned by two different paired

@@ -19,7 +19,7 @@
 // and never runs on mount for a backend the user hasn't turned on.
 
 import { useCallback, useEffect, useState } from 'react';
-import { listAgyImageModels } from '../services/api';
+import { listAgyImageModels } from '../services/apiImageVideo.js';
 
 /**
  * @param {boolean} enabled - only probe while the Agy backend is in play

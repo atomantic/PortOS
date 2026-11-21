@@ -30,7 +30,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { ITEM_KIND, REF_MAX_LENGTH, itemKey, parseKey } from '../lib/mediaItemKey.js';
+import { ITEM_KIND, REF_MAX_LENGTH, MEDIA_COLLECTION_ITEMS_MAX, itemKey, parseKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { compareNewerWins, compareEarlierWins, parseTsMs } from '../lib/lwwTimestamp.js';
@@ -47,7 +47,7 @@ export const ERR_VALIDATION = 'VALIDATION_ERROR';
 
 export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
-export const ITEMS_MAX = 5000;
+export const ITEMS_MAX = MEDIA_COLLECTION_ITEMS_MAX;
 
 // Bounded fan-out for the multi-record snapshot-merge / GC-sweep loops. Distinct
 // record ids ride distinct per-record write queues, so these are safe to run
@@ -171,6 +171,7 @@ const SERIES_ID_MAX = 80;
 // `sanitizeItem`'s optional `origin`).
 export const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
 const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
+const sanitizePrimaryInstanceId = (raw) => typeof raw === 'string' && raw.length > 0 && raw.length <= 128 ? raw : null;
 
 const sanitizeCollection = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -225,6 +226,7 @@ const sanitizeCollection = (raw) => {
   // look far older than it is and skew LWW merges + the GC cutoff window.
   const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? updatedAt : null);
   const source = sanitizeSource(raw.source);
+  const primaryInstanceId = sanitizePrimaryInstanceId(raw.primaryInstanceId);
   return {
     id: raw.id,
     name,
@@ -233,6 +235,7 @@ const sanitizeCollection = (raw) => {
     universeId,
     seriesId,
     ...(source ? { source } : {}),
+    ...(primaryInstanceId ? { primaryInstanceId } : {}),
     items,
     ...(Object.keys(removedItems).length ? { removedItems } : {}),
     createdAt,
@@ -315,7 +318,11 @@ const announceNewCollection = (id) => {
 // that doesn't pass it — a person clicking "New collection". Machine flows
 // (Creative Director, Writers Room) pass `source: 'auto'` explicitly. The route
 // schema doesn't accept `source`, so a client can't claim either stamp.
-export async function createCollection({ name, description = '', source = 'user' }) {
+export function createCollection(input) {
+  return persistNewCollection(input, []);
+}
+
+async function persistNewCollection({ name, description = '', source = 'user' }, items) {
   // Service-layer guards mirror sanitizeCollection so a direct caller
   // (tests, future internal usage) can't persist a record that the next
   // listCollections() read would silently drop.
@@ -338,7 +345,7 @@ export async function createCollection({ name, description = '', source = 'user'
       description: trimmedDescription,
       coverKey: null,
       source,
-      items: [],
+      items,
       createdAt: now,
       updatedAt: now,
     };
@@ -347,6 +354,77 @@ export async function createCollection({ name, description = '', source = 'user'
   });
   announceNewCollection(created.id);
   return created;
+}
+
+// An owner-managed collection has a deterministic id (mood board, music video,
+// deck, commission, …) or a universe/series link: its owner finds it by that id,
+// so a join copies its items but never retires it.
+// The shape of randomUUID(); fileCore's UUID_RE would pull its child-process
+// imports into every suite that loads collections.
+const RANDOM_COLLECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isOwnerManaged = (collection) => !RANDOM_COLLECTION_ID.test(collection.id)
+  || Boolean(collection.universeId) || Boolean(collection.seriesId);
+
+// Point every record that files renders into one of `fromIds` at `toId`, so
+// retiring them does not make an owner mint a fresh bucket on its next render.
+// Random-id collections are minted only by Creative Director projects and
+// Writers Room works.
+async function retargetCollectionOwners(fromIds, toId) {
+  const [{ repointProjectCollections }, { repointWorkMediaCollections }] = await Promise.all([
+    import('./creativeDirector/local.js'),
+    import('./writersRoom/local.js'),
+  ]);
+  await Promise.all([repointProjectCollections(fromIds, toId), repointWorkMediaCollections(fromIds, toId)]);
+}
+
+/**
+ * Merge several collections into one. The destination is the selected
+ * collection already carrying `name` (an owner-managed one first), else a new
+ * collection. Unless `keepOriginals`, every other selected collection is then
+ * retired: its owners are re-pointed at the destination and it is tombstoned,
+ * so the merge propagates to peers. Owner-managed sources are kept.
+ */
+export async function joinCollections({ name, collectionIds, keepOriginals = false }) {
+  const ids = [...new Set(collectionIds)];
+  if (ids.length < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
+
+  // Read each source before writing the destination so a stale selection or
+  // oversized union leaves no empty or partially populated collection behind.
+  const sources = [];
+  const itemsByKey = new Map();
+  for (const id of ids) {
+    const collection = await getCollection(id);
+    sources.push(collection);
+    for (const item of collection.items) {
+      const key = itemKey(item);
+      const existing = itemsByKey.get(key);
+      if (!existing || compareEarlierWins(item.addedAt, existing.addedAt) < 0) itemsByKey.set(key, item);
+    }
+    if (itemsByKey.size > ITEMS_MAX) {
+      throw codedError(`Joined collection exceeds the limit of ${ITEMS_MAX} items`, ERR_VALIDATION);
+    }
+  }
+  const union = [...itemsByKey.values()];
+  const needle = name.trim().toLowerCase();
+  const named = sources.filter((c) => c.name.trim().toLowerCase() === needle);
+  const target = named.find(isOwnerManaged) ?? named[0] ?? null;
+  const joined = target
+    ? (await bulkUpdateCollectionItems(target.id, { add: union.map(({ kind, ref }) => ({ kind, ref })) })).collection
+    : await persistNewCollection({ name }, union);
+
+  const others = sources.filter((source) => source.id !== joined.id);
+  const retire = keepOriginals ? [] : others.filter((source) => !isOwnerManaged(source)).map((source) => source.id);
+  const keptCollectionIds = others.map((source) => source.id).filter((id) => !retire.includes(id));
+  if (retire.length) await retargetCollectionOwners(retire, joined.id);
+  for (const id of retire) {
+    // A render filed into a source after it was read above moves too, so the
+    // tombstone (which empties the record) loses nothing.
+    const latest = await getCollection(id).catch(() => null);
+    const late = (latest?.items || []).filter((item) => !itemsByKey.has(itemKey(item)));
+    if (late.length) await bulkUpdateCollectionItems(joined.id, { add: late.map(({ kind, ref }) => ({ kind, ref })) });
+    await deleteCollection(id);
+  }
+  return { ...joined, removedCollectionIds: retire, keptCollectionIds };
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
@@ -661,25 +739,116 @@ export const musicVideoCollectionId = (projectId) => `mvc-${String(projectId).sl
 export const musicVideoCollectionNameFor = (projectName) =>
   `Music video: ${typeof projectName === 'string' && projectName.trim() ? projectName.trim() : 'Untitled'}`.slice(0, NAME_MAX_LENGTH);
 
-export async function findOrCreateMusicVideoCollection({ projectId, projectName }) {
+export const findOrCreateMusicVideoCollection = async ({ projectId, projectName }) => {
   if (!projectId || typeof projectId !== 'string') throw codedError('projectId is required', ERR_VALIDATION);
-  const id = musicVideoCollectionId(projectId);
+  return findOrCreateFixedCollection(musicVideoCollectionId(projectId), {
+    name: musicVideoCollectionNameFor(projectName),
+    description: 'Every still and clip generated for this music video.',
+  });
+};
+
+// The "External" collection: everything downloaded from outside (Video
+// Downloader, Mood Board Pinterest / X / URL imports). A fixed id so every
+// peer converges on one bucket instead of minting a same-named copy each.
+export const EXTERNAL_COLLECTION_ID = 'external';
+export const findOrCreateExternalCollection = () => findOrCreateFixedCollection(EXTERNAL_COLLECTION_ID, {
+  name: 'External',
+  description: 'Images and videos downloaded from outside sources (Video Downloader, Mood Board imports).',
+});
+
+// A mood board's own collection: every image generated for the board, named
+// exactly like the board. Deterministic id so peers converge on one bucket.
+export const moodBoardCollectionId = (boardId) => `mbc-${String(boardId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+const moodBoardCollectionName = (boardName) =>
+  (typeof boardName === 'string' && boardName.trim() ? boardName.trim() : 'Untitled mood board').slice(0, NAME_MAX_LENGTH);
+
+/** Find or create the board's collection, re-syncing its name to the board's current name. */
+export async function findOrCreateMoodBoardCollection({ boardId, boardName }) {
+  if (!boardId || typeof boardId !== 'string') throw codedError('boardId is required', ERR_VALIDATION);
+  const name = moodBoardCollectionName(boardName);
+  const collection = await findOrCreateFixedCollection(moodBoardCollectionId(boardId), {
+    name,
+    description: 'Every image generated for this mood board.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// Project ids keep equally named decks separate and converge across peers.
+export async function findOrCreateDeckCollection({ deckId, deckName }) {
+  const name = `Deck: ${deckName}`.slice(0, NAME_MAX_LENGTH);
+  const collection = await findOrCreateFixedCollection(`deck-${deckId}`, {
+    name,
+    description: 'Images generated for this deck.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// One collection per Creative Commission: every scheduled run of the same job
+// files into it instead of minting a dated bucket per fire. The id derives
+// from the commission id so peers converge on one bucket.
+export const commissionCollectionId = (commissionId) => `cdc-${String(commissionId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+export const commissionCollectionNameFor = (commissionName) =>
+  `Creative Director: ${typeof commissionName === 'string' && commissionName.trim() ? commissionName.trim() : 'Untitled job'}`.slice(0, NAME_MAX_LENGTH);
+
+export async function findOrCreateCommissionCollection({ commissionId, commissionName }) {
+  if (!commissionId || typeof commissionId !== 'string') throw codedError('commissionId is required', ERR_VALIDATION);
+  const name = commissionCollectionNameFor(commissionName);
+  const collection = await findOrCreateFixedCollection(commissionCollectionId(commissionId), {
+    name,
+    description: 'Every render from this Creative Director job.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+// Catalog record types get one library-wide collection each, so every cast
+// portrait, environment plate and object reference is findable by kind.
+export const CATALOG_TYPE_COLLECTIONS = Object.freeze({
+  character: { id: 'catalog-cast', name: 'Cast', description: 'Portraits and references of every catalog cast member.' },
+  place: { id: 'catalog-environments', name: 'Environments', description: 'References of every catalog environment.' },
+  object: { id: 'catalog-objects', name: 'Objects', description: 'References of every catalog object.' },
+});
+
+export function findOrCreateCatalogTypeCollection(type) {
+  const spec = CATALOG_TYPE_COLLECTIONS[type];
+  if (!spec) throw codedError(`No collection for catalog type: ${type}`, ERR_VALIDATION);
+  return findOrCreateFixedCollection(spec.id, spec);
+}
+
+export const findOrCreateStoryboardCollection = ({ id, name }) => findOrCreateFixedCollection(`storyboard-${id}`, {
+  name: `Storyboard: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Images generated for this storyboard.',
+});
+
+export const findOrCreateFableLoomCollection = ({ id, name }) => findOrCreateFixedCollection(`fable-loom-${id}`, {
+  name: `Fable Loom: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Images and clips generated for this Fable Loom.',
+});
+
+export const findOrCreateTimelineCollection = ({ id, name }) => findOrCreateFixedCollection(`timeline-${id}`, {
+  name: `Timeline: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Videos exported from this timeline.',
+});
+
+export const findOrCreateSpriteCollection = ({ id, name }) => findOrCreateFixedCollection(`sprite-${id}`, {
+  name: `Sprite: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Generated reference images for this sprite.',
+});
+
+export const findOrCreateCompositionsCollection = () => findOrCreateFixedCollection('compositions', {
+  name: 'Compositions',
+  description: 'Videos exported from HTML compositions and Code Animation.',
+});
+
+// Find a collection by its deterministic id, or create it. A tombstone at the
+// id is overwritten (re-creating a deleted auto bucket on next use).
+async function findOrCreateFixedCollection(id, { name, description }) {
   assertCollectionId(id);
   let createdId = null;
   const result = await store().queueRecordWrite(id, async () => {
     const current = await store().loadOne(id);
     if (current && !current.deleted) return current;
     const now = new Date().toISOString();
-    const next = {
-      id,
-      name: musicVideoCollectionNameFor(projectName),
-      description: 'Every still and clip generated for this music video.',
-      coverKey: null,
-      source: 'auto',
-      items: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+    const next = { id, name, description, coverKey: null, source: 'auto', items: [], createdAt: now, updatedAt: now };
     createdId = id;
     await store().saveOneNow(id, next);
     return next;
@@ -780,6 +949,20 @@ export const renameCollectionForUniverse = (universeId, newUniverseName) =>
 // outside this list is local-only and must not advance `updatedAt` (the LWW
 // clock every peer compares against) — see the `source` note below.
 const WIRE_VISIBLE_PATCH_FIELDS = ['name', 'description', 'coverKey'];
+
+// The selected machine is an operator preference for this install. Peers sync
+// each asset's primary through the existing media records.
+export async function setCollectionPrimaryMachine(id, instanceId) {
+  assertCollectionId(id);
+  if (!sanitizePrimaryInstanceId(instanceId)) throw codedError('Invalid primary machine', ERR_VALIDATION);
+  return store().queueRecordWrite(id, async () => {
+    const current = await getCollection(id);
+    if (current.primaryInstanceId === instanceId) return current;
+    const next = { ...current, primaryInstanceId: instanceId };
+    await store().saveOneNow(id, next);
+    return next;
+  });
+}
 
 export async function updateCollection(id, patch) {
   assertCollectionId(id);
@@ -956,7 +1139,7 @@ export async function addItem(id, item) {
  *
  * Returns the post-write collection plus counts: `{ collection, added, removed }`.
  */
-export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}) {
+export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}, { preserveRemovals = false } = {}) {
   if (!Array.isArray(add)) throw codedError('add must be an array', ERR_VALIDATION);
   if (!Array.isArray(remove)) throw codedError('remove must be an array', ERR_VALIDATION);
 
@@ -995,12 +1178,14 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     const additions = [];
     for (const { kind, ref } of cleanAdd) {
       const key = `${kind}:${ref}`;
-      if (presentKeys.has(key)) continue;
+      if (presentKeys.has(key) || (preserveRemovals && removedItems[key])) continue;
       presentKeys.add(key);
       // A key removed earlier in this same batch keeps its removal record, so
       // the re-add must postdate it to survive.
       additions.push({ kind, ref, addedAt: removedItems[key] ? stampAfter(removedItems[key]) : now });
     }
+
+    if (!additions.length && !removed) return { collection: cur, added: 0, removed: 0 };
 
     const nextItems = [...remainingItems, ...additions];
     if (nextItems.length > ITEMS_MAX) {
@@ -1182,6 +1367,7 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
   let firstError = null;
   const outcomes = await mapWithConcurrency(remoteCollections, COLLECTION_WRITE_CONCURRENCY, (remote) => {
     const sanitized = sanitizeCollection(remote);
+    if (sanitized) delete sanitized.primaryInstanceId;
     if (!sanitized) return false;
     return store().queueRecordWrite(sanitized.id, async () => {
       const local = await store().loadOne(sanitized.id);

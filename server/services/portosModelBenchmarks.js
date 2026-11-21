@@ -217,4 +217,3 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   return { observation, complete, failureReason };
 }
 
-export const PORTOS_BENCHMARK_TASK_COUNT = TASKS.length;

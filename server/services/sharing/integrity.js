@@ -11,11 +11,12 @@
  *   `{ available: bool, reason?, records: [...] }`.
  */
 
-import { computeRecordIntegrity } from '../../lib/syncIntegrity.js';
+import { computeRecordIntegrity, INTEGRITY_STATUS } from '../../lib/syncIntegrity.js';
+import { peerCollectionIntegrityPayloadSchema } from '../../lib/peerSyncValidation.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
-import { listLooms } from '../fableLoom/index.js';
+import { listLooms } from '../fableLoom/records.js';
 import { listAuthors } from '../authors/index.js';
 import { listArtists } from '../artists/index.js';
 import { listAlbums } from '../albums/index.js';
@@ -31,7 +32,13 @@ import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
 import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
-import { assetIntegrityForRecord } from './peerSync.js';
+import { getInstanceId } from '../instanceIdentity.js';
+import { hostedByForCollectionItems, hostedCountsByPeer, listHostedEntries } from '../peerHostedMedia.js';
+import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
+import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
+import { sanitizeAssetFilename } from './buckets.js';
+import { collectionVideoRefToFilename } from '../collectionVideoFiles.js';
+import { itemKey } from '../../lib/mediaItemKey.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
@@ -74,6 +81,7 @@ async function recordsForKind(kind) {
  */
 export async function buildLocalManifest(kind) {
   const records = await recordsForKind(kind);
+  const hostedEntries = kind === 'mediaCollection' ? await listHostedEntries() : null;
   // Hash records SEQUENTIALLY (for...of, not Promise.all(map)) so a large
   // library can't fan out an unbounded number of concurrent file-hash reads and
   // spike CPU/disk. Each assetShaListForRecord already reads many files; doing
@@ -91,6 +99,11 @@ export async function buildLocalManifest(kind) {
       const { buildWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
       workAssets = [...await buildWorkBodyManifest(r), ...await buildWorkBibleManifest(r)];
     }
+    // Per-peer count of this collection's files streamed from that peer, so
+    // the requester can accept hash gaps that host mode explains.
+    const hostedBy = hostedEntries && !deleted
+      ? hostedCountsByPeer(await hostedByForCollectionItems(r.items, { entries: hostedEntries }))
+      : {};
     out.push({
       id: r.id,
       name: r.name ?? r.title,
@@ -102,26 +115,110 @@ export async function buildLocalManifest(kind) {
       // still-on-disk assets is pure wasted file I/O.
       assetHashes: [...assetIntegrity.assetHashes, ...workAssets.map((asset) => asset.sha256)].sort(),
       metadataMissing: assetIntegrity.metadataMissing,
+      ...(Object.keys(hostedBy).length ? { hostedBy } : {}),
     });
   }
   return out;
+}
+
+const assetKey = ({ kind, filename }) => `${kind}:${filename}`;
+
+// Reference key → local collection item key, so a file neither machine holds
+// can be offered for removal from the collection (nothing can sync it back).
+function localItemKeysByReference(items) {
+  const out = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (typeof item?.ref !== 'string' || (item.kind !== 'image' && item.kind !== 'video')) continue;
+    const filename = sanitizeAssetFilename(item.kind === 'video' ? collectionVideoRefToFilename(item.ref) : item.ref);
+    if (filename) out.set(assetKey({ kind: item.kind, filename }), itemKey(item));
+  }
+  return out;
+}
+
+function collectionInventory({ record, assetManifest, videoFilenames, hostedBy, sourceInstanceId }) {
+  const filenames = new Map(Object.entries(videoFilenames ?? {}));
+  const manifest = new Map(assetManifest.filter((asset) => asset.sha256).map((asset) => [assetKey(asset), asset]));
+  const files = new Map();
+  const matched = new Set();
+  for (const ref of referenceCollectionAssetManifest(record)) {
+    const alias = ref.kind === 'video' ? sanitizeAssetFilename(filenames.get(ref.filename)) : null;
+    const file = alias ? { ...ref, filename: alias } : ref;
+    const copy = manifest.get(assetKey(file));
+    files.set(assetKey(ref), { ...file, sha256: copy?.sha256, alias });
+    if (copy) matched.add(copy);
+  }
+  const assets = [...matched];
+  return {
+    ...record,
+    instanceId: sourceInstanceId,
+    hostedFiles: hostedBy ?? {},
+    hostedBy: hostedCountsByPeer(hostedBy),
+    files,
+    assetHashes: assets.map((asset) => asset.sha256),
+    metadataMissing: assets.some((asset) => asset.kind === 'image' && !asset.sidecarSha256),
+  };
+}
+
+function compareCollections(localPayload, peerPayload) {
+  const local = localPayload ? collectionInventory(localPayload) : null;
+  const peer = collectionInventory(peerPayload);
+  const records = computeRecordIntegrity(local ? [local] : [], [peer], { selfId: local?.instanceId, peerId: peer.instanceId });
+  if (!local || local.deleted === true || peer.deleted === true) return records;
+
+  const differences = new Map();
+  let localItemKeys;
+  for (const [key, ref] of new Map([...local.files, ...peer.files])) {
+    const here = local.files.get(key);
+    const there = peer.files.get(key);
+    const localSha = here?.sha256;
+    const peerSha = there?.sha256;
+    if (localSha && localSha === peerSha) continue;
+    // Host mode: one side streams the file from the other instead of copying
+    // it, so the single stored copy is the intended state, not a gap.
+    const fileKey = assetKey(here ?? there ?? ref);
+    if (localSha && !peerSha && peer.hostedFiles[fileKey]?.includes(local.instanceId)) continue;
+    if (peerSha && !localSha && local.hostedFiles[fileKey]?.includes(peer.instanceId)) continue;
+    const availability = localSha ? (peerSha ? 'different' : 'local') : (peerSha ? 'peer' : 'neither');
+    const filename = (localSha ? here.filename : peerSha ? there.filename : here?.alias ?? there?.alias) ?? ref.filename;
+    const asset = { kind: ref.kind, filename, availability };
+    // Built on first need: most collections have no file missing everywhere.
+    const removableKey = availability === 'neither'
+      ? (localItemKeys ??= localItemKeysByReference(localPayload.record?.items)).get(key)
+      : null;
+    if (removableKey) asset.itemKey = removableKey;
+    differences.set(`${availability}:${assetKey(asset)}`, asset);
+  }
+  const comparison = records[0];
+  // Equal hash lists can hide missing files on both sides or the same bytes
+  // stored under different filenames. Keep timestamp divergence actionable.
+  if (differences.size && comparison.status !== INTEGRITY_STATUS.DIVERGED) {
+    comparison.status = INTEGRITY_STATUS.ASSETS_MISSING;
+  }
+  return [{ ...comparison, assetDifferences: [...differences.values()] }];
 }
 
 /**
  * Fetch the peer's manifest for `kind`, run the local-vs-remote diff, and
  * return the classified record list.
  *
- * @param {{ peerId: string, kind: string }} opts
+ * @param {{ peerId: string, kind: string, recordId?: string }} opts
  * @returns {Promise<{ available: boolean, reason?: string, records: Array }>}
  */
-export async function getPeerIntegrity({ peerId, kind }) {
+export async function getPeerIntegrity({ peerId, kind, recordId }) {
   const peers = await getPeers().catch(() => []);
   const peer = peers.find((p) => p.instanceId === peerId) || null;
 
   if (!peer) return { available: false, reason: 'peer-not-found', records: [] };
 
+  const collectionDetail = kind === 'mediaCollection' && !!recordId;
+  const query = new URLSearchParams({ kind });
+  if (collectionDetail) {
+    query.set('id', recordId);
+    query.set('collectionIntegrity', '1');
+  }
+  const path = collectionDetail ? '/api/peer-sync/record' : '/api/peer-sync/manifest';
   const res = await peerFetch(
-    `${peerBaseUrl(peer)}/api/peer-sync/manifest?kind=${encodeURIComponent(kind)}`,
+    `${peerBaseUrl(peer)}${path}?${query}`,
     { signal: AbortSignal.timeout(PEER_INTEGRITY_TIMEOUT_MS), maxBytes: PEER_INTEGRITY_MAX_BYTES },
     peer,
   ).catch(() => null);
@@ -131,7 +228,13 @@ export async function getPeerIntegrity({ peerId, kind }) {
   // an older PortOS without the /manifest route. Lumping them together would
   // tell the user "peer too old, upgrade it" when the peer is simply down.
   if (!res) return { available: false, reason: 'peer-unreachable', records: [] };
-  if (res.status === 404) return { available: false, reason: 'peer-too-old', records: [] };
+  if (res.status === 404) {
+    if (!collectionDetail) return { available: false, reason: 'peer-too-old', records: [] };
+    // A 404 can mean either a missing collection or an older peer. The
+    // category manifest can distinguish a local-only row from an unknown one.
+    const fallback = await getPeerIntegrity({ peerId, kind });
+    return { ...fallback, records: fallback.records.filter((entry) => entry.id === recordId) };
+  }
   if (!res.ok) return { available: false, reason: 'fetch-failed', records: [] };
 
   const body = await readPeerBody(res, 'json', {
@@ -139,6 +242,15 @@ export async function getPeerIntegrity({ peerId, kind }) {
     maxBytes: PEER_INTEGRITY_MAX_BYTES,
   }).catch(() => null);
   if (!body) return { available: false, reason: 'fetch-failed', records: [] };
+  if (collectionDetail) {
+    const parsed = peerCollectionIntegrityPayloadSchema.safeParse(body);
+    if (!parsed.success || parsed.data.sourceInstanceId !== peerId || parsed.data.record.id !== recordId ||
+        (parsed.data.record.deleted !== true && !Array.isArray(parsed.data.record.items))) {
+      return { available: false, reason: 'fetch-failed', records: [] };
+    }
+    const localPayload = await getRecordPayloadForPeer(kind, recordId, { collectionIntegrity: true });
+    return { available: true, records: compareCollections(localPayload, parsed.data) };
+  }
   if (!Array.isArray(body.records)) return { available: false, reason: 'fetch-failed', records: [] };
   if (!isLegacyManifestKind(kind) &&
       (typeof body.manifestVersion !== 'number' || body.manifestVersion < PEER_MANIFEST_VERSION)) {
@@ -153,5 +265,6 @@ export async function getPeerIntegrity({ peerId, kind }) {
   );
 
   const local = await buildLocalManifest(kind);
-  return { available: true, records: computeRecordIntegrity(local, remote) };
+  const selfId = await getInstanceId().catch(() => null);
+  return { available: true, records: computeRecordIntegrity(local, remote, { selfId, peerId }) };
 }

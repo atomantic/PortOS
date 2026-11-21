@@ -88,7 +88,7 @@ export async function getOrComputeImageSha256(imagePath) {
 let gallerySha256Writer = null;
 /**
  * Register the gallery sidecar edit-queue writer `(filename, entry) => merged | null`
- * that persists the hash cache (services/imageGen/local.js `cacheImageSha256`).
+ * that persists the hash cache (services/imageGen/localGallery.js `cacheImageSha256`).
  */
 export function registerGallerySha256Writer(writer) {
   gallerySha256Writer = typeof writer === 'function' ? writer : null;

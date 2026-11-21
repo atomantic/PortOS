@@ -52,7 +52,7 @@ import { getTrack, mergeTracksFromSync } from '../tracks/index.js';
 import { getProject, mergeProjectsFromSync } from '../creativeDirector/local.js';
 import { getProject as getMusicVideoProject, mergeProjectsFromSync as mergeMusicVideoProjectsFromSync } from '../musicVideo/projects.js';
 import { getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
-import { getLoom, mergeLoomsFromSync } from '../fableLoom/index.js';
+import { getLoom, mergeLoomsFromSync } from '../fableLoom/records.js';
 import {
   getWorkForSync, mergeWorksFromSync,
   getFolderForSync, mergeFoldersFromSync,
@@ -98,22 +98,22 @@ export const RECORD_KINDS = Object.freeze({
     load: (id) => getUniverse(id, { includeDeleted: true }),
     merge: mergeUniversesFromSync,
     buildAssetManifest: null, // bundle-aware builder lives in buildPushPayload's universe hook
-    referencedAssets: (record, { linkedCollection }) => referenceAssetManifestWithCollection(record, linkedCollection),
+    referencedAssets: (record, { linkedCollection, videoFilenames }) => referenceAssetManifestWithCollection(record, linkedCollection, videoFilenames),
     hasEphemeral: true,
   },
   series: {
     load: (id) => getSeries(id, { includeDeleted: true }),
     merge: mergeSeriesFromSync,
     buildAssetManifest: null, // bundle-aware builder lives in buildPushPayload's series hook
-    referencedAssets: (record, { issues, linkedCollection }) => referenceAssetManifestForSeries(record,
-      (Array.isArray(issues) ? issues : []).filter((issue) => issue?.deleted !== true && issue?.ephemeral !== true), linkedCollection),
+    referencedAssets: (record, { issues, linkedCollection, videoFilenames }) => referenceAssetManifestForSeries(record,
+      (Array.isArray(issues) ? issues : []).filter((issue) => issue?.deleted !== true && issue?.ephemeral !== true), linkedCollection, videoFilenames),
     hasEphemeral: true,
   },
   mediaCollection: {
     load: (id) => getCollection(id, { includeDeleted: true }),
     merge: mergeMediaCollectionsFromSync,
     buildAssetManifest: buildCollectionAssetManifest,
-    referencedAssets: referenceCollectionAssetManifest,
+    referencedAssets: (record, { videoFilenames }) => referenceCollectionAssetManifest(record, videoFilenames),
     hasEphemeral: false,
   },
   author: {

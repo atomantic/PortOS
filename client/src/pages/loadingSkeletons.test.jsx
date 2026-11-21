@@ -20,7 +20,7 @@ function pendingModule(path) {
   };
 }
 
-vi.mock('../services/api', pendingModule('../services/api'));
+vi.mock('../services/apiCore.js', pendingModule('../services/apiCore.js'));
 vi.mock('../services/apiCatalog.js', pendingModule('../services/apiCatalog.js'));
 vi.mock('../services/apiCatalogTypes.js', pendingModule('../services/apiCatalogTypes.js'));
 vi.mock('../services/apiCreativeDirector.js', pendingModule('../services/apiCreativeDirector.js'));

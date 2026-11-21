@@ -59,7 +59,7 @@ vi.mock('../../lib/processEnv.js', () => ({
   safeChildProcessOptions: (options = {}) => ({ ...options, env: {}, windowsHide: true }),
 }));
 vi.mock('../../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn() }));
-vi.mock('../videoGen/local.js', () => ({
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()),
   loadHistory: vi.fn(),
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
@@ -97,7 +97,7 @@ vi.mock('./shotSegments.js', () => ({
 
 import { renderMusicVideo, getRenderJobStatus, getActiveRenderJobId, cancelRender } from './render.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
-import { loadHistory } from '../videoGen/local.js';
+import { loadHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { unlink } from 'fs/promises';
@@ -844,7 +844,7 @@ describe('a song change during a footage render (#15154)', () => {
   });
 
   it("leaves another instance's render running, and its finished file never completes the project", async () => {
-    const { mutateVideoHistory } = await import('../videoGen/local.js');
+    const { mutateVideoHistory } = await import('../videoGen/history.js');
     const pid = 'song-peer';
     prime(pid);
     const events = [];

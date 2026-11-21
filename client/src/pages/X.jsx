@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { AtSign, BarChart3, Check, ExternalLink, FilePen, Plus, RefreshCw, ShieldAlert, X as XIcon } from 'lucide-react';
-import * as api from '../services/api';
+import {
+  getXAccounts,
+  getXPosts,
+  getXDrafts,
+  updateXAccount,
+  createXAccount,
+  deleteXAccount,
+  syncXAccount,
+  openXAccountDestination,
+  createXDraft,
+  reviewXDraft,
+  openXDraft,
+} from '../services/apiX.js';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -99,7 +111,7 @@ export default function XPage() {
     setLoading(true);
     setAccountsReadError('');
     try {
-      const result = await api.getXAccounts({ silent: true });
+      const result = await getXAccounts({ silent: true });
       setAccounts(result.accounts || []);
     } catch (err) {
       setAccountsReadError(err.message || 'Could not load X accounts.');
@@ -113,7 +125,7 @@ export default function XPage() {
     const requestId = ++selectedLoadRef.current[kind];
     const setRead = kind === 'posts' ? setPostRead : setDraftRead;
     const setItems = kind === 'posts' ? setPosts : setDrafts;
-    const read = kind === 'posts' ? api.getXPosts : api.getXDrafts;
+    const read = kind === 'posts' ? getXPosts : getXDrafts;
     setRead({ status: 'loading', error: '' });
     if (!requestedAccountId) return;
     try {
@@ -172,7 +184,7 @@ export default function XPage() {
     const payload = { label, username, enabled: accountForm.enabled, notes: accountForm.notes };
     if (accountFormMode === 'edit' && selected) {
       const savedId = selected.id;
-      finish('save-account', api.updateXAccount(savedId, payload, { silent: true }), (result) => {
+      finish('save-account', updateXAccount(savedId, payload, { silent: true }), (result) => {
         setAccounts((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
         if (currentAccountIdRef.current === savedId) {
           const next = { label: result.label, username: result.username, enabled: result.enabled, notes: result.notes || '' };
@@ -185,7 +197,7 @@ export default function XPage() {
       });
       return;
     }
-    finish('create-account', api.createXAccount(payload, { silent: true }), (result) => {
+    finish('create-account', createXAccount(payload, { silent: true }), (result) => {
       setAccounts((previous) => [...previous, result]);
       setAccountForm(emptyAccount);
       closeAccountForm();
@@ -194,14 +206,14 @@ export default function XPage() {
     });
   };
 
-  const removeAccount = (id) => finish(`delete-account-${id}`, api.deleteXAccount(id, { silent: true }), () => {
+  const removeAccount = (id) => finish(`delete-account-${id}`, deleteXAccount(id, { silent: true }), () => {
     setAccounts((previous) => previous.filter((candidate) => candidate.id !== id));
     setDeleteAccountId(null);
     if (id === accountId) navigate('/x');
     setNotice('X account removed.');
   });
 
-  const sync = () => selected && finish('sync', api.syncXAccount(selected.id, { silent: true }), (result) => {
+  const sync = () => selected && finish('sync', syncXAccount(selected.id, { silent: true }), (result) => {
     setAccounts((previous) => previous.map((candidate) => candidate.id === result.account.id ? result.account : candidate));
     if (currentAccountIdRef.current !== selected.id) return;
     ++selectedLoadRef.current.posts;
@@ -211,26 +223,26 @@ export default function XPage() {
     setNotice(`Diagnostic complete: ${result.ingested} public post(s) captured.`);
   });
 
-  const openDestination = (kind) => selected && finish(`open-${kind}`, api.openXAccountDestination(selected.id, kind, { silent: true }), () => {
+  const openDestination = (kind) => selected && finish(`open-${kind}`, openXAccountDestination(selected.id, kind, { silent: true }), () => {
     setNotice('Opened the requested X page in the managed browser.');
   });
 
   const createDraft = (event) => {
     event.preventDefault();
     if (!selected || !draftBody.trim()) return;
-    finish('create-draft', api.createXDraft({ accountId: selected.id, body: draftBody.trim() }, { silent: true }), (result) => {
+    finish('create-draft', createXDraft({ accountId: selected.id, body: draftBody.trim() }, { silent: true }), (result) => {
       setDrafts((previous) => [result, ...previous]);
       setDraftBody('');
       setNotice('Draft saved locally. Submit it for review when you are ready.');
     });
   };
 
-  const reviewDraft = (draft, state) => finish(`review-${draft.id}`, api.reviewXDraft(draft.id, { state }, { silent: true }), (result) => {
+  const reviewDraft = (draft, state) => finish(`review-${draft.id}`, reviewXDraft(draft.id, { state }, { silent: true }), (result) => {
     setDrafts((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
     setNotice(state === 'pending_review' ? 'Draft submitted to Review Hub.' : `Draft ${state}.`);
   });
 
-  const openDraft = (draft) => finish(`open-draft-${draft.id}`, api.openXDraft(draft.id, { silent: true }), (result) => {
+  const openDraft = (draft) => finish(`open-draft-${draft.id}`, openXDraft(draft.id, { silent: true }), (result) => {
     setDrafts((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
     setNotice('Opened the approved draft in X for a final manual check. Nothing was posted.');
   });

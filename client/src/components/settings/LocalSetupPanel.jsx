@@ -7,7 +7,7 @@ import { usePrevious } from '../../hooks/usePrevious.js';
 import { useInstallStream } from '../../hooks/useInstallStream.js';
 import useMounted from '../../hooks/useMounted.js';
 import QueueInstallInvestigationButton from '../install/QueueInstallInvestigationButton';
-import { checkImageGenSetup, detectImageGenPython, createImageGenVenv } from '../../services/api';
+import { checkImageGenSetup, detectImageGenPython, createImageGenVenv } from '../../services/apiImageVideo.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);

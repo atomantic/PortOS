@@ -24,8 +24,6 @@ import {
 } from '../lib/fileUtils.js';
 import {
   MODEL_ABUSE_GUARD,
-  MODEL_ABUSE_GUARD_CHUNK_OVERLAP,
-  MODEL_ABUSE_GUARD_CHUNK_TOKENS,
   MODEL_ABUSE_GUARD_ID,
   MODEL_ABUSE_GUARD_MAX_INPUT_CHARS,
   MODEL_ABUSE_GUARD_MAX_OUTPUT_CHARS,
@@ -66,7 +64,7 @@ const GUARD_PYTHON = IS_WIN
 const FALLBACK_GUARD_PYTHON = IS_WIN
   ? join(homedir(), '.portos', 'venv-prompt-guard', 'Scripts', 'python.exe')
   : join(homedir(), '.portos', 'venv-prompt-guard', 'bin', 'python3');
-const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'run_prompt_guard.py');
+const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'run_prompt_guard.py');
 const RUNTIME_PROBE_TIMEOUT_MS = 30_000;
 const MAX_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INSTALL_EVENT_CHARS = 300;
@@ -687,8 +685,3 @@ export async function runModelAbuseScan({
   };
 }
 
-export const MODEL_ABUSE_GUARD_RUNTIME = Object.freeze({
-  chunkTokens: MODEL_ABUSE_GUARD_CHUNK_TOKENS,
-  chunkOverlap: MODEL_ABUSE_GUARD_CHUNK_OVERLAP,
-  timeoutMs: MODEL_ABUSE_GUARD_TIMEOUT_MS,
-});

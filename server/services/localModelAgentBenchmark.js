@@ -68,8 +68,6 @@ export const LOCAL_TUI_AGENT_BENCHMARK_TARGETS = Object.freeze({
   }),
 });
 
-export const OPENCODE_AGENT_BENCHMARK_TARGETS = LOCAL_TUI_AGENT_BENCHMARK_TARGETS;
-
 export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AGENT_BENCHMARK.txt') => [
   'This is a disposable PortOS runtime benchmark. You must exercise the terminal tool loop.',
   `In the current scratch workspace, create a file named PORTOS_AGENT_BENCHMARK.txt at exactly this path: ${benchmarkFilePath}`,
@@ -77,10 +75,6 @@ export const buildOpenCodeAgentBenchmarkPrompt = (benchmarkFilePath = 'PORTOS_AG
   'Read that file back with a terminal tool, verify the exact sentinel, and then reply with exactly',
   'PORTOS_AGENT_BENCHMARK_OK. Do not create or modify any other file.',
 ].join(' ');
-
-// Kept as a stable export for callers/tests that only need the prompt shape;
-// live runs use the builder with their disposable scratch path below.
-export const OPENCODE_AGENT_BENCHMARK_PROMPT = buildOpenCodeAgentBenchmarkPrompt();
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 

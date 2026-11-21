@@ -113,8 +113,10 @@ import { AudioLines,
 
 // NAV_COMMANDS owns every structural field shared with the sidebar. This map
 // intentionally contains presentation only: giving a manifest path an icon is
-// what opts that destination into the sidebar. External and runtime-hydrated
-// rows have no manifest destination and stay explicitly local below.
+// what opts that destination into the sidebar (a row with a manifest
+// `parentPath` renders nested under that parent). The same icons serve in-page
+// tab bars and saved Pinned/Recent rows. External and runtime-hydrated rows
+// have no manifest destination and stay explicitly local in the sidebar.
 export const NAV_PRESENTATION = {
   '/': { icon: Home, single: true },
   '/review': { icon: ClipboardList, single: true },
@@ -152,20 +154,20 @@ export const NAV_PRESENTATION = {
   '/cos/agents': { icon: Cpu },
   '/cos/briefing': { icon: Newspaper },
   '/cos/config': { icon: Settings },
-  '/cos/digest': { icon: Calendar },
+  '/cos/briefing/digest': { icon: Calendar },
   '/feature-agents': { icon: Wand2 },
   '/cos/gsd': { icon: Compass },
   '/cos/health': { icon: Activity },
   '/cos/learning': { icon: GraduationCap },
   '/cos/memory': { icon: Brain },
   '/cos/mind': { icon: MessageSquare },
-  '/cos/run-events': { icon: ScrollText },
+  '/cos/runs/events': { icon: ScrollText },
   '/cos/runs': { icon: Play },
   '/cos/schedule': { icon: Clock },
   '/agents': { icon: Users },
   '/cos/jobs': { icon: Bot },
   '/cos/tasks': { icon: FileText },
-  '/cos/workflow': { icon: ChartGantt },
+  '/cos/schedule/timeline': { icon: ChartGantt },
   '/messages/beeper': { icon: MessageCircle },
   '/messages/config': { icon: Settings },
   '/messages/contacts': { icon: Users },
@@ -178,14 +180,15 @@ export const NAV_PRESENTATION = {
   '/x': { icon: AtSign },
   '/3d': { icon: Boxes },
   '/authors': { icon: FilePen },
-  '/catalog': { icon: Sparkles },
-  '/casting': { icon: Drama },
-  '/environments': { icon: Mountain },
-  '/objects': { icon: Package },
+  '/create/media': { icon: Layers },
+  '/create/story': { icon: PenLine },
+  '/catalog': { icon: Sparkles, activePathPrefixes: ['/catalog', '/casting', '/environments', '/objects'] },
+  '/catalog/casting': { icon: Drama },
+  '/catalog/environments': { icon: Mountain },
+  '/catalog/objects': { icon: Package },
   '/creative-commission': { icon: CalendarClock },
   '/code-animation': { icon: FileCode2 },
   '/creative-director': { icon: Clapperboard },
-  '/video': { icon: Clapperboard },
   '/pipeline/editorial-checks': { icon: ListChecks },
   '/fableloom': { icon: Waypoints },
   '/game': { icon: Gamepad2 },

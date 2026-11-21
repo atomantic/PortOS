@@ -15,10 +15,12 @@ function makeDeferred(registry, id) {
   return promise;
 }
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPersonalities.js', () => ({
   getAgentPersonality: vi.fn(id => makeDeferred(mockAgentDeferreds, id)),
-  getPlatformAccounts: vi.fn(id => makeDeferred(mockPlatformDeferreds, id)),
   toggleAgentPersonality: vi.fn(),
+}));
+vi.mock('../../services/apiAccounts.js', () => ({
+  getPlatformAccounts: vi.fn(id => makeDeferred(mockPlatformDeferreds, id)),
 }));
 
 vi.mock('../BrailleSpinner', () => ({
@@ -35,7 +37,8 @@ vi.mock('./tabs/PublishedTab', () => ({ default: () => null }));
 vi.mock('./tabs/SchedulesTab', () => ({ default: () => null }));
 vi.mock('./tabs/ActivityTab', () => ({ default: () => null }));
 
-import * as api from '../../services/api';
+import { getAgentPersonality, toggleAgentPersonality } from '../../services/apiPersonalities.js';
+import { getPlatformAccounts } from '../../services/apiAccounts.js';
 import AgentDetail from './AgentDetail';
 
 function Harness() {
@@ -72,8 +75,8 @@ describe('AgentDetail route lifecycle', () => {
       screen.getByText('go-b').click();
     });
     await waitFor(() => {
-      expect(api.getAgentPersonality).toHaveBeenLastCalledWith('agent-b');
-      expect(api.getPlatformAccounts).toHaveBeenLastCalledWith('agent-b');
+      expect(getAgentPersonality).toHaveBeenLastCalledWith('agent-b');
+      expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-b');
     });
 
     await act(async () => {
@@ -120,7 +123,7 @@ describe('AgentDetail route lifecycle', () => {
     await act(async () => {
       screen.getByRole('button', { name: 'Enabled' }).click();
     });
-    expect(api.toggleAgentPersonality).toHaveBeenCalledWith('agent-b', false);
+    expect(toggleAgentPersonality).toHaveBeenCalledWith('agent-b', false);
   });
 
   it('keeps the new agent load active when an old toggle completes', async () => {
@@ -130,7 +133,7 @@ describe('AgentDetail route lifecycle', () => {
       mockPlatformDeferreds['agent-a'].resolve([]);
     });
     let completeToggle;
-    api.toggleAgentPersonality.mockImplementationOnce(() => new Promise(resolve => {
+    toggleAgentPersonality.mockImplementationOnce(() => new Promise(resolve => {
       completeToggle = resolve;
     }));
     await act(async () => { screen.getByRole('button', { name: 'Enabled' }).click(); });

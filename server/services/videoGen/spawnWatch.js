@@ -793,7 +793,7 @@ export async function spawnAndWatchVideo({
   // metadata, staged source images/audio — is closed over and reused verbatim, so
   // the relaunch is the same render with smaller command buffers, not a new job.
   // Deliberately NOT gated on a runtime allowlist: the phase markers the decision
-  // reads are emitted by scripts/generate_ltx2.py alone, so every other runtime is
+  // reads are emitted by scripts/ml/generate_ltx2.py alone, so every other runtime is
   // excluded by construction rather than by a list that could drift.
   const maybeRelaunchForMetalWatchdog = async ({ code, signal, childKilled, cancelEpochAtClose, stderr }) => {
     if (code === 0) return false;

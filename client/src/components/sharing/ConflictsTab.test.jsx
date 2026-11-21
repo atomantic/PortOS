@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSyncReview.js', () => ({
   listConflicts: vi.fn(),
   getConflict: vi.fn(),
   resolveConflict: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 
-import * as api from '../../services/api';
+import { listConflicts, getConflict, resolveConflict } from '../../services/apiSyncReview.js';
 import ConflictsTab from './ConflictsTab';
 
 const entry = {
@@ -32,13 +32,13 @@ const compact = (e) => ({ ...e, diffSummary: e.diffSummary.map(({ field, changed
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listConflicts.mockResolvedValue({ conflicts: [compact(entry)] });
-  api.getConflict.mockResolvedValue(entry);
+  listConflicts.mockResolvedValue({ conflicts: [compact(entry)] });
+  getConflict.mockResolvedValue(entry);
 });
 
 describe('ConflictsTab', () => {
   it('shows a retryable load failure and does not claim the queue is empty', async () => {
-    api.listConflicts.mockRejectedValueOnce(new Error('journal unavailable'));
+    listConflicts.mockRejectedValueOnce(new Error('journal unavailable'));
     const user = userEvent.setup();
     render(<ConflictsTab />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load pending conflicts.');
@@ -46,25 +46,25 @@ describe('ConflictsTab', () => {
 
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/2 field\(s\)/)).toBeInTheDocument();
-    expect(api.listConflicts).toHaveBeenCalledTimes(2);
+    expect(listConflicts).toHaveBeenCalledTimes(2);
   });
 
   it('shows the existing empty copy after a successful empty response', async () => {
-    api.listConflicts.mockResolvedValue({ conflicts: [] });
+    listConflicts.mockResolvedValue({ conflicts: [] });
     render(<ConflictsTab />);
     expect(await screen.findByText(/No pending conflicts/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('treats a malformed successful payload as a load failure', async () => {
-    api.listConflicts.mockResolvedValue({});
+    listConflicts.mockResolvedValue({});
     render(<ConflictsTab />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load pending conflicts.');
     expect(screen.queryByText(/No pending conflicts/)).not.toBeInTheDocument();
   });
 
   it('shows the degraded-detection banner when the base-hash store is latched (#7260)', async () => {
-    api.listConflicts.mockResolvedValue({
+    listConflicts.mockResolvedValue({
       conflicts: [],
       conflictDetection: { degraded: true, reason: 'sync_base_hashes.json is present but unreadable — repair or delete it and restart' },
     });
@@ -85,39 +85,39 @@ describe('ConflictsTab', () => {
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
-    expect(api.getConflict).not.toHaveBeenCalled();
+    expect(getConflict).not.toHaveBeenCalled();
     expect(screen.queryByTestId('diff')).not.toBeInTheDocument();
 
     await user.click(screen.getByText(/u-123456789012/));
     expect(await screen.findAllByTestId('diff')).toHaveLength(2);
-    expect(api.getConflict).toHaveBeenCalledWith('entry-1', expect.anything());
+    expect(getConflict).toHaveBeenCalledWith('entry-1', expect.anything());
 
     await user.click(screen.getByText(/u-123456789012/)); // collapse
     await user.click(screen.getByText(/u-123456789012/)); // re-expand: cached
-    expect(api.getConflict).toHaveBeenCalledTimes(1);
+    expect(getConflict).toHaveBeenCalledTimes(1);
   });
 
   it('removes a resolved row locally without re-listing', async () => {
-    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: /Discard/ }));
     expect(await screen.findByText(/No pending conflicts/)).toBeInTheDocument();
-    expect(api.listConflicts).toHaveBeenCalledTimes(1);
+    expect(listConflicts).toHaveBeenCalledTimes(1);
   });
 
   it('restore-all resolves the whole entry', async () => {
-    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: /Restore mine/ }));
-    await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'restore-all' }, expect.anything()));
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'restore-all' }, expect.anything()));
   });
 
   it('merge-fields sends only the selected fields', async () => {
-    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
@@ -127,16 +127,16 @@ describe('ConflictsTab', () => {
     const checkboxes = await screen.findAllByRole('checkbox');
     await user.click(checkboxes[0]); // starterPrompt
     await user.click(screen.getByRole('button', { name: /Merge 1 selected field/ }));
-    await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'merge-fields', fields: ['starterPrompt'] }, expect.anything()));
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'merge-fields', fields: ['starterPrompt'] }, expect.anything()));
   });
 
   it('discard keeps the synced version', async () => {
-    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: /Discard/ }));
-    await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'discard' }, expect.anything()));
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith('entry-1', { action: 'discard' }, expect.anything()));
   });
 
   it('renders per-sub-entry diffs for a field carrying `parts`, and still merges at field granularity', async () => {
@@ -152,9 +152,9 @@ describe('ConflictsTab', () => {
       }],
       status: 'pending',
     };
-    api.listConflicts.mockResolvedValue({ conflicts: [compact(deepEntry)] });
-    api.getConflict.mockResolvedValue(deepEntry);
-    api.resolveConflict.mockResolvedValue({ status: 'resolved' });
+    listConflicts.mockResolvedValue({ conflicts: [compact(deepEntry)] });
+    getConflict.mockResolvedValue(deepEntry);
+    resolveConflict.mockResolvedValue({ status: 'resolved' });
     const user = userEvent.setup();
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/1 field\(s\)/)).toBeInTheDocument());
@@ -170,6 +170,6 @@ describe('ConflictsTab', () => {
     expect(checkboxes).toHaveLength(1);
     await user.click(checkboxes[0]);
     await user.click(screen.getByRole('button', { name: /Merge 1 selected field/ }));
-    await waitFor(() => expect(api.resolveConflict).toHaveBeenCalledWith('entry-2', { action: 'merge-fields', fields: ['characters'] }, expect.anything()));
+    await waitFor(() => expect(resolveConflict).toHaveBeenCalledWith('entry-2', { action: 'merge-fields', fields: ['characters'] }, expect.anything()));
   });
 });

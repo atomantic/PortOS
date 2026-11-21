@@ -17,7 +17,11 @@ const toast = vi.hoisted(() => ({
   warning: vi.fn(),
 }));
 
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiProviders.js', () => ({
+  createProvider: api.createProvider,
+  updateProvider: api.updateProvider,
+  deriveProviderPreset: api.deriveProviderPreset,
+}));
 vi.mock('../../services/apiCore.js', () => ({ request: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 

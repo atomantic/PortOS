@@ -4,7 +4,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 const api = vi.hoisted(() => ({
   getCosWeeklyDigest: vi.fn(), getCosWeekProgress: vi.fn(), listCosWeeklyDigests: vi.fn(), generateCosDigest: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosWeeklyDigest: api.getCosWeeklyDigest,
+  getCosWeekProgress: api.getCosWeekProgress,
+  listCosWeeklyDigests: api.listCosWeeklyDigests,
+  generateCosDigest: api.generateCosDigest,
+}));
 
 import DigestTab from './DigestTab';
 

@@ -5,6 +5,7 @@ import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
+import { DIGITAL_TWIN_REFERENCE_LABEL } from '../lib/privacyPrompt.js';
 import { getPrivacyTwinContext } from './privacyTwinContext.js';
 
 // Twin document markdown is re-read on every agent prompt build
@@ -120,7 +121,7 @@ export async function getDigitalTwinForPrompt(options = {}) {
   }
 
   if (reference.trim()) {
-    output += `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock('Digital twin reference data', reference, Math.max(0, maxChars - preamble.length))}`;
+    output += `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock(DIGITAL_TWIN_REFERENCE_LABEL, reference, Math.max(0, maxChars - preamble.length))}`;
   }
   return output.trim();
 }

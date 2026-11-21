@@ -7,13 +7,25 @@ import { findEnabledByRole } from '../test/enabledBarrier.js';
 const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: toastMocks }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiStoryboards.js', () => ({
   listStoryboards: vi.fn(async () => []),
   makeStoryboardFromFableLoom: vi.fn(),
+}));
+vi.mock('../services/apiFableLoom.js', () => ({
   addLoomEpisode: vi.fn(),
   addLoomNode: vi.fn(),
   deleteLoomEpisode: vi.fn(),
+  getLoom: vi.fn(),
+  startLoomFalVideo: vi.fn(),
+  updateLoomEpisode: vi.fn(),
+  updateLoom: vi.fn(),
+  updateLoomNode: vi.fn(),
+  weaveLoomEpisode: vi.fn(),
+}));
+vi.mock('../services/apiSystem.js', () => ({
   generateImage: vi.fn(),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
   previewImagePrompt: vi.fn(async body => ({
     sentPrompt: `Universe style: painted ink. Motivated window light.\n\n${body.prompt}`,
     sentNegativePrompt: 'glossy skin',
@@ -21,14 +33,12 @@ vi.mock('../services/api', () => ({
     referenceImages: [{ filename: 'example-canon.png', status: 'included', source: 'character-neutral' }],
   })),
   generateVideo: vi.fn(),
-  getLoom: vi.fn(),
+}));
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: vi.fn(),
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   getUniverse: vi.fn(),
-  startLoomFalVideo: vi.fn(),
-  updateLoomEpisode: vi.fn(),
-  updateLoom: vi.fn(),
-  updateLoomNode: vi.fn(),
-  weaveLoomEpisode: vi.fn(),
 }));
 
 // Keep the graph lightweight while exposing its page-owned scene-media action
@@ -121,7 +131,11 @@ vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <d
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
 vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div>Episode validation</div> }));
 
-import * as api from '../services/api';
+import { getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo } from '../services/apiFableLoom.js';
+import { getUniverse } from '../services/apiUniverseBuilder.js';
+import { getPipelineSeries } from '../services/apiPipeline.js';
+import { listStoryboards, makeStoryboardFromFableLoom } from '../services/apiStoryboards.js';
+import { generateImage } from '../services/apiSystem.js';
 import FableLoomStory from './FableLoomStory';
 
 const loom = (fields = {}) => ({
@@ -159,14 +173,14 @@ const renderEditor = (initialEntry = '/fableloom/loom-1') => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getLoom.mockResolvedValue(loom());
-  api.getUniverse.mockResolvedValue(null);
+  getLoom.mockResolvedValue(loom());
+  getUniverse.mockResolvedValue(null);
 });
 
 describe('FableLoomStory navigation and series backlink', () => {
   it('keeps a target episode route while the newly selected loom is loading', async () => {
     let resolveTargetLoom;
-    api.getLoom
+    getLoom
       .mockResolvedValueOnce(loom({ id: 'loom-a', episodes: [episode({ id: 'ep-a' })] }))
       .mockImplementationOnce(() => new Promise((resolve) => { resolveTargetLoom = resolve; }));
 
@@ -204,7 +218,7 @@ describe('FableLoomStory navigation and series backlink', () => {
 
   it('opens Play as a viewport-filling movie player', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1');
 
     await user.click(await screen.findByRole('button', { name: 'Play' }));
@@ -227,7 +241,7 @@ describe('FableLoomStory navigation and series backlink', () => {
   });
 
   it('still opens the first episode for an established loom', async () => {
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor();
 
     expect(await screen.findByRole('tab', { name: '1. The First Door' }))
@@ -236,28 +250,28 @@ describe('FableLoomStory navigation and series backlink', () => {
   });
 
   it('links back to the series a loom is soft-linked to', async () => {
-    api.getLoom.mockResolvedValue(loom({ seriesId: 'ser-1' }));
-    api.getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: 'Example Series' });
+    getLoom.mockResolvedValue(loom({ seriesId: 'ser-1' }));
+    getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: 'Example Series' });
     renderEditor();
 
     const link = await screen.findByRole('link', { name: /Example Series/ });
     expect(link).toHaveAttribute('href', '/pipeline/series/ser-1');
-    expect(api.getPipelineSeries).toHaveBeenCalledWith('ser-1', { silent: true });
+    expect(getPipelineSeries).toHaveBeenCalledWith('ser-1', { silent: true });
   });
 
   it('renders no chip (not a dead link) when the linked series has been deleted', async () => {
-    api.getLoom.mockResolvedValue(loom({ seriesId: 'ser-gone' }));
-    api.getPipelineSeries.mockRejectedValue(new Error('Series not found'));
+    getLoom.mockResolvedValue(loom({ seriesId: 'ser-gone' }));
+    getPipelineSeries.mockRejectedValue(new Error('Series not found'));
     renderEditor();
 
     await screen.findByText('Example Loom');
-    await waitFor(() => expect(api.getPipelineSeries).toHaveBeenCalled());
+    await waitFor(() => expect(getPipelineSeries).toHaveBeenCalled());
     expect(screen.queryByRole('link', { name: /series/i })).toBeNull();
   });
 
   it('falls back to a placeholder for a series with no name', async () => {
-    api.getLoom.mockResolvedValue(loom({ seriesId: 'ser-1' }));
-    api.getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: '' });
+    getLoom.mockResolvedValue(loom({ seriesId: 'ser-1' }));
+    getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: '' });
     renderEditor();
 
     expect(await screen.findByRole('link', { name: /Untitled series/ }))
@@ -267,7 +281,7 @@ describe('FableLoomStory navigation and series backlink', () => {
   it('never asks for a series when the loom is standalone', async () => {
     renderEditor();
     await screen.findByText('Example Loom');
-    expect(api.getPipelineSeries).not.toHaveBeenCalled();
+    expect(getPipelineSeries).not.toHaveBeenCalled();
   });
 
   it('keeps series planning outside the episode tabs at a dedicated URL', async () => {
@@ -285,7 +299,7 @@ describe('FableLoomStory navigation and series backlink', () => {
 
 describe('FableLoomStory episode outline route', () => {
   it('renders the outline view at its dedicated URL without mounting the graph editor', async () => {
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     render(
       <MemoryRouter initialEntries={['/fableloom/loom-1/ep-1/outline']}>
         <Routes>
@@ -302,11 +316,11 @@ describe('FableLoomStory episode outline route', () => {
 describe('FableLoomStory episode board route', () => {
   it('lays one path out as panels, moves it by a fork pick in the URL, and opens a scene in the graph', async () => {
     const user = userEvent.setup();
-    api.listStoryboards.mockResolvedValueOnce([
+    listStoryboards.mockResolvedValueOnce([
       { id: 'sb-made', name: 'Earlier board', source: { kind: 'fableloom', loomId: 'loom-1', episodeId: 'ep-1' } },
       { id: 'sb-other', name: 'Unrelated board', source: null },
     ]);
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
+    getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
       { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', transitions: [
         { id: 'tr-left', targetNodeId: 'node-2', intent: 'Go left' },
         { id: 'tr-right', targetNodeId: 'node-3', intent: 'Go right' },
@@ -338,10 +352,10 @@ describe('FableLoomStory episode board route', () => {
 
   it('makes a storyboard from the picked path and opens it', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
+    getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [
       { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', isEnding: true, transitions: [] },
     ] })] }));
-    api.makeStoryboardFromFableLoom.mockResolvedValueOnce({ id: 'sb-new' });
+    makeStoryboardFromFableLoom.mockResolvedValueOnce({ id: 'sb-new' });
     render(
       <MemoryRouter initialEntries={['/fableloom/loom-1/ep-1/board?via=tr-right']}>
         <Routes>
@@ -352,7 +366,7 @@ describe('FableLoomStory episode board route', () => {
     );
 
     await user.click(await screen.findByRole('button', { name: 'Make storyboard from this path' }));
-    expect(api.makeStoryboardFromFableLoom).toHaveBeenCalledWith('loom-1', 'ep-1', ['tr-right']);
+    expect(makeStoryboardFromFableLoom).toHaveBeenCalledWith('loom-1', 'ep-1', ['tr-right']);
     expect(await screen.findByText('Storyboard page')).toBeInTheDocument();
   });
 });
@@ -360,7 +374,7 @@ describe('FableLoomStory episode board route', () => {
 describe('FableLoomStory episode expansion safety', () => {
   it('exposes an explicit episode editor for changing the title and synopsis', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1');
 
     await user.click(await screen.findByRole('button', { name: 'Edit episode' }));
@@ -372,7 +386,7 @@ describe('FableLoomStory episode expansion safety', () => {
 
   it('clears outline guidance when the editor switches episodes', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       episodes: [
         episode(),
         episode({ id: 'ep-2', number: 2, title: 'The Second Door', synopsis: 'A different blockade.' }),
@@ -398,19 +412,19 @@ describe('FableLoomStory episode expansion safety', () => {
       { id: 'node-1', title: 'Existing scene', prose: 'Existing text.', transitions: [] },
       { id: 'node-2', title: 'Existing ending', prose: 'Existing ending text.', transitions: [] },
     ] });
-    api.getLoom.mockResolvedValue(loom({ episodes: [existingEpisode] }));
-    api.weaveLoomEpisode.mockResolvedValue({ loom: loom({ episodes: [existingEpisode] }) });
+    getLoom.mockResolvedValue(loom({ episodes: [existingEpisode] }));
+    weaveLoomEpisode.mockResolvedValue({ loom: loom({ episodes: [existingEpisode] }) });
     renderEditor('/fableloom/loom-1/ep-1');
 
     await user.click(await screen.findByRole('button', { name: 'Weave' }));
     await user.click(screen.getByRole('button', { name: 'Expand validated outline to teleplay' }));
 
-    expect(api.weaveLoomEpisode).not.toHaveBeenCalled();
+    expect(weaveLoomEpisode).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Replace scenes' })).toBeInTheDocument();
     expect(screen.getByText(/Replace 2 existing scenes and remove their rendered stills and video clips/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Replace scenes' }));
-    await waitFor(() => expect(api.weaveLoomEpisode).toHaveBeenCalledWith(
+    await waitFor(() => expect(weaveLoomEpisode).toHaveBeenCalledWith(
       'loom-1',
       'ep-1',
       expect.objectContaining({ replace: true, expandFromOutline: true, providerId: 'writer', model: 'example-model', effort: 'low' }),
@@ -422,10 +436,10 @@ describe('FableLoomStory episode expansion safety', () => {
 describe('FableLoomStory node moves', () => {
   it('returns the node to its saved position and shows the error when the save fails', async () => {
     const real = await vi.importActual('../services/apiFableLoom');
-    api.updateLoomNode.mockImplementation(real.updateLoomNode);
+    updateLoomNode.mockImplementation(real.updateLoomNode);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Loom save failed' }) }));
     const savedEpisode = episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 10, y: 20 } }] });
-    api.getLoom.mockResolvedValue(loom({ episodes: [savedEpisode] }));
+    getLoom.mockResolvedValue(loom({ episodes: [savedEpisode] }));
     const user = userEvent.setup();
     renderEditor('/fableloom/loom-1/ep-1');
 
@@ -438,20 +452,20 @@ describe('FableLoomStory node moves', () => {
   });
 
   it('keeps the dragged position when the save succeeds', async () => {
-    api.updateLoomNode.mockResolvedValue({});
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 10, y: 20 } }] })] }));
+    updateLoomNode.mockResolvedValue({});
+    getLoom.mockResolvedValue(loom({ episodes: [episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 10, y: 20 } }] })] }));
     const user = userEvent.setup();
     renderEditor('/fableloom/loom-1/ep-1');
 
     await user.click(await screen.findByRole('button', { name: 'Canvas move node' }));
-    await waitFor(() => expect(api.updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { pos: { x: 500, y: 600 } }));
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { pos: { x: 500, y: 600 } }));
     expect(screen.getByTestId('canvas-node-pos')).toHaveTextContent('{"x":500,"y":600}');
   });
 });
 
 describe('FableLoomStory episode rail layout', () => {
   it('keeps the episode rail content independently scrollable when no scene is selected', async () => {
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1');
 
     const rail = await screen.findByTestId('loom-validation-rail');
@@ -460,7 +474,7 @@ describe('FableLoomStory episode rail layout', () => {
   });
 
   it('sizes the stacked graph/rail split against the pane, never the viewport', async () => {
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1');
 
     const rail = await screen.findByTestId('loom-validation-rail');
@@ -476,7 +490,7 @@ describe('FableLoomStory episode rail layout', () => {
 describe('FableLoomStory mobile header', () => {
   it('offers every header action from the phone overflow menu', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1');
 
     // The labelled row is desktop-only; on a phone the same actions live behind
@@ -495,7 +509,7 @@ describe('FableLoomStory mobile header', () => {
 describe('FableLoomStory mobile scene details', () => {
   it('opens the selected scene in a slide-up sheet and closes back to the graph', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
     renderEditor('/fableloom/loom-1/ep-1/node-1');
 
     const sheet = await screen.findByTestId('scene-details-sheet');
@@ -514,7 +528,7 @@ describe('FableLoomStory mobile scene details', () => {
 
 describe('FableLoomStory scene media lifecycle', () => {
   it('keeps scene media disabled until the ordered beat arc is validated', async () => {
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       episodes: [episode({ storyOutline: null })],
     }));
     renderEditor();
@@ -524,7 +538,7 @@ describe('FableLoomStory scene media lifecycle', () => {
 
   it('queues a linked scene for the compiler to style and notifies when the render later fails', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       universeId: 'universe-1',
       styleNotes: 'blue dusk lighting',
       episodes: [episode({
@@ -537,16 +551,16 @@ describe('FableLoomStory scene media lifecycle', () => {
         }],
       })],
     }));
-    api.getUniverse.mockResolvedValue({
+    getUniverse.mockResolvedValue({
       id: 'universe-1',
       influences: { embrace: ['painted ink'], avoid: ['photorealism'] },
     });
-    api.generateImage.mockResolvedValue({ jobId: 'image-job-1', status: 'queued' });
+    generateImage.mockResolvedValue({ jobId: 'image-job-1', status: 'queued' });
     renderEditor();
 
     const generate = await findEnabledByRole('button', { name: 'Canvas generate image' });
     await user.click(generate);
-    expect(api.generateImage).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
     const fullPrompt = await screen.findByRole('button', { name: 'Show full prompt' });
     await user.click(fullPrompt);
     expect(screen.getByText(/Universe style: painted ink.*Motivated window light./)).toBeInTheDocument();
@@ -555,8 +569,8 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(screen.getByText('example-canon.png')).toBeInTheDocument();
     await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
-    expect(api.generateImage).toHaveBeenCalledWith({
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
+    expect(generateImage).toHaveBeenCalledWith({
       // The server's compiler adds the universe style ("painted ink") and its avoid list.
       prompt: 'an ancient gate in alien grass\n\nStyle: blue dusk lighting',
       promptAdditions: [{ id: 'loom-style', label: 'Loom style', text: 'Style: blue dusk lighting' }],
@@ -576,10 +590,10 @@ describe('FableLoomStory scene media lifecycle', () => {
   it('saves edited authored text before Render and refuses generation when the save fails', async () => {
     const user = userEvent.setup();
     const initial = loom({ episodes: [episode({ nodes: [{ id: 'node-1', title: 'Gate', imagePrompt: 'The gate', transitions: [] }] })] });
-    api.getLoom.mockResolvedValue(initial);
-    api.updateLoomNode.mockRejectedValueOnce(new Error('Synthetic save failure'));
-    api.updateLoomNode.mockResolvedValueOnce({ ...initial, episodes: [episode({ nodes: [{ ...initial.episodes[0].nodes[0], imagePrompt: 'The revised gate' }] })] });
-    api.generateImage.mockResolvedValue({ jobId: 'example-job', status: 'queued' });
+    getLoom.mockResolvedValue(initial);
+    updateLoomNode.mockRejectedValueOnce(new Error('Synthetic save failure'));
+    updateLoomNode.mockResolvedValueOnce({ ...initial, episodes: [episode({ nodes: [{ ...initial.episodes[0].nodes[0], imagePrompt: 'The revised gate' }] })] });
+    generateImage.mockResolvedValue({ jobId: 'example-job', status: 'queued' });
     renderEditor();
     await user.click(await screen.findByRole('button', { name: 'Canvas generate image' }));
     const prompt = screen.getByLabelText('Scene image prompt');
@@ -587,16 +601,16 @@ describe('FableLoomStory scene media lifecycle', () => {
     await user.type(prompt, 'The revised gate');
     await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
     await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('Synthetic save failure'));
-    expect(api.generateImage).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
     expect(prompt).toHaveValue('The revised gate');
     await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'The revised gate' }), { silent: true }));
-    expect(api.updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { imagePrompt: 'The revised gate' }, { silent: true });
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'The revised gate' }), { silent: true }));
+    expect(updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { imagePrompt: 'The revised gate' }, { silent: true });
   });
 
   it('shows a synchronously generated scene image without watching a nonexistent job', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       episodes: [episode({
         nodes: [{
           id: 'node-1',
@@ -607,7 +621,7 @@ describe('FableLoomStory scene media lifecycle', () => {
         }],
       })],
     }));
-    api.generateImage.mockResolvedValue({
+    generateImage.mockResolvedValue({
       generationId: 'sync-generation-1',
       filename: 'finished-scene.png',
       path: '/data/images/finished-scene.png',
@@ -625,7 +639,7 @@ describe('FableLoomStory scene media lifecycle', () => {
 
   it('sends only the scene tag so the server resolves typed graph continuity', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       episodes: [episode({
         nodes: [
           {
@@ -644,13 +658,13 @@ describe('FableLoomStory scene media lifecycle', () => {
         ],
       })],
     }));
-    api.generateImage.mockResolvedValue({ jobId: 'image-job-2', status: 'queued' });
+    generateImage.mockResolvedValue({ jobId: 'image-job-2', status: 'queued' });
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
     await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith({
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
       prompt: 'the same scout crosses into the observatory',
       width: 1024,
       height: 576,
@@ -660,7 +674,7 @@ describe('FableLoomStory scene media lifecycle', () => {
 
   it('does not silently retry a rejected canon request without its conditioning', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       episodes: [episode({
         nodes: [
           {
@@ -676,7 +690,7 @@ describe('FableLoomStory scene media lifecycle', () => {
         ],
       })],
     }));
-    api.generateImage.mockRejectedValueOnce(Object.assign(new Error('Canon conditioning unavailable'), {
+    generateImage.mockRejectedValueOnce(Object.assign(new Error('Canon conditioning unavailable'), {
       code: 'FABLELOOM_CANON_CONDITIONING_UNAVAILABLE',
     }));
     renderEditor();
@@ -684,8 +698,8 @@ describe('FableLoomStory scene media lifecycle', () => {
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
     await user.click(await findEnabledByRole('button', { name: 'Render', exact: true }));
 
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
-    expect(api.generateImage.mock.calls[0]).toEqual([{
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
+    expect(generateImage.mock.calls[0]).toEqual([{
       prompt: 'the scout enters the observatory',
       width: 1024,
       height: 576,
@@ -698,7 +712,7 @@ describe('FableLoomStory scene media lifecycle', () => {
 
   it('automates fal.ai with the starting image context and attaches the finished browser render', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       styleNotes: 'blue dusk lighting',
       episodes: [episode({
         nodes: [{
@@ -711,7 +725,7 @@ describe('FableLoomStory scene media lifecycle', () => {
         }],
       })],
     }));
-    api.startLoomFalVideo.mockResolvedValue({
+    startLoomFalVideo.mockResolvedValue({
       id: 'fal-job-1',
       source: 'fal-browser',
       loomId: 'loom-1',
@@ -724,7 +738,7 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Canvas automate fal.ai' }));
 
-    await waitFor(() => expect(api.startLoomFalVideo).toHaveBeenCalledWith(
+    await waitFor(() => expect(startLoomFalVideo).toHaveBeenCalledWith(
       'loom-1',
       'ep-1',
       'node-1',
@@ -746,7 +760,7 @@ describe('FableLoomStory scene media lifecycle', () => {
   // linked loom's universe style and avoid list (#11317).
   it('hands fal.ai a linked loom\'s universe style and avoid list', async () => {
     const user = userEvent.setup();
-    api.getLoom.mockResolvedValue(loom({
+    getLoom.mockResolvedValue(loom({
       universeId: 'universe-1',
       episodes: [episode({
         nodes: [{
@@ -755,13 +769,13 @@ describe('FableLoomStory scene media lifecycle', () => {
         }],
       })],
     }));
-    api.getUniverse.mockResolvedValue({ id: 'universe-1', influences: { embrace: ['painted ink'], avoid: ['photorealism'] } });
-    api.startLoomFalVideo.mockResolvedValue({ id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued' });
+    getUniverse.mockResolvedValue({ id: 'universe-1', influences: { embrace: ['painted ink'], avoid: ['photorealism'] } });
+    startLoomFalVideo.mockResolvedValue({ id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued' });
     renderEditor('/fableloom/loom-1/ep-1');
 
     await user.click(await findEnabledByRole('button', { name: 'Canvas automate fal.ai' }));
 
-    await waitFor(() => expect(api.startLoomFalVideo).toHaveBeenCalledWith(
+    await waitFor(() => expect(startLoomFalVideo).toHaveBeenCalledWith(
       'loom-1', 'ep-1', 'node-1',
       { prompt: 'painted ink. The door opens.\n\nAvoid: photorealism', aspectRatio: '16:9' },
       { silent: true },

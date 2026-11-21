@@ -22,7 +22,7 @@ const { broadcastSse } = await import('../../lib/sseUtils.js');
 
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({ ...(await importOriginal()), generateThumbnail: vi.fn(async () => 'thumb.jpg') }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'instance-test') }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+vi.mock('../videoGen/history.js', async (load) => ({ ...(await load()), loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
 // History is synthetic here; media-retirement ownership is covered by renderCleanup.test.js.
 vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () => ({})) }));
 vi.mock('./codeRender.js', async (importOriginal) => ({ ...(await importOriginal()), writeCodeProofSheet: vi.fn(async () => null) }));
@@ -37,7 +37,7 @@ const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { encodeDocumentComposition } = await import('./documentRender.js');
-const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { mutateVideoHistory } = await import('../videoGen/history.js');
 const { musicVideoEvents } = await import('./events.js');
 
 afterEach(waitForMusicVideoRenderDrain);

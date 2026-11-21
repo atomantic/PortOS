@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertTriangle, ArrowRight, Bot, CalendarDays, ChevronRight, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
-import * as api from '../../../services/api';
+import { getCosWorkflow } from '../../../services/apiAgents.js';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import { describeCron, describeRecurrence, summarizeAppSchedules } from '../../../utils/cronHelpers';
 import ScheduleEditor from './workflow/ScheduleEditor';
@@ -350,7 +350,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
   const fetchGraph = useCallback(async () => {
     const generation = ++fetchGeneration.current;
     setLoading(true);
-    const data = await api.getCosWorkflow(hours, { silent: true }).catch(err => {
+    const data = await getCosWorkflow(hours, { silent: true }).catch(err => {
       if (generation === fetchGeneration.current) setError(err?.message || 'Failed to load schedule');
       return null;
     });

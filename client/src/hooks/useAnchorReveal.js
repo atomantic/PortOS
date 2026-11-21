@@ -9,7 +9,7 @@
 import { useEffect } from 'react';
 
 // Class + duration must stay in sync with the `manuscript-anchor-flash`
-// keyframe in `client/src/index.css` (#1601).
+// keyframe in `client/src/components/pipeline/manuscript/manuscriptAnchorFlash.css` (#1601).
 const FLASH_CLASS = 'manuscript-anchor-flash';
 const FLASH_MS = 1200;
 

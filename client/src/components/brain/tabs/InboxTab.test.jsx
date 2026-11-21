@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiBrain.js', () => ({
   getBrainInbox: vi.fn(),
   getBrainInboxEntry: vi.fn(),
   captureBrainThought: vi.fn(),
@@ -46,7 +46,15 @@ vi.mock('../../ui/Toast', () => ({
 vi.mock('../VoiceCapture', () => ({ default: () => null }));
 vi.mock('../RepoIntakeOptions', () => ({ default: () => null }));
 
-import { captureBrainThought, getBrainInbox, getBrainInboxEntry, resolveBrainReview, markBrainInboxDone, updateBrainInboxEntry, deleteBrainInboxEntry } from '../../../services/api';
+import {
+  captureBrainThought,
+  getBrainInbox,
+  getBrainInboxEntry,
+  resolveBrainReview,
+  markBrainInboxDone,
+  updateBrainInboxEntry,
+  deleteBrainInboxEntry,
+} from '../../../services/apiBrain.js';
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import InboxTab from './InboxTab';

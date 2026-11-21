@@ -11,8 +11,8 @@ PATH. A previous runtime built with another Python minor version or a Conda base
 is rebuilt in the same location; no Python path setting is
 needed. Model weights remain a separate explicit download.
 
-The installer selects `scripts/requirements-wan22-cuda-windows.lock.txt` or
-`scripts/requirements-wan22-cuda-linux.lock.txt`, then runs `uv pip sync` with
+The installer selects `scripts/ml/requirements/requirements-wan22-cuda-windows.lock.txt` or
+`scripts/ml/requirements/requirements-wan22-cuda-linux.lock.txt`, then runs `uv pip sync` with
 `--require-hashes --only-binary :all:`. This includes torch, torchvision,
 setuptools, and every transitive dependency. Sync removes packages outside the
 lock during Repair. There is no separate unpinned pip/bootstrap/torch install.
@@ -30,7 +30,7 @@ validating both locks together.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-wan22-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
+Edit `scripts/ml/requirements/requirements-wan22-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:
 
 ```bash
 SLUG=wan22-cuda

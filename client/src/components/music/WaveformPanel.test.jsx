@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import WaveformPanel from './WaveformPanel';
-import * as api from '../../services/api';
+import { drawTrackWaveform, getTrack, renderTrackWaveform } from '../../services/apiTracks.js';
 import { renderSketchPreview } from '../../lib/waveSketchSynthWorker.js';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiTracks.js', () => ({
   drawTrackWaveform: vi.fn(),
   getTrack: vi.fn(),
   renderTrackWaveform: vi.fn(),
@@ -74,12 +74,12 @@ describe('<WaveformPanel>', () => {
     vi.stubGlobal('AudioContext', FakeAudioContext);
     // The server stores what it drew; getTrack serves it back (a reload).
     const stored = new Map();
-    api.drawTrackWaveform.mockImplementation(async (trackId) => {
+    drawTrackWaveform.mockImplementation(async (trackId) => {
       stored.set(trackId, painted);
       return { sketch: painted, llm: { provider: 'provider-a', model: 'model-a' }, track: { id: trackId, waveSketch: painted } };
     });
-    api.getTrack.mockImplementation(async (trackId) => ({ id: trackId, waveSketch: stored.get(trackId) ?? null }));
-    api.renderTrackWaveform.mockResolvedValue({ track: { id: 'track-1' }, filename: 'music-x.wav', durationSec: 1 });
+    getTrack.mockImplementation(async (trackId) => ({ id: trackId, waveSketch: stored.get(trackId) ?? null }));
+    renderTrackWaveform.mockResolvedValue({ track: { id: 'track-1' }, filename: 'music-x.wav', durationSec: 1 });
   });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -92,7 +92,7 @@ describe('<WaveformPanel>', () => {
     fireEvent.click(screen.getByRole('button', { name: /Paint it/ }));
 
     await screen.findByText('Glass Tide');
-    expect(api.drawTrackWaveform).toHaveBeenCalledWith('track-1', {
+    expect(drawTrackWaveform).toHaveBeenCalledWith('track-1', {
       description: 'glassy tidal ambient',
       lyrics: undefined,
       guidance: 'lots of glide',
@@ -109,23 +109,23 @@ describe('<WaveformPanel>', () => {
     cleanup();
     renderPanel();
     await screen.findByText('Glass Tide');
-    expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1);
+    expect(drawTrackWaveform).toHaveBeenCalledTimes(1);
 
     // …but a different draft starts blank.
     cleanup();
     renderPanel({ trackId: 'track-2' });
-    await waitFor(() => expect(api.getTrack).toHaveBeenCalledWith('track-2', { silent: true }));
+    await waitFor(() => expect(getTrack).toHaveBeenCalledWith('track-2', { silent: true }));
     expect(screen.getByText(/Nothing painted yet/)).toBeTruthy();
   });
 
   it('opens on the host track\'s stored painting without fetching, and revises it at its own length', async () => {
     renderPanel({ track: { id: 'track-1', waveSketch: { ...painted, durationSec: 95 } } });
     expect(screen.getByText('Glass Tide')).toBeTruthy();
-    expect(api.getTrack).not.toHaveBeenCalled();
+    expect(getTrack).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Length (sec)').value).toBe('95');
     fireEvent.click(screen.getByRole('button', { name: /Revise painting/ }));
-    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1));
-    expect(api.drawTrackWaveform.mock.calls[0][1]).toMatchObject({ revise: true, durationSec: 95 });
+    await waitFor(() => expect(drawTrackWaveform).toHaveBeenCalledTimes(1));
+    expect(drawTrackWaveform.mock.calls[0][1]).toMatchObject({ revise: true, durationSec: 95 });
   });
 
   it('still shows, plays, and saves a v1 drawing, which is repainted rather than revised', async () => {
@@ -189,13 +189,13 @@ describe('<WaveformPanel>', () => {
     fireEvent.change(length, { target: { value: '1' } });
     fireEvent.change(length, { target: { value: '12' } });
     fireEvent.click(screen.getByRole('button', { name: /Paint it/ }));
-    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1));
-    expect(api.drawTrackWaveform.mock.calls[0][1].durationSec).toBe(12);
+    await waitFor(() => expect(drawTrackWaveform).toHaveBeenCalledTimes(1));
+    expect(drawTrackWaveform.mock.calls[0][1].durationSec).toBe(12);
 
     fireEvent.change(length, { target: { value: '9999' } });
     fireEvent.click(await screen.findByRole('button', { name: /Paint from scratch/ }));
-    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(2));
-    expect(api.drawTrackWaveform.mock.calls[1][1].durationSec).toBe(600);
+    await waitFor(() => expect(drawTrackWaveform).toHaveBeenCalledTimes(2));
+    expect(drawTrackWaveform.mock.calls[1][1].durationSec).toBe(600);
   });
 
   it('revises the stored painting (the server holds it, so only the intent is sent), with an opt-in look-and-repaint pass', async () => {
@@ -203,11 +203,11 @@ describe('<WaveformPanel>', () => {
     fireEvent.click(screen.getByRole('button', { name: /Paint it/ }));
     fireEvent.click(screen.getByLabelText(/Look and repaint/));
     fireEvent.click(await screen.findByRole('button', { name: /Revise painting/ }));
-    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(2));
-    expect(api.drawTrackWaveform.mock.calls[0][1].revise).toBeUndefined();
-    expect(api.drawTrackWaveform.mock.calls[0][1].review).toBeUndefined();
-    expect(api.drawTrackWaveform.mock.calls[1][1]).toMatchObject({ revise: true, review: true });
-    expect(api.drawTrackWaveform.mock.calls[1][1].current).toBeUndefined();
+    await waitFor(() => expect(drawTrackWaveform).toHaveBeenCalledTimes(2));
+    expect(drawTrackWaveform.mock.calls[0][1].revise).toBeUndefined();
+    expect(drawTrackWaveform.mock.calls[0][1].review).toBeUndefined();
+    expect(drawTrackWaveform.mock.calls[1][1]).toMatchObject({ revise: true, review: true });
+    expect(drawTrackWaveform.mock.calls[1][1].current).toBeUndefined();
   });
 
   it('plays and stops the synthesized painting in stereo', async () => {
@@ -237,7 +237,7 @@ describe('<WaveformPanel>', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Save as take/ }));
 
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith({ id: 'track-1' }));
-    expect(api.renderTrackWaveform).toHaveBeenCalledWith('track-1', {
+    expect(renderTrackWaveform).toHaveBeenCalledWith('track-1', {
       prompt: 'glassy tidal ambient', title: 'Glass Tide',
     }, { silent: true });
   });

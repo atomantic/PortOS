@@ -42,7 +42,7 @@ const joinBlocks = (blocks, separator) => blocks.filter(Boolean).map((item) => i
  */
 export function buildFableLoomVisualPrompts({
   node, universe, series, bindings, references, temporalSourceNode,
-  adapterTriggerWords, kind, capability, authoredPrompt, authoredNegativePrompt,
+  adapterTriggerWords, kind, capability, authoredPrompt, authoredNegativePrompt, supportsNegativePrompt = true,
 }) {
   const characterPrompts = bindings.boundCharacters.map(({ character, appearance }) => visualPromptForCharacter(
     character, appearance, adapterTriggerWords.get(character.id) || [],
@@ -118,6 +118,17 @@ export function buildFableLoomVisualPrompts({
     universeVisualStyleTokens(universe).avoid,
     identityAvoid,
   ];
+  if (!supportsNegativePrompt) {
+    // These runners reject negative prompts. Keep canon exclusions visible as
+    // a labeled addition to the caption and leave authored input to validation.
+    const exclusions = mergeNegativePromptTokens(addedAvoid).join(', ');
+    blocks.push(block('canon-avoid', 'Visual exclusions', `Avoid: ${exclusions}.`));
+    return {
+      prompt: joinBlocks(blocks, separator),
+      negativePrompt: authoredNegativePrompt,
+      promptAdditions: blocks.filter((item) => item && !item.authored),
+    };
+  }
   const merged = mergeNegativePromptTokens([authoredNegativePrompt, ...addedAvoid]);
   const negativePrompt = merged.join(', ');
   // The authored negative leads the merge, so what follows it is what the compiler added.

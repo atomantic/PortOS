@@ -2,6 +2,10 @@
  *   GET    /api/media/collections                  → Collection[]       (`?limit`/`?offset` switch it to
  *                                                                       `{ items, total, limit, offset }`)
  *   POST   /api/media/collections                  → Collection         (body: { name, description? })
+ *   POST   /api/media/collections/join             → Collection & { removedCollectionIds, keptCollectionIds }
+ *                                                  (body: { name, collectionIds, keepOriginals? }; merges into the
+ *                                                  selected collection already named `name`, else a new one, and
+ *                                                  retires the other non-owner-managed sources)
  *   GET    /api/media/collections/:id              → Collection
  *                                                  Each item carries `location` ('local' | 'remote' | 'missing')
  *                                                  and, when remote, `hostPeerId`/`hostPeerName` (peer-hosted media)
@@ -20,10 +24,10 @@ import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { mediaCollectionBulkItemsSchema } from '../lib/mediaValidation.js';
+import { mediaCollectionBulkItemsSchema, mediaCollectionJoinSchema, mediaCollectionPrimarySchema } from '../lib/mediaValidation.js';
 import * as svc from '../services/mediaCollections.js';
 import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
-import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';
+import { pullMissingAssetsFromPeer } from '../services/sharing/peerSyncAssets.js';
 
 const router = Router();
 
@@ -36,6 +40,7 @@ const SERVICE_ERROR_STATUS = {
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 const nameSchema = z.string().trim().min(1).max(svc.NAME_MAX_LENGTH);
+const joinSchema = mediaCollectionJoinSchema(svc.NAME_MAX_LENGTH);
 const descriptionSchema = z.string().trim().max(svc.DESCRIPTION_MAX_LENGTH);
 // `:` is the API key separator (`<kind>:<ref>` is split on first `:`), so a
 // ref containing one would be unaddressable for DELETE/coverKey lookups.
@@ -80,6 +85,17 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(await svc.createCollection(body));
 }));
 
+router.post('/join', asyncHandler(async (req, res) => {
+  const body = validateRequest(joinSchema, req.body ?? {});
+  const collection = await svc.joinCollections(body).catch((err) => { throw mapServiceError(err); });
+  res.status(201).json(collection);
+}));
+
+router.post('/auto-organize', asyncHandler(async (_req, res) => {
+  const { autoOrganizeMediaCollections } = await import('../services/mediaCollectionAutoOrganize.js');
+  res.json(await autoOrganizeMediaCollections());
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
   const locations = await resolveMediaLocations(c.items);
@@ -96,11 +112,11 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
   const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
   const wanted = keys ? new Set(keys) : null;
   const items = c.items.filter((item) => !wanted || wanted.has(svc.itemKey(item)));
-  const locations = await resolveMediaLocations(items);
+  const locations = await resolveMediaLocations(items, { includeFilename: true });
   const byPeer = new Map();
   items.forEach((item, i) => {
     if (locations[i].location !== 'remote') return;
-    const filename = item.kind === 'video' ? collectionVideoRefToFilename(item.ref) : item.ref;
+    const { filename } = locations[i];
     const list = byPeer.get(locations[i].hostPeerId) ?? [];
     list.push({ kind: item.kind, filename });
     byPeer.set(locations[i].hostPeerId, list);
@@ -112,6 +128,18 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
     await Promise.all(list.map((entry) => unmarkHosted(entry.kind, entry.filename)));
   })).catch((err) => console.error(`❌ localize collection media failed: ${err.message}`));
   res.status(202).json({ requested: items.length, started });
+}));
+
+router.get('/:id/primary', asyncHandler(async (req, res) => {
+  const { getCollectionPrimaryStatus } = await import('../services/mediaCollectionPrimary.js');
+  res.json(await getCollectionPrimaryStatus(req.params.id).catch((err) => { throw mapServiceError(err); }));
+}));
+
+router.post('/:id/primary', asyncHandler(async (req, res) => {
+  const { instanceId } = validateRequest(mediaCollectionPrimarySchema, req.body ?? {});
+  const { startCollectionPrimary } = await import('../services/mediaCollectionPrimary.js');
+  res.status(202).json(await startCollectionPrimary(req.params.id, instanceId)
+    .catch((err) => { throw mapServiceError(err); }));
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

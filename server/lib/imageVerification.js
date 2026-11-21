@@ -54,8 +54,6 @@ export const IMAGE_VERIFICATION_DIMENSIONS = Object.freeze({
   }),
 });
 
-export const DIMENSION_KEYS = Object.freeze(Object.keys(IMAGE_VERIFICATION_DIMENSIONS));
-
 export const verificationDimensionConfigSchema = z.object({
   enabled: z.boolean().default(true),
   severity: z.enum(['critical', 'advisory']).default('critical'),

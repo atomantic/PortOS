@@ -17,6 +17,11 @@ const baseProps = (overrides = {}) => ({
 
 describe('ImageGenControls — custom dimensions', () => {
 
+  it('renders before the caller supplies a model or runtime status', () => {
+    render(<ImageGenControls {...baseProps({ modelId: undefined, width: 1024, height: 1024 })} />);
+    expect(screen.getByLabelText('Model')).toBeInTheDocument();
+  });
+
   it('shows FLUX.3 license terms without an acceptance gate and hides baked-in controls', () => {
     render(<ImageGenControls {...baseProps({ models: [{ id: 'flux3-klein-q4', runner: 'flux3', cfgDisabled: true,
       disclosure: 'Community weights are ungated; access does not verify upstream acceptance.', licenseUrl: 'https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md' }],

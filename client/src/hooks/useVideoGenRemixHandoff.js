@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getVideoHistoryItem } from '../services/api';
+import { getVideoHistoryItem } from '../services/apiImageVideo.js';
 import { finishTargetForRecord } from '../lib/videoFinish.js';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoOf } from '../lib/musicVideoFiling';
 import useMediaPreviewActions from './useMediaPreviewActions';

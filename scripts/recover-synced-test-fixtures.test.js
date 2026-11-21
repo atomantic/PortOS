@@ -14,7 +14,7 @@ const dryRunExit = new Error('dry-run exit');
 
 async function run(args = []) {
   process.argv = ['node', 'recover-synced-test-fixtures.mjs', '--data-root=' + root, ...args];
-  await import('./recover-synced-test-fixtures.mjs');
+  await import('./ops/recover-synced-test-fixtures.mjs');
 }
 
 beforeEach(() => {

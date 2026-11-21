@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const listUniverseStyles = vi.fn();
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   listUniverseStyles: (...args) => listUniverseStyles(...args),
 }));
 

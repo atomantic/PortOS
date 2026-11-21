@@ -1,5 +1,4 @@
 import { createHash } from 'crypto';
-import sharp from 'sharp';
 import { fetchPublicBinary } from '../lib/safeUrlFetch.js';
 
 const MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024;
@@ -23,6 +22,7 @@ export async function fetchAndNormalizeStackerNewsImage(url) {
   const mimeType = fetched.contentType.split(';')[0].trim().toLowerCase();
   if (!SAFE_INPUT_TYPES.has(mimeType)) throw new Error(`Unsupported remote image type: ${mimeType || 'unknown'}`);
 
+  const { default: sharp } = await import('sharp');
   const pipeline = sharp(fetched.buffer, { limitInputPixels: MAX_PIXELS, animated: false }).rotate();
   const metadata = await pipeline.metadata();
   if (!metadata.width || !metadata.height || metadata.width * metadata.height > MAX_PIXELS) throw new Error('Remote image exceeds the pixel limit');

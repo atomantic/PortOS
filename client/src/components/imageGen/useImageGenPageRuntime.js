@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../../lib/composeStyledPrompt';
 import {
-  FAL_IMAGE_MODEL_IDS, HIGGSFIELD_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS, GOOGLE_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
   isCloudCliMode,
   modeLabel,
@@ -25,21 +24,21 @@ import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
 import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { useAgyModels } from '../../hooks/useAgyModels';
+import { useRunwayCatalog } from '../../hooks/useRunwayCatalog';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import toast from '../ui/Toast';
 import {
   buildFormData,
   cancelImageGen,
-  generateImage,
   generateImageMultipart,
   getActiveImageJob,
   getFlux2Status,
-  getImageGenStatus,
   getRegenAvailability,
-  listMediaJobs,
   previewImagePrompt,
   regenerateGalleryImage,
-} from '../../services/api';
+} from '../../services/apiImageVideo.js';
+import { generateImage, getImageGenStatus } from '../../services/apiSystem.js';
+import { listMediaJobs } from '../../services/apiMediaJobs.js';
 import { musicVideoFilingFields } from '../../lib/musicVideoFiling';
 
 // The style presets folded into the prompt, recorded beside it on the render (#11317).
@@ -76,14 +75,11 @@ function useImageGenBackendRuntime() {
   const isCloudMode = isCloudCliMode(effectiveMode);
   const cloudModeLabel = modeLabel(effectiveMode);
   const isAgyMode = effectiveMode === IMAGE_GEN_MODE.AGY;
-  const isRunwayMode = effectiveMode === IMAGE_GEN_MODE.RUNWAY;
-  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
-  const isHiggsfieldMode = effectiveMode === IMAGE_GEN_MODE.HIGGSFIELD;
-  const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
   const remoteTarget = useFederatedMediaTarget('image');
   const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
   const localBackendPending = statusLoading && !remoteTargetActive;
   const agy = useAgyModels(isAgyMode);
+  const { imageModels: runwayImageModels } = useRunwayCatalog(effectiveMode === IMAGE_GEN_MODE.RUNWAY);
 
   const refreshStatus = useCallback((mode, localModelId) => {
     const requestToken = ++statusRequestToken.current;
@@ -122,14 +118,11 @@ function useImageGenBackendRuntime() {
     isCloudMode,
     cloudModeLabel,
     isAgyMode,
-    isRunwayMode,
-    isFalMode,
-    isHiggsfieldMode,
-    isGoogleMode,
     remoteTarget,
     remoteTargetActive,
     localBackendPending,
     agy,
+    runwayImageModels,
     refreshStatus,
     setSelectedMode,
     configureBackends,
@@ -178,13 +171,7 @@ export function useImageGenPageRuntime() {
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
   const { fields, derived, images, actions } = form;
   const { effectiveMode, isCloudMode, remoteTargetActive } = backend;
-  const effectiveAgyModel = backend.agy.models.includes(fields.agyModel) ? fields.agyModel : '';
-  // Only a catalog id is ever sent — the server refuses anything else.
-  const effectiveFalModel = FAL_IMAGE_MODEL_IDS.includes(fields.falModel) ? fields.falModel : '';
-  const effectiveHiggsfieldModel = HIGGSFIELD_IMAGE_MODEL_IDS.includes(fields.higgsfieldModel) ? fields.higgsfieldModel : '';
-  const effectiveGoogleModel = GOOGLE_IMAGE_MODEL_IDS.includes(fields.googleModel) ? fields.googleModel : '';
-  const effectiveRunwayModel = RUNWAY_IMAGE_MODEL_IDS.includes(fields.runwayModel) ? fields.runwayModel : '';
-  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : backend.isHiggsfieldMode ? effectiveHiggsfieldModel : backend.isGoogleMode ? effectiveGoogleModel : backend.isRunwayMode ? effectiveRunwayModel : '';
+  const effectiveCloudModel = form.cloudModelPicker.controlProps.cloudModel;
 
   useEffect(() => {
     if (!effectiveMode) return;
@@ -363,7 +350,7 @@ export function useImageGenPageRuntime() {
     };
   })();
   const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
-    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing,
+    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing && !derived.unsupportedCloudInputs,
   });
 
   const submitGenerationPayload = async () => {
@@ -432,8 +419,8 @@ export function useImageGenPageRuntime() {
 
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
-    if (form.remix.pending || derived.loraHandoffBlocked || derived.unsupportedLocalInputs) return;
-    if (derived.editImageMissing || derived.cloudNeedsPrompt) return;
+    if (form.cloudModelPicker.unavailable || form.remix.pending || derived.loraHandoffBlocked || derived.unsupportedLocalInputs) return;
+    if (derived.editImageMissing || derived.cloudNeedsPrompt || derived.unsupportedCloudInputs) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {
       if (derived.remoteUnsupportedInputs) {
@@ -567,7 +554,7 @@ export function useImageGenPageRuntime() {
 
   return {
     form,
-    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveHiggsfieldModel, effectiveGoogleModel, effectiveRunwayModel, openRuntimeInstall },
+    backend: { ...backend, openRuntimeInstall },
     generation: {
       handleGenerate,
       handleCancel,

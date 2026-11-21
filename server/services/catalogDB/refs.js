@@ -163,14 +163,15 @@ export async function linkIngredientsToCreativeDirector(projectId, ingredients =
   return list;
 }
 
-export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role) {
-  ingredientId = await assertCatalogIdentityWritable(ingredientId);
-  await assertCatalogAssociationRemovable(ingredientId, 'refs', [refKind, refId, role]);
+export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role, { client } = {}) {
+  ingredientId = await assertCatalogIdentityWritable(ingredientId, { client });
+  await assertCatalogAssociationRemovable(ingredientId, 'refs', [refKind, refId, role], { client });
+  const exec = client ? client.query.bind(client) : query;
   // Soft-delete via UPDATE so the row stays around as a tombstone and the
   // trg_catalog_ref_sync_seq trigger bumps sync_sequence — peers pick the
   // unlink up on their next pull. The `AND deleted = false` filter keeps
   // re-unlinks from re-bumping sync_sequence unnecessarily.
-  await query(
+  await exec(
     `UPDATE catalog_ingredient_refs
         SET deleted = true, deleted_at = NOW()
       WHERE ingredient_id = catalog_resolve_ingredient_id($1) AND ref_kind = $2 AND ref_id = $3 AND role = $4

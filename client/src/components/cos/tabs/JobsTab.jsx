@@ -1,7 +1,10 @@
+import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
-import * as api from '../../../services/api';
+import { getApps } from '../../../services/apiApps.js';
+import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } from '../../../services/apiAgents.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { formatCount, formatDateTime } from '../../../utils/formatters';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from '../AgentJobProviderFields';
 import { filterRunnableProviders } from '../../../utils/providers';
@@ -19,7 +22,7 @@ import TaskDataInputs from '../TaskDataInputs';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 
-const fetchApps = () => api.getApps({ silent: true }).then(data => data?.apps || data || []);
+const fetchApps = () => getApps({ silent: true }).then(data => data?.apps || data || []);
 
 // Blank create-form state — shared by the initial useState and the post-create
 // reset so the two can't drift (a field added to one but not the other would
@@ -63,7 +66,7 @@ export default function JobsTab() {
   const [dataInputCatalog, setDataInputCatalog] = useState([]);
 
   const fetchJobs = useCallback(async () => {
-    const data = await api.getCosJobs({ silent: true }).catch(err => {
+    const data = await getCosJobs({ silent: true }).catch(err => {
       toast.error(`Failed to load jobs: ${err.message}`);
       return null;
     });
@@ -85,7 +88,7 @@ export default function JobsTab() {
   const loadProviders = useCallback(() => {
     const request = ++providersRequestRef.current;
     const current = () => request === providersRequestRef.current;
-    return api.getProviders({ silent: true }).then(data => {
+    return getProviders({ silent: true }).then(data => {
       if (!current()) return;
       setRawProviders(data?.providers || []);
       setActiveProviderId(data?.activeProvider || '');
@@ -123,7 +126,7 @@ export default function JobsTab() {
       return;
     }
 
-    const created = await api.createCosJob(normalizeJobPayload(newJob), { silent: true }).catch(err => {
+    const created = await createCosJob(normalizeJobPayload(newJob), { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -135,7 +138,7 @@ export default function JobsTab() {
   };
 
   const handleToggle = async (jobId) => {
-    const result = await api.toggleCosJob(jobId, { silent: true }).catch(err => {
+    const result = await toggleCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -157,7 +160,7 @@ export default function JobsTab() {
     // fires a second trigger, which for a re-aimed run comes back as a
     // confusing duplicate-skipped success.
     setTriggering(jobId);
-    const result = await api.triggerCosJob(jobId, { ...runOptions, silent: true }).catch(err => {
+    const result = await triggerCosJob(jobId, { ...runOptions, silent: true }).catch(err => {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });
@@ -182,7 +185,7 @@ export default function JobsTab() {
   };
 
   const handleDelete = async (jobId) => {
-    const result = await api.deleteCosJob(jobId, { silent: true }).catch(err => {
+    const result = await deleteCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -306,7 +309,7 @@ export default function JobsTab() {
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 >
                   <option value="">Global (PortOS)</option>
-                  {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {sortByLabel(apps).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
             )}

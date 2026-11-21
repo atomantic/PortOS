@@ -659,11 +659,6 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
   };
 }
 
-export const outlineValidationStatus = (validation) => {
-  if (!validation?.stats) return 'draft';
-  return validation.stats.errorCount ? 'invalid' : 'valid';
-};
-
 /** Compact outline rendering for the outline-review and expansion prompts. */
 export function describeStoryOutlineForPrompt(outline) {
   const scenes = asArray(outline?.scenes);

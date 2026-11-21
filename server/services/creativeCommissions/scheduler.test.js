@@ -51,6 +51,8 @@ vi.mock('./surface.js', () => ({
 const createProjectMock = vi.fn(async () => ({ id: 'cd-xyz' }));
 const advanceMock = vi.fn(async () => {});
 vi.mock('../creativeDirector/local.js', () => ({ createProject: (...a) => createProjectMock(...a) }));
+const commissionCollectionMock = vi.fn(async ({ commissionId }) => ({ id: `cdc-${commissionId}` }));
+vi.mock('../mediaCollections.js', () => ({ findOrCreateCommissionCollection: (...a) => commissionCollectionMock(...a) }));
 vi.mock('../creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettled: (...a) => advanceMock(...a) }));
 vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-default' }));
 
@@ -283,7 +285,10 @@ describe('runScheduledCommission gates', () => {
     expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
       aspectRatio: '16:9', quality: 'standard', modelId: 'ltx-default', targetDurationSeconds: 10,
       directive: expect.objectContaining({ goal: expect.stringContaining('surreal') }),
+      // Every run of the job files into the job's one collection, not a dated one.
+      collectionId: 'cdc-commission-1',
     }));
+    expect(commissionCollectionMock).toHaveBeenCalledWith({ commissionId: 'commission-1', commissionName: videoCommission().name });
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
     // Phase 2: a successful fire surfaces the run (notification + brain inbox) so
@@ -433,8 +438,8 @@ describe('runScheduledCommission gates', () => {
     }));
   });
 
-  it('records an explicit skip when the configured music renderer is unavailable', async () => {
-    resolveMusicEngineSelectionMock.mockResolvedValueOnce({ status: 'unavailable', reason: 'music-model-unavailable' });
+  it.each(['music-engine-unavailable', 'music-model-unavailable'])('records a %s skip before project creation', async (reason) => {
+    resolveMusicEngineSelectionMock.mockResolvedValueOnce({ status: 'unavailable', reason });
     getCommissionMock.mockResolvedValue(videoCommission({
       targetAbility: 'music',
       brief: { intent: 'ambient', musicTaste: { source: 'digital-twin', musicEngineId: 'acestep', musicModelId: 'removed-model' } },
@@ -442,7 +447,7 @@ describe('runScheduledCommission gates', () => {
     }));
     await runScheduledCommission('commission-1');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({
-      status: 'skipped', reason: 'music-model-unavailable',
+      status: 'skipped', reason,
     }));
     expect(createProjectMock).not.toHaveBeenCalled();
   });

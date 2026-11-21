@@ -10,7 +10,7 @@
  *
  * `keyPrefixMap`: a ComfyUI-packaged conditioner flattens the transformers namespace (`model.layers.N.`,
  * `visual.`) while the MLX loader matches the HF one (`model.language_model.layers.N.`, `model.visual.`).
- * scripts/generate_minimax_h3.py applies it to every key BEFORE the pinned loader sees them.
+ * scripts/ml/generate_minimax_h3.py applies it to every key BEFORE the pinned loader sees them.
  *
  * `finalNormKey`: the pinned loader builds the full module tree (including the never-applied `norm`) and refuses
  * any missing parameter, so for a checkpoint published without the final norm the runner synthesizes a

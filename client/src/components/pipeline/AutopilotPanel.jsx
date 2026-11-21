@@ -16,13 +16,14 @@ import {
   pipelineAutopilotSseUrl,
   getPipelineSeries,
   listPipelineIssues,
-  getProviders,
-  getSettings,
-  patchSettingsSlice,
-} from '../../services/api';
+} from '../../services/apiPipeline.js';
+import { getProviders } from '../../services/apiProviders.js';
+import { getSettings, patchSettingsSlice } from '../../services/apiSystem.js';
 import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
 import { autopilotStepLabel, describeAutopilotVerification, autopilotMarkerTerminal } from '../../lib/autopilotMilestones';
 import Pill from '../ui/Pill';
+import CollapsibleSection from '../ui/CollapsibleSection';
+import { formatCount } from '../../utils/formatters.js';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutopilotMilestones from './AutopilotMilestones';
 import CanonReadinessPanel from './CanonReadinessPanel';
@@ -191,6 +192,13 @@ const OPTION_SPECS = {
     persistOnEdit: true,
   },
 };
+
+const QUALITY_OPTION_KEYS = [
+  'foundationGate', 'foundationThreshold', 'maxFoundationRounds',
+  'maxArcVerifyRounds', 'maxBeatContinuityRounds', 'maxEditorialRounds',
+  'checkFindingsPauseThreshold', 'revisionEnabled', 'revisionMinCycles',
+  'revisionMaxCycles', 'revisionPlateauDelta',
+];
 
 // A single numeric field for the Options popover (round bounds + the pause
 // threshold). Allows '' mid-edit (so the field can be cleared) and clamps +
@@ -930,6 +938,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // would redraw as still running.
   const mapTerminal = markerPlan ? autopilotMarkerTerminal(ap.status) : terminal;
 
+  const customStages = Object.values(stageLlm)
+    .filter((routes) => Object.values(routes || {}).some((route) => route && Object.values(route).some(Boolean))).length;
+  const qualityOverrides = QUALITY_OPTION_KEYS
+    .filter((key) => (OPTION_SPECS[key].clamp?.(opt[key]) ?? opt[key]) !== OPTION_SPECS[key].defaultValue).length
+    + Number(Boolean(readinessGate));
+
   return (
     <div className="border border-port-border rounded-lg bg-port-card/40">
       <div className="flex items-center gap-2 flex-wrap p-3">
@@ -945,6 +959,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 onClick={() => setShowOpts((v) => !v)}
                 className="inline-flex items-center gap-1 px-2 py-1.5 rounded text-xs text-gray-300 hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40"
                 title="Run options"
+                aria-expanded={showOpts}
               >
                 <Sliders size={12} /> Options
               </button>
@@ -1072,7 +1087,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 run on this route instead, so the whole pipeline — script verification included — stays on one provider.
                 A stage pinned to a local provider to keep manuscript text off the network loses that too.
                 Stage <em>tiers</em> (quick / coding / heavy) still apply when you leave the model blank,
-                and the judge and per-stage routes below still win where you set them.
+                and the judge and per-stage overrides still win where you set them.
               </p>
             ) : null}
             <label className="flex items-center gap-2 text-xs text-gray-300 pt-1">
@@ -1110,91 +1125,6 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 </p>
               </div>
             ) : null}
-            <div className="border-t border-port-border/70 pt-2 mt-1 flex flex-col gap-2">
-              <label className="flex items-center gap-2 text-xs text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={editStageLlm}
-                  onChange={(e) => {
-                    setEditStageLlm(e.target.checked);
-                    if (!e.target.checked) setStageLlm({});
-                  }}
-                />
-                Override a specific stage and role
-              </label>
-              {editStageLlm ? (
-                <>
-                  <p className="text-[11px] text-gray-400">
-                    Stage route overrides win over run-wide and learned routes for the selected role. They are restored when a run pauses.
-                  </p>
-                  <div className="flex flex-wrap gap-2 max-w-2xl">
-                <div>
-                  <label htmlFor="autopilot-stage-llm" className="block text-[11px] text-gray-400 mb-1">Stage override</label>
-                  <select
-                    id="autopilot-stage-llm"
-                    value={selectedStageLlm}
-                    onChange={(e) => setSelectedStageLlm(e.target.value)}
-                    className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-200"
-                  >
-                    {AUTOPILOT_LLM_STAGES.map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="autopilot-stage-role" className="block text-[11px] text-gray-400 mb-1">Role</label>
-                  <select
-                    id="autopilot-stage-role"
-                    value={selectedStageRole}
-                    onChange={(e) => setSelectedStageRole(e.target.value)}
-                    className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-200"
-                  >
-                    <option value="creative">Creative / repair</option>
-                    <option value="judge">Judge / verify</option>
-                  </select>
-                </div>
-              </div>
-              <div className="max-w-md">
-                <ProviderModelSelector
-                  providers={providers}
-                  selectedProviderId={selectedStageRoute.providerOverride || ''}
-                  effectiveProviderId={stageProviderId}
-                  selectedModel={selectedStageRoute.modelOverride || ''}
-                  availableModels={stageModels}
-                  onProviderChange={(id) => updateSelectedStageRoute({
-                    providerOverride: id,
-                    modelOverride: '',
-                    effortOverride: '',
-                  })}
-                  onModelChange={(model) => updateSelectedStageRoute({ modelOverride: model })}
-                  effort={selectedStageRoute.effortOverride || ''}
-                  onEffortChange={(effort) => updateSelectedStageRoute({ effortOverride: effort })}
-                  label="Override this stage and role"
-                  compact
-                  alwaysShowModel
-                  emptyProviderOption={`Role default (${providerDisplayName(providers, stageBaseProviderId, '—')})`}
-                  emptyModelOption={stageBaseModel ? `Role default (${stageBaseModel})` : 'Role default model'}
-                />
-                {Object.keys(selectedStageRoute).length > 0 ? (
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="text-[11px] text-port-accent">
-                      Active: {providerModelLabel(providers, stageProviderId, stageModel)}{stageEffort ? ` / ${stageEffort}` : ''}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => updateSelectedStageRoute({
-                        providerOverride: '', modelOverride: '', effortOverride: '',
-                      })}
-                      className="text-[11px] text-gray-500 hover:text-white"
-                    >
-                      Clear override
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-                </>
-              ) : null}
-            </div>
           </div>
           <label className="flex items-center gap-2 text-xs text-gray-300">
             <input type="checkbox" checked={opt.autoSelectModels} onChange={(e) => options.edit('autoSelectModels', e.target.checked)} />
@@ -1202,7 +1132,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           </label>
           {opt.autoSelectModels ? (
             <p className="text-[11px] text-gray-500">
-              Uses separate technical and quality outcomes by step, role, provider, model and effort. Historical outcomes can backfill effort when older run records lack it. A route needs at least {modelMetrics?.minimumQualitySamples ?? 2} quality-reviewed samples and a positive reliability threshold; explicit choices above and exact Prompts-stage pins still win. Current history: {modelMetrics?.evidenceRuns ?? 0} attributed run{modelMetrics?.evidenceRuns === 1 ? '' : 's'}, {modelMetrics?.metrics?.reduce((sum, metric) => sum + (metric.qualityEvaluated || 0), 0) ?? 0} quality-reviewed.
+              Uses separate technical and quality outcomes by step, role, provider, model and effort. Historical outcomes can backfill effort when older run records lack it. A route needs at least {modelMetrics?.minimumQualitySamples ?? 2} quality-reviewed samples and a positive reliability threshold; explicit route overrides and exact Prompts-stage pins still win. Current history: {modelMetrics?.evidenceRuns ?? 0} attributed run{modelMetrics?.evidenceRuns === 1 ? '' : 's'}, {modelMetrics?.metrics?.reduce((sum, metric) => sum + (metric.qualityEvaluated || 0), 0) ?? 0} quality-reviewed.
             </p>
           ) : null}
           <label className="flex items-center gap-2 text-xs text-gray-300">
@@ -1218,10 +1148,6 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             Notify me when a run pauses (with a resume link)
           </label>
           <label className="flex items-center gap-2 text-xs text-gray-300">
-            <input type="checkbox" checked={opt.foundationGate} onChange={(e) => options.edit('foundationGate', e.target.checked)} />
-            Judge the foundation (world / characters / arc) before drafting
-          </label>
-          <label className="flex items-center gap-2 text-xs text-gray-300">
             <input type="checkbox" checked={unlockForRun} onChange={(e) => setUnlockForRun(e.target.checked)} />
             Unlock everything this series owns first (full edit control)
           </label>
@@ -1229,109 +1155,6 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <p className="text-[11px] text-gray-500">
               Clears the arc freeze, arc-field locks, volume locks and issue stage locks — so the run can actually apply the fixes its editorial passes find. Universe canon is only unlocked when this is the universe&apos;s <em>only</em> series: once another series shares the universe, its cast and setting stay locked, because a character this series introduced may well be one the other series is built on. Nothing is ever deleted: characters, objects and volumes can be rewritten in full but stay in the Universe and the Catalog. Locks are <em>not</em> restored when the run ends. Applies to this run only — it is never saved as a default and the box clears itself after you launch, so a scheduled or repeat run can&apos;t inherit it.
             </p>
-          ) : null}
-          <div className="flex flex-wrap gap-4 pt-1">
-            <RoundInput
-              id="autopilot-arc-rounds"
-              label="Arc verify rounds"
-              {...options.inputProps('maxArcVerifyRounds')}
-            />
-            <RoundInput
-              id="autopilot-beat-continuity-rounds"
-              label="Beat continuity rounds"
-              {...options.inputProps('maxBeatContinuityRounds')}
-            />
-            <RoundInput
-              id="autopilot-editorial-rounds"
-              label="Editorial rounds"
-              {...options.inputProps('maxEditorialRounds')}
-            />
-          </div>
-          <p className="text-[11px] text-gray-500">
-            How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
-          </p>
-          {opt.foundationGate ? (
-            <>
-              <div className="flex flex-wrap gap-4 pt-1">
-                <RoundInput
-                  id="autopilot-foundation-threshold"
-                  label="Foundation threshold"
-                  {...options.inputProps('foundationThreshold')}
-                  max={10}
-                />
-                <RoundInput
-                  id="autopilot-foundation-rounds"
-                  label="Foundation rounds"
-                  {...options.inputProps('maxFoundationRounds')}
-                />
-              </div>
-              <p className="text-[11px] text-gray-500">
-                Weighted quality bar (0–10: worldbuilding 40%, character 30%, structure 20%, craft 10%) the foundation must clear before drafting; the run repairs the largest weighted deficit up to the round limit, then pauses for review.
-              </p>
-            </>
-          ) : null}
-          <div className="flex items-center gap-2 pt-1">
-            <label htmlFor="autopilot-readiness-gate" className="text-xs text-gray-300">Readiness gate</label>
-            <select
-              id="autopilot-readiness-gate"
-              value={readinessGate}
-              onChange={(e) => setReadinessGate(e.target.value)}
-              className="px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
-            >
-              <option value="">
-                Use saved default{savedGate ? ` (${READINESS_GATE_LABELS[savedGate]})` : ''}
-              </option>
-              {READINESS_GATE_ORDER.map((value) => (
-                <option key={value} value={value}>{READINESS_GATE_LABELS[value]}</option>
-              ))}
-            </select>
-          </div>
-          <p className="text-[11px] text-gray-500">
-            The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
-          </p>
-          <div className="pt-1">
-            <RoundInput
-              id="autopilot-check-pause-threshold"
-              label="Pause at high findings"
-              {...options.inputProps('checkFindingsPauseThreshold')}
-              max={null}
-            />
-          </div>
-          <p className="text-[11px] text-gray-500">
-            When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
-          </p>
-          <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
-            <input type="checkbox" checked={opt.revisionEnabled} onChange={(e) => options.edit('revisionEnabled', e.target.checked)} />
-            Iterate to quality (revise the weakest issue under a keep/revert score gate)
-          </label>
-          {opt.revisionEnabled ? (
-            <>
-              <div className="flex flex-wrap gap-4 pt-1">
-                <RoundInput
-                  id="autopilot-revision-min-cycles"
-                  label="Min cycles"
-                  {...options.inputProps('revisionMinCycles')}
-                  min={1}
-                />
-                <RoundInput
-                  id="autopilot-revision-max-cycles"
-                  label="Max cycles"
-                  {...options.inputProps('revisionMaxCycles')}
-                  min={1}
-                />
-                <RoundInput
-                  id="autopilot-revision-plateau-delta"
-                  label="Plateau Δ"
-                  {...options.inputProps('revisionPlateauDelta')}
-                  min={0}
-                  max={10}
-                  step={0.1}
-                />
-              </div>
-              <p className="text-[11px] text-gray-500">
-                After the editorial-health gate, judge every drafted issue and revise the weakest via adversarial cuts, keeping a change only when the quality score doesn&apos;t regress. Stops on plateau (mean score moves less than Δ), hedged-convergence, or max cycles. Fresh judge + cut LLM spend — saved as the default and reused on Resume.
-              </p>
-            </>
           ) : null}
           <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
             <input type="checkbox" checked={opt.selfImprove} onChange={(e) => options.edit('selfImprove', e.target.checked)} />
@@ -1356,6 +1179,216 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           </p>
         </div>
       ) : null}
+
+      {!active && (
+        <div className="border-t border-port-border px-3">
+          <CollapsibleSection
+            label="Stage model overrides"
+            summary={`${formatCount(customStages)} custom`}
+            size="bar"
+            bodyClassName="space-y-2 pb-3"
+          >
+            <label className="flex items-center gap-2 text-xs text-gray-300">
+              <input
+                type="checkbox"
+                checked={editStageLlm}
+                onChange={(e) => {
+                  setEditStageLlm(e.target.checked);
+                  if (!e.target.checked) setStageLlm({});
+                }}
+              />
+              Override a specific stage and role
+            </label>
+            {editStageLlm ? (
+              <>
+                <p className="text-[11px] text-gray-400">
+                  Stage route overrides win over run-wide and learned routes for the selected role. They are restored when a run pauses.
+                </p>
+                <div className="flex flex-wrap gap-2 max-w-2xl">
+                  <div>
+                    <label htmlFor="autopilot-stage-llm" className="block text-[11px] text-gray-400 mb-1">Stage override</label>
+                    <select
+                      id="autopilot-stage-llm"
+                      value={selectedStageLlm}
+                      onChange={(e) => setSelectedStageLlm(e.target.value)}
+                      className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-200"
+                    >
+                      {AUTOPILOT_LLM_STAGES.map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="autopilot-stage-role" className="block text-[11px] text-gray-400 mb-1">Role</label>
+                    <select
+                      id="autopilot-stage-role"
+                      value={selectedStageRole}
+                      onChange={(e) => setSelectedStageRole(e.target.value)}
+                      className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-200"
+                    >
+                      <option value="creative">Creative / repair</option>
+                      <option value="judge">Judge / verify</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="max-w-md">
+                  <ProviderModelSelector
+                    providers={providers}
+                    selectedProviderId={selectedStageRoute.providerOverride || ''}
+                    effectiveProviderId={stageProviderId}
+                    selectedModel={selectedStageRoute.modelOverride || ''}
+                    availableModels={stageModels}
+                    onProviderChange={(id) => updateSelectedStageRoute({
+                      providerOverride: id,
+                      modelOverride: '',
+                      effortOverride: '',
+                    })}
+                    onModelChange={(model) => updateSelectedStageRoute({ modelOverride: model })}
+                    effort={selectedStageRoute.effortOverride || ''}
+                    onEffortChange={(effort) => updateSelectedStageRoute({ effortOverride: effort })}
+                    label="Override this stage and role"
+                    compact
+                    alwaysShowModel
+                    emptyProviderOption={`Role default (${providerDisplayName(providers, stageBaseProviderId, '—')})`}
+                    emptyModelOption={stageBaseModel ? `Role default (${stageBaseModel})` : 'Role default model'}
+                  />
+                  {Object.keys(selectedStageRoute).length > 0 ? (
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-[11px] text-port-accent">
+                        Active: {providerModelLabel(providers, stageProviderId, stageModel)}{stageEffort ? ` / ${stageEffort}` : ''}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateSelectedStageRoute({
+                          providerOverride: '', modelOverride: '', effortOverride: '',
+                        })}
+                        className="text-[11px] text-gray-500 hover:text-white"
+                      >
+                        Clear override
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </CollapsibleSection>
+          <CollapsibleSection
+            label="Quality gates & round limits"
+            summary={`${formatCount(qualityOverrides)} custom`}
+            size="bar"
+            className="border-t border-port-border"
+            bodyClassName="space-y-2 pb-3"
+          >
+            <label className="flex items-center gap-2 text-xs text-gray-300">
+              <input type="checkbox" checked={opt.foundationGate} onChange={(e) => options.edit('foundationGate', e.target.checked)} />
+              Judge the foundation (world / characters / arc) before drafting
+            </label>
+            <div className="flex flex-wrap gap-4 pt-1">
+              <RoundInput
+                id="autopilot-arc-rounds"
+                label="Arc verify rounds"
+                {...options.inputProps('maxArcVerifyRounds')}
+              />
+              <RoundInput
+                id="autopilot-beat-continuity-rounds"
+                label="Beat continuity rounds"
+                {...options.inputProps('maxBeatContinuityRounds')}
+              />
+              <RoundInput
+                id="autopilot-editorial-rounds"
+                label="Editorial rounds"
+                {...options.inputProps('maxEditorialRounds')}
+              />
+            </div>
+            <p className="text-[11px] text-gray-500">
+              How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
+            </p>
+            {opt.foundationGate ? (
+              <>
+                <div className="flex flex-wrap gap-4 pt-1">
+                  <RoundInput
+                    id="autopilot-foundation-threshold"
+                    label="Foundation threshold"
+                    {...options.inputProps('foundationThreshold')}
+                    max={10}
+                  />
+                  <RoundInput
+                    id="autopilot-foundation-rounds"
+                    label="Foundation rounds"
+                    {...options.inputProps('maxFoundationRounds')}
+                  />
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  Weighted quality bar (0–10: worldbuilding 40%, character 30%, structure 20%, craft 10%) the foundation must clear before drafting; the run repairs the largest weighted deficit up to the round limit, then pauses for review.
+                </p>
+              </>
+            ) : null}
+            <div className="flex items-center gap-2 pt-1">
+              <label htmlFor="autopilot-readiness-gate" className="text-xs text-gray-300">Readiness gate</label>
+              <select
+                id="autopilot-readiness-gate"
+                value={readinessGate}
+                onChange={(e) => setReadinessGate(e.target.value)}
+                className="px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+              >
+                <option value="">
+                  Use saved default{savedGate ? ` (${READINESS_GATE_LABELS[savedGate]})` : ''}
+                </option>
+                {READINESS_GATE_ORDER.map((value) => (
+                  <option key={value} value={value}>{READINESS_GATE_LABELS[value]}</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[11px] text-gray-500">
+              The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
+            </p>
+            <div className="pt-1">
+              <RoundInput
+                id="autopilot-check-pause-threshold"
+                label="Pause at high findings"
+                {...options.inputProps('checkFindingsPauseThreshold')}
+                max={null}
+              />
+            </div>
+            <p className="text-[11px] text-gray-500">
+              When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
+            </p>
+            <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
+              <input type="checkbox" checked={opt.revisionEnabled} onChange={(e) => options.edit('revisionEnabled', e.target.checked)} />
+              Iterate to quality (revise the weakest issue under a keep/revert score gate)
+            </label>
+            {opt.revisionEnabled ? (
+              <>
+                <div className="flex flex-wrap gap-4 pt-1">
+                  <RoundInput
+                    id="autopilot-revision-min-cycles"
+                    label="Min cycles"
+                    {...options.inputProps('revisionMinCycles')}
+                    min={1}
+                  />
+                  <RoundInput
+                    id="autopilot-revision-max-cycles"
+                    label="Max cycles"
+                    {...options.inputProps('revisionMaxCycles')}
+                    min={1}
+                  />
+                  <RoundInput
+                    id="autopilot-revision-plateau-delta"
+                    label="Plateau Δ"
+                    {...options.inputProps('revisionPlateauDelta')}
+                    min={0}
+                    max={10}
+                    step={0.1}
+                  />
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  After the editorial-health gate, judge every drafted issue and revise the weakest via adversarial cuts, keeping a change only when the quality score doesn&apos;t regress. Stops on plateau (mean score moves less than Δ), hedged-convergence, or max cycles. Fresh judge + cut LLM spend — saved as the default and reused on Resume.
+                </p>
+              </>
+            ) : null}
+          </CollapsibleSection>
+        </div>
+      )}
 
       {/* Live progress */}
       {active ? (

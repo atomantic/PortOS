@@ -29,7 +29,6 @@ import { basename, isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -500,6 +499,7 @@ async function keepFirstFrame(scratchDir, jobId, meta) {
   try {
     await ensureDir(PATHS.images);
     // Grok may save another format under the .png name; the gallery serves PNG only.
+    const { default: sharp } = await import('sharp');
     const png = await sharp(source).png().toBuffer();
     // Publish the image, its sidecar and its index row together, as gallery uploads do (imageGen/local.js).
     await withBackupAssetPublication(async () => {

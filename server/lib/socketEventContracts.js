@@ -346,6 +346,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate health after a service change or changed shared readiness sample.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'auth:password-risk:changed': {
+    direction: 'server-to-client',
+    summary: 'Public password posture after a password change. The risk revision stays in the gated API.',
+    payloadSchema: { type: 'object', required: ['enabled'], properties: { enabled: { type: 'boolean' } }, additionalProperties: false },
+  },
   'capabilities:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate capabilities after a persisted change or changed readiness sample.',
@@ -746,6 +751,13 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A media examination was saved; reconcile history without exposing prompt content.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'media:collection-primary:changed': {
+    direction: 'server-to-client',
+    summary: 'A collection consolidation started or finished; refresh its status.',
+    payloadSchema: {
+      type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false,
+    },
+  },
   'media:holders:changed': {
     direction: 'server-to-client',
     summary: 'Which machines hold a media file changed (holdings, Make primary, queued releases); refetch the holders map.',
@@ -753,8 +765,27 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'media-jobs:changed': {
     direction: 'server-to-client',
-    summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',
+    summary: 'Invalidate queue snapshots after job lifecycle, archive or hold changes.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:subscribe': {
+    direction: 'client-to-server', summary: 'Observe transient media queue progress on this socket.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:unsubscribe': {
+    direction: 'client-to-server', summary: 'Stop observing media queue progress on this socket.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'media-jobs:progress': {
+    direction: 'server-to-client',
+    summary: 'Latest in-memory progress for one running media job, sent to queue subscribers.',
+    payloadSchema: {
+      type: 'object', required: ['id', 'startedAt', 'progress', 'statusMsg'], additionalProperties: false,
+      properties: {
+        id: { type: 'string' }, startedAt: { type: 'string' }, progress: { type: 'number' },
+        statusMsg: { type: 'string' }, etaMs: { type: 'number' },
+      },
+    },
   },
   'training:checkpoints:changed': {
     direction: 'server-to-client',

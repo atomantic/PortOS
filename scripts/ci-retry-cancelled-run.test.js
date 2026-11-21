@@ -375,7 +375,7 @@ describe('the wait before re-dispatching', () => {
 
   it('lets a supersession that lands DURING the wait win', async () => {
     // This is the re-check the delay exists for: the pre-wait listing said
-    // there was no successor, and a push five minutes later must still
+    // there was no successor, and a push during the wait must still
     // cancel the retry rather than re-running code nobody is waiting on.
     let pushedDuringWait = false;
     const impl = vi.fn(async (url) => {
@@ -418,7 +418,7 @@ describe('the wait before re-dispatching', () => {
 
   it('does not hold a runner idle for a run that is already ineligible', async () => {
     // Skipping before the wait is what keeps the delay cheap: a genuinely red
-    // run costs one API call, not five minutes of occupancy.
+    // run costs one API call, without an idle wait.
     const clock = fakeClock();
     await expect(invoke({
       env: BASE_ENV,
@@ -605,10 +605,15 @@ describe('ci-cancel-recovery.yml wiring', () => {
     expect(timeoutMinutes * 60_000).toBeGreaterThan(MAX_RUNTIME_MS);
   });
 
-  it('observes only CI requests/completions while retry stays cancellation-scoped', () => {
-    expect(RECOVERY_WORKFLOW).toMatch(/on:\n {2}workflow_run:\n {4}workflows: \[CI\]\n {4}types: \[requested, completed\]/);
+  it('observes completed CI runs and only defines the retry job', () => {
+    expect(RECOVERY_WORKFLOW).toMatch(/on:\n {2}workflow_run:\n {4}workflows: \[CI\]\n {4}types: \[completed\]/);
+    expect(Object.keys(jobs)).toEqual(['retry']);
     // A `pull_request` trigger here would run with the PR's own code.
     expect(RECOVERY_WORKFLOW).not.toMatch(/^\s{2}pull_request:/m);
+  });
+
+  it('limits the pre-dispatch wait to one minute', () => {
+    expect(RETRY_DELAY_MS).toBeLessThanOrEqual(60_000);
   });
 
   it('pre-filters on the same three cheap guards the script re-checks', () => {

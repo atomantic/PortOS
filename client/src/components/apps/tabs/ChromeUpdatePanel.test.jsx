@@ -2,14 +2,16 @@ import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ChromeUpdatePanel from './ChromeUpdatePanel';
-import { getBrowserUpdateStatus } from '../../../services/api';
+import { getBrowserUpdateStatus } from '../../../services/apiSystem.js';
 
 const listeners = vi.hoisted(() => new Map());
 vi.mock('../../../services/socket', () => ({ default: {
   on: vi.fn((name, handler) => listeners.set(name, handler)),
   off: vi.fn((name) => listeners.delete(name)),
 } }));
-vi.mock('../../../services/api', () => ({ getBrowserUpdateStatus: vi.fn() }));
+vi.mock('../../../services/apiSystem.js', () => ({
+  getBrowserUpdateStatus: vi.fn(),
+}));
 
 beforeEach(() => { listeners.clear(); vi.resetAllMocks(); });
 

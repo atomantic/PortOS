@@ -11,6 +11,9 @@
 export const ITEM_KINDS = ['image', 'video'];
 export const ITEM_KIND = new Set(ITEM_KINDS);
 export const REF_MAX_LENGTH = 256;
+export const MEDIA_COLLECTION_ITEMS_MAX = 5000;
+// Most items one bulk add or remove request may name.
+export const MEDIA_COLLECTION_BULK_MAX = 1000;
 
 export const itemKey = (it) => `${it.kind}:${it.ref}`;
 

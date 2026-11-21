@@ -5,7 +5,7 @@
 import { loadSlashdoFile, loadSlashdoBundle, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js';
 import { resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, parseExplicitReviewWith, SLASHDO_REVIEWER_INCLUDE_NAMES, SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
-import { DEFAULT_REVIEWER, resolveReviewerConfig, buildReviewerEffortNote, buildReviewersCsv } from '../../lib/cos/cosValidation.js';
+import { DEFAULT_REVIEWER, resolveReviewerConfig, buildReviewerEffortNote, buildReviewersCsv } from '../../lib/reviewerConfig.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 /**

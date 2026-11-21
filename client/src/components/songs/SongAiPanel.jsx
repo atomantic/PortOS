@@ -16,7 +16,7 @@
 import { useState } from 'react';
 import { Sparkles, Wand2, ClipboardCheck, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { generateRoundFor, evaluateRound } from '../../services/api';
+import { generateRoundFor, evaluateRound } from '../../services/apiRounds.js';
 
 const scoreColor = (n) => {
   if (n == null) return 'text-gray-400';

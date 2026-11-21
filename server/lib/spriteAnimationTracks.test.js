@@ -543,9 +543,10 @@ describe('sharp-free leaf property', () => {
     const walkBounds = staticImportClosure(join(SPRITES_DIR, 'walkBounds.js'));
     expect([...walkBounds.files]).toContain(join(LIB_DIR, 'spriteAnimationTracks.js'));
 
-    const packer = staticImportClosure(join(SPRITES_DIR, 'walkPostprocess.js'));
-    expect([...packer.packages], 'walkPostprocess is the native-graph module this split exists to fence off')
-      .toContain('sharp');
+    // Sprite fixtures eagerly import Sharp to encode test PNGs. Production
+    // renderers can load it on demand without invalidating this control.
+    const fixtures = staticImportClosure(join(SPRITES_DIR, 'spriteTestFixtures.js'));
+    expect(fixtures.packages.has('sharp')).toBe(true);
 
     // …and that spriteValidation.js's closure is genuinely large, so a resolver gap
     // can't make its clean result meaningless.

@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Clapperboard, Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
@@ -115,7 +116,7 @@ function BeatEditor({ project, world, timeline, beat, characters, setName, onCha
                 <span className="text-port-text-muted">By</span>
                 <select id="timeline-beat-vehicle" className={selectCls} value={beat.vehicleSubjectId || ''} onChange={(event) => onChange({ vehicleSubjectId: event.target.value || null })}>
                   <option value="">On foot</option>
-                  {vehicles.map((vehicle) => <option key={vehicle.subjectId} value={vehicle.subjectId}>{vehicle.name}</option>)}
+                  {sortByLabel(vehicles).map((vehicle) => <option key={vehicle.subjectId} value={vehicle.subjectId}>{vehicle.name}</option>)}
                 </select>
               </label>
             )}

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Check, X, Wifi } from 'lucide-react';
 import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
-import { updatePeer } from '../../services/api';
+import { updatePeer } from '../../services/apiSystem.js';
 
 export default function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
   const [editing, setEditing] = useState(false);

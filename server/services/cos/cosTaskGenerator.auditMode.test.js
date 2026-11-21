@@ -86,7 +86,8 @@ import { generateTaskFromJob } from '../autonomousJobs/skillTemplates.js';
 import { buildLightContextPrompt } from '../agent/agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
 import {
-  AUDIT_TASK_TYPES,
+  AUDIT_EXECUTION_TASK_TYPES as AUDIT_TYPES,
+  isAuditTaskType,
   FILE_ISSUES_DELIVERY_SETTINGS,
   defaultFileIssuesFor,
   isFileIssuesMode,
@@ -95,7 +96,6 @@ import { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES } fr
 
 import { buildMaintenanceSteps } from '../../lib/maintenanceSequence.js';
 
-const AUDIT_TYPES = [...AUDIT_TASK_TYPES];
 const WORKSPACE = '/tmp/example-repo';
 
 const makeApp = (overrides = {}) => ({
@@ -553,7 +553,7 @@ describe('programmatic scheduled handlers expose no issues-only toggle', () => {
   it('none of them is an audit type, so no mode banner or default reaches them', () => {
     expect(PROGRAMMATIC_SCHEDULED_TASK_TYPES.length).toBeGreaterThan(0);
     for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
-      expect(AUDIT_TASK_TYPES.has(taskType), taskType).toBe(false);
+      expect(isAuditTaskType(taskType), taskType).toBe(false);
       expect(defaultFileIssuesFor(taskType), taskType).toBe(false);
       // Even a hand-edited schedule cannot switch one on: the catalog gate in
       // `isFileIssuesMode` refuses a type it does not own.

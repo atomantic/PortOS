@@ -99,9 +99,14 @@ import { isHttpUrl } from '../utils/urlNormalize';
 import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import {
-  getSong, updateSong, deleteSong,
-  listSongAttachments, uploadSongAttachment, deleteSongAttachment, songAttachmentUrl,
-} from '../services/api';
+  getSong,
+  updateSong,
+  deleteSong,
+  listSongAttachments,
+  uploadSongAttachment,
+  deleteSongAttachment,
+  songAttachmentUrl,
+} from '../services/apiSongbook.js';
 
 const TRANSPOSE_MIN = -11;
 const TRANSPOSE_MAX = 11;

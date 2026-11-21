@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { ImagePlus, Trash2 } from 'lucide-react';
 import InfluenceChipsInput from '../universeBuilder/InfluenceChipsInput';
@@ -111,7 +112,7 @@ export default function DeckStylePanel({ deck, universes, onPatch, onDeckReplace
           <label htmlFor="deck-universe" className="block text-xs text-gray-400 mb-1">Universe</label>
           <select id="deck-universe" value={deck.universeId || ''} onChange={(e) => onPatch({ universeId: e.target.value || null })} className={INPUT_CLASS}>
             <option value="">— none —</option>
-            {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {sortByLabel(universes).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           <p className="text-[11px] text-gray-500 mt-1">With a universe linked, "Generate prompts" first casts its characters, places and objects onto the cards.</p>
         </div>

@@ -1,8 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'fs';
+import { describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { appsNeedingStart } from './pm2-start.js';
+import { appsNeedingStart, startProductionApps } from './pm2-start.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const root = join(repoRoot, 'fixture-root');
@@ -42,12 +41,92 @@ describe('appsNeedingStart', () => {
   });
 });
 
-describe('npm start wiring', () => {
-  it('probes before deleting the ecosystem, so a healthy install is never restarted', () => {
-    const start = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).scripts.start;
-    const probe = start.indexOf('scripts/pm2-start.js');
-    expect(probe).toBeGreaterThan(-1);
-    expect(probe).toBeLessThan(start.indexOf('pm2 delete ecosystem.config.cjs'));
-    expect(start.slice(probe)).toMatch(/pm2-start\.js [^|]+ \|\| \(/);
+describe('production PM2 startup', () => {
+  const monitor = 'portos-autofixer';
+  const expectedApps = [...apps, monitor, 'portos-browser'];
+  const production = port => expectedApps.map(name => name === monitor
+    ? {
+      name,
+      pm2_env: { status: 'online', pm_exec_path: join(root, 'autofixer', 'server.js'), env: { PORT: port } },
+    }
+    : proc(name));
+  const legacyDashboard = (checkout, id) => ({
+    ...proc('portos-autofixer-ui', 'online', join(checkout, 'autofixer', 'ui.js')),
+    pm_id: id,
+  });
+  const foreignDashboard = legacyDashboard(join(repoRoot, 'other-checkout'), 12);
+  const restart = ['restart', 'ecosystem.config.cjs', '--only', monitor];
+  const setup = (before, after = production(5560)) => {
+    const list = vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after);
+    const pm2 = vi.fn();
+    return { pm2, list, start: () => startProductionApps({ expectedApps, root, list, pm2 }) };
+  };
+
+  it('deletes only the current checkout dashboard by ID, restarts only Autofixer and saves', async () => {
+    const { pm2, start } = setup([...production(5559), foreignDashboard, legacyDashboard(root, 0)]);
+    await start();
+    expect(pm2.mock.calls).toEqual([['delete', '0'], restart, ['save']]);
+  });
+
+  it.each(['5559', undefined])('recovers a monitor with saved port %j after the dashboard was removed', async (port) => {
+    const { pm2, start } = setup([...production(port), foreignDashboard]);
+    await start();
+    expect(pm2.mock.calls).toEqual([restart, ['save']]);
+  });
+
+  it('retires a leftover dashboard without restarting a monitor already on 5560', async () => {
+    const { pm2, start } = setup([...production(5560), legacyDashboard(root, 4)]);
+    await start();
+    expect(pm2.mock.calls).toEqual([['delete', '4'], ['save']]);
+  });
+
+  it.each([
+    ['with no legacy entries', []],
+    ['with a foreign dashboard', [foreignDashboard]],
+    ['with a stopped duplicate', [proc('portos-cos', 'stopped')]],
+  ])('leaves a healthy current install alone %s', async (_case, foreignEntries) => {
+    const { pm2, start } = setup([...foreignEntries, ...production(5560)]);
+    await start();
+    expect(pm2).not.toHaveBeenCalled();
+  });
+
+  it('fails a scoped upgrade if PM2 returns success without applying the configuration', async () => {
+    const { pm2, start } = setup(production(5559), production(5559));
+    await expect(start()).rejects.toThrow('did not apply the combined Autofixer');
+    expect(pm2.mock.calls).toEqual([restart]);
+  });
+
+  it('retries just the monitor after a failed restart followed retirement of the dashboard', async () => {
+    const { pm2, list, start } = setup([...production(undefined), legacyDashboard(root, 5)]);
+    list.mockResolvedValueOnce(production(undefined));
+    pm2.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+      throw new Error('PM2 restart failed');
+    });
+    await expect(start()).rejects.toThrow('PM2 restart failed');
+    expect(pm2.mock.calls).toEqual([['delete', '5'], restart]);
+    pm2.mockClear();
+    await start();
+    expect(pm2.mock.calls).toEqual([restart, ['save']]);
+  });
+
+  it('refuses to restart by name when a second monitor belongs to another checkout', async () => {
+    const foreignMonitor = proc(monitor, 'online', join(repoRoot, 'other-checkout', 'autofixer', 'server.js'));
+    const { pm2, start } = setup([foreignMonitor, ...production(5559), legacyDashboard(root, 0)]);
+    await expect(start()).rejects.toThrow('Multiple PM2 Autofixer monitors');
+    expect(pm2).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', production(5559).filter(({ name }) => name !== 'portos-cos')],
+    ['stopped', [...production(5559).filter(({ name }) => name !== 'portos-cos'), proc('portos-cos', 'stopped')]],
+  ])('runs full recovery when a production service is %s', async (_case, before) => {
+    const { pm2, start } = setup([...before, foreignDashboard, legacyDashboard(root, 7)]);
+    await start();
+    expect(pm2.mock.calls).toEqual([
+      ['delete', '7'],
+      ['delete', 'ecosystem.config.cjs', '--silent'],
+      ['start', 'ecosystem.config.cjs', '--only', expectedApps.join(',')],
+      ['save'],
+    ]);
   });
 });

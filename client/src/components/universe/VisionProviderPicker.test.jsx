@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({ getProviders: vi.fn() }));
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
+}));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
 
 import VisionProviderPicker from './VisionProviderPicker';
-import { getProviders } from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
 import { getVisionModels } from '../../services/apiLocalLlm';
 
 // A local backend whose ONLY vision-capable model belongs to a family the

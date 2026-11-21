@@ -8,6 +8,8 @@ vi.mock('../lib/execGit.js', () => {
   };
 });
 
+const isLocalBranchList = args => args.join(' ') === 'for-each-ref --format=%(refname:lstrip=2) refs/heads/';
+
 describe('getDefaultBranch', () => {
   let getDefaultBranch;
   let execGit;
@@ -60,11 +62,8 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref') {
         return Promise.reject(new Error('not set'));
       }
-      if (args[0] === 'branch') {
-        return Promise.resolve({ stdout: '  main\n  dev\n', stderr: '', exitCode: 0 });
-      }
-      if (args[0] === 'rev-parse') {
-        return Promise.resolve({ stdout: 'main', stderr: '', exitCode: 0 });
+      if (isLocalBranchList(args)) {
+        return Promise.resolve({ stdout: 'main\ndev\n', stderr: '', exitCode: 0 });
       }
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
@@ -101,8 +100,8 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref') {
         return Promise.reject(new Error('not set'));
       }
-      if (args[0] === 'branch') {
-        return Promise.resolve({ stdout: '  master\n  feature/x\n', stderr: '', exitCode: 0 });
+      if (isLocalBranchList(args)) {
+        return Promise.resolve({ stdout: 'master\nfeature/x\n', stderr: '', exitCode: 0 });
       }
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
@@ -116,8 +115,8 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref') {
         return Promise.reject(new Error('not set'));
       }
-      if (args[0] === 'branch') {
-        return Promise.resolve({ stdout: '  develop\n  feature/x\n', stderr: '', exitCode: 0 });
+      if (isLocalBranchList(args)) {
+        return Promise.resolve({ stdout: 'develop\nfeature/x\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) {
         return Promise.resolve({ stdout: 'develop', stderr: '', exitCode: 0 });
@@ -134,8 +133,8 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref') {
         return Promise.reject(new Error('not set'));
       }
-      if (args[0] === 'branch') {
-        return Promise.resolve({ stdout: '  develop\n  feature/x\n', stderr: '', exitCode: 0 });
+      if (isLocalBranchList(args)) {
+        return Promise.resolve({ stdout: 'develop\nfeature/x\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) {
         return Promise.resolve({ stdout: 'feature/x', stderr: '', exitCode: 0 });
@@ -152,8 +151,8 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref') {
         return Promise.reject(new Error('not set'));
       }
-      if (args[0] === 'branch') {
-        return Promise.resolve({ stdout: '  feature/x\n  feature/y\n', stderr: '', exitCode: 0 });
+      if (isLocalBranchList(args)) {
+        return Promise.resolve({ stdout: 'feature/x\nfeature/y\n', stderr: '', exitCode: 0 });
       }
       if (args[0] === 'rev-parse') {
         return Promise.resolve({ stdout: 'HEAD', stderr: '', exitCode: 0 });

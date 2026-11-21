@@ -155,19 +155,19 @@ the GPU cases concurrently. Each trace occupies roughly 0.4 GiB; keep arrays
 outside the repository and commit only synthetic aggregate metrics.
 
 ~~~sh
-python scripts/diagnose_minimax_h3.py --output-dir /tmp/h3-flat
+python scripts/ml/diagnose_minimax_h3.py --output-dir /tmp/h3-flat
 PYTHON=<diagnostic-python>
 CHECKPOINT=<cached-FL2VA>
 
-"$PYTHON" scripts/diagnose_minimax_h3_vision.py torch \
+"$PYTHON" scripts/ml/diagnose_minimax_h3_vision.py torch \
   --dtype bfloat16 --device gpu --checkpoint-dir "$CHECKPOINT" \
   --source /tmp/h3-flat/source.ppm --output /tmp/h3-torch-bf16.npz \
   --trace-dir /tmp/h3-torch-bf16
-"$PYTHON" scripts/diagnose_minimax_h3_vision.py mlx \
+"$PYTHON" scripts/ml/diagnose_minimax_h3_vision.py mlx \
   --dtype bfloat16 --device gpu --checkpoint-dir "$CHECKPOINT" \
   --source /tmp/h3-flat/source.ppm --output /tmp/h3-mlx-bf16.npz \
   --trace-dir /tmp/h3-mlx-bf16 --replay-dir /tmp/h3-torch-bf16
-"$PYTHON" scripts/compare_minimax_h3_vision.py \
+"$PYTHON" scripts/ml/compare_minimax_h3_vision.py \
   /tmp/h3-mlx-bf16 /tmp/h3-torch-bf16 --output /tmp/h3-comparison.json
 ~~~
 

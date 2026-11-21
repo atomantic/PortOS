@@ -3,7 +3,15 @@ import { Mail, Search, RefreshCw, ChevronRight, Sparkles, Archive, Trash2, Reply
 import { useNavigate, useSearchParams } from 'react-router';
 import toast from '../ui/Toast';
 import TabPills from '../ui/TabPills';
-import * as api from '../../services/api';
+import {
+  getMessageInbox,
+  getMessageDetail,
+  syncMessageAccount,
+  evaluateMessages,
+  generateMessageDraft,
+  executeMessageAction,
+  fetchFullContent,
+} from '../../services/apiMessages.js';
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import { pluralize } from '../../lib/textUtils';
 import MessageDetail from './MessageDetail';
@@ -237,7 +245,7 @@ export default function InboxTab({ accounts }) {
     const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
     if (debouncedSearch) params.search = debouncedSearch;
-    const result = await api.getMessageInbox(params, { silent: true, signal });
+    const result = await getMessageInbox(params, { silent: true, signal });
     return result.messages || [];
   }, [selectedAccount, debouncedSearch]);
   const { data, loading, error, refetch: fetchMessages, updateData } = useSocketResource(readMessages, {
@@ -262,7 +270,7 @@ export default function InboxTab({ accounts }) {
     setDetailError(null);
     if (!messageId || !resolvedMessageAccount) return undefined;
 
-    api.getMessageDetail(resolvedMessageAccount, messageId, { silent: true })
+    getMessageDetail(resolvedMessageAccount, messageId, { silent: true })
       .then(message => {
         if (!active) return;
         if (message) setLoadedMessage(message);
@@ -297,7 +305,7 @@ export default function InboxTab({ accounts }) {
     const syncedNow = {};
     for (const acct of targets) {
       toast(`Syncing ${acct.name} (${mode})...`, { icon: '📧' });
-      const result = await api.syncMessageAccount(acct.id, mode, { silent: true }).catch(err => {
+      const result = await syncMessageAccount(acct.id, mode, { silent: true }).catch(err => {
         toast.error(`${acct.name}: ${err?.message || 'Sync failed'}`);
         return null;
       });
@@ -322,7 +330,7 @@ export default function InboxTab({ accounts }) {
   const handleEvaluate = async () => {
     setEvaluating(true);
     const data = selectedAccount ? { accountId: selectedAccount } : {};
-    const result = await api.evaluateMessages(data, { silent: true }).catch((err) => {
+    const result = await evaluateMessages(data, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Evaluation failed');
       return null;
     });
@@ -342,7 +350,7 @@ export default function InboxTab({ accounts }) {
     const account = accountList.find(a => a.id === msg.accountId) || accountList[0];
     if (!account) return toast.error('No account available');
     toast('Generating AI reply...', { icon: '✨' });
-    const draft = await api.generateMessageDraft({
+    const draft = await generateMessageDraft({
       accountId: account.id,
       replyToMessageId: msg.id,
       threadId: msg.threadId,
@@ -365,7 +373,7 @@ export default function InboxTab({ accounts }) {
     }
     setActionInProgress(msg.id);
     toast(`${action === 'archive' ? 'Archiving' : 'Deleting'}...`, { icon: '📧' });
-    const result = await api.executeMessageAction(msg.accountId, msg.id, action, { silent: true }).catch(err => {
+    const result = await executeMessageAction(msg.accountId, msg.id, action, { silent: true }).catch(err => {
       toast.error(err?.message || `${action} failed`);
       return null;
     });
@@ -524,7 +532,7 @@ export default function InboxTab({ accounts }) {
           <button
             onClick={async () => {
               setFetchingFull(true);
-              const result = await api.fetchFullContent(selectedAccount).catch(() => null);
+              const result = await fetchFullContent(selectedAccount).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
               toast.success(`Fetched full content for ${pluralize(result.count || 0, 'message')}`);
@@ -542,7 +550,7 @@ export default function InboxTab({ accounts }) {
           <button
             onClick={async () => {
               setFetchingFull(true);
-              const result = await api.fetchFullContent(selectedAccount, { force: true }).catch(() => null);
+              const result = await fetchFullContent(selectedAccount, { force: true }).catch(() => null);
               setFetchingFull(false);
               if (!result) return;
               toast.success(`Re-fetched content for ${result.updated || 0} of ${pluralize(result.total || 0, 'message')}`);

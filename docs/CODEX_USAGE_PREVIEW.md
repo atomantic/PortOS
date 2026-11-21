@@ -3,7 +3,7 @@
 Run an explicit, bounded preview without loading or changing the PortOS usage ledger:
 
 ```bash
-node scripts/preview-codex-usage.js --from 2026-07-01 --to 2026-07-07
+node scripts/ops/preview-codex-usage.js --from 2026-07-01 --to 2026-07-07
 ```
 
 Both dates are required, inclusive UTC calendar days, at most 366 days apart
@@ -70,12 +70,18 @@ work under #15030 and #15031.
 ## Routine accounting
 
 Run reconciliation and the native history reader read the same sources under separate
-limits, so these do not change what a preview reports. Each pass decodes at most
-5,000 unindexed files, 64 GiB or 20 seconds of work and stores each verified
-projection (see the storage header in [`codexInventoryCache.js`](../server/services/codexInventoryCache.js)). Sources
-already stored spend none of that budget. A pass that leaves work reports
-`indexing_pending` with counts, holds the Codex native-history fold and run claims, and the next
-pass continues, so a history larger than one pass converges. A single source is
+limits, so these do not change what a preview reports. A pass admits up to 5,000
+unindexed files and stops admitting decode work at 64 GiB or 20 seconds. It stores
+each verified projection (see [`codexInventoryCache.js`](../server/services/codexInventoryCache.js)).
+Sources with precise timestamps can reuse an unchanged projection without reading
+the rollout. When both timestamps have whole-second precision, as on HFS+, the
+reader streams and hashes the file before reuse and charges those bytes and time
+to the same budgets. Historical speed repair defers when coarse-timestamp sources
+remain unverified because they can contain conflicting copies of resolved sessions.
+A pass that leaves work reports
+`indexing_pending` with counts and holds the Codex native-history fold and run
+claims. The next pass picks up more unindexed files when coarse-source validation
+fits within the pass limits. A single source is
 limited to 100,000 accounting records; a larger one holds accounting until it is
 resolved, and only that source is reported.
 

@@ -32,7 +32,7 @@ import {
   measureClosures,
   measureWorkingTree,
 } from '../../scripts/lib/importGrowth.js';
-import { importSpecifiersFromSource } from '../../scripts/lib/importReach.js';
+import { moduleSpecifiers } from '../../scripts/lib/moduleGraph.js';
 
 const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -136,7 +136,7 @@ const SELECTION_CUTS = [
 ];
 
 const importTargets = (entry) => {
-  const { static: eager, dynamic: lazy } = importSpecifiersFromSource(readFileSync(abs(entry), 'utf-8'));
+  const { statics: eager, deferred: lazy } = moduleSpecifiers(readFileSync(abs(entry), 'utf-8'), entry);
   return [...eager, ...lazy].filter((spec) => spec.startsWith('.'))
     .map((spec) => posix.normalize(posix.join(posix.dirname(entry), spec)));
 };
@@ -342,12 +342,25 @@ describe('shared provider type leaf', () => {
 // that is imported statically, so a resolver gap cannot make this look clean.
 describe('heavy single-feature packages stay out of the boot closure', () => {
   const closure = staticImportClosure(abs('index.js'));
-  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three'])(
+  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three', 'sharp', '@babel/parser'])(
     'does not reach %s through static imports from index.js',
     (pkg) => {
       expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);
     },
   );
+  it.each(['routes/apps/index.js', 'routes/musicVideo.js', 'routes/localLlm.js'])(
+    'keeps native image processing and JavaScript parsing off ordinary requests to %s', (entry) => {
+      const { packages } = staticImportClosure(abs(entry));
+      expect(packages.has('sharp')).toBe(false);
+      expect(packages.has('@babel/parser')).toBe(false);
+    },
+  );
+  it('arms local model subscriptions before either HTTP router loads', () => {
+    expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
+  });
+  it('loads at most half of the original 3,023 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1511);
+  });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);
   });

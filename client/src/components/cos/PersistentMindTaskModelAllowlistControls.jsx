@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import * as api from '../../services/api';
+import { getProviders } from '../../services/apiProviders.js';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import {
   filterHardwareCompatibleProviderModels,
   filterSelectableModels,
@@ -38,7 +39,7 @@ export default function PersistentMindTaskModelAllowlistControls({
   }, [capabilities?.schemaVersion, capabilities?.taskModelAllowlist]);
 
   useEffect(() => {
-    api.getProviders({ silent: true })
+    getProviders({ silent: true })
       .then((response) => setProviders((response?.providers || []).filter((provider) => (
         provider.enabled !== false && (provider.type === 'cli' || provider.type === 'tui')
       ))))
@@ -72,7 +73,7 @@ export default function PersistentMindTaskModelAllowlistControls({
         taskModelAllowlist: deduped,
         ...(Array.isArray(capabilities?.allowedAppIds) ? { allowedAppIds: capabilities.allowedAppIds } : {}),
       };
-      await api.updateCosConfig({ persistentMindCapabilities: next }, { silent: true });
+      await updateCosConfig({ persistentMindCapabilities: next }, { silent: true });
       onSaved?.({ ...capabilities, ...next });
       toast.success(deduped.length ? 'Persistent mind task models restricted' : 'Persistent mind task model restriction cleared');
     } catch (requestError) {

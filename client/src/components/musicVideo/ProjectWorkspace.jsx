@@ -137,6 +137,8 @@ export default function ProjectWorkspace({
   );
   const publish = publishProgress(publishing);
   const progress = deriveStages(stageProject, productionReview.readiness, publish);
+  const autopilot = autopilotStatus(stageProject, productionReview.readiness, { progress });
+  const notes = stepNotes(stageProject, productionReview.readiness, publish, { progress });
   // Which stage tab is open. The URL is the source of truth; with none (or an
   // unknown one) the tab is the stage the project was in when it was opened,
   // pinned so a stage completing mid-session doesn't move the user off the tab
@@ -403,6 +405,7 @@ export default function ProjectWorkspace({
   const productionNextAction = selected ? deriveNextAction(stageProject, {
     readiness: productionReview.readiness,
     publish,
+    progress,
     renderActive: renderTargetsSelected,
     draftActive: excerpts.rendering,
     proofActive: productionReview.proof.active,
@@ -652,8 +655,8 @@ export default function ProjectWorkspace({
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={projectStatus}
-            notes={previzRunning ? { ...stepNotes(stageProject, productionReview.readiness, publish), previz: 'Running…' } : stepNotes(stageProject, productionReview.readiness, publish)}
-            autopilot={autopilotStatus(stageProject, productionReview.readiness)}
+            notes={previzRunning ? { ...notes, previz: 'Running…' } : notes}
+            autopilot={autopilot}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}
             previewExpanded={dockExpanded}
@@ -688,7 +691,7 @@ export default function ProjectWorkspace({
               <NeedsAttentionBanner
                 // A parked autonomous or production run with nothing to resume, while the
                 // header's Autopilot button reports that run, is that button (which opens it); no second row.
-                items={autopilotStatus(stageProject).label === 'Autopilot' ? attentionItems
+                items={autopilot.label === 'Autopilot' ? attentionItems
                   : attentionItems.filter((item) => !(['autonomous', 'production'].includes(item.kind) && !item.canResume))}
                 busy={revisions.busy || castSets.busy || autoReview.busy || autonomous.busy || production.busy || renderJob.reattaching}
                 actions={{

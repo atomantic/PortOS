@@ -18,14 +18,14 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../services/socket', () => ({ default: socket }));
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   getEidoverseDestinations: vi.fn(async () => ({
     destinations: [{ peerId: 'example-peer', label: 'Example world' }],
   })),
   departEidoverse: vi.fn(),
 }));
 
-import { departEidoverse, getEidoverseDestinations } from '../../services/api';
+import { departEidoverse, getEidoverseDestinations } from '../../services/apiSystem.js';
 import EidoverseTravel from './EidoverseTravel';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });

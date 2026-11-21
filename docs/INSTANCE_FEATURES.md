@@ -27,17 +27,13 @@ and the voice widget each fetch `/api/palette/manifest` once per session and it
 is HTTP-cached, so a server-side filter would both defeat that cache and still
 show hidden pages until a reload.
 
-A sidebar row still needs its own `NAV_PRESENTATION` entry in
-`client/src/lib/navPresentation.js` (path → icon), which `Layout.jsx` iterates.
-`feature`, `section` and `label` are inherited from `NAV_COMMANDS`, so the path
-is the one thing declared twice — the icon lives only in `NAV_PRESENTATION` —
-and a manifest tag alone yields no sidebar row: `NAV_PRESENTATION`'s keys are
-the set the sidebar iterates. `Layout.test.jsx` pins that every Settings,
-Digital Twin and Messages sub-tab path has a `NAV_PRESENTATION` entry, and that
-each entry stays presentation-only (an icon, no `to`/`label`/`section`/`feature`)
-keyed to a live manifest path. `navManifest.test.js` fails when a tag names an
-unregistered feature, or when a `SECTION_FEATURE` key stops matching a live
-section.
+Destination icons live in `NAV_DESTINATION_PRESENTATION` in
+`client/src/lib/navPresentation.js`. The same registry supplies icons for
+section tabs and saved Pinned and Recent rows. Its `NAV_PRESENTATION` projection
+excludes local hub and studio views from the sidebar. `Layout.jsx` reads
+`feature`, `section` and `label` from `NAV_COMMANDS`. Tests keep each icon keyed
+to a live manifest path and check that feature tags and section gates refer to
+registered features and sections.
 
 ## Feature groups (one toggle, additive)
 

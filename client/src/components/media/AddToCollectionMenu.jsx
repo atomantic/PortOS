@@ -3,7 +3,7 @@ import { FolderPlus, Check } from 'lucide-react';
 import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
 import CollectionRowLabel from './CollectionRowLabel';
-import { addMediaCollectionItem, removeMediaCollectionItem } from '../../services/api';
+import { addMediaCollectionItem, removeMediaCollectionItem } from '../../services/apiImageVideo.js';
 
 // Self-contained popover button used by MediaCard. The popover is portalled
 // into <body> by CollectionPickerShell with fixed positioning so it escapes

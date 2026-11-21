@@ -2,9 +2,9 @@
 
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
-That "every dependency" claim is enforced by `docs/deps-doc.test.js` (run by `cd server && npm test`): adding a dependency to any workspace manifest without a row here fails the suite, and a Quick Reference row naming a package no manifest declares fails too unless its verdict records the removal (`REMOVED` / `REPLACED`).
+That "every dependency" claim is enforced by `server/test/guards/repo/deps-doc.test.js` (run by `cd server && npm test`): every dependency needs a row under the workspace and dependency group that declares it. A row without a matching declaration fails unless its verdict records the removal (`REMOVED` / `REPLACED`).
 
-**Last audited:** 2026-09-21 (routine sweep: 0 open Dependabot alerts, 0 vulnerabilities across root/server/client/autofixer, react/react-dom 19.3.0 held back by r3f peer cap #7370); prior 2026-09-12 (scoped: remove the redundant direct `google-auth-library`, issue #7013); prior 2026-09-11 (scoped: drop `@scalar/api-reference-react`, issue #7012); prior 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672; parity sweep that added the missing `playwright-core` row and put this document under test — `docs/deps-doc.test.js`, issue #5708); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
+**Last audited:** 2026-09-21 (routine sweep: 0 open Dependabot alerts, 0 vulnerabilities across root/server/client/autofixer, react/react-dom 19.3.0 held back by r3f peer cap #7370); prior 2026-09-12 (scoped: remove the redundant direct `google-auth-library`, issue #7013); prior 2026-09-11 (scoped: drop `@scalar/api-reference-react`, issue #7012); prior 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672; parity sweep that added the missing `playwright-core` row and put this document under test — `server/test/guards/repo/deps-doc.test.js`, issue #5708); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
 **Verdict:** All remaining dependencies justified. The 2026-09-21 routine sweep verified that all direct dependencies are current, with 0 open Dependabot alerts on GitHub, clean audits across all workspaces, and react/react-dom 19.3.0 held back by @react-three/fiber's peer constraint (issue #7370). The 2026-09-12 follow-up removed the direct `google-auth-library@11.0.2` pin (issue #7013); Google OAuth now uses the copy already pulled transitively by the scoped Calendar SDK, so this is a manifest/lockfile cleanup rather than a reduction of the transitive tree. The 2026-09-11 follow-up removed `@scalar/api-reference-react` (issue #7012) — the heaviest client dependency, ~half the lockfile and 3.24 MB of dist assets, including Vue 3 and the Vercel AI SDK advisory GHSA-866g-f22w-33x8. The REST Reference tab now lists OpenAPI operations natively. The 2026-08-04 audit replaced the client `eslint` lint stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
 
 ## Audit Methodology
@@ -21,9 +21,10 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
-| **Root deps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Pinned `7.1.0` (aligned with server pin) |
-| **Server deps** | | | | |
+| **Root dependencies** | | | | |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Uses the same pin as the server |
+| **Server dependencies** | | | | |
+| `@babel/parser` | 1 | KEEP | JavaScript parsing for server features and developer tools | Parses source without executing it, including for the complexity report and prompt-stage call-site generator |
 | `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
 | `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
@@ -38,20 +39,20 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `playwright-core` | 1 | KEEP | `server/services/fableLoom/falVideoAutomation.js` — fal.ai scene video automation | Drives the PortOS-managed browser over CDP (`chromium.connectOverCDP`). `-core` rather than the full `playwright` package deliberately: the browser is provisioned separately by `npm run setup:browser`, so the bundled browser download would be dead weight |
-| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.1.0` (aligned with root pin) |
+| `pm2` | 1 | KEEP | app lifecycle | Process manager. Uses the same pin as the root |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
 | `trash` | — | REPLACED | Recoverable image/video history deletion (`server/lib/trashFiles.js`) | Issue #12246 → PortOS-owned adapters in `server/lib/nativeTrash.js` / `nativeTrashXdg.js` (ADR `docs/decisions/2026-10-18-native-trash-without-dependency.md`): `osascript` + `NSFileManager.trashItemAtURL` per file on macOS, Windows PowerShell 5.1 + shell32 `SHFileOperationW` with a fixed-drive pre-flight, freedesktop Trash 1.0 on `node:fs` for Linux. Removed the package's 57 lockfile entries, its ad-hoc-signed macOS binary and unsigned Windows executable |
+| `three` | 1 | KEEP | code film rendering | Supplies the Three.js runtime for generated film pages |
 | `undici` | 1 | KEEP | HTTP client | Node core team project |
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
-| **Server devDeps** | | | | |
-| `@babel/parser` | 1 | KEEP | `scripts/generate-prompt-stage-call-sites.js` — parses `server/` sources to index prompt-stage call sites | Already present transitively (via vitest); promoted to an explicit devDep in #6624 so the generator can't break on a hoist change. Declared on `server` rather than root because CI never installs root `node_modules` |
-| `eslint` | 1 | KEEP | `npm run quality:complexity` | Uses its classic cyclomatic complexity rule for report-only discovery. Regular lint stays on Biome; see the historical client removal and current server tree below |
+| **Server devDependencies** | | | | |
+| `eslint` | — | REMOVED | Former cyclomatic complexity reporter | The report now computes classic scores from the Babel AST |
 | `vitest` | 1 | KEEP | test runner | |
 | `@vitest/coverage-v8` | 1 | KEEP | coverage | Paired with vitest |
-| **Client deps** | | | | |
+| **Client dependencies** | | | | |
 | `@dnd-kit/core` | 1 | KEEP | drag/drop | |
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
 | `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
@@ -68,9 +69,9 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `socket.io-client` | 1 | KEEP | realtime client | |
 | `three` | 1 | KEEP | 3D | |
 | `three-stdlib` | — | REMOVED (direct) | 3D avatars | 2026-09-02 → `three/examples/jsm/utils/SkeletonUtils.js` (issue #5683). The sole direct import was `SkeletonUtils.clone`, which `three` itself ships. Still in the tree transitively via `@react-three/drei`, so this is a manifest cleanup, not a supply-chain reduction — the win is one fewer pin to Dependabot-bump and the removal of a pinned-vs-`^` drift surface against drei's own request |
-| **Client devDeps** | | | | |
-| `@biomejs/biome` | 1 | KEEP | linting | Replaced the whole eslint stack 2026-08-04; native binary, 0 regular deps + 8 platform optionals (1 installed) |
-| `eslint` | — | REMOVED (client) | linting | 2026-08-04 → `@biomejs/biome`. The later server-only report reintroduces ESLint and its transitive tree without changing the client lint setup |
+| **Client devDependencies** | | | | |
+| `@biomejs/biome` | 1 | KEEP | linting across the repo | Client owns the single installation used for local and CI linting |
+| `eslint` | — | REMOVED (client) | linting | 2026-08-04 → `@biomejs/biome`. The server later used ESLint for its complexity report until #16999 |
 | `@eslint/js` | — | REMOVED | linting | Removed with `eslint` |
 | `@eslint-react/eslint-plugin` | — | REMOVED | linting | Removed with `eslint`; its 8 enabled rules map to Biome rules + one GritQL plugin |
 | `eslint-plugin-react-hooks` | — | REMOVED | linting | Removed with `eslint`; `rules-of-hooks` → Biome `useHookAtTopLevel` |
@@ -85,10 +86,9 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/dom` | — | REMOVED (direct) | DOM test utilities | 2026-09-12 → imported through `@testing-library/react`; remains in the tree transitively, so this removes only the redundant direct pin |
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
+| `playwright-core` | 1 | KEEP | browser test tooling | Drives the separately provisioned browser for client verification |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
-| **Autofixer deps** | | | | |
-| `express` | 1 | KEEP | `autofixer/ui.js` | Same framework and pin (`5.2.1`) as the server workspace, but a separate install prefix with its own lockfile — so it needs its own `overrides` block to inherit the server's express-tree pins |
-| **Browser workspace** | | | | |
+| **Browser dependencies** | | | | |
 | _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus in-repo imports from `server/lib/` and `scripts/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
 ## Detailed Findings — Tier 2/3 Audits
@@ -127,16 +127,16 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 - **Usage (was)**: `server/services/googleAuth.js` imported `OAuth2Client` directly for the shared Calendar/Messages OAuth flow.
 - **Resolution**: the service now uses `auth.OAuth2` from the existing `@googleapis/calendar` SDK. That export is the same `OAuth2Client` class supplied through `googleapis-common`, so authorization URLs, token exchange, credentials, and refresh-token persistence keep the existing behavior.
 - **Transitive cost**: the lockfile retains `google-auth-library@10.9.1` under `googleapis-common` (shared by the Calendar and Gmail SDKs) and removes the direct `11.0.2` copy plus its exclusive nested dependencies. This removes a redundant direct pin, not the transitive package itself.
-- **Regression cover**: `docs/deps-doc.test.js` and the Calendar route/account/sync suites pass; a direct module-load smoke check confirms that `auth.OAuth2` is constructible.
+- **Regression cover**: `server/test/guards/repo/deps-doc.test.js` and the Calendar route/account/sync suites pass; a direct module-load smoke check confirms that `auth.OAuth2` is constructible.
 
 
-### `eslint` — historical client removal and server report-only use
+### `eslint` — removed from client lint and server complexity report
 
 - **Trigger**: the August 2026 Shai-Hulud npm compromise hit `keyv`, `flat-cache`, and `file-entry-cache` (among ~430 packages). PortOS was **never exposed** — it held `keyv@4.5.4`, `flat-cache@4.0.1`, `file-entry-cache@8.0.0`, while the malicious releases were the *next major* in each line (`6.0.0` / `6.1.24` / `11.1.6`), unreachable from the `^4` / `^4.0.0` / `^8.0.0` ranges. npm has since unpublished all three, and no install hook ever existed in the tree.
 - **Why they were here at all**: not direct dependencies. A single chain under one root — `eslint → file-entry-cache → flat-cache → keyv` — client workspace, devDependencies only. At the time, `eslint@10.8.0` required `file-entry-cache@^8.0.0`, so shedding that chain meant stopping use of eslint.
 - **Semver headroom was already zero**: the highest published `file-entry-cache@8.x` *is* `8.0.0`, `flat-cache@4.x` *is* `4.0.1`, `keyv@4.x` *is* `4.5.4`. An `overrides` pin would have been a no-op — there was nowhere to float. Removal was therefore a **maintenance** win, not a security fix.
 - **Resolution**: replaced eslint with `@biomejs/biome` (the Quick Reference row and `client/package.json` are the version's home — naming a pin here only drifts). Client lockfile **447 → 337 packages** (−110; the eslint tree out, 9 Biome entries in, only 1 platform binary installed). All four eslint-chain packages now report 0 occurrences in `client/package-lock.json`.
-- **Current server use**: the server declares ESLint as a pinned dev dependency solely for the report-only cyclomatic complexity command. Its lockfile again contains `file-entry-cache`, `flat-cache`, `keyv`, `minimatch`, and `brace-expansion`; the historical client range analysis above does not describe this server tree. `server/.npmrc` still disables install scripts. Biome remains the normal linter.
+- **Server removal**: the server briefly used ESLint to report classic cyclomatic complexity. The report now uses the existing `@babel/parser` dependency, and both lint commands use the client Biome installation (#16999).
 - **`typescript` went with it.** It was a client devDependency solely to satisfy `@eslint-react/eslint-plugin`'s peer dep — the client has no `tsconfig`, zero `.ts`/`.tsx` sources, no `tsc` script, and nothing peer-depends on it. Removing it also retires the `.github/dependabot.yml` ignore rule that pinned it below TS7 (and issue #3351, which tracked waiting on typescript-eslint for TS7 support — now moot).
 - **Rule parity was proven with fixtures, not inferred from a clean run** — a linter with no rules also reports "0 problems". Every rule the old config enforced fires under Biome; `npm run lint` covers the same **1859 files** with 0 problems. `exhaustive-deps` was already `off` (documented, deliberate), which is what made this a half-day swap instead of a risky one.
 - **The `crypto.randomUUID` ban survives as a GritQL plugin** (`client/lint-no-random-uuid.grit`). This rule is load-bearing: `crypto.randomUUID` is undefined on insecure origins, and PortOS is routinely reached over plain HTTP via Tailscale. It matches on the CST node kind rather than code snippets, so it catches `crypto.`, `globalThis.crypto.`, `window.`, `self.`, optional chaining, bare `typeof` references, and assignment targets — and, matching the old ESLint rule exactly, *not* `crypto['randomUUID']`. Exemptions for `src/lib/uuid.js` and `src/**/*.test.{js,jsx}` are expressed as **negated globs**, because a Biome override's `plugins` list is *additive*: `plugins: []` does NOT disable an inherited plugin. Do not "simplify" that back.
@@ -172,23 +172,23 @@ An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring
 
 ## Override Pins (`overrides`)
 
-The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), [client](../client/package.json), and [autofixer](../autofixer/package.json). The `autofixer/` workspace mirrors only the express-reachable subset (`path-to-regexp`, `body-parser`, and `qs`); adding a pin for a package absent from its tree would read as protection that does not exist. The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
+The authoritative current override pins are declared in the [`package.json`](../package.json) manifests for [root](../package.json), [server](../server/package.json), and [client](../client/package.json). Autofixer uses the server workspace’s Express dependency and lockfile. The retired Kokoro dependency tree no longer needs the `tar` or `protobufjs` override pins.
 
 These overrides force-bump transitive dependencies to address known upstream advisories. Check the manifests for the current package and workspace list and exact versions; revisit the overrides if `npm audit` flags new advisories.
 
-`server/dependency-overrides.guard.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, that each tracked lockfile actually resolves the pinned version, and that every pin names a package its own workspace lockfile still contains — so a pin outliving its consumer fails rather than lingering as imaginary protection), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — update the authoritative manifest pin and its `MINIMUM_SAFE` row; this document links readers to those sources.
+`server/test/guards/repo/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, that each tracked lockfile actually resolves the pinned version, and that every pin names a package its own workspace lockfile still contains — so a pin outliving its consumer fails rather than lingering as imaginary protection), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — update the authoritative manifest pin and its `MINIMUM_SAFE` row; this document links readers to those sources.
 
-**Not every compromised package warrants a pin.** A pin only helps when the installed version is *below* the top of its permitted range — otherwise there is nothing to force. The former client tree affected by the August 2026 `keyv` / `flat-cache` / `file-entry-cache` compromise deliberately got **no** pin: each range was already at its ceiling, so a pin would have been a no-op, and that client tree was removed instead. The current server ESLint tree has different versions and ranges; assess it independently. Check headroom (`npm view <pkg>@<major> version`) before adding an entry here.
+**Not every compromised package warrants a pin.** A pin only helps when the installed version is *below* the top of its permitted range — otherwise there is nothing to force. The former client tree affected by the August 2026 `keyv` / `flat-cache` / `file-entry-cache` compromise deliberately got **no** pin: each range was already at its ceiling, so a pin would have been a no-op, and that client tree was removed instead. Check headroom (`npm view <pkg>@<major> version`) before adding an entry here.
 
 ## Direct Dependency Pinning
 
 **Every direct dependency and devDependency, in every manifest, is an exact version — no `^`, `~`, `>=`, or `*`.** A caret range lets a fresh `npm install` (or any tree re-resolution: a Dependabot bump to a sibling package, `npm run setup`'s cwd-based `npm install --no-save` in `server/`, `scripts/ensure-deps.js`'s clean-reinstall path) float past a version nobody reviewed — the same argument that already makes an override pin exact, applied to the packages this repo depends on directly. Upgrades arrive as reviewable Dependabot PRs instead.
 
-`server/dependency-overrides.guard.test.js` enforces this across all four manifests, so a dependency added with a caret fails the suite rather than shipping.
+`server/test/guards/repo/dependency-overrides.test.js` enforces this across all four manifests, so a dependency added with a caret fails the suite rather than shipping.
 
 ## Install-Script Policy
 
-`ignore-scripts=true` is pinned in **every** workspace's own `.npmrc` (root, `client/`, `server/`, `autofixer/`, `browser/`) — not just the repo root. The list is not maintained by hand: `discoverWorkspaces()` in `scripts/trusted-rebuilds.js` globs every top-level directory carrying a `package.json`, and the test asserts each discovered one has the setting — so a workspace added later is caught rather than silently unguarded. npm resolves the project `.npmrc` from the *local prefix* and never walks up the directory tree, so a root-only setting does not cover `cd client && npm install` or `npm ci --prefix server` (what CI runs). Deleting any workspace `.npmrc` silently re-grants every dependency in that workspace an install-time code-execution slot — the vector the Shai-Hulud worm used.
+`ignore-scripts=true` is pinned in **every** workspace's own `.npmrc` (root, `client/`, `server/`, `browser/`) — not just the repo root. The list is not maintained by hand: `discoverWorkspaces()` in `scripts/trusted-rebuilds.js` globs every top-level directory carrying a `package.json`, and the test asserts each discovered one has the setting — so a workspace added later is caught rather than silently unguarded. npm resolves the project `.npmrc` from the *local prefix* and never walks up the directory tree, so a root-only setting does not cover `cd client && npm install` or `npm ci --prefix server` (what CI runs). Deleting any workspace `.npmrc` silently re-grants every dependency in that workspace an install-time code-execution slot — the vector the Shai-Hulud worm used.
 
 Packages that legitimately need an install script are named explicitly in the allowlist in `scripts/trusted-rebuilds.js`, the single source consumed by `scripts/setup.js` (behind `npm run setup`, `setup.sh` and `setup.ps1`), `scripts/ensure-deps.js`, `update.sh` / `update.ps1`, and CI. `scripts/trusted-rebuilds.test.js` fails if a workspace `.npmrc` loses the setting, or if a dependency appears with an install hook that nobody has explicitly decided about. Because CI caches `server/node_modules` between jobs, `scripts/trusted-rebuild-stamp.js` writes a mark into the tree in the same step that rebuilds it and checks that mark after a cache restore — a tree cached before the rebuild is otherwise indistinguishable from a good one, since the allowlisted packages all ship prebuilt bindings and import fine either way.
 
@@ -206,4 +206,4 @@ The upstream [braces advisory GHSA-vfj7-8cjw-p6xm](https://github.com/advisories
 
 It is off because it is a hang risk on the path that matters least. The lookup only prints a summary, but npm **blocks** on it, and a request that stalls costs `fetch-timeout` (300s by default) times `fetch-retries` (2) before npm gives up. On 2026-09-03 the endpoint began completing the TLS handshake and then never sending a byte; a warm root install that takes 0.15s took **153.88s**, of which 0.22s was CPU and the rest was a socket wait. Every managed install path runs four workspace installs in sequence (`update.sh`, `update.ps1`, `scripts/setup.js`, `scripts/ensure-deps.js`), so a self-update stalled for roughly ten minutes on a report written to `data/update.log`. PortOS is distributed software that self-updates on machines nobody is watching, so a third-party endpoint must not be able to wedge the update path for something advisory.
 
-Nothing is lost. Dependency safety here is enforced statically rather than by a live network call: direct dependencies are pinned to exact versions and the `overrides` blocks are pinned too, both asserted by `server/dependency-overrides.guard.test.js` — which deliberately replaced an `npm audit` shell-out because "audit needs the network and its output drifts". CI never ran `npm audit` either. Run `npm audit` directly when you want the report; the periodic dependency audits recorded in this document are where it belongs.
+Nothing is lost. Dependency safety here is enforced statically rather than by a live network call: direct dependencies are pinned to exact versions and the `overrides` blocks are pinned too, both asserted by `server/test/guards/repo/dependency-overrides.test.js` — which deliberately replaced an `npm audit` shell-out because "audit needs the network and its output drifts". CI never ran `npm audit` either. Run `npm audit` directly when you want the report; the periodic dependency audits recorded in this document are where it belongs.

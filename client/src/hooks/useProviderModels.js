@@ -6,7 +6,7 @@
 
 import { getCreatedExecutionSelection } from '../services/executionSelectionCache.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import * as api from '../services/api';
+import { getProviders } from '../services/apiProviders.js';
 import {
   filterHardwareCompatibleProviderModels,
   filterSelectableModels,
@@ -150,7 +150,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
   const load = useCallback(async () => {
     const loadGeneration = ++loadGenerationRef.current;
     setLoading(true);
-    const data = await api.getProviders(silent ? { silent: true } : undefined).catch((err) => {
+    const data = await getProviders(silent ? { silent: true } : undefined).catch((err) => {
       // Log even when `silent` suppresses the toast, so a failed fetch leaves
       // a breadcrumb (matches the prior inline console.warn behavior).
       console.warn(`⚠️ Provider list fetch failed: ${err?.message || err}`);

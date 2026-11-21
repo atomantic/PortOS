@@ -7,7 +7,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getSettings, getVideoGenModelContext, getVideoGenStatus } from '../services/api';
+import { getSettings } from '../services/apiSystem.js';
+import { getVideoGenModelContext, getVideoGenStatus } from '../services/apiImageVideo.js';
 
 export function useVideoGenServiceStatus() {
   // `/status` owns connectivity ONLY. It shells out to python on every call

@@ -2,7 +2,7 @@ import { Link } from 'react-router';
 import { useState } from 'react';
 import { Clock, Loader2 } from 'lucide-react';
 import { formatCount, formatDateTime } from '../../utils/formatters';
-import { recheckCosAgentCleanup } from '../../services/api';
+import { recheckCosAgentCleanup } from '../../services/apiAgents.js';
 import toast from '../ui/Toast';
 
 const HOLD_REASONS = {

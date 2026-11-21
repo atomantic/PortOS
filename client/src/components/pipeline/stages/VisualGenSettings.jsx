@@ -15,9 +15,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import {
-  getSettings, listImageModels, getProviders,
-} from '../../../services/api';
+import { getSettings } from '../../../services/apiSystem.js';
+import { listImageModels } from '../../../services/apiImageVideo.js';
+import { getProviders } from '../../../services/apiProviders.js';
 import { filterSelectableModels } from '../../../utils/providers';
 import {
   deriveAvailableBackends, IMAGE_GEN_MODE, RENDER_TARGET, imageModeCandidates, modeLabel, pickUsableMode,

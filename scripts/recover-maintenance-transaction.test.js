@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { recoverMaintenanceTransaction } from './recover-maintenance-transaction.mjs';
+import { recoverMaintenanceTransaction } from './ops/recover-maintenance-transaction.mjs';
 import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
 
 const roots = [];
@@ -32,7 +32,7 @@ describe('offline maintenance transaction recovery', () => {
     fs.writeFileSync(join(directory, 'transaction', 'evidence'), 'original transaction');
     const barrier = join(data, 'barrier');
     fs.mkdirSync(barrier);
-    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const module = new URL('./ops/recover-maintenance-transaction.mjs', import.meta.url).href;
     const source = `
       import * as fs from 'node:fs';
       import { join, basename } from 'node:path';
@@ -103,7 +103,7 @@ describe('offline maintenance transaction recovery', () => {
     const { data, directory } = fixture();
     fs.mkdirSync(join(directory, 'transaction'));
     fs.writeFileSync(join(directory, 'transaction', 'original'), 'interrupted runtime evidence');
-    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const module = new URL('./ops/recover-maintenance-transaction.mjs', import.meta.url).href;
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import * as fs from 'node:fs';
       import { basename } from 'node:path';
@@ -135,7 +135,7 @@ describe('offline maintenance transaction recovery', () => {
     fs.writeFileSync(join(fence, 'owner.json'), originalOwner);
     const barrier = join(data, 'barrier');
     fs.mkdirSync(barrier);
-    const module = new URL('./recover-maintenance-transaction.mjs', import.meta.url).href;
+    const module = new URL('./ops/recover-maintenance-transaction.mjs', import.meta.url).href;
     const source = `
       import * as fs from 'node:fs';
       import { join, basename } from 'node:path';

@@ -7,9 +7,9 @@ const ledger = vi.hoisted(() => ({ grokRepairIds: [] }));
 const written = vi.hoisted(() => []);
 const paths = vi.hoisted(() => ({ data: '' }));
 
-vi.mock('./usage.js', () => ({
+vi.mock('./usage.js', async (importOriginal) => ({
+  ...await importOriginal(),
   loadUsage: vi.fn(async () => ledger),
-  getUsage: vi.fn(() => ledger),
   addDatedUsageBatch: vi.fn(async additions => additions.filter(item => {
     if (ledger.grokRepairIds.includes(item.repairId)) return false;
     ledger.grokRepairIds.push(item.repairId);
@@ -85,6 +85,6 @@ describe('applyAgyUsageRepair', () => {
 
   it('refuses to apply a plan read from a directory the server will not save', async () => {
     await expect(applyAgyUsageRepair({ home, dataDir: join(dataDir, 'elsewhere') }))
-      .rejects.toThrow(/usage\.json/);
+      .rejects.toThrow(/active install ledger/);
   });
 });

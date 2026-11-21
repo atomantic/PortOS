@@ -12,6 +12,7 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
+import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
@@ -54,11 +55,14 @@ export const AUDIT_SLICE_HISTORY_RUNS = 8;
  * recorded no slice (older prompts, summaries without the line) are skipped.
  */
 export async function readRecentAuditSlices(appId, taskType, deps = {}) {
+  const id = normalizeAuditTaskType(taskType);
+  const categories = [id, ...(CONSOLIDATED_AUDIT_DOMAINS[id]?.members || [])];
+  if (categories.includes('ui-lifecycle')) categories.push('react-lifecycle');
   const result = await (deps.query || query)(
     `SELECT assessed_at, slice FROM app_quality_measurements
-     WHERE app_id = $1 AND category = $2 AND slice IS NOT NULL
+     WHERE app_id = $1 AND category = ANY($2::text[]) AND slice IS NOT NULL
      ORDER BY assessed_at DESC, agent_id DESC LIMIT $3`,
-    [appId, normalizeAuditTaskType(taskType), AUDIT_SLICE_HISTORY_RUNS]
+    [appId, categories, AUDIT_SLICE_HISTORY_RUNS]
   );
   return result.rows.map(row => ({ assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice }));
 }

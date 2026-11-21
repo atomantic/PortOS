@@ -1,5 +1,5 @@
 import { MessageSquare } from 'lucide-react';
-import * as api from '../../services/api';
+import { importDiscordHistory } from '../../services/apiTimeline.js';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
 // Bulk-backfill importer for the Discord "data package" export (#2160) → the
@@ -11,7 +11,7 @@ export default function DiscordImportPanel({ onImported }) {
       icon={MessageSquare}
       title="Import Discord history"
       noun="message"
-      importFn={api.importDiscordHistory}
+      importFn={importDiscordHistory}
       onImported={onImported}
       accept=".zip,.json,.csv,application/zip,application/json,text/csv"
       help={(

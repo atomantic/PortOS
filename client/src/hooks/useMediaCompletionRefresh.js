@@ -1,5 +1,5 @@
 /**
- * Refetch on image/video completion and `media:history:changed` socket events.
+ * Refetch on image/video completion, history changes, and optional holder changes.
  *
  * Use when: A list view that needs to refresh when new media lands.
  */
@@ -7,7 +7,7 @@
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 
-export function useMediaCompletionRefresh({ onImageCompleted, onVideoCompleted, delay = 250 } = {}) {
+export function useMediaCompletionRefresh({ onImageCompleted, onVideoCompleted, refreshOnHolderChange = false, delay = 250 } = {}) {
   const imageCallbackRef = useRef(onImageCompleted);
   const videoCallbackRef = useRef(onVideoCompleted);
   const timersRef = useRef({ image: null, video: null });
@@ -39,16 +39,18 @@ export function useMediaCompletionRefresh({ onImageCompleted, onVideoCompleted, 
     socket.on('video-gen:completed', onVideoDone);
     socket.on('video-gen:failed', onVideoFailed);
     socket.on('media:history:changed', onHistoryChanged);
+    if (refreshOnHolderChange) socket.on('media:holders:changed', onImageDone);
 
     return () => {
       socket.off('image-gen:completed', onImageDone);
       socket.off('video-gen:completed', onVideoDone);
       socket.off('video-gen:failed', onVideoFailed);
       socket.off('media:history:changed', onHistoryChanged);
+      if (refreshOnHolderChange) socket.off('media:holders:changed', onImageDone);
       Object.values(timersRef.current).forEach((timer) => {
         if (timer) clearTimeout(timer);
       });
       timersRef.current = { image: null, video: null };
     };
-  }, [delay]);
+  }, [delay, refreshOnHolderChange]);
 }

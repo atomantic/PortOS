@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Check, CornerUpLeft, GitBranch, ImageIcon, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import MediaImage from '../MediaImage';
-import { listStoryboards, makeStoryboardFromFableLoom } from '../../services/api';
+import { listStoryboards, makeStoryboardFromFableLoom } from '../../services/apiStoryboards.js';
 import { aspectClass } from '../storyboards/storyboardArt';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { fableLoomBoardPath } from '../../../../server/lib/fableLoomBoard.js';

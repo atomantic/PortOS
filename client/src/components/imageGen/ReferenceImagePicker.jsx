@@ -7,7 +7,7 @@
 // Flux2KleinKVPipeline (K/V-cache reference-token attention). First-time use
 // prompts the user to accept the FLUX.2-klein-9B-kv license on Hugging Face.
 // Per-reference strengths are honored end-to-end there:
-// scripts/flux2_macos.py patches Flux2KVLayerCache.store +
+// scripts/ml/flux2_macos.py patches Flux2KVLayerCache.store +
 // _flux2_kv_causal_attention so each reference's V slice is scaled by its
 // strength (1.0 = full influence, 0.0 = ignored).
 //

@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MockEventSource, lastEventSource } from '../../../test/mockEventSource';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiPipeline.js', () => ({
   generatePipelineStage: vi.fn(),
   getPipelineStageRecovery: vi.fn(async () => ({ recoverable: false, ownership: 'local', live: true })),
   recoverPipelineStage: vi.fn(),
@@ -23,7 +23,12 @@ vi.mock('../../ui/Toast', () => ({
 
 import TextStagePanel from './TextStagePanel';
 import toast from '../../ui/Toast';
-import { generatePipelineStage, updatePipelineIssue, getPipelineStageRecovery, recoverPipelineStage } from '../../../services/api';
+import {
+  generatePipelineStage,
+  updatePipelineIssue,
+  getPipelineStageRecovery,
+  recoverPipelineStage,
+} from '../../../services/apiPipeline.js';
 
 const makeIssue = (ideaOverrides = {}) => ({
   id: 'iss-1',

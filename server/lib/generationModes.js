@@ -1,5 +1,5 @@
 /**
- * Shared immutable image/video render-backend alphabets and the media-queue lane and swim-lane rules.
+ * Shared generation backend alphabets and labels, music engine readiness, and media-queue routing rules.
  *
  * Covers `IMAGE_GEN_MODE[S]`, `QUEUEABLE_IMAGE_MODES`,
  * `VIDEO_GEN_MODE[S]`, cloud subsets, plus `mediaJobExecutionLane(...)` / `MEDIA_JOB_EXECUTION_LANES`
@@ -62,6 +62,20 @@ export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
   VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.GOOGLE,
 ]);
 
+export const GENERATION_MODE_LABELS = Object.freeze({
+  [IMAGE_GEN_MODE.LOCAL]: 'Local',
+  [IMAGE_GEN_MODE.CODEX]: 'Codex',
+  [IMAGE_GEN_MODE.GROK]: 'Grok',
+  [IMAGE_GEN_MODE.AGY]: 'Agy',
+  [IMAGE_GEN_MODE.EXTERNAL]: 'External',
+  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
+  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
+  [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
+  [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
+  [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
+  [VIDEO_GEN_MODE.GOOGLE]: 'Google',
+});
+
 /**
  * THE media-queue execution-lane rule, shared by the scheduler and the public job projection so the UI
  * can't drift from how a job runs. `remote` wins outright (a peer executes it whatever backend it
@@ -93,3 +107,41 @@ export const mediaJobSwimlane = ({ kind, mode, remote, peerId } = {}) => {
   if (lane === 'remote') return `remote:${peerId || 'unknown'}`;
   return 'gpu:local';
 };
+
+/** Check a music engine's capabilities for the chosen checkpoint (or the aggregate in the Music catalog). */
+export function musicEngineReadinessReason(engine, modelReady) {
+  if (!engine.platformSupported) return 'platform-unsupported';
+  if (!engine.runtimeReady) return 'runtime-unavailable';
+  if (engine.cudaRequired && engine.cudaState !== 'available') {
+    return engine.cudaState === 'unknown' ? 'cuda-unknown' : 'cuda-absent';
+  }
+  // Older capabilities omit vramState. Local probes always set it and fail
+  // closed when a CUDA engine's execution profile cannot be measured.
+  if (engine.cudaRequired && engine.vramState != null && engine.vramState !== 'sufficient') {
+    return engine.vramState === 'unknown-size' ? 'vram-unknown-size' : 'vram-insufficient';
+  }
+  return modelReady ? null : 'model-unavailable';
+}
+
+export function musicEngineReadinessMessage(engine, reason) {
+  switch (reason) {
+    case 'platform-unsupported':
+      return `${engine.name} requires ${engine.platformLabel || 'a different platform'}.`;
+    case 'runtime-unavailable':
+      return `${engine.name} runtime is unavailable.`;
+    case 'cuda-unknown':
+      return `CUDA availability for ${engine.name} could not be determined.`;
+    case 'cuda-absent':
+      return `${engine.name} requires an available NVIDIA CUDA GPU.`;
+    case 'vram-unknown-size':
+      return `The GPU VRAM requirement for ${engine.name} has not been measured for the ${engine.vramProfileLabel || 'selected'} execution profile.`;
+    case 'vram-insufficient':
+      return `${engine.name} requires at least ${engine.minVramGb} GB of VRAM for the ${engine.vramProfileLabel || 'selected'} profile. This host reports ${engine.maxVramGb} GB.`;
+    case 'model-unavailable':
+      return `The selected ${engine.name} model weights are not installed. Install them from Music → Generate.`;
+    case 'unknown-engine':
+      return 'The configured music engine is no longer available.';
+    default:
+      return null;
+  }
+}

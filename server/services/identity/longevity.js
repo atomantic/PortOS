@@ -79,7 +79,7 @@ export async function deriveLongevity(birthDate, { withoutGenetics = false } = {
 
   await saveJSON(LONGEVITY_FILE, longevity);
   const markerCount = Object.keys(longevityMarkers).length + Object.keys(cardiovascularMarkers).length;
-  console.log(`🧬 Longevity derived: ${lifeExpectancy.adjusted}y (${markerCount} markers, confidence: ${confidence})`);
+  console.log(`🧬 Longevity derived: ${markerCount} markers`);
 
   return longevity;
 }

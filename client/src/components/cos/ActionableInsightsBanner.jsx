@@ -17,7 +17,7 @@ import {
   GitBranch,
   Play
 } from 'lucide-react';
-import * as api from '../../services/api';
+import { approveCosTask, triggerCosOnDemandTask, updateCosTask } from '../../services/apiAgents.js';
 import ProvenanceChip from '../ui/ProvenanceChip';
 import { timeAgo } from '../../utils/formatters';
 
@@ -158,7 +158,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
 
   const handleApproveTask = async (task) => {
     setApprovingTaskId(task.id);
-    const result = await api.approveCosTask(task.id, { silent: true }).catch(err => {
+    const result = await approveCosTask(task.id, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -170,7 +170,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
 
   const handleRunReconcile = async (app) => {
     setReconcileState(prev => ({ ...prev, [app.appId]: 'queuing' }));
-    const result = await api.triggerCosOnDemandTask('branch-reconcile', app.appId, { silent: true }).catch(err => {
+    const result = await triggerCosOnDemandTask('branch-reconcile', app.appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -184,7 +184,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
   };
 
   const handleUnblockTask = async (taskId, taskType) => {
-    const result = await api.updateCosTask(taskId, { status: 'pending', type: taskType }, { silent: true }).catch(err => {
+    const result = await updateCosTask(taskId, { status: 'pending', type: taskType }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

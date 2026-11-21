@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels';
-import * as api from '../../services/api';
+import { updateCosConfig } from '../../services/apiAgents.js';
 import { classifyMindRouteBilling, formatMindRoute, mintMindPresetId } from '../../lib/mindThinkingPresets.js';
 import MindRouteBadge, { BILLING_TONE } from './MindRouteBadge.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -95,7 +95,7 @@ export default function PersistentMindThinkingPresets({
     onSavingChange?.(true);
     setError(null);
     try {
-      await api.updateCosConfig(
+      await updateCosConfig(
         { persistentMindThinkingPresets: { presets: nextPresets } },
         { silent: true },
       );

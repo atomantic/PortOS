@@ -44,14 +44,8 @@ const normalizeToCurrentPaths = (paths, resolveNavEntry) => {
   return changed ? next : paths;
 };
 
-/**
- * Sidebar working-set state (Pinned + Recent), persisted to localStorage.
- * @param {(path: string) => ({ path, label, icon } | null)} resolveNavEntry
- *   Maps a stored route path to a display row, or null if it's not a known page.
- *   MUST be stable (useCallback or module-level) — an unstabilized inline function
- *   re-derives pinned/recent on every parent render.
- */
-export function useNavWorkingSet(resolveNavEntry) {
+/** Raw paths are available before the dynamic navigation lists resolve. */
+export function useNavWorkingSet() {
   const location = useLocation();
 
   // Record the initial visit synchronously so it's present on first render.
@@ -97,6 +91,10 @@ export function useNavWorkingSet(resolveNavEntry) {
 
   const isPinned = useCallback((path) => isPinnedPure(path, pinnedPaths), [pinnedPaths]);
 
+  return { pinnedPaths, recentPaths, setPinnedPaths, setRecentPaths, pin, unpin, isPinned };
+}
+
+export function useResolvedNavWorkingSet({ pinnedPaths, recentPaths, setPinnedPaths, setRecentPaths }, resolveNavEntry, pathname) {
   // Fold moved pages back into storage once the nav manifest can resolve them.
   // Settles after one pass: normalizeToCurrentPaths returns the SAME list when
   // nothing moved, so the state updates (and the effect's own deps) stop there.
@@ -111,7 +109,7 @@ export function useNavWorkingSet(resolveNavEntry) {
       setRecentPaths(nextRecent);
       writeList(RECENT_KEY, nextRecent);
     }
-  }, [resolveNavEntry, pinnedPaths, recentPaths]);
+  }, [resolveNavEntry, pinnedPaths, recentPaths, setPinnedPaths, setRecentPaths]);
 
   const resolveAll = useCallback(
     (paths) => paths.map((p) => resolveNavEntry(p)).filter(Boolean),
@@ -124,10 +122,10 @@ export function useNavWorkingSet(resolveNavEntry) {
   const recent = useMemo(() => {
     const pinnedSet = new Set(pinnedPaths);
     const visible = recentPaths.filter(
-      (p) => p !== location.pathname && !pinnedSet.has(p),
+      (p) => p !== pathname && !pinnedSet.has(p),
     );
     return resolveAll(visible);
-  }, [resolveAll, recentPaths, pinnedPaths, location.pathname]);
+  }, [resolveAll, recentPaths, pinnedPaths, pathname]);
 
-  return { pinned, recent, pin, unpin, isPinned };
+  return { pinned, recent };
 }

@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import * as api from '../services/api';
+import { getCodeReviewDefaults } from '../services/apiCodeReview.js';
 import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, EFFORT_SELECTABLE_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 
 // The per-reviewer scalars, generated from the same rosters the picker renders
@@ -53,7 +53,7 @@ export function CodeReviewDefaultsProvider({ children }) {
   const [value, setValue] = useState(FALLBACK);
   useEffect(() => {
     let cancelled = false;
-    api.getCodeReviewDefaults({ silent: true })
+    getCodeReviewDefaults({ silent: true })
       .then((d) => {
         if (cancelled || !d) return;
         setValue({

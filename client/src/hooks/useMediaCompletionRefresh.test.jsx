@@ -41,3 +41,22 @@ it('refreshes the matching kind when history changes elsewhere', () => {
   unmount();
   expect(socket.off).toHaveBeenCalledWith('media:history:changed', changed);
 });
+
+it('refreshes a location-scoped feed when holders change and cancels queued work when the scope is cleared', () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn();
+  const { rerender } = renderHook(refreshOnHolderChange => useMediaCompletionRefresh({
+    onImageCompleted: refresh, refreshOnHolderChange,
+  }), { initialProps: true });
+  const changed = socket.on.mock.calls.findLast(([event]) => event === 'media:holders:changed')[1];
+  act(() => {
+    changed();
+    vi.advanceTimersByTime(250);
+  });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  act(() => changed());
+  rerender(false);
+  act(() => vi.advanceTimersByTime(250));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(socket.off).toHaveBeenCalledWith('media:holders:changed', changed);
+});

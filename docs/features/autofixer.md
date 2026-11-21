@@ -6,7 +6,7 @@ Autonomous crash detection and isolated repair using the configured CLI provider
 
 - **Daemon Process** (`autofixer/server.js`): Monitors PM2 for crashed processes registered in PortOS
 - **UI Server** (`autofixer/ui.js`): Web interface for viewing logs and fix history on port 5560
-- **PM2 Integration**: Runs as `portos-autofixer` and `portos-autofixer-ui` processes
+- **PM2 Integration**: Runs the monitor and dashboard in `portos-autofixer`, independently of `portos-server`
 
 ## Features
 

@@ -17,7 +17,7 @@ const { submitMemoryPractice, getChunkMastery, getMemoryItem, attestMemoryMaster
   attestMemoryMastery: vi.fn(),
 }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   submitMemoryPractice,
   getChunkMastery,
   getMemoryItem,

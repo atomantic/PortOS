@@ -6,7 +6,6 @@
 
 import { readFile } from 'fs/promises';
 import { basename } from 'path';
-import sharp from 'sharp';
 import { ServerError } from '../../lib/errorHandler.js';
 import { keyChannelSplit } from './chromaKey.js';
 import { isAnimationTrack } from './animationTracks.js';
@@ -52,6 +51,7 @@ export async function composePresentationIdleStrip(frameBytes, chromaKey) {
 
   const split = keyChannelSplit(chromaKey);
   const tiles = [];
+  const { default: sharp } = await import('sharp');
   for (let index = 0; index < frameBytes.length; index++) {
     // frame order is the animation order
     const frame = await decodeTransparentSpriteSource(frameBytes[index], split, chromaKey);

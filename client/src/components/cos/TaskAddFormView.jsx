@@ -1,4 +1,5 @@
-import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, Wand2 } from 'lucide-react';
+import { sortByLabel } from '../../lib/sortByLabel.js';
+import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, ShieldCheck, Wand2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import AppContextPicker from '../AppContextPicker';
@@ -16,6 +17,12 @@ import {
 import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption } from './constants';
 import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
+
+// Opt-ins for a PR that a required code-owner review blocks (server: resolveAutoApprovePR / resolveAdminMerge).
+const CODE_OWNER_BLOCK_OPTIONS = [
+  { field: 'autoApprovePR', id: 'task-auto-approve-pr', label: 'Auto-approve', iconClass: 'text-green-400', title: "If a required code-owner review blocks the merge, approve the PR with the agent's GitHub account. GitHub refuses this when that account opened the PR or is not a code owner; the PR then stays open." },
+  { field: 'adminMerge', id: 'task-admin-merge', label: 'Admin merge', iconClass: 'text-amber-400', title: 'Merge with the admin override (gh pr merge --admin) after required CI is green on the verified head, when only a review requirement blocks the merge. Bypasses branch protection for that one rule.' },
+];
 
 const ORCHESTRATION_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const ORCHESTRATION_ROLES_META = [
@@ -250,7 +257,7 @@ function TaskTypeFields({ form, compact, queueFirst }) {
               className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white"
             >
               <option value="">Custom Profile</option>
-              {state.orchestrationProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+              {sortByLabel(state.orchestrationProfiles).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
             </select>
           </div>
         )}
@@ -569,6 +576,21 @@ function TaskCompletionFields({ form }) {
                 </span>
               </label>
             )}
+            {state.openPR && prCompletionMerges(state.prCompletion) && CODE_OWNER_BLOCK_OPTIONS.map(({ field, id, label, title, iconClass }) => (
+              <label key={field} htmlFor={id} className="flex items-center gap-2 cursor-pointer py-1" title={title}>
+                <input
+                  id={id}
+                  type="checkbox"
+                  checked={!!state[field]}
+                  onChange={(event) => setField(field, event.target.checked)}
+                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                />
+                <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <ShieldCheck size={14} className={iconClass} />
+                  {label}
+                </span>
+              </label>
+            ))}
             {state.openPR && state.prCompletion === 'review-then-merge' && (
               <div className="basis-full mt-1">
                 <ReviewerPicker

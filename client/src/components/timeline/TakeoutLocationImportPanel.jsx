@@ -1,5 +1,5 @@
 import { MapPin } from 'lucide-react';
-import * as api from '../../services/api';
+import { importTakeoutLocationHistory } from '../../services/apiTimeline.js';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
 // Bulk-backfill importer for Google Takeout "Location History (Timeline)"
@@ -11,7 +11,7 @@ export default function TakeoutLocationImportPanel({ onImported }) {
       icon={MapPin}
       title="Import Google location history"
       noun="visit"
-      importFn={api.importTakeoutLocationHistory}
+      importFn={importTakeoutLocationHistory}
       onImported={onImported}
       help={(
         <>

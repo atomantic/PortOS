@@ -10,7 +10,7 @@ vi.doUnmock('../components/videoGen/VideoGenGallery');
 vi.doMock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
 vi.doMock('../components/media/PinToMoodBoardMenu', () => ({ default: () => null }));
 await loadVideoGenPage();
-const api = await import('../services/api');
+const api = await import('../services/apiImageVideo.js');
 const { default: toast } = await import('../components/ui/Toast');
 
 const model = videoGenModel('example-video');

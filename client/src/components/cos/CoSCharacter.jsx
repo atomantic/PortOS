@@ -1,4 +1,5 @@
 import { AGENT_STATES } from './constants';
+import './CoSCharacter.css';
 
 export default function CoSCharacter({ state, speaking }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;

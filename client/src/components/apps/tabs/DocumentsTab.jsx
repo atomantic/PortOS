@@ -4,7 +4,7 @@ import { RefreshCw, FileText, Pencil, Save, X, Plus, AlertTriangle } from 'lucid
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
-import * as api from '../../../services/api';
+import { getAppDocument, getAppDocuments, saveAppDocument } from '../../../services/apiApps.js';
 
 const DOCS_ROOT = 'docs';
 
@@ -61,7 +61,7 @@ export default function DocumentsTab({ appId, repoPath }) {
     }
     let cancelled = false;
     setLoadingDoc(true);
-    api.getAppDocument(appId, selectedDoc, { silent: true })
+    getAppDocument(appId, selectedDoc, { silent: true })
       .catch(() => null)
       .then(data => {
         if (cancelled) return;
@@ -73,7 +73,7 @@ export default function DocumentsTab({ appId, repoPath }) {
 
   const fetchDocuments = useCallback(async () => {
     setLoading(true);
-    const data = await api.getAppDocuments(appId, { silent: true }).catch(() => null);
+    const data = await getAppDocuments(appId, { silent: true }).catch(() => null);
     setLoading(false);
 
     // A failed refresh keeps the list already on screen rather than blanking it.
@@ -114,8 +114,7 @@ export default function DocumentsTab({ appId, repoPath }) {
   const handleSave = async () => {
     const saved = activeDoc;
     setSaving(true);
-    const result = await api
-      .saveAppDocument(appId, saved, editContent, undefined, { silent: true })
+    const result = await saveAppDocument(appId, saved, editContent, undefined, { silent: true })
       .catch(() => null);
     setSaving(false);
 

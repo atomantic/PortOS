@@ -15,7 +15,13 @@ const api = vi.hoisted(() => ({
   updateSubscriptions: vi.fn(),
   setSubscriptionEnabled: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiSystem.js', () => ({
+  getSubscriptions: api.getSubscriptions,
+  getUsage: api.getUsage,
+  getProviderUsage: api.getProviderUsage,
+  updateSubscriptions: api.updateSubscriptions,
+  setSubscriptionEnabled: api.setSubscriptionEnabled,
+}));
 
 const { default: SubscriptionsTab, buildRowPatch, resolvePlanTier } = await import('./SubscriptionsTab');
 

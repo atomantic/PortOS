@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   describeReviewerCli,
@@ -7,7 +8,6 @@ import {
   DEFAULT_REVIEWER,
   LOCAL_LLM_REVIEWERS,
   REVIEWER_ALIASES,
-  REVIEWER_CLI_BINARIES,
   REVIEWER_VALUES,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_CAPABLE_CLI_REVIEWERS,
@@ -59,8 +59,8 @@ import {
 import { PROVIDER_VENDORS } from './provider/providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
 // pin survives the schema that persists it, so they need both modules.
-import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cos/cosValidation.js';
-import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
+import { createCosTaskSchema, codeReviewSettingsSchema } from './cos/cosValidation.js';
+import { sanitizeTaskMetadata, reviewerConfigMetadata } from './cos/cosTaskMetadata.js';
 import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './provider/providerModels.js';
 
 describe('reviewerConfig reviewer CLI binaries', () => {
@@ -184,16 +184,6 @@ describe('reviewerConfig reviewer CLI binaries', () => {
     ]);
     expect(flagTokens).toEqual(['ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'codex']);
     expect(portosOnly).toEqual(['mtplx', 'kilo']);
-  });
-
-  // slashdoInvocation keeps its own copy of the roster to decide which slashdo
-  // `lib/*` includes a reviewer needs. Two hand-maintained lists of the same
-  // reviewers drift the moment one gains a member — the `grok` addition is the
-  // precedent — so pin them to each other rather than making slashdoInvocation
-  // import this module (cosValidation.js re-exports this module AND imports
-  // slashdoInvocation, so a cycle here would be worse than the duplication).
-  it('matches slashdoInvocation LOCAL_AGENT_REVIEWERS', () => {
-    expect([...LOCAL_AGENT_REVIEWERS].sort()).toEqual(Object.keys(REVIEWER_CLI_BINARIES).sort());
   });
 });
 
@@ -1023,11 +1013,12 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
   // still ordered the comment in words of its own — so it now asserts the
   // SEMANTICS over whole prompt bullets: no bullet that leaves a PR open for a
   // review that could not answer may also order a comment about it.
-  const SITES = [
-    'services/promptSections/completion.js',
-    'services/promptSections/reviewLifecycle.js',
-    'services/taskPromptDefaults/prompts.js',
-  ];
+  const promptSections = ['services/promptSections/completion.js', 'services/promptSections/reviewLifecycle.js'];
+  const catalogPath = 'services/taskPromptDefaults/catalog/';
+  const sites = [...promptSections, ...readdirSync(new URL('../' + catalogPath, import.meta.url))
+    .filter(file => file.endsWith('.js')).map(file => catalogPath + file)];
+  const requiredReferences = [...promptSections, ...['guidance.js', 'planTask.js', 'claimJira.js']
+    .map(file => catalogPath + file)];
   // How a prompt bullet refers to a review that could not answer, including the
   // consequence clause ("left open ... until the required review completes") —
   // the claim-flow miss named only the consequence, never `review-blocked`.
@@ -1047,7 +1038,7 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
   };
 
   it('never orders a comment in the same prompt bullet as an unanswered review', async () => {
-    for (const site of SITES) {
+    for (const site of sites) {
       const source = await readSite(site);
       // One line is one prompt bullet / template literal in these builders.
       const offenders = source
@@ -1059,7 +1050,7 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
   });
 
   it('states the rule by reference, never hand-written, in every site that carries it', async () => {
-    for (const site of SITES) {
+    for (const site of sites) {
       const source = await readSite(site);
       expect(source, site).not.toMatch(/do NOT post (a|an) (PR|MR|PR\/MR)[^`']*comment saying the review/);
       expect(source, site).not.toContain('REVIEW_BLOCKED_COMMENT');
@@ -1067,7 +1058,7 @@ describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
     // Stripped above, so assert the reference against the raw source.
     const { readFile } = await import('node:fs/promises');
     const { fileURLToPath } = await import('node:url');
-    for (const site of SITES) {
+    for (const site of requiredReferences) {
       const raw = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
       expect(raw, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
     }

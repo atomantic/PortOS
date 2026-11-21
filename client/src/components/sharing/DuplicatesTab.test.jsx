@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSyncReview.js', () => ({
   listUniverseDuplicates: vi.fn(),
   listSeriesDuplicates: vi.fn(),
   previewUniverseMerge: vi.fn(),
@@ -12,14 +12,25 @@ vi.mock('../../services/api', () => ({
   mergeSeries: vi.fn(),
   aiResolveUniverseMerge: vi.fn(),
   aiResolveSeriesMerge: vi.fn(),
+}));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
   updateUniverse: vi.fn(),
+}));
+vi.mock('../../services/apiPipeline.js', () => ({
   updatePipelineSeries: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock('../ui/Modal', () => ({ default: ({ open, children }) => (open ? <div role="dialog">{children}</div> : null) }));
 vi.mock('../ui/InlineDiff', () => ({ default: ({ oldText, newText }) => <div data-testid="diff">{oldText}|{newText}</div> }));
 
-import * as api from '../../services/api';
+import {
+  listUniverseDuplicates,
+  listSeriesDuplicates,
+  previewUniverseMerge,
+  mergeUniverses,
+  aiResolveUniverseMerge,
+} from '../../services/apiSyncReview.js';
+import { updateUniverse } from '../../services/apiUniverseBuilder.js';
 import DuplicatesTab from './DuplicatesTab';
 
 const uniGroup = {
@@ -32,14 +43,14 @@ const uniGroup = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listUniverseDuplicates.mockResolvedValue({ groups: [uniGroup] });
-  api.listSeriesDuplicates.mockResolvedValue({ series: [], orphans: [], orphanCount: 0 });
+  listUniverseDuplicates.mockResolvedValue({ groups: [uniGroup] });
+  listSeriesDuplicates.mockResolvedValue({ series: [], orphans: [], orphanCount: 0 });
 });
 
 describe('DuplicatesTab', () => {
   it('shows a section-specific retry when universe duplicate loading fails', async () => {
-    api.listUniverseDuplicates.mockRejectedValueOnce(new Error('unavailable'));
-    api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
+    listUniverseDuplicates.mockRejectedValueOnce(new Error('unavailable'));
+    listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
     const user = userEvent.setup();
     render(<DuplicatesTab />);
     expect(await screen.findByText('Could not load universe duplicates.')).toBeInTheDocument();
@@ -49,24 +60,24 @@ describe('DuplicatesTab', () => {
   });
 
   it('shows a section-specific retry when series duplicate loading fails', async () => {
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
-    api.listSeriesDuplicates.mockRejectedValueOnce(new Error('unavailable'));
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listSeriesDuplicates.mockRejectedValueOnce(new Error('unavailable'));
     render(<DuplicatesTab />);
     expect(await screen.findByText('Could not load series duplicates.')).toBeInTheDocument();
     expect(screen.queryByText(/No duplicates found/)).not.toBeInTheDocument();
   });
 
   it('shows the existing empty copy after both requests succeed empty', async () => {
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
-    api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 });
     render(<DuplicatesTab />);
     expect(await screen.findByText(/No duplicates found/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it.each([
-    ['universe', () => api.listUniverseDuplicates.mockResolvedValue({}), () => api.listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 })],
-    ['series', () => api.listUniverseDuplicates.mockResolvedValue({ groups: [] }), () => api.listSeriesDuplicates.mockResolvedValue({})],
+    ['universe', () => listUniverseDuplicates.mockResolvedValue({}), () => listSeriesDuplicates.mockResolvedValue({ series: [], orphanCount: 0 })],
+    ['series', () => listUniverseDuplicates.mockResolvedValue({ groups: [] }), () => listSeriesDuplicates.mockResolvedValue({})],
   ])('treats a malformed successful %s payload as a section failure', async (_section, setUniverse, setSeries) => {
     setUniverse();
     setSeries();
@@ -82,38 +93,38 @@ describe('DuplicatesTab', () => {
   });
 
   it('opens the merge modal, shows the conflict, and executes with field choices', async () => {
-    api.previewUniverseMerge.mockResolvedValue({
+    previewUniverseMerge.mockResolvedValue({
       conflicts: [{ field: 'starterPrompt', survivorValue: 'A', loserValue: 'B' }],
       cascade: { seriesToRepoint: [{ id: 's1' }], loserCollectionItemCount: 3 },
     });
-    api.mergeUniverses.mockResolvedValue({ merged: true });
+    mergeUniverses.mockResolvedValue({ merged: true });
     const user = userEvent.setup();
     render(<DuplicatesTab />);
     await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Merge…/ }));
-    await waitFor(() => expect(api.previewUniverseMerge).toHaveBeenCalledWith({ survivorId: 'u-new', loserId: 'u-old' }, expect.anything()));
+    await waitFor(() => expect(previewUniverseMerge).toHaveBeenCalledWith({ survivorId: 'u-new', loserId: 'u-old' }, expect.anything()));
     // Conflict surfaced.
     await waitFor(() => expect(screen.getByText('starterPrompt')).toBeInTheDocument());
     expect(screen.getByText(/child series re-pointed/)).toBeInTheDocument();
 
     // Execute — default choice is survivor.
     await user.click(screen.getByRole('button', { name: /^Merge$/ }));
-    await waitFor(() => expect(api.mergeUniverses).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeUniverses).toHaveBeenCalledWith(
       { survivorId: 'u-new', loserId: 'u-old', fieldChoices: { starterPrompt: 'survivor' } },
       expect.anything(),
     ));
   });
 
   it('Merge with AI populates an editable override and ships it as fieldOverrides on submit', async () => {
-    api.previewUniverseMerge.mockResolvedValue({
+    previewUniverseMerge.mockResolvedValue({
       conflicts: [{ field: 'starterPrompt', survivorValue: 'A', loserValue: 'B' }],
       cascade: { seriesToRepoint: [], loserCollectionItemCount: 0 },
     });
-    api.aiResolveUniverseMerge.mockResolvedValue({
+    aiResolveUniverseMerge.mockResolvedValue({
       merged: { starterPrompt: 'Unified A+B' }, skipped: [], llm: { provider: 'codex', model: null }, runId: 'r1',
     });
-    api.mergeUniverses.mockResolvedValue({ merged: true });
+    mergeUniverses.mockResolvedValue({ merged: true });
 
     const user = userEvent.setup();
     render(<DuplicatesTab />);
@@ -124,7 +135,7 @@ describe('DuplicatesTab', () => {
 
     // Click Merge with AI — the AI-resolve API is called with the conflict field list.
     await user.click(screen.getByRole('button', { name: /Merge with AI/ }));
-    await waitFor(() => expect(api.aiResolveUniverseMerge).toHaveBeenCalledWith(
+    await waitFor(() => expect(aiResolveUniverseMerge).toHaveBeenCalledWith(
       { survivorId: 'u-new', loserId: 'u-old', fields: ['starterPrompt'] },
       expect.anything(),
     ));
@@ -138,14 +149,14 @@ describe('DuplicatesTab', () => {
     // Execute — survivor/loser choice is dropped (server's enum doesn't accept 'ai'),
     // override is sent as fieldOverrides.
     await user.click(screen.getByRole('button', { name: /^Merge$/ }));
-    await waitFor(() => expect(api.mergeUniverses).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeUniverses).toHaveBeenCalledWith(
       { survivorId: 'u-new', loserId: 'u-old', fieldChoices: {}, fieldOverrides: { starterPrompt: 'Hand-tweaked unified' } },
       expect.anything(),
     ));
   });
 
   it('renames a record inline via the update API', async () => {
-    api.updateUniverse.mockResolvedValue({ id: 'u-old', name: 'Clandestiny (v2)' });
+    updateUniverse.mockResolvedValue({ id: 'u-old', name: 'Clandestiny (v2)' });
     const user = userEvent.setup();
     render(<DuplicatesTab />);
     await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
@@ -155,6 +166,6 @@ describe('DuplicatesTab', () => {
     const input = screen.getByDisplayValue('Clandestiny');
     await retypeSettled(user, input, 'Clandestiny (v2)');
     await user.keyboard('{Enter}');
-    await waitFor(() => expect(api.updateUniverse).toHaveBeenCalledWith('u-new', { name: 'Clandestiny (v2)' }, expect.anything()));
+    await waitFor(() => expect(updateUniverse).toHaveBeenCalledWith('u-new', { name: 'Clandestiny (v2)' }, expect.anything()));
   });
 });

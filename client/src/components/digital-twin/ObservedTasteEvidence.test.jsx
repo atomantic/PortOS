@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiDigitalTwin.js', () => ({
   getTwinEvidence: vi.fn(),
-  getProviders: vi.fn(),
   recomputeTwinEvidence: vi.fn(),
   interpretTwinConsumption: vi.fn(),
+}));
+vi.mock('../../services/apiProviders.js', () => ({
+  getProviders: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 vi.mock('./TwinProviderPicker.jsx', () => ({
   default: ({ providers }) => <div data-testid="picker">{providers.map((p) => p.id).join(',')}</div>,
 }));
 
-import * as api from '../../services/api';
+import { getTwinEvidence } from '../../services/apiDigitalTwin.js';
+import { getProviders } from '../../services/apiProviders.js';
 import ObservedTasteEvidence from './ObservedTasteEvidence';
 
 const EVIDENCE = { taste: { windows: { month: {}, week: {} } } };
@@ -22,8 +25,8 @@ describe('ObservedTasteEvidence failed reads', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows an error with Retry, not "No observed evidence yet", when the evidence read fails', async () => {
-    api.getTwinEvidence.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(EVIDENCE);
-    api.getProviders.mockResolvedValue(PROVIDERS);
+    getTwinEvidence.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(EVIDENCE);
+    getProviders.mockResolvedValue(PROVIDERS);
     render(<ObservedTasteEvidence />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load observed evidence.*offline/i);
@@ -35,8 +38,8 @@ describe('ObservedTasteEvidence failed reads', () => {
   });
 
   it('shows an error with Retry, not "No AI provider configured", when the provider list fails', async () => {
-    api.getTwinEvidence.mockResolvedValue(EVIDENCE);
-    api.getProviders.mockRejectedValueOnce(new Error('providers down')).mockResolvedValueOnce(PROVIDERS);
+    getTwinEvidence.mockResolvedValue(EVIDENCE);
+    getProviders.mockRejectedValueOnce(new Error('providers down')).mockResolvedValueOnce(PROVIDERS);
     render(<ObservedTasteEvidence />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load AI providers/i);
@@ -47,8 +50,8 @@ describe('ObservedTasteEvidence failed reads', () => {
   });
 
   it('keeps the empty copy for a genuinely empty evidence profile and provider list', async () => {
-    api.getTwinEvidence.mockResolvedValue({});
-    api.getProviders.mockResolvedValue({ providers: [] });
+    getTwinEvidence.mockResolvedValue({});
+    getProviders.mockResolvedValue({ providers: [] });
     render(<ObservedTasteEvidence />);
     expect(await screen.findByText(/No observed evidence yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();

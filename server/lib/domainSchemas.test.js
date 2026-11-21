@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { featureAgentSchema, featureAgentUpdateSchema } from './agent/agentValidation.js';
-import { sanitizeTaskMetadata, normalizeReviewers, normalizeReviewUsernames, resolveReviewUsernames, normalizeOptionalReviewers, resolveOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerMaxRounds, MAX_REVIEWER_MAX_ROUNDS, normalizeReviewerModels, resolveReviewerModels, reviewerModelsFromDefaults, MAX_REVIEWER_MODEL_LENGTH, resolveKeyedReviewers, buildReviewersCsv, buildReviewWithArgs, createCosTaskSchema, updateCosTaskSchema, codeReviewSettingsSchema } from './cos/cosValidation.js';
+import { createCosTaskSchema, updateCosTaskSchema, codeReviewSettingsSchema } from './cos/cosValidation.js';
+import { sanitizeTaskMetadata } from './cos/cosTaskMetadata.js';
+import { normalizeReviewers, normalizeReviewUsernames, resolveReviewUsernames, normalizeOptionalReviewers, resolveOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerMaxRounds, MAX_REVIEWER_MAX_ROUNDS, normalizeReviewerModels, resolveReviewerModels, reviewerModelsFromDefaults, MAX_REVIEWER_MODEL_LENGTH, resolveKeyedReviewers, buildReviewersCsv, buildReviewWithArgs } from './reviewerConfig.js';
 import { stageConfigUpdateSchema, writersRoomCharacterUpdateSchema, writersRoomObjectUpdateSchema, editorialCustomCheckUpdateSchema, pipelineEditorialChecksSettingsSchema, storyboardShotSchema, storyboardSceneSchema } from './pipelineValidation.js';
 import { eidoverseWorldConfigPatchSchema } from './eidoverseValidation.js';
 import { spriteTrackFrameCountSchema, spriteTrackFpsSchema, spriteRuntimeContractSchema, spriteWalkGenerateSchema, spriteTrackGenerateSchema } from './spriteValidation.js';

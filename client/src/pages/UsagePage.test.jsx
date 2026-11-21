@@ -20,7 +20,17 @@ const api = vi.hoisted(() => ({
   updateUsageFleetBilling: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSystem.js', () => ({
+  getClaudeCodeModelUsage: api.getClaudeCodeModelUsage,
+  getProviderUsage: api.getProviderUsage,
+  getUsage: api.getUsage,
+  getUsageBackfillStatus: api.getUsageBackfillStatus,
+  getUsageTips: api.getUsageTips,
+  getUsageRollingCost: api.getUsageRollingCost,
+  startUsageBackfill: api.startUsageBackfill,
+  updateSubscriptionCosts: api.updateSubscriptionCosts,
+  updateUsageFleetBilling: api.updateUsageFleetBilling,
+}));
 
 const UsagePageModule = await import('./UsagePage');
 const UsagePage = UsagePageModule.UsagePage;

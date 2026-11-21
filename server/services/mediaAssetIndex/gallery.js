@@ -1,3 +1,6 @@
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PATHS } from '../../lib/paths.js';
 import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
@@ -10,6 +13,19 @@ const keyForRef = item => `${item.kind}:${item.ref}`;
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0;
 const text = value => typeof value === 'string' && value.trim() ? value : null;
 const readImages = async diskReader => (diskReader || (await import('../imageGen/local.js')).listGallery)();
+
+async function localFilenames(directory) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const files = entries.filter(entry => entry.isFile()).map(entry => entry.name);
+  const links = await mapWithConcurrency(entries.filter(entry => entry.isSymbolicLink()), 4, async entry => {
+    const info = await stat(join(directory, entry.name)).catch(() => null);
+    return info?.isFile() ? entry.name : null;
+  });
+  return new Set([...files, ...links.filter(Boolean)]);
+}
 
 async function resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot }) {
   let keys = mediaKeys;
@@ -37,16 +53,23 @@ async function resolveScope({ collectionId, starred, rating, mediaKeys, collecti
 
 /** Bounded reads; sidecars remain the reconcile authority and test escape hatch. */
 export async function listGalleryPage({
-  limit = 60, offset = 0, q = '', hidden, filename, starred = false, rating, summary = false, compact = false,
+  limit = 60, offset = 0, q = '', hidden, filename, starred = false, rating, summary = false, compact = false, localOnly = false,
   kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys,
 } = {}, diskReader) {
   const mixed = media || kind !== 'image';
   const videoReader = mixed && videoSnapshot == null ? await import('../videoGen/history.js') : null;
-  const videos = mixed ? videoSnapshot ?? await (compact && !q.trim()
+  let videos = mixed ? videoSnapshot ?? await (compact && !q.trim()
     ? videoReader.loadCompactHistory() : videoReader.loadHistory()) : undefined;
+  // A copied file is local even if its metadata or hosted entry names a peer.
+  // Snapshot filenames once before paging so counts use the same inventory.
+  const [localImages, localVideos] = localOnly
+    ? await Promise.all([localFilenames(PATHS.images), mixed ? localFilenames(PATHS.videos) : undefined])
+    : [];
+  if (localVideos) videos = videos.filter(video => localVideos.has(video.filename));
   const scope = await resolveScope({ collectionId, starred, rating, mediaKeys, collectionSnapshot });
   const filters = { kind: kind === 'all' ? undefined : kind, q, hidden, filename,
-    universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos };
+    universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos,
+    localImages: localImages && [...localImages] };
   let items;
   let total;
   let hiddenTotal;
@@ -54,7 +77,10 @@ export async function listGalleryPage({
   if (isFileBackend()) {
     const images = kind === 'video' && !summary ? [] : await readImages(diskReader);
     const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const candidates = [...images.map(data => ({ kind: 'image', data })), ...(videos || []).map(data => ({ kind: 'video', data }))];
+    const candidates = [
+      ...images.filter(data => !localImages || localImages.has(data.filename)).map(data => ({ kind: 'image', data })),
+      ...(videos || []).map(data => ({ kind: 'video', data })),
+    ];
     const matching = (row, activeFilters, activeScope) =>
       (!activeFilters.kind || row.kind === activeFilters.kind)
       && (filename === undefined || ((row.kind === 'image' ? row.data.filename : row.data.id) === filename || row.data.filename === filename))
@@ -148,7 +174,7 @@ async function projectCovers(summaries, videoSnapshot) {
     if (videoFilename) return { kind: 'video', ref: videoFilename, url: cover };
     return null;
   });
-  const located = await resolveMediaLocations(probes.filter(Boolean));
+  const located = await resolveMediaLocations(probes.filter(Boolean), { knownFilenames: true });
   let next = 0;
   return summaries.map((summary, i) => {
     const probe = probes[i];

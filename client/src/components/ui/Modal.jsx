@@ -27,7 +27,7 @@
  * `items-center`, so a panel taller than the overlay has its overflow split
  * top and bottom, pushing the title AND the Save/Cancel footer off-screen. The
  * clamp lives in the primitive so no call site has to remember it
- * (`client/src/AGENTS.md`); `modalPanelHeights.guard.test.js` fails the build if the
+ * (`client/src/AGENTS.md`); `client/src/test/guards/ui/modalPanelHeights.test.js` fails the build if the
  * per-caller idiom returns. A caller wanting a *shorter* panel sets the cap, not
  * a raw vh: `panelClassName="… [--dvh-cap:60dvh]"`. Modal also supplies
  * `overflow-auto` unless `panelClassName` already declares an overflow utility;

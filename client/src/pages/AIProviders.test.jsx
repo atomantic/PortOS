@@ -58,12 +58,40 @@ vi.mock('../services/apiCore.js', async importOriginal => {
   const actual = await importOriginal();
   return { ...actual, request: (url, options) => url.includes('/execution-options') ? Promise.resolve({ options: [] }) : actual.request(url, options) };
 });
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiLocalLlm.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getLocalPersistentMindSetup: vi.fn(async () => null),
+}));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
+vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
+vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
+vi.mock('../services/apiHarnesses.js', () => ({ getHarnesses: api.getHarnesses }));
 vi.mock('../services/apiProviders', () => ({
   getFleetLlmHost: vi.fn(() => new Promise(() => {})),
   getFleetPeerHosts: vi.fn(() => new Promise(() => {})),
   revealFleetLlmHostKey: vi.fn(),
   revealFleetPeerHostKey: vi.fn(),
+  getProviders: api.getProviders,
+  getProviderStatuses: api.getProviderStatuses,
+  getProviderRuntimes: api.getProviderRuntimes,
+  getProviderReadiness: api.getProviderReadiness,
+  getCodexAccount: api.getCodexAccount,
+  getCodexModels: api.getCodexModels,
+  startCodexLogin: api.startCodexLogin,
+  cancelCodexLogin: api.cancelCodexLogin,
+  codexLogout: api.codexLogout,
+  getSampleProviders: api.getSampleProviders,
+  createProvider: api.createProvider,
+  updateProvider: api.updateProvider,
+  refreshProviderModels: api.refreshProviderModels,
+  getModelPinWarnings: api.getModelPinWarnings,
+  clearModelPin: api.clearModelPin,
+  setActiveProvider: api.setActiveProvider,
+  getProviderCatalog: api.getProviderCatalog,
+  getProviderBootstraps: api.getProviderBootstraps,
+  createProviderPreset: api.createProviderPreset,
+  getProviderServices: api.getProviderServices,
 }));
 vi.mock('../components/ui/Toast', () => ({
   default: toast,
@@ -212,7 +240,7 @@ describe('AIProviders page load error handling', () => {
     const install = await screen.findByRole('button', { name: /Install OpenCode CLI/ });
     expect(install).toBeEnabled();
     fireEvent.click(install);
-    const modal = screen.getByTestId('runtime-install-modal');
+    const modal = await screen.findByTestId('runtime-install-modal');
     expect(modal).toHaveAttribute('data-runtime', 'opencode');
     expect(modal).toHaveAttribute('data-stream-method', 'POST');
     expect(modal).toHaveAttribute('data-flush-ms', '250');
@@ -2191,7 +2219,9 @@ describe('compatibility matrix', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New preset: Claude Code on Ollama' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Compose a new preset' });
-    expect(within(dialog).getByLabelText('Harness')).toHaveValue('claude');
+    // The popover is a lazy chunk that mounts already open, so its catalog loads
+    // after the dialog shell appears; the seeded pair is selectable only once it has.
+    await waitFor(() => expect(within(dialog).getByLabelText('Harness')).toHaveValue('claude'));
     expect(within(dialog).getByLabelText('Method')).toHaveValue('cli');
     expect(within(dialog).getByLabelText('Service')).toHaveValue('ollama');
     expect(within(dialog).queryByRole('button', { name: 'Use once' })).not.toBeInTheDocument();

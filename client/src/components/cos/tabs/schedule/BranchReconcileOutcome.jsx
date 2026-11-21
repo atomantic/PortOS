@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { formatCount, formatDateTime } from '../../../../utils/formatters';
-import { retireBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/api';
+import { retireBranchReconcileCheckout, refreshBranchReconcileInventory } from '../../../../services/apiAgents.js';
 import useMounted from '../../../../hooks/useMounted';
 import { isHttpUrl } from '../../../../utils/urlNormalize';
 

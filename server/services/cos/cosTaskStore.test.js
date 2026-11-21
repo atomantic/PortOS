@@ -126,7 +126,7 @@ import { PRIORITY_VALUES } from '../../lib/taskParser.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 import { getTaskPrompt, } from '../../lib/cos/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../../lib/taskPauseHold.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { activeAgents, runnerAgents } from '../agent/agentState.js';
 
 const baseState = () => ({ agents: {} });
@@ -2580,30 +2580,6 @@ describe('addTask — first-line dedup (source guards)', () => {
 // against the in-memory file map so the read-merge-write round-trip + write-skip
 // are covered end-to-end (the merge rules themselves are unit-tested in
 // cosTaskMerge.test.js).
-describe('historical release attempt compatibility', () => {
-  it('dispatches releases without generating transfer membership', async () => {
-    const task = await addTask({ id: 'sys-release', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
-    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: 'first-start' };
-    const result = await updateTask(task.id, { status: 'in_progress', metadata: { totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'first-start', lastSpawnedAt: 'first-start' } }, 'internal');
-    expect(result.status).toBe('in_progress');
-    expect(result.metadata.releaseAttempts).toBeUndefined();
-  });
-
-  it('keeps stored attempt history readable across peer merges and ordinary edits', async () => {
-    const task = await addTask({ id: 'sys-release-peer', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
-    const history = { version: 1, complete: true, attempts: [{ agentId: 'agent-peer', startedAt: 'peer-start', instanceId: 'example' }] };
-    await mergePeerTasks('internal', [{ ...task, taskType: 'internal', metadata: { ...task.metadata, releaseAttempts: history } }],
-      { now: Date.parse('2026-06-25T12:00:00Z') });
-    const updated = await updateTask(task.id, { metadata: { releaseAttempts: undefined } }, 'internal');
-    expect(updated.metadata.releaseAttempts).toEqual(history);
-    mock.state.agents['agent-successor'] = { id: 'agent-successor', taskId: task.id, status: 'running', startedAt: 'successor-start' };
-    const dispatched = await updateTask(task.id, { status: 'in_progress', metadata: {
-      totalSpawnCount: 1, claimedBy: 'fixture', claimedAt: 'successor-start', lastSpawnedAt: 'successor-start',
-    } }, 'internal');
-    expect(dispatched.metadata.releaseAttempts).toEqual({ ...history, complete: false });
-  });
-});
-
 describe('cosTaskStore.mergePeerTasks', () => {
   const NOW = Date.parse('2026-06-25T12:00:00.000Z');
   const future = (ms) => new Date(NOW + ms).toISOString();

@@ -1,10 +1,11 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Anchor, Check, Wand2 } from 'lucide-react';
 import {
   BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, designRoundId, designTakeIndex, featureLines, blendLines,
 } from '../../../../server/lib/catalog/catalogDesign.js';
-import { listMoodBoardNames } from '../../services/api';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
 import { getCatalogIngredientDetails, renderCatalogDesign, spreadCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -354,7 +355,7 @@ function PickedActions({ ingredientId, take, isCanon, forms, images, disabled, o
       {boards && (boards.length ? <label htmlFor={`${id}-board`} className="block space-y-1 text-xs"><span>Mood board</span>
         <select id={`${id}-board`} value={boardId} onChange={(e) => setBoardId(e.target.value)} className={fieldClass}>
           <option value="">Choose a mood board</option>
-          {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          {sortByLabel(boards).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
       </label> : <p className="text-xs text-gray-400">No mood boards yet.</p>)}
       <div className="grid grid-cols-2 gap-2">

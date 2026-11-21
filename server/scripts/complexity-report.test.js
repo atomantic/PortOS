@@ -89,3 +89,46 @@ it('reports syntax errors as an incomplete scan while retaining the valid shortl
   expect(result.stderr).toMatch(/Scan incomplete: 1 error\(s\)/);
   expect(result.stderr).toMatch(/src\/broken\.js:1:\d+ Parsing error:/);
 });
+
+it('matches classic decision scores for loops, short-circuiting and class scopes', () => {
+  const { write, run } = fixtureRepo();
+  write('src/decisions.js', `const outside = left && right;
+function alternatives(items, { value = 0 } = {}) {
+  let result = value;
+  try {
+    for (let i = 0; i < items.length; i++) {
+      while (result) result--;
+      do { result ||= i; } while (false);
+    }
+    for (const key in items) result ??= items[key];
+    for (const item of items) result &&= item;
+    if (items?.[0]?.run?.()?.value || result) return value ? result : 0;
+    switch (result) { case 1: return 1; default: return 0; }
+  } catch { return result; }
+}
+function classScopes(flag) {
+  return class Choice {
+    [flag && 'key'] = flag || undefined;
+    static #fallback = flag ? 1 : 0;
+    static { if (flag) this.#fallback ??= 1; }
+    async [flag || 'resolve'](value = flag) { return value?.get(); }
+    field = a => a ?? flag;
+  };
+}
+`);
+
+  const result = run();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain('8 functions/initializers');
+  const entries = result.stdout.split('\n').filter(line => line.includes('src/decisions.js'));
+  expect(entries.map(line => line.trim())).toEqual([
+    "20  src/decisions.js:2:1  Function 'alternatives'",
+    "3  src/decisions.js:15:1  Function 'classScopes'",
+    '3  src/decisions.js:19:5  Class static block',
+    '3  src/decisions.js:20:5  Async method',
+    '2  src/decisions.js:17:23  Class field initializer',
+    '2  src/decisions.js:18:24  Class field initializer',
+    "2  src/decisions.js:21:5  Method 'field'",
+    '1  src/decisions.js:21:13  Class field initializer',
+  ]);
+});

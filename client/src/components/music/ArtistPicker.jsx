@@ -8,8 +8,9 @@
  * `onChange('', '')`. Self-contained: fetches the artist list on mount.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Link } from 'react-router';
-import { listArtists } from '../../services/api';
+import { listArtists } from '../../services/apiArtists.js';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
@@ -44,7 +45,7 @@ export default function ArtistPicker({ id = 'music-artist', value, name, onChang
         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
       >
         <option value="">— No artist —</option>
-        {artistOptions.map((a) => (
+        {sortByLabel(artistOptions).map((a) => (
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
       </select>

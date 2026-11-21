@@ -20,14 +20,26 @@ const api = vi.hoisted(() => ({
   deleteNote: vi.fn(),
   searchNotes: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiNotes.js', () => ({
+  getNotesVaults: api.getNotesVaults,
+  detectNotesVaults: api.detectNotesVaults,
+  scanNotesVault: api.scanNotesVault,
+  getNotesVaultFolders: api.getNotesVaultFolders,
+  getNotesVaultTags: api.getNotesVaultTags,
+  addNotesVault: api.addNotesVault,
+  getNote: api.getNote,
+  updateNote: api.updateNote,
+  createNote: api.createNote,
+  deleteNote: api.deleteNote,
+  searchNotes: api.searchNotes,
+}));
 
 const NotesTab = (await import('./NotesTab')).default;
 
 // jsdom has no layout engine and Tailwind is never compiled for the test run,
 // so touch-target size is asserted from the utility tokens the element renders
 // with rather than from measured geometry — the same approach as the repo-wide
-// guard in src/a11y/*.conventions.test.js and Layout.test.jsx. Reverting
+// guard in src/test/guards/a11y/ and Layout.test.jsx. Reverting
 // NotesTab.jsx to its pre-fix state fails every case in this file.
 //
 // Tailwind `min-h-`/`min-w-`/`h-`/`w-` token → px, for both the arbitrary value

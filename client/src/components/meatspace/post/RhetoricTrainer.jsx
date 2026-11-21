@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle, Feather, RotateCcw, Save, Sparkles } from 'lucide-react';
-import { evaluateRhetoricAttempt, getLoadedLlmModels, submitTrainingEntry, updatePostConfig } from '../../../services/api';
+import { evaluateRhetoricAttempt, submitTrainingEntry, updatePostConfig } from '../../../services/apiMeatspace.js';
+import { getLoadedLlmModels } from '../../../services/apiLocalLlm.js';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { isEmbeddingModel, isLocalEndpoint, isLocalInstanceProvider, isOllamaBackedProvider, localBackendForProvider, mergeModelLists } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';

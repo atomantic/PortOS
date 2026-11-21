@@ -21,9 +21,12 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { writersRoomWorksQuerySchema } from '../../lib/pipelineValidation.js';
 import { randomUUID, createHash } from 'crypto';
+import { isUtf8 } from 'node:buffer';
 import { readFile } from 'fs/promises';
 import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { journalConflict, WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND } from '../../lib/conflictJournal.js';
+import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
@@ -286,6 +289,20 @@ export async function ensureWorkMediaCollection(workId) {
     await saveManifest(workId, { ...manifest, mediaCollectionId: collection.id, updatedAt: nowIso() });
     return collection;
   });
+}
+
+/** Re-point works filing into any of `fromIds` at collection `toId` (a collection join). */
+export async function repointWorkMediaCollections(fromIds, toId) {
+  const from = new Set(fromIds);
+  const works = (await store().listWorks()).filter((manifest) => from.has(manifest?.mediaCollectionId));
+  for (const { id } of works) {
+    await queueWorkWrite(id, async () => {
+      const manifest = await getWork(id);
+      if (!from.has(manifest.mediaCollectionId)) return;
+      await saveManifest(id, { ...manifest, mediaCollectionId: toId, updatedAt: nowIso() });
+    });
+  }
+  return works.length;
 }
 
 function summarizeWork(manifest) {
@@ -682,19 +699,19 @@ function buildDraftMeta(text, base = {}) {
 // The draft body replaces its .md in place and the manifest row records its new
 // hash, word count and segment index, so the pair is one backup-admitted workflow
 // (#9982): a cut never copies the old prose beside a row that describes the new.
-export function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
-  return queueWorkWrite(workId, () => saveDraftBodyNow(workId, body, { referencedIngredientIds }));
+export function saveDraftBody(workId, body, options) {
+  return queueWorkWrite(workId, () => saveDraftBodyNow(workId, body, options));
 }
 
-function saveDraftBodyNow(workId, body, { referencedIngredientIds } = {}) {
+function saveDraftBodyNow(workId, body, { referencedIngredientIds, draftId } = {}) {
   return withBackupAssetPublication(async () => {
     const manifest = await getWork(workId);
-    const activeId = manifest.activeDraftVersionId;
-    if (!activeId) throw badRequest('Work has no active draft');
+    const targetId = draftId ?? manifest.activeDraftVersionId;
+    if (!targetId) throw badRequest('Work has no active draft');
+    const draftIdx = manifest.drafts.findIndex((d) => d.id === targetId);
+    if (draftIdx < 0) throw notFound(draftId ? 'Draft version' : 'Active draft');
     const text = String(body ?? '');
-    await atomicWrite(wrDraftPath(workId, activeId), text);
-    const draftIdx = manifest.drafts.findIndex((d) => d.id === activeId);
-    if (draftIdx < 0) throw notFound('Active draft');
+    await atomicWrite(wrDraftPath(workId, targetId), text);
     const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);
     // Distinguish "caller omitted the field" (preserve the existing snapshot of
     // referenced ids) from "caller passed an empty array" (the prose no longer
@@ -704,11 +721,50 @@ function saveDraftBodyNow(workId, body, { referencedIngredientIds } = {}) {
       meta.referencedIngredientIds = referencedIngredientIds;
     }
     manifest.drafts[draftIdx] = meta;
-    manifest.updatedAt = nowIso();
+    // A restore must win against the current federated timestamp, even if the
+    // peer's clock is ahead of this install's.
+    manifest.updatedAt = draftId
+      ? new Date(Math.max(Date.now(), (parseTsMs(manifest.updatedAt) ?? -Infinity) + 1)).toISOString()
+      : nowIso();
     await saveManifest(workId, manifest);
-    console.log(`📝 wr: saved draft ${activeId.slice(0, 14)}… (${manifest.drafts[draftIdx].wordCount} words)`);
+    console.log(`📝 wr: saved draft ${targetId.slice(0, 14)}… (${meta.wordCount} words)`);
     return { manifest, body: text };
   });
+}
+
+/** Publish verified peer bytes without advancing the work's federation timestamp. */
+export function applyPulledDraftBody({ workId, draftId, sha256 }, bytes, source) {
+  return queueWorkWrite(workId, () => withBackupAssetPublication(async () => {
+    const manifest = await loadManifest(workId);
+    const draft = Array.isArray(manifest?.drafts) ? manifest.drafts.find((d) => d?.id === draftId) : null;
+    // A save during the download may already have changed the manifest hash.
+    // Hold the work's write queue through the journal and file write as well.
+    if (!draft || draft.contentHash !== sha256) return false;
+
+    const path = wrDraftPath(workId, draftId);
+    const localBytes = await readFile(path).catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (localBytes?.equals(bytes)) return true;
+    if (!isUtf8(bytes) || (localBytes && !isUtf8(localBytes))) {
+      throw new Error('Invalid UTF-8 in Writers Room draft body');
+    }
+    if (localBytes) {
+      // The accepted manifest describes the incoming file. The incumbent is
+      // independent of it and may contain edits the sender never received.
+      await journalConflict({
+        kind: WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND,
+        id: `${workId}/${draftId}`,
+        local: { body: localBytes.toString('utf8') },
+        remote: { body: bytes.toString('utf8') },
+        source,
+        hashes: { localHash: contentHash(localBytes), remoteHash: sha256 },
+      });
+    }
+    await atomicWrite(path, bytes);
+    return true;
+  }));
 }
 
 // The new version's body file and the manifest row that adds it are one

@@ -326,5 +326,3 @@ export function mountEidoverseWebSocket(httpServer, {
     });
   });
 }
-
-export const BAD_GATEWAY_MESSAGE = BAD_GATEWAY_BODY;

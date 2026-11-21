@@ -13,7 +13,13 @@ const api = vi.hoisted(() => ({
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
 const listeners = vi.hoisted(() => new Map());
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiCalendar.js', () => ({
+  getCalendarTokenStatus: api.getCalendarTokenStatus,
+  clearCalendarToken: api.clearCalendarToken,
+  syncCalendarAccount: api.syncCalendarAccount,
+  apiSyncGoogleCalendar: api.apiSyncGoogleCalendar,
+  mcpSyncGoogleCalendar: api.mcpSyncGoogleCalendar,
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/socket', () => ({ default: {
   on: (event, handler) => listeners.set(event, handler),

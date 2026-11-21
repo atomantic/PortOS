@@ -19,7 +19,7 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../../services/socket', () => ({ default: socket }));
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAgents.js', () => ({
   getCosLearningDurations: vi.fn(),
   getCosAgent: vi.fn(),
   getCosCompletedAgents: vi.fn(),
@@ -103,7 +103,17 @@ vi.mock('../../ui/InlineConfirmRow', () => ({
   ),
 }));
 
-import * as api from '../../../services/api';
+import {
+  getCosLearningDurations,
+  getCosCompletedAgents,
+  getCosPendingAgentFeedback,
+  hydrateCosAgentDescription,
+  addCosTask,
+  resumeCosAgent,
+  getCosAgent,
+  clearCompletedCosAgents,
+  deleteCosAgent,
+} from '../../../services/apiAgents.js';
 import toast from '../../ui/Toast';
 import AgentsTab from './AgentsTab';
 
@@ -131,21 +141,21 @@ const renderTab = (agents, onRefresh = vi.fn(), initialEntry = '/cos/agents') =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getCosLearningDurations.mockResolvedValue({});
-  api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
-  api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
-  api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
+  getCosLearningDurations.mockResolvedValue({});
+  getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+  getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
+  hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
 });
 
 describe('AgentsTab duration loading lifecycle', () => {
   it('ignores a duration request from the StrictMode effect pass that was cleaned up', async () => {
     const firstRequest = deferred();
     const activeRequest = deferred();
-    api.getCosLearningDurations.mockReturnValueOnce(firstRequest.promise).mockReturnValueOnce(activeRequest.promise);
+    getCosLearningDurations.mockReturnValueOnce(firstRequest.promise).mockReturnValueOnce(activeRequest.promise);
     render(<StrictMode><MemoryRouter><AgentsTab agents={[completedAgent('done', 'Completed work')]} onRefresh={vi.fn()}
       liveOutputs={{}} providers={[]} apps={[]} /></MemoryRouter></StrictMode>);
 
-    expect(api.getCosLearningDurations).toHaveBeenCalledTimes(2);
+    expect(getCosLearningDurations).toHaveBeenCalledTimes(2);
     await act(async () => firstRequest.resolve({ first: 1 }));
     expect(screen.getByTestId('durations-done')).toHaveTextContent('null');
 
@@ -178,8 +188,8 @@ describe('AgentsTab relaunch routing', () => {
     await waitFor(() => expect(onRefresh).toHaveBeenCalled());
     // A relaunch moves the EXISTING task, so neither resume door may fire — a
     // second task would spawn a second agent.
-    expect(api.addCosTask).not.toHaveBeenCalled();
-    expect(api.resumeCosAgent).not.toHaveBeenCalled();
+    expect(addCosTask).not.toHaveBeenCalled();
+    expect(resumeCosAgent).not.toHaveBeenCalled();
   });
 
   it('offers no relaunch on a settled agent, which has no live run to move', async () => {
@@ -204,19 +214,19 @@ describe('AgentsTab resume routing', () => {
 
   it('resumes a PAUSED agent in place instead of queueing a second task', async () => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
     renderTab([pausedAgent]);
     await act(async () => {});
 
     await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
     await user.click(screen.getByRole('button', { name: 'Submit resume' }));
 
-    await waitFor(() => expect(api.resumeCosAgent).toHaveBeenCalledWith(
+    await waitFor(() => expect(resumeCosAgent).toHaveBeenCalledWith(
       'agent-paused',
       expect.objectContaining({ provider: 'claude', model: 'claude-opus-5', effort: 'high' }),
       { silent: true },
     ));
-    expect(api.addCosTask).not.toHaveBeenCalled();
+    expect(addCosTask).not.toHaveBeenCalled();
   });
 
   // `already-active` and `superseded` create NOTHING server-side — the task is
@@ -227,7 +237,7 @@ describe('AgentsTab resume routing', () => {
     ['superseded', /later agent/i],
   ])('reports the %s outcome without claiming a task was created', async (mode, pattern) => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode });
     renderTab([pausedAgent]);
     await act(async () => {});
 
@@ -243,7 +253,7 @@ describe('AgentsTab resume routing', () => {
   // reads as the Resume click not having taken.
   it('says the resumed task is running when the server started it', async () => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued', spawned: true });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued', spawned: true });
     renderTab([pausedAgent]);
     await act(async () => {});
 
@@ -255,7 +265,7 @@ describe('AgentsTab resume routing', () => {
 
   it('names why a resumed task stayed queued instead of leaving the user to hunt for it', async () => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({
+    resumeCosAgent.mockResolvedValue({
       success: true, taskId: 'task-abc', mode: 'requeued',
       spawned: false, spawnHold: 'No available agent slots (3/3)',
     });
@@ -274,7 +284,7 @@ describe('AgentsTab resume routing', () => {
   // the replacement actually started.
   it('says a replacement task is running when the server started that too', async () => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-new', mode: 'new-task', created: true, spawned: true });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-new', mode: 'new-task', created: true, spawned: true });
     renderTab([pausedAgent]);
     await act(async () => {});
 
@@ -289,7 +299,7 @@ describe('AgentsTab resume routing', () => {
   // not regress to announcing a task that was never queued.
   it('never claims a task was created for an unrecognized non-creating mode', async () => {
     const user = userEvent.setup();
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'some-future-mode', created: false });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'some-future-mode', created: false });
     renderTab([pausedAgent]);
     await act(async () => {});
 
@@ -302,18 +312,18 @@ describe('AgentsTab resume routing', () => {
 
   it('still queues a fresh task for a COMPLETED agent, which has no task to requeue', async () => {
     const user = userEvent.setup();
-    api.addCosTask.mockResolvedValue({ id: 'task-new' });
+    addCosTask.mockResolvedValue({ id: 'task-new' });
     renderTab([completedAgent('done', 'Finished work')]);
     await act(async () => {});
 
     await user.click(screen.getByRole('button', { name: 'Resume done' }));
     await user.click(screen.getByRole('button', { name: 'Submit resume' }));
 
-    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(
+    await waitFor(() => expect(addCosTask).toHaveBeenCalledWith(
       expect.objectContaining({ description: '[Resume] Finished work' }),
       { silent: true },
     ));
-    expect(api.resumeCosAgent).not.toHaveBeenCalled();
+    expect(resumeCosAgent).not.toHaveBeenCalled();
   });
 });
 
@@ -321,9 +331,9 @@ describe('AgentsTab feedback review queue', () => {
   it('applies notification feedback to live, archived and selected cards without reloading history', async () => {
     const live = completedAgent('live', 'Recent task');
     const archived = completedAgent('archived', 'Archived task');
-    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
-    api.getCosAgent.mockResolvedValue(archived);
-    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
+    getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    getCosAgent.mockResolvedValue(archived);
+    getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
     const onRefresh = vi.fn();
     const view = render(
       <MemoryRouter initialEntries={['/cos/agents/archived']}>
@@ -333,8 +343,8 @@ describe('AgentsTab feedback review queue', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Rate Archived task' })).toHaveLength(2));
-    const pageReads = api.getCosCompletedAgents.mock.calls.length;
-    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
+    const pageReads = getCosCompletedAgents.mock.calls.length;
+    getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
     await act(async () => socket.receive('cos:agent:feedback', {
       agentId: 'archived', feedback: { rating: 'positive', comment: null, submittedAt: '2026-07-13T12:00:00.000Z' },
     }));
@@ -342,13 +352,13 @@ describe('AgentsTab feedback review queue', () => {
     expect(screen.queryByRole('button', { name: 'Rate Archived task' })).not.toBeInTheDocument();
     await screen.findByRole('button', { name: 'Needs feedback: 1' });
 
-    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 0 });
+    getCosPendingAgentFeedback.mockResolvedValue({ count: 0 });
     await act(async () => socket.receive('cos:agent:feedback', {
       agentId: 'live', feedback: { rating: 'negative', comment: null, submittedAt: '2026-07-13T12:01:00.000Z' },
     }));
     expect(screen.getByText('Feedback: negative')).toBeInTheDocument();
     await screen.findByRole('button', { name: 'Needs feedback: 0' });
-    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(pageReads);
+    expect(getCosCompletedAgents).toHaveBeenCalledTimes(pageReads);
     expect(onRefresh).not.toHaveBeenCalled();
     view.unmount();
     expect(socket.listenerCount('cos:agent:feedback')).toBe(0);
@@ -356,12 +366,12 @@ describe('AgentsTab feedback review queue', () => {
 
   it('removes externally rated runs from the feedback filter and reconciles repeated ratings without double-counting', async () => {
     const archived = completedAgent('archived', 'Archived task');
-    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
-    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
+    getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
     renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
     await screen.findByText('Archived task');
     await screen.findByRole('button', { name: 'Needs feedback: 2' });
-    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
+    getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
     const event = { agentId: 'archived', feedback: { rating: 'positive' } };
     await act(async () => socket.receive('cos:agent:feedback', event));
     expect(screen.queryByText('Archived task')).not.toBeInTheDocument();
@@ -372,16 +382,16 @@ describe('AgentsTab feedback review queue', () => {
 
   it('renders an older durable pending run and uses its server count', async () => {
     const archived = completedAgent('agent-archived', 'An older pending run');
-    api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [archived], count: 1 });
+    getCosPendingAgentFeedback.mockResolvedValue({ agents: [archived], count: 1 });
 
-    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
     renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument());
     expect(screen.getByText('An older pending run')).toBeInTheDocument();
   });
 
   it('does not hide a live completion that arrives after the index snapshot', async () => {
-    api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: 0 });
+    getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: 0 });
     renderTab([completedAgent('just-finished', 'A just-finished run')]);
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument());
@@ -430,7 +440,7 @@ describe('AgentsTab feedback review queue', () => {
   it('removes an archived run from the queue immediately after feedback', async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
-    api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('archived', 'Archived task')], total: 1, nextCursor: null });
+    getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('archived', 'Archived task')], total: 1, nextCursor: null });
 
     renderTab([], onRefresh);
     await act(async () => {});
@@ -447,17 +457,17 @@ describe('AgentsTab feedback review queue', () => {
 });
 
 it('opens an agent deep link even after it has left the recent agent list', async () => {
-  api.getCosAgent.mockResolvedValue({ id: 'archived-example', status: 'completed', metadata: { taskDescription: 'Example maintenance audit' } });
+  getCosAgent.mockResolvedValue({ id: 'archived-example', status: 'completed', metadata: { taskDescription: 'Example maintenance audit' } });
   render(<MemoryRouter initialEntries={['/cos/agents/archived-example']}><Routes>
     <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
   </Routes></MemoryRouter>);
   expect(await screen.findByTestId('agent-archived-example')).toBeInTheDocument();
-  expect(api.getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
+  expect(getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
 });
 
 it('keeps a retry on an agent deep link whose read failed, and reports a 404 as not found', async () => {
   const user = userEvent.setup();
-  api.getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
+  getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Server unavailable'), { status: 503 }))
     .mockResolvedValueOnce({ id: 'archived-example', status: 'completed', metadata: { taskDescription: 'Example maintenance audit' } });
   const { unmount } = render(<MemoryRouter initialEntries={['/cos/agents/archived-example']}><Routes>
     <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
@@ -468,7 +478,7 @@ it('keeps a retry on an agent deep link whose read failed, and reports a 404 as 
   expect(await screen.findByTestId('agent-archived-example')).toBeInTheDocument();
   unmount();
 
-  api.getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Agent not found'), { status: 404 }));
+  getCosAgent.mockRejectedValueOnce(Object.assign(new Error('Agent not found'), { status: 404 }));
   render(<MemoryRouter initialEntries={['/cos/agents/missing-example']}><Routes>
     <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
   </Routes></MemoryRouter>);
@@ -479,18 +489,18 @@ it('keeps a retry on an agent deep link whose read failed, and reports a 404 as 
 describe('AgentsTab bounded archive loading', () => {
   it('loads a bounded first page and preserves rows and cursor after a failed next page', async () => {
     const user = userEvent.setup();
-    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [completedAgent('archived', 'Archived task')], total: 2, nextCursor: 'next' })
+    getCosCompletedAgents.mockResolvedValueOnce({ items: [completedAgent('archived', 'Archived task')], total: 2, nextCursor: 'next' })
       .mockRejectedValueOnce(new Error('Temporary failure'))
       .mockResolvedValueOnce({ items: [completedAgent('older', 'Older task')], total: 2, nextCursor: null });
     renderTab([]);
     await screen.findByText('Archived task');
-    expect(api.getCosCompletedAgents).toHaveBeenCalledWith(expect.objectContaining({ limit: 25, cursor: null }));
+    expect(getCosCompletedAgents).toHaveBeenCalledWith(expect.objectContaining({ limit: 25, cursor: null }));
     await user.click(screen.getByRole('button', { name: 'Load older agents' }));
     await screen.findByRole('alert');
     expect(screen.getByText('Archived task')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry loading' }));
     await screen.findByText('Older task');
-    expect(api.getCosCompletedAgents.mock.calls.slice(1).map(([args]) => args.cursor)).toEqual(['next', 'next']);
+    expect(getCosCompletedAgents.mock.calls.slice(1).map(([args]) => args.cursor)).toEqual(['next', 'next']);
     expect(screen.getByText('All results loaded')).toBeInTheDocument();
   });
 });
@@ -508,26 +518,26 @@ describe('AgentsTab hydrates a clipped description before reusing it', () => {
 
   it('hands the resume dialog the full description, not the listing preview', async () => {
     const user = userEvent.setup();
-    api.hydrateCosAgentDescription.mockResolvedValue({
+    hydrateCosAgentDescription.mockResolvedValue({
       ...clipped,
       metadata: { ...clipped.metadata, taskDescription: 'Half-finished work, in full', taskDescriptionTruncated: false },
     });
-    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
+    resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
 
     renderTab([clipped]);
     await act(async () => {});
     await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
     await user.click(await screen.findByRole('button', { name: 'Submit resume' }));
 
-    await waitFor(() => expect(api.resumeCosAgent).toHaveBeenCalled());
-    expect(api.hydrateCosAgentDescription).toHaveBeenCalledWith(clipped);
-    expect(api.resumeCosAgent.mock.calls[0][1].description).toBe('[Resume] Half-finished work, in full');
+    await waitFor(() => expect(resumeCosAgent).toHaveBeenCalled());
+    expect(hydrateCosAgentDescription).toHaveBeenCalledWith(clipped);
+    expect(resumeCosAgent.mock.calls[0][1].description).toBe('[Resume] Half-finished work, in full');
   });
 });
 
 
 it('makes the clear scope explicit when the feedback filter hides completed records', async () => {
-  api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('filtered', 'Pending feedback')], total: 1, nextCursor: null });
+  getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('filtered', 'Pending feedback')], total: 1, nextCursor: null });
   renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
   await screen.findByText('Pending feedback');
   await userEvent.click(screen.getByRole('button', { name: 'Clear all completed agents' }));
@@ -537,8 +547,8 @@ it('makes the clear scope explicit when the feedback filter hides completed reco
 
 it('explains retained active cleanup owners when clearing completed agents', async () => {
   const user = userEvent.setup();
-  api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('done', 'Completed work')], total: 2, nextCursor: null });
-  api.clearCompletedCosAgents.mockResolvedValue({ cleared: 1, retained: 1 });
+  getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('done', 'Completed work')], total: 2, nextCursor: null });
+  clearCompletedCosAgents.mockResolvedValue({ cleared: 1, retained: 1 });
   const onRefresh = vi.fn();
   renderTab([], onRefresh);
   await screen.findByText('Completed work');
@@ -562,13 +572,13 @@ describe('AgentsTab confirmed deletion', () => {
     const first = completedAgent('first', 'Shared first');
     const second = completedAgent('second', 'Shared second');
     const older = completedAgent('older', 'Shared older');
-    api.getCosCompletedAgents
+    getCosCompletedAgents
       .mockResolvedValueOnce({ items: [first, second], total: 4, nextCursor: 'second-cursor' })
       .mockResolvedValueOnce({ items: [older], total: 4, nextCursor: 'older-cursor' })
       .mockResolvedValueOnce({ items: [second], total: 3, nextCursor: 'second-cursor' })
       .mockResolvedValueOnce({ items: [completedAgent('oldest', 'Shared oldest')], total: 3, nextCursor: null });
     const deletion = deferred();
-    api.deleteCosAgent.mockReturnValue(deletion.promise);
+    deleteCosAgent.mockReturnValue(deletion.promise);
     const onRefresh = vi.fn();
     renderTab([], onRefresh, '/cos/agents?feedback=needs-feedback');
     await screen.findByTestId('agent-second');
@@ -590,10 +600,10 @@ describe('AgentsTab confirmed deletion', () => {
     expect(screen.getByRole('button', { name: /Needs feedback:/ })).toHaveAttribute('aria-pressed', 'true');
     expect(grid.scrollTop).toBe(240);
     expect(screen.getByText('(3 total)')).toBeInTheDocument();
-    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(3);
+    expect(getCosCompletedAgents).toHaveBeenCalledTimes(3);
     expect(onRefresh).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Load older agents' }));
-    expect(api.getCosCompletedAgents).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older-cursor', feedback: true }));
+    expect(getCosCompletedAgents).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older-cursor', feedback: true }));
   });
 
   it('removes only each confirmed ID when deletes settle out of order and parent props stay stale', async () => {
@@ -601,20 +611,20 @@ describe('AgentsTab confirmed deletion', () => {
     const first = completedAgent('first', 'First');
     const second = completedAgent('second', 'Second');
     const survivor = completedAgent('survivor', 'Survivor');
-    api.getCosCompletedAgents.mockResolvedValue({ items: [first, second, survivor], total: 3, nextCursor: null });
+    getCosCompletedAgents.mockResolvedValue({ items: [first, second, survivor], total: 3, nextCursor: null });
     const firstDelete = deferred();
     const secondDelete = deferred();
-    api.deleteCosAgent.mockImplementation(id => id === 'first' ? firstDelete.promise : secondDelete.promise);
+    deleteCosAgent.mockImplementation(id => id === 'first' ? firstDelete.promise : secondDelete.promise);
     renderTab([first, second]);
     const survivorCard = await screen.findByTestId('agent-survivor');
     await user.click(screen.getByRole('button', { name: 'Delete first' }));
     await user.click(screen.getByRole('button', { name: 'Delete second' }));
-    api.getCosCompletedAgents.mockResolvedValue({ items: [first, survivor], total: 2, nextCursor: null });
+    getCosCompletedAgents.mockResolvedValue({ items: [first, survivor], total: 2, nextCursor: null });
     await act(async () => secondDelete.resolve({ success: true, agentId: 'second' }));
     expect(screen.queryByTestId('agent-second')).toBeNull();
     expect(screen.getByTestId('agent-first')).toBeInTheDocument();
     expect(screen.getByText('(2 total)')).toBeInTheDocument();
-    api.getCosCompletedAgents.mockResolvedValue({ items: [survivor], total: 1, nextCursor: null });
+    getCosCompletedAgents.mockResolvedValue({ items: [survivor], total: 1, nextCursor: null });
     await act(async () => {
       socket.receive('cos:agent:feedback', { agentId: 'second', feedback: { rating: 'positive' } });
       firstDelete.resolve({ success: true, agentId: 'first' });
@@ -627,8 +637,8 @@ describe('AgentsTab confirmed deletion', () => {
 
   it('keeps every card and local state when deletion fails', async () => {
     const user = userEvent.setup();
-    api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('first', 'First')], total: 1, nextCursor: null });
-    api.deleteCosAgent.mockRejectedValue(new Error('Could not remove agent'));
+    getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('first', 'First')], total: 1, nextCursor: null });
+    deleteCosAgent.mockRejectedValue(new Error('Could not remove agent'));
     const onRefresh = vi.fn();
     renderTab([], onRefresh);
     const card = await screen.findByTestId('agent-first');
@@ -638,7 +648,7 @@ describe('AgentsTab confirmed deletion', () => {
     expect(screen.getByTestId('agent-first')).toBe(card);
     expect(screen.getByRole('textbox', { name: 'Card draft first' })).toHaveValue('Keep me');
     expect(screen.getByText('(1 total)')).toBeInTheDocument();
-    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(1);
+    expect(getCosCompletedAgents).toHaveBeenCalledTimes(1);
     expect(onRefresh).not.toHaveBeenCalled();
   });
 });
@@ -650,8 +660,8 @@ describe('AgentsTab deletion reconciliation races', () => {
     const removed = completedAgent('removed', 'Removed');
     const kept = completedAgent('kept', 'Kept');
     const deletion = deferred();
-    api.deleteCosAgent.mockReturnValue(deletion.promise);
-    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [removed, kept], total: 2, nextCursor: null })
+    deleteCosAgent.mockReturnValue(deletion.promise);
+    getCosCompletedAgents.mockResolvedValueOnce({ items: [removed, kept], total: 2, nextCursor: null })
       .mockResolvedValue({ items: [kept], total: 1, nextCursor: null });
     const tab = revision => <MemoryRouter><AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}}
       providers={[]} apps={[]} completedRevision={revision} /></MemoryRouter>;
@@ -672,10 +682,10 @@ describe('AgentsTab deletion reconciliation races', () => {
     const user = userEvent.setup();
     const selected = completedAgent('selected', 'Selected');
     const kept = completedAgent('kept', 'Kept');
-    api.getCosAgent.mockResolvedValue(selected);
-    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [kept], total: 2, nextCursor: 'kept' })
+    getCosAgent.mockResolvedValue(selected);
+    getCosCompletedAgents.mockResolvedValueOnce({ items: [kept], total: 2, nextCursor: 'kept' })
       .mockResolvedValue({ items: [kept], total: 1, nextCursor: null });
-    api.deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
+    deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
     render(<MemoryRouter initialEntries={['/cos/agents/selected']}><Routes>
       <Route path="/cos/agents/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()}
         liveOutputs={{}} providers={[]} apps={[]} />} />
@@ -692,10 +702,10 @@ describe('AgentsTab deletion reconciliation races', () => {
     const user = userEvent.setup();
     const selected = completedAgent('selected', 'Selected');
     const focus = deferred();
-    api.getCosAgent.mockReturnValue(focus.promise);
-    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [selected], total: 1, nextCursor: null })
+    getCosAgent.mockReturnValue(focus.promise);
+    getCosCompletedAgents.mockResolvedValueOnce({ items: [selected], total: 1, nextCursor: null })
       .mockResolvedValue({ items: [], total: 0, nextCursor: null });
-    api.deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
+    deleteCosAgent.mockResolvedValue({ success: true, agentId: 'selected' });
     render(<MemoryRouter initialEntries={['/cos/agents/selected']}><Routes>
       <Route path="/cos/agents/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()}
         liveOutputs={{}} providers={[]} apps={[]} />} />

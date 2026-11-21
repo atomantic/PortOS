@@ -30,6 +30,7 @@ import { peerStreamRequest } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
 import { getPeers } from './instances.js';
+import { loadCollectionVideoFilenames, resolveCollectionVideoFilename, VIDEO_FILE_EXTENSIONS } from './collectionVideoFiles.js';
 
 const HOSTED_FILE = () => join(PATHS.data, 'peer-hosted-media.json');
 const SCHEMA_VERSION = 1;
@@ -46,7 +47,6 @@ const KIND_DIRS = {
   video: () => PATHS.videos,
 };
 const KIND_PREFIX = { image: '/data/images', video: '/data/videos' };
-const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.ogv'];
 
 export const hostedKey = (kind, filename) => `${kind}:${filename}`;
 const hostsOf = (entry) => Array.isArray(entry?.hosts) ? entry.hosts : (entry?.peerId ? [{ peerId: entry.peerId, at: entry.at, revision: entry.revision }] : []);
@@ -250,16 +250,19 @@ export function unmarkHosted(kind, filename) {
 }
 
 /** Where does this media file live? `local` | `remote` (hosted by a peer) | `missing`. */
-export async function resolveMediaLocations(items) {
+export async function resolveMediaLocations(items, { includeFilename = false, knownFilenames = false } = {}) {
+  const collectionItems = Array.isArray(items) ? items : [];
+  const videoFilenames = knownFilenames ? undefined : await loadCollectionVideoFilenames(collectionItems);
   const entries = await readEntriesOrEmpty();
   const peers = await getPeers().catch(() => []);
   const peerName = new Map(peers.map((p) => [p.instanceId, p.name || null]));
   // A hosted image's pending delete lives in the delete queue, not a sidecar.
   const queued = await import('./mediaRemoteDelete.js').then((m) => m.listQueuedImageDeletes()).catch(() => new Map());
-  return (Array.isArray(items) ? items : []).map((item) => {
+  return collectionItems.map((item) => {
     const kind = item?.kind === 'video' ? 'video' : 'image';
-    const filename = kind === 'video' ? videoRefToFilename(item.ref) : item?.ref;
-    const safe = isStr(filename) ? sanitizeAssetFilename(filename) : null;
+    const safe = kind === 'video' && !knownFilenames
+      ? resolveCollectionVideoFilename(item.ref, videoFilenames)
+      : sanitizeAssetFilename(item?.ref);
     if (!safe) return { location: 'missing' };
     if (existsSync(join(KIND_DIRS[kind](), safe))) return { location: 'local' };
     const hosted = entries[hostedKey(kind, safe)];
@@ -268,14 +271,44 @@ export async function resolveMediaLocations(items) {
     return {
       location: 'remote', hostPeerId: hosted.peerId, hostPeerName: peerName.get(hosted.peerId) ?? null,
       ...(pendingDelete ? { pendingDelete } : {}),
+      ...(includeFilename ? { filename: safe } : {}),
     };
   });
 }
 
-// Collection video refs are bare ids; on disk they are `<id>.<ext>` (mp4 today).
-// Mirrors collectionVideoRefToFilename in sharing/peerSyncAssets.js without
-// importing it (that module would drag the whole peer-sync graph in here).
-const videoRefToFilename = (ref) => (isStr(ref) ? (/\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`) : null);
+/**
+ * Which peers host each of a collection's items that has no local copy:
+ * `{ '<kind>:<filename>': [peerInstanceId, …] }`. Sync integrity uses it so a
+ * file one side streams from the other (host mode) counts as in parity rather
+ * than as a missing asset neither push nor pull will ever copy. A caller
+ * checking many collections passes the index once as `entries`.
+ */
+export async function hostedByForCollectionItems(items, { entries } = {}) {
+  const collectionItems = Array.isArray(items) ? items : [];
+  if (collectionItems.length === 0) return {};
+  const index = entries ?? await readEntriesOrEmpty();
+  if (Object.keys(index).length === 0) return {};
+  const videoFilenames = await loadCollectionVideoFilenames(collectionItems);
+  const out = {};
+  for (const item of collectionItems) {
+    const kind = item?.kind === 'video' ? 'video' : 'image';
+    const safe = kind === 'video' ? resolveCollectionVideoFilename(item.ref, videoFilenames) : sanitizeAssetFilename(item?.ref);
+    const key = safe && hostedKey(kind, safe);
+    const peerIds = key ? hostsOf(index[key]).map((host) => host?.peerId).filter(isStr) : [];
+    // A local copy wins over any recorded host.
+    if (peerIds.length && !existsSync(join(KIND_DIRS[kind](), safe))) out[key] = peerIds;
+  }
+  return out;
+}
+
+/** Per-peer count of hosted files in a `hostedByForCollectionItems` map. */
+export function hostedCountsByPeer(hostedBy) {
+  const counts = {};
+  for (const peerIds of Object.values(hostedBy ?? {})) {
+    for (const peerId of new Set(peerIds)) counts[peerId] = (counts[peerId] ?? 0) + 1;
+  }
+  return counts;
+}
 
 /** The registered, ENABLED peer behind a hosted entry (a disabled peer stops every direction). */
 export async function findHostPeer(instanceId) {
@@ -344,7 +377,7 @@ async function resolveHostedRequest(mount, filename) {
     // video. The stem fallback is for older records with no poster mapping.
     if (videos.length > 0) return null;
     const stem = basename(safe, extname(safe));
-    for (const ext of VIDEO_EXTS) {
+  for (const ext of VIDEO_FILE_EXTENSIONS) {
       const hosted = entries[hostedKey('video', `${stem}${ext}`)];
       if (hosted) return { peerId: hosted.peerId, hosts: hostsOf(hosted), url: `/data/video-thumbnails/${encodeURIComponent(safe)}` };
     }

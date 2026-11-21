@@ -17,7 +17,7 @@ import CollapsibleListItem from '../components/ui/CollapsibleListItem';
 import ListLoadError from '../components/ui/ListLoadError';
 import toast from '../components/ui/Toast';
 import useListResource from '../hooks/useListResource';
-import { createStoryboard, deleteStoryboard, listStoryboards } from '../services/api';
+import { createStoryboard, deleteStoryboard, listStoryboards } from '../services/apiStoryboards.js';
 import { formatCount, formatTimecode, timeAgo } from '../utils/formatters';
 import { aspectClass, takeSrc } from '../components/storyboards/storyboardArt';
 

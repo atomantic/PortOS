@@ -259,7 +259,7 @@ memory: {
 | `server/services/memoryRetriever.js` | Retrieve and format for injection |
 | `server/routes/memory.js` | REST API endpoints |
 | `client/src/pages/ChiefOfStaff.jsx` | MemoryTab, MemoryTimeline, MemoryGraph |
-| `client/src/services/api.js` | Memory API client functions |
+| `client/src/services/apiMemory.js` | Memory API client functions |
 | `data/prompts/stages/memory-evaluate.md` | Memory evaluation prompt template |
 
 ## Related Features

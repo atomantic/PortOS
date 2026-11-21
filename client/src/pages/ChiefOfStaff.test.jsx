@@ -58,7 +58,36 @@ const localLlm = vi.hoisted(() => ({
   getToolUseModels: vi.fn(),
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiAgents.js', () => ({
+  getCosStatus: api.getCosStatus,
+  getCosTasks: api.getCosTasks,
+  getCosTask: api.getCosTask,
+  getCosAgents: api.getCosAgents,
+  getCosHealth: api.getCosHealth,
+  getCosLearningSummary: api.getCosLearningSummary,
+  getCosActionableInsights: api.getCosActionableInsights,
+  getCosBudgetUsage: api.getCosBudgetUsage,
+  getPersistentMind: api.getPersistentMind,
+  forceCosEvaluate: api.forceCosEvaluate,
+  updateCosTask: api.updateCosTask,
+  pauseCos: api.pauseCos,
+  resumeCos: api.resumeCos,
+  forceHealthCheck: api.forceHealthCheck,
+  updateCosConfig: api.updateCosConfig,
+  getCosTodayActivity: api.getCosTodayActivity,
+  getCosLearning: api.getCosLearning,
+  getCosLearningDurations: api.getCosLearningDurations,
+  getCosPopularTemplates: api.getCosPopularTemplates,
+  getCosCompletedAgents: api.getCosCompletedAgents,
+  getCosPendingAgentFeedback: api.getCosPendingAgentFeedback,
+}));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: api.getProviders,
+  getProviderStatuses: api.getProviderStatuses,
+}));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiCodeReview.js', () => ({ getCodeReviewDefaults: api.getCodeReviewDefaults }));
+vi.mock('../services/apiAvatar.js', () => ({ getRiggedAvatars: api.getRiggedAvatars }));
 // useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
 vi.mock('../services/apiSystem.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -164,7 +193,7 @@ const withFakeTimers = () => vi.useFakeTimers({ shouldAdvanceTime: true });
 const renderPageAt = (tab) => render(
   <MemoryRouter initialEntries={[`/cos/${tab}`]}>
     <Routes>
-      <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+      <Route path="/cos/:tab/:agentId?" element={<ChiefOfStaff />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -293,7 +322,7 @@ describe('ChiefOfStaff loading skeleton', () => {
   });
 });
 
-// CoS is the busiest section (16 tabs), so it is past the compact threshold on
+// CoS has eight primary tabs, so it is past the compact threshold on
 // a phone. It collapses to TabPills' ICON ROW — the same buttons, labels kept
 // for assistive tech — rather than the `<select>` #7283 briefly made universal.
 // The scroll chevrons that used to be hand-rolled here now live in TabPills.
@@ -306,6 +335,26 @@ describe('ChiefOfStaff mobile tab navigation', () => {
     expect(tasksTab).toHaveAttribute('aria-selected', 'true');
     expect(tasksTab.querySelector('svg')).toBeTruthy();
     expect(tasksTab.querySelector('.max-sm\\:sr-only')).toBeTruthy();
+  });
+
+  it.each([
+    ['runs', 'Runs', 'Run Events', 'events'],
+    ['schedule', 'Schedule', 'Timeline', 'timeline'],
+    ['briefing', 'Briefing', 'Digest', 'digest'],
+  ])('shows the %s subview within its primary tab', async (parent, label, view, viewId) => {
+    await renderSettledAt(`${parent}/${viewId}`);
+
+    const tabBar = screen.getByRole('tablist', { name: 'Chief of Staff sections' });
+    expect(within(tabBar).getAllByRole('tab')).toHaveLength(8);
+    expect(within(tabBar).getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
+    const panel = screen.getByRole('tabpanel', { name: label });
+    const link = within(panel).getByRole('link', { name: view });
+    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(link).toHaveAttribute('href', `/cos/${parent}/${viewId}`);
+
+    fireEvent.click(within(panel).getAllByRole('link')[0]);
+    expect(link).not.toHaveAttribute('aria-current');
+    expect(within(tabBar).getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('navigates to the tab route when an icon is clicked', async () => {
@@ -1171,7 +1220,7 @@ describe('ChiefOfStaff Issues card', () => {
     }
   });
 
-  it('opens the Health tab when the tile is clicked', async () => {
+  it('opens the Health view inside Config when the tile is clicked', async () => {
     await renderWithIssues([memoryWarning]);
     const cards = await issueCards();
 
@@ -1181,7 +1230,8 @@ describe('ChiefOfStaff Issues card', () => {
     fireEvent.click(cards[0]);
 
     const panel = await screen.findByRole('tabpanel');
-    expect(panel).toHaveAttribute('id', 'tabpanel-health');
+    expect(panel).toHaveAttribute('id', 'tabpanel-config');
+    expect(within(panel).getByRole('link', { name: 'Health' })).toHaveAttribute('aria-current', 'page');
     expect(within(panel).getByText(memoryWarning.message)).toBeInTheDocument();
   });
 

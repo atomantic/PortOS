@@ -24,6 +24,7 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
+import { inspectClaimDependencyLock } from './claimDependencyLock.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { MERGED_OWNERSHIP_HOLDS, claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
@@ -69,6 +70,8 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
   return ['node_modules', ...children.filter(Boolean)];
 }
 
+const hasInstalledDependencies = path => stat(path).then(info => info.isDirectory()).catch(() => false);
+
 /**
  * Make installed dependencies available to a fresh worktree without copying
  * or reinstalling them. Missing source directories are skipped so this also
@@ -77,12 +80,20 @@ async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup 
  * A root node_modules holding workspace links is rebuilt as a real directory
  * so those links resolve inside the worktree, not the source (#12633).
  */
-export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
+export async function linkWorktreeDependencies(sourceWorkspace, worktreePath, { verifyRootLockfile = false } = {}) {
   const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
+  const lock = verifyRootLockfile ? await inspectClaimDependencyLock(sourceWorkspace, worktreePath) : null;
+  // A missing or unverifiable root install can require a workspace-wide
+  // reinstall. Leave child paths unlinked so it cannot write through them.
+  if (lock && lock.status !== 'matching') {
+    const installedChildren = await Promise.all(dependencyPaths.slice(1).map(path => hasInstalledDependencies(join(sourceWorkspace, path))));
+    return [{ path: 'node_modules', ...lock, hasInstalledChildren: installedChildren.some(Boolean) }];
+  }
+
   const outcomes = await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
-    const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
+    const sourceExists = await hasInstalledDependencies(sourcePath);
     const targetStat = await lstat(targetPath).catch(() => null);
     if (!sourceExists) return { path: relativePath, status: targetStat ? 'existing' : 'absent' };
     if (targetStat) {
@@ -100,9 +111,10 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
         return { path: relativePath, status: 'existing' };
       }
     }
-    if (relativePath === 'node_modules' && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath)) return { path: relativePath, status: 'linked' };
-    await symlink(sourcePath, targetPath, 'dir');
-    return { path: relativePath, status: 'linked' };
+    const root = relativePath === 'node_modules';
+    const provisioned = root && await provisionWorkspaceNodeModules(sourceWorkspace, worktreePath);
+    if (!provisioned) await symlink(sourcePath, targetPath, 'dir');
+    return { path: relativePath, status: root && lock ? 'linked-match' : 'linked' };
   }));
   return outcomes;
 }
@@ -2312,16 +2324,14 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
 
-  const currentBranch = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => r.stdout.trim())
-    .catch(() => '');
-
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
   const roots = { worktreesDir: WORKTREES_DIR, claudeTreesRoot };
 
   // An unreadable inventory is not an empty successful sweep: callers must
   // retain work rather than falling through to receipt-free orphan cleanup.
-  const worktrees = await listWorktrees(sourceWorkspace);
+  const { readRepoBranchSnapshot } = await import('./repoBranchSnapshot.js');
+  const { branches, worktrees, tips } = await readRepoBranchSnapshot(sourceWorkspace);
+  const currentBranch = branches.find(branch => branch.current)?.name;
   const reaped = [];
   const skipped = [];
 
@@ -2338,7 +2348,8 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     const scan = await decideWith(facts => decideMergedWorktreeReap({
       tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
     }), {
-      ...contentReaders,
+      dirty: contentReaders.dirty,
+      mergeEvidence: () => hasBranchMergeEvidence(sourceWorkspace, scannedBranch, target, tips).catch(() => false),
       // A merged PR at this exact head makes uncommitted and untracked files
       // disposable, and proves a new or still-used branch shipped (#16625).
       mergedPrAtHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),

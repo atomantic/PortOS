@@ -97,6 +97,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let reportedLegacyLimit = false;
   const heavyObservation = {};
   let manualLegacyWork = false;
+  let settledControl = null;
   const checkLegacy = legacyRunning ?? (async () => {
     const control = join(admission.directory, '..', 'update-detached');
     const raw = (await readControl(join(control, 'pid')).catch(() => '')).trim();
@@ -111,7 +112,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       return [];
     });
     const rows = await legacySnapshot(platform);
-    const observed = await observedLegacyUpdate({ root: cwd, priorPid: pid, priorAt, groups, platform,
+    const observed = await observedLegacyUpdate({ root: cwd, priorPid: pid, priorAt, groups, settledControl, platform,
       snapshot: async () => rows, probeCwds: legacyCwds });
     const exclusive = observed.running || observedDatabaseRestoreProcess(rows);
     if (exclusive && (observed.limitations.length || groupInspectionUnavailable) && !reportedLegacyLimit) {
@@ -139,6 +140,8 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let manualChecks = 0;
   let takeoverChecks = 0;
   try {
+    const previous = admission.deferredUpdate.get().result;
+    if (previous && platform !== 'win32') settledControl = join(admission.directory, '..', 'update-detached', previous.id);
     const handoff = await readControl(join(admission.directory, `update-handoff-${operation.id}.json`));
     const transferred = handoff ? JSON.parse(handoff) : null;
     const waitingTakeover = transferred?.successorId === operation.id && transferred.previous?.phase === 'waiting'
@@ -294,7 +297,7 @@ export async function settleInterruptedUpdate(id, { admission = maintenance, cwd
   }
   const rows = await Promise.resolve().then(snapshot).catch(() => []);
   const inspected = Array.isArray(rows) ? rows : [];
-  const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js', 'autofixer/ui.js'];
+  const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js'];
   const alive = inspected.filter(row => !String(row.state ?? '').startsWith('Z'));
   const nodes = alive.map(row => ({ row, args: parseCommandArgs(String(row.command ?? '')) }))
     .filter(({ args }) => /^node(?:js|\.exe)?$/i.test(basename((args[0] ?? '').replaceAll('\\', '/'))));

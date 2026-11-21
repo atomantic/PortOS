@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import Banner from '../../ui/Banner';
 import toast from '../../ui/Toast';
-import { clearOutboxBreaker } from '../../../services/api';
+import { clearOutboxBreaker } from '../../../services/apiBeeper.js';
 
 /**
  * The runaway breaker, on the settings card and nowhere else (#36, decided on

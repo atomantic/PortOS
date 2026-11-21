@@ -17,7 +17,7 @@
  * - plaintext is NEVER stored — every write computes `value_enc` (AES-256-GCM
  *   via lib/vaultCrypto.js) + a per-type `masked_value` for list/read display.
  * - plaintext is NEVER logged — log ids/types only, single-line emoji style.
- * - reads return masked values; `revealValue(id)` is the ONE decrypt path.
+ * - ordinary reads return masked values; `revealValue(id)` explicitly returns plaintext.
  *
  * The first vault record creation writes an explicit consent row (scope
  * `pii_vault`) — the audit trail the later broker opt-out engine builds on.
@@ -29,7 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
-import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES } from '../lib/privacyConstants.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 import { resolveSubjectId, assertSubject, recordConsent } from './privacySubjects.js';
 
 // Re-exported so the pre-#3658 deep import `privacyVault.recordConsent` keeps
@@ -136,12 +136,18 @@ export async function getVaultRecord(id) {
   return rowToRecord(rows[0]);
 }
 
+async function scrubVaultRecord(row) {
+  if (!row.value_enc || row.subject_id !== PRIVACY_SELF_SUBJECT_ID || PRIVACY_SENSITIVE_TYPES.includes(row.type)) return;
+  const { scrubRevokedPrivacyFacts } = await import('./privacyPromptScrub.js');
+  await scrubRevokedPrivacyFacts([row.value_enc]);
+}
+
 export async function updateVaultRecord(id, patch) {
   return withTransaction(async (client) => {
     // Row lock: label PATCH + value PATCH from different UI affordances can
     // race a read-modify-write; FOR UPDATE serializes writes to one record.
     const sel = await client.query(
-      `SELECT id, type FROM privacy_vault_records WHERE id = $1 FOR UPDATE`, [id],
+      `SELECT id, type, subject_id, value_enc FROM privacy_vault_records WHERE id = $1 FOR UPDATE`, [id],
     );
     const existing = sel.rows[0];
     if (!existing) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
@@ -175,6 +181,7 @@ export async function updateVaultRecord(id, patch) {
        WHERE id = $${params.length} RETURNING ${RECORD_COLUMNS}`,
       params,
     );
+    if (patch.shareWithTwin === false) await scrubVaultRecord(existing);
     console.log(`🔐 Updated vault record ${id} (type=${existing.type})`);
     return rowToRecord(rows[0]);
   });
@@ -191,7 +198,7 @@ export async function deleteVaultRecord(id) {
   const { clearSubjectIdentityEvidence } = await import('./privacyBrokers.js');
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type, subject_id`, [id],
+      `DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type, subject_id, value_enc`, [id],
     );
     const deleted = rows[0];
     if (!deleted) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
@@ -201,12 +208,15 @@ export async function deleteVaultRecord(id) {
     if (EVIDENCE_SOURCE_TYPES.has(deleted.type)) {
       await clearSubjectIdentityEvidence(deleted.subject_id, { client });
     }
+    // An earlier unshare may predate artifact scrubbing. Do not gate deletion
+    // cleanup on the record's current share flag.
+    await scrubVaultRecord(deleted);
     console.log(`🗑️ Deleted vault record ${id} (type=${deleted.type})`);
     return { ok: true };
   });
 }
 
-/** The ONE decrypt path — explicit reveal. Returns plaintext; logs id/type only. */
+/** Explicit reveal. Returns plaintext; logs id/type only. */
 export async function revealValue(id) {
   const { rows } = await query(`SELECT id, type, value_enc FROM privacy_vault_records WHERE id = $1`, [id]);
   if (!rows[0]) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });

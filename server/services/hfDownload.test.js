@@ -112,7 +112,7 @@ describe('buildHfDownloadArgs', () => {
     ]);
   });
 
-  // scripts/hf_download_repo.py hard-errors on the two together (--only never
+  // scripts/ml/hf_download_repo.py hard-errors on the two together (--only never
   // enumerates the repo, so there is nothing for a glob to filter), so an argv
   // carrying both would fail the download outright.
   it('drops ignore when only is set, rather than emitting both', () => {

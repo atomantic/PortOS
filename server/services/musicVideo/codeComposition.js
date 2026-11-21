@@ -7,10 +7,12 @@
  * after fetch/WebSocket are disabled.
  */
 
-import { parseExpression } from '@babel/parser';
+import { createRequire } from 'node:module';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isDeterministicCodeSource } from '../../lib/musicVideo/musicVideoValidation.js';
 import { codeRuntimeSource } from './codeFrame.js';
+
+const require = createRequire(import.meta.url);
 
 const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 
@@ -21,6 +23,7 @@ function staticSectionFunction(source) {
   if (/<\/script|<!--|-->/i.test(source)) throw new ServerError('Escape HTML script delimiters inside section source with JavaScript string escapes', { status: 422, code: 'INVALID_SECTION_SOURCE' });
   const wrapped = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
   const literal = `function (ctx, env) {\n${wrapped}\nreturn typeof render === 'function' ? render(ctx, env) : undefined;\n}`;
+  const { parseExpression } = require('@babel/parser');
   let expression;
   try { expression = parseExpression(`(${literal})`, { sourceType: 'script' }); }
   catch { throw new ServerError('A section function has invalid JavaScript', { status: 422, code: 'INVALID_SECTION_SOURCE' }); }

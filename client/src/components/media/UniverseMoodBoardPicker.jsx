@@ -1,6 +1,8 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { listMoodBoardNames, listUniverseNames, listUniverseStyles } from '../../services/api';
+import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
+import { listUniverseNames, listUniverseStyles } from '../../services/apiUniverseBuilder.js';
 import ListLoadError from '../ui/ListLoadError';
 import { BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../../lib/styleSourceChoice.js';
 
@@ -73,7 +75,7 @@ export default function UniverseMoodBoardPicker({
           <select id={`${idPrefix}-universe`} value={universeId} onChange={(e) => onUniverseChange(e.target.value)} className={inputClass}>
             <option value="">No universe</option>
             {!universeKnown && <option value={universeId}>{universeId}</option>}
-            {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {sortByLabel(universes).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
         </div>
         <div>
@@ -82,7 +84,7 @@ export default function UniverseMoodBoardPicker({
             <option value={BOARD_FOLLOW_UNIVERSE}>Universe&apos;s linked board</option>
             <option value={BOARD_NONE}>No mood board</option>
             {!boardKnown && <option value={moodBoardChoice}>{moodBoardChoice}</option>}
-            {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            {sortByLabel(boards).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </div>
       </div>

@@ -8,7 +8,13 @@ const api = vi.hoisted(() => ({
   revealVaultRecord: vi.fn(),
   updateVaultRecord: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiPrivacy.js', () => ({
+  getVaultRecords: api.getVaultRecords,
+  getPrivacyStatus: api.getPrivacyStatus,
+  deleteVaultRecord: api.deleteVaultRecord,
+  revealVaultRecord: api.revealVaultRecord,
+  updateVaultRecord: api.updateVaultRecord,
+}));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./VaultRecordDrawer', () => ({ default: () => null }));
 

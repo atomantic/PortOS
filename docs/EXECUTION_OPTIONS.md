@@ -118,17 +118,18 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/pipeline/stages/NounsStage.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/stages/VisualGenSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/prompts/StageModelField.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/providers/ProviderPresetsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/quotaBurn/StepSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/AiAssignmentsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/OrchestrationTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/VoiceTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/songs/SongScoreParts.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/storyBuilder/ProviderModelPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/system-resources/StoragePanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/universe/VisionProviderPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/universeBuilder/MoodBoardStyleSynthesis.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/universeBuilder/UniverseBibleTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/writers-room/StagePromptModelPicker.jsx` | Shared structured options or saved provider reference |
-| `client/src/pages/AIProviders.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/CatalogIngest.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/CodeAnimation.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/FableLoom.jsx` | Shared structured options or saved provider reference |
@@ -137,7 +138,6 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/pages/PipelineEditorialChecks.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/PipelineManuscriptEditor.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/RunnerPage.jsx` | Shared structured options or saved provider reference |
-| `client/src/pages/StoryBuilder.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModelDetail.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModels.jsx` | Shared structured options or saved provider reference |
 

@@ -19,11 +19,10 @@ import {
   memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
-import { guardInputSnapshot } from './lib/pregateReport.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { CI_GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards } from './lib/guardBudget.js';
-import { getAlwaysRunTests } from './ci-test-plan.js';
+import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
+import { getAlwaysRunTests } from './lib/ciPlanRules.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -442,20 +441,22 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 }
 
 /**
- * Reports the always-run guards in `files` that ran over CI_GUARD_BUDGET_MS.
+ * Reports the always-run guards in `files` that ran over CI_GUARD_BUDGET_MS: each
+ * structural guard runner's checks, and every other always-run file whole.
  * With `enforce` (the scheduled hosted run) an over-budget guard returns 1,
  * naming each one; otherwise it is a warning annotation and returns 0. A guard
  * with no reading (it crashed, or ran nothing) is left to the test status,
  * which already fails that run.
  */
-function guardBudgetStatus(files, durations, { enforce }) {
-  const timed = Object.fromEntries(files.filter(file => typeof durations[file] === 'number').map(file => [file, durations[file]]));
+function guardBudgetStatus(files, results, loads, { enforce }) {
+  const watched = new Set(files);
+  const timed = guardDurations(results.filter(({ file }) => watched.has(file)), loads);
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
   if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
   if (over.length === 0) return 0;
   const title = 'Always-run guard over its time budget';
-  const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
+  const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-guard budget. Speed the check up (read the tree through scripts/lib/guardCorpus.js, which lists and reads it once per runner) rather than raising the budget.`;
   if (!enforce) {
     console.log(`⚠️ ${title}, reported only on this run (the scheduled hosted run enforces it): ${detail}`);
     console.log(formatWarningAnnotation(title, detail));
@@ -475,10 +476,7 @@ async function main() {
   const workspace = workspaceOf(scope);
   const { script } = TEST_SCOPES[scope];
 
-  const guardProof = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || 'null');
-  // A proof is for this runner only, never a nested invocation from its tests.
-  delete process.env.PORTOS_PREGATE_GUARDS;
-  // Same one-shot rule: pregate's guard stage asks for per-file wall times.
+  // Pregate's guard stage asks for per-file wall times for this runner only.
   const durationsPath = process.env.PORTOS_PREGATE_DURATIONS_PATH;
   delete process.env.PORTOS_PREGATE_DURATIONS_PATH;
   // Set by ci.yml's Linux server job only; a nested runner a test spawns must not inherit it.
@@ -487,7 +485,7 @@ async function main() {
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
-  // workspace discovery and Vitest; guard reuse may leave only these suites.
+  // workspace discovery and Vitest.
   const browserExcludes = new Set(scope === 'server'
     ? browserOwnerExcludes().map(path => `server/${path}`) : []);
   const dbExcludes = new Set(scope === 'server'
@@ -528,7 +526,7 @@ async function main() {
   // returns.
   const memoDir = resolveMemoDir();
   const readOnlyMemo = process.env.GITHUB_EVENT_NAME === 'pull_request';
-  if (mode === 'full' && !memoDir && !shard && !guardProof) {
+  if (mode === 'full' && !memoDir && !shard) {
     process.exitCode = await spawnNpm(workspace, script, [], label, { name: scope });
     return;
   }
@@ -553,15 +551,6 @@ async function main() {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
   }
-  // Pregate supplies only guards that passed earlier in this invocation, after
-  // rechecking their repository snapshot. Keep normal memo selection/sharding.
-  const excluded = new Set(guardProof && Array.isArray(guardProof.files)
-    && guardProof.files.every(file => typeof file === 'string')
-    && typeof guardProof.snapshot === 'string' && guardInputSnapshot(repoRoot) === guardProof.snapshot
-    ? guardProof.files : []);
-  const reused = plan.run.filter(test => excluded.has(test));
-  plan.run = plan.run.filter(test => !excluded.has(test));
-  if (reused.length > 0) console.log(`♻️ Reused ${reused.length} structural guards from this pregate run (inputs unchanged).`);
   if (plan.run.length === 0) {
     console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
     process.exitCode = 0;
@@ -585,12 +574,14 @@ async function main() {
     if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
   }
   const passed = [];
-  const durations = {};
+  const results = [];
+  // Each structural guard runner logs its checks' load times here (registerGuardChecks).
+  const loads = [];
   let interrupted = false;
   const onResult = (result) => {
     if (result.interrupted) interrupted = true;
-    for (const { file, durationMs } of result.fileResults ?? []) {
-      if (durationMs !== null) durations[relative(repoRoot, file).split(sep).join('/')] = durationMs;
+    for (const { file, durationMs, checks } of result.fileResults ?? []) {
+      results.push({ file: relative(repoRoot, file).split(sep).join('/'), durationMs, checks });
     }
     passed.push(...passedTestFiles(result.fileResults ?? [], {
       repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
@@ -602,15 +593,19 @@ async function main() {
       if (interrupted) break;
       const selection = writeSelectionFile({ scope, include, exclude: [] });
       process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+      const loadLog = join(selection.dir, 'guard-loads.jsonl');
+      process.env.PORTOS_GUARD_LOAD_LOG = loadLog;
       try {
         status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult })) || status;
       } finally {
+        loads.push(...readGuardLoads(loadLog));
         rmSync(selection.dir, { recursive: true, force: true });
       }
-      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, durations, { enforce: enforceGuardBudget }) || status;
+      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, loads, { enforce: enforceGuardBudget }) || status;
     }
   } finally {
-    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(durations));
+    delete process.env.PORTOS_GUARD_LOAD_LOG;
+    if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
   process.exitCode = status;
   if (!memoDir || passed.length === 0) return;

@@ -21,11 +21,11 @@ import { LAST_FRAME_ANCHORED_RUNTIMES } from '../../lib/runners.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
-// `runtime: 'ltx2'`. The companion helper at scripts/generate_ltx2.py
+// `runtime: 'ltx2'`. The companion helper at scripts/ml/generate_ltx2.py
 // imports `ltx_pipelines_mlx` from this venv and emits the same SSE
 // progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
 export const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
-export const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+export const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_ltx2.py');
 const LTX2_EXPECTED_REVISION = '1192051fd380e0501adb5f3c0e9a216e679cb123';
 
 // LTX-2.5 MLX runtime — MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. Same
@@ -47,15 +47,15 @@ export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-
 // entry point from a text/image render — so it gets its own helper script per
 // runtime rather than another mode flag on the generation script. Both runners
 // have landed (#6512 MLX / #6513 CUDA) and share one argv contract
-// (`scripts/_upscale_contract.py`); per-backend verification status lives in
+// (`scripts/ml/_upscale_contract.py`); per-backend verification status lives in
 // `docs/features/video-upscale.md` "Readiness". An install with neither
 // runtime's venv present still has no generative upscale, which is what gates
 // the feature off per host.
-export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25.py');
+export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'upscale_ltx25.py');
 
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
 export const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'mlx-gen', '.venv', 'bin', 'python3');
-export const WAN22_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22.py');
+export const WAN22_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_wan22.py');
 export const WAN22_REPO_DIR = join(homedir(), '.portos', 'mlx-gen');
 export const WAN22_EXPECTED_REVISION = '2452f0c12edcc8886eebf15772205ce9c417a618';
 
@@ -63,9 +63,9 @@ export const WAN22_EXPECTED_REVISION = '2452f0c12edcc8886eebf15772205ce9c417a618
 // after the user selects Install in Video Gen. The model weights remain a
 // separate, explicitly accepted/downloaded Hugging Face operation.
 export const MINIMAX_H3_VENV_PYTHON = join(homedir(), '.portos', 'minimax-h3-mlx', '.venv', 'bin', 'python3');
-export const MINIMAX_H3_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_minimax_h3.py');
-export const MINIMAX_H3_RUNTIME_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'minimax_h3_runtime_probe.py');
-export const MINIMAX_H3_LORA_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'minimax_h3_lora_probe.py');
+export const MINIMAX_H3_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_minimax_h3.py');
+export const MINIMAX_H3_RUNTIME_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'minimax_h3_runtime_probe.py');
+export const MINIMAX_H3_LORA_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'minimax_h3_lora_probe.py');
 export const MINIMAX_H3_REPO_DIR = join(homedir(), '.portos', 'minimax-h3-mlx');
 export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
 // Composed checkpoint roots for a substituted prompt conditioner
@@ -112,8 +112,8 @@ export const MINIMAX_H3_CUDA_REPO_DIR = join(homedir(), '.portos', 'minimax-h3-c
 export const MINIMAX_H3_CUDA_VENV_PYTHON = process.platform === 'win32'
   ? join(MINIMAX_H3_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
   : join(MINIMAX_H3_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
-export const MINIMAX_H3_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_minimax_h3_cuda.py');
-// Mirrors OFFLOAD_PROFILES in scripts/generate_minimax_h3_cuda.py. Kept in sync
+export const MINIMAX_H3_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_minimax_h3_cuda.py');
+// Mirrors OFFLOAD_PROFILES in scripts/ml/generate_minimax_h3_cuda.py. Kept in sync
 // by hand — the helper's argparse `choices=` is the enforcement, this list is
 // what lets the server reject a bad `offloadProfile` before queueing a render.
 export const MINIMAX_H3_CUDA_OFFLOAD_PROFILES = Object.freeze([
@@ -122,7 +122,7 @@ export const MINIMAX_H3_CUDA_OFFLOAD_PROFILES = Object.freeze([
 
 // FastVideo MLX runtime — Hao AI Lab's FastVideo / FastMetal Apple Silicon framework.
 export const FASTVIDEO_VENV_PYTHON = join(homedir(), '.portos', 'fastvideo', '.venv', 'bin', 'python3');
-export const FASTVIDEO_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_fastvideo.py');
+export const FASTVIDEO_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_fastvideo.py');
 export const FASTVIDEO_REPO_DIR = join(homedir(), '.portos', 'fastvideo');
 // FastH3's two derived-artifact roots, declared here for the same reason the
 // H3 shim and prompt-embedding roots above are: the server owns WHERE they
@@ -138,21 +138,21 @@ export const LTX25_CUDA_REPO_DIR = join(homedir(), '.portos', 'ltx-2.5-cuda');
 export const LTX25_CUDA_VENV_PYTHON = process.platform === 'win32'
   ? join(LTX25_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
   : join(LTX25_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
-export const LTX25_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx25_cuda.py');
-export const LTX25_CUDA_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25_cuda.py');
+export const LTX25_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_ltx25_cuda.py');
+export const LTX25_CUDA_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'upscale_ltx25_cuda.py');
 
 // Wan 2.2 TI2V 5B on CUDA — official Diffusers checkpoint.
 export const WAN22_CUDA_REPO_DIR = join(homedir(), '.portos', 'wan2.2-cuda');
 export const WAN22_CUDA_VENV_PYTHON = process.platform === 'win32'
   ? join(WAN22_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
   : join(WAN22_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
-export const WAN22_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22_cuda.py');
+export const WAN22_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'generate_wan22_cuda.py');
 
-// Standalone runtime-fingerprint probe (scripts/runtime_fingerprint.py). Run in
+// Standalone runtime-fingerprint probe (scripts/ml/runtime_fingerprint.py). Run in
 // each installed BYOV venv by resolveRuntimeFingerprint() to surface resolved
 // package versions on GET /api/video-gen/status without running a render. Shares
 // its fingerprint definition with the inline render-time emit (_runner_common).
-const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerprint.py');
+const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'ml', 'runtime_fingerprint.py');
 
 // These locks contain a flat set of pins for arm64 CPython 3.11. A checkout at
 // the expected revision can still have the old upstream dependency versions.
@@ -169,7 +169,7 @@ try:
 except metadata.PackageNotFoundError:
     current = False
 sys.exit(0 if current else 78)
-`, join(PATHS.root, 'scripts', `requirements-${profile}-mlx.lock.txt`)];
+`, join(PATHS.root, 'scripts', 'ml', 'requirements', `requirements-${profile}-mlx.lock.txt`)];
 
 // Per-runtime metadata for "bring-your-own-venv" video runtimes — those that
 // resolve their own Python interpreter inside buildArgs (so the legacy
@@ -254,7 +254,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     killProcessGroup: true,
     // Everything this runtime executes is an installed distribution, so there
     // is no `expectedRevision` / `sourcePath` clean-checkout probe to run: the
-    // `==` set in scripts/requirements-minimax-h3-cuda.txt is the pin. `repoUrl`
+    // `==` set in scripts/ml/requirements/requirements-minimax-h3-cuda.txt is the pin. `repoUrl`
     // is therefore the integration's documentation rather than a clone source —
     // there is no checkout under repoDir, only the venv.
     repoUrl: 'https://huggingface.co/docs/diffusers/main/en/api/pipelines/minimax_h3',
@@ -273,9 +273,9 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // here: it installs cleanly on Windows, hides the setup banner, and then
     // renders a 33B model on the CPU.
     importProbe: 'import torch; from diffusers import MiniMaxH3Transformer3DModel; from diffusers.modular_pipelines.minimax_h3 import MiniMaxH3ImageReference; import torchao; assert torch.cuda.is_available(), "no CUDA device"',
-    // Mirror scripts/generate_minimax_h3_cuda.py's emit_runtime_fingerprint list.
+    // Mirror scripts/ml/generate_minimax_h3_cuda.py's emit_runtime_fingerprint list.
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'torchao', 'accelerate', 'huggingface-hub'],
-    loraProbeArgs: [join(PATHS.root, 'scripts', 'minimax_h3_cuda_lora.py'), '--probe'],
+    loraProbeArgs: [join(PATHS.root, 'scripts', 'ml', 'minimax_h3_cuda_lora.py'), '--probe'],
   },
   ltx25_cuda: {
     id: 'ltx25_cuda',
@@ -287,7 +287,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     killProcessGroup: true,
     repoUrl: 'https://github.com/Lightricks/LTX-2',
     installSourceLabel: 'official Lightricks ltx-core / ltx-pipelines packages',
-    currencyProbeArgs: [join(PATHS.root, 'scripts', 'ltx25_cuda_currency.py'), join(PATHS.root, 'scripts', `requirements-ltx25-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
+    currencyProbeArgs: [join(PATHS.root, 'scripts', 'ml', 'ltx25_cuda_currency.py'), join(PATHS.root, 'scripts', 'ml', 'requirements', `requirements-ltx25-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
     importProbe: 'import torch; import ltx_core, ltx_pipelines; from ltx_pipelines.distilled import DistilledPipeline; assert torch.cuda.is_available(), "no CUDA device"',
     fingerprintPackages: ['torch', 'ltx-core', 'ltx-pipelines', 'transformers', 'accelerate', 'huggingface-hub'],
   },
@@ -311,7 +311,7 @@ try:
 except m.PackageNotFoundError:
  current = False
 sys.exit(0 if current else 78)
-`, join(PATHS.root, 'scripts', `requirements-wan22-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
+`, join(PATHS.root, 'scripts', 'ml', 'requirements', `requirements-wan22-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
     importProbe: 'import torch, hf_xet; from diffusers import AutoencoderKLWan, WanPipeline; assert torch.cuda.is_available(), "no CUDA device"',
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'accelerate', 'huggingface-hub', 'hf-xet'],
   },
@@ -327,7 +327,7 @@ sys.exit(0 if current else 78)
     pinEnvVar: 'WAN22_PIN',
     currencyProbeArgs: mlxVideoCurrencyProbe('wan22'),
     importProbe: 'import mflux.models.wan.cli.wan_generate',
-    // Mirror scripts/generate_wan22.py's emit_runtime_fingerprint package list.
+    // Mirror scripts/ml/generate_wan22.py's emit_runtime_fingerprint package list.
     fingerprintPackages: ['mlx-gen', 'mlx', 'mlx_metal', 'huggingface-hub'],
   },
   ltx2: {
@@ -344,7 +344,7 @@ sys.exit(0 if current else 78)
     // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
     // for this venv).
     importProbe: 'import ltx_pipelines_mlx',
-    // Mirror scripts/generate_ltx2.py's emit_runtime_fingerprint package list.
+    // Mirror scripts/ml/generate_ltx2.py's emit_runtime_fingerprint package list.
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
   },
   ltx25: {
@@ -365,7 +365,7 @@ sys.exit(0 if current else 78)
     // picture at every step, not only the last (#5422). This is deliberately a
     // literal rather than a reference to LTX25_EXPECTED_REVISION: bumping the
     // pin without re-reading that loop turns runtimes.test.js red, which is the
-    // whole point. scripts/generate_ltx2.py enforces the invariant against the
+    // whole point. scripts/ml/generate_ltx2.py enforces the invariant against the
     // LIVE pin regardless, and refuses the render when it cannot.
     i2vAnchorVerifiedRevision: '57952288076766abe27dda3a774b2c24f7346977',
   },
@@ -492,7 +492,7 @@ const summarizeProbeStderr = (stderr) => stderr.replace(/\s+/g, ' ').trim() || '
 //
 // Two negative outcomes, deliberately different icons: a non-zero exit is the
 // probe ANSWERING — for the LoRA probe, "the runtime plus adapter cannot apply"
-// is the documented normal verdict (see scripts/minimax_h3_lora_probe.py),
+// is the documented normal verdict (see scripts/ml/minimax_h3_lora_probe.py),
 // cached as a legitimate `false` — while a spawn error or timeout means it
 // never answered at all. Calling the first one a failure cries wolf on every
 // healthy install with an incompatible runtime.
@@ -586,7 +586,7 @@ export async function resolveByovRuntimeLoraCapable(runtimeId) {
 export async function resolveMiniMaxH3MlxSpeedCapable(profileId) {
   if (!existsSync(MINIMAX_H3_VENV_PYTHON) || !await isByovRuntimeCurrent('minimax_h3')) return false;
   return runVenvProbe(MINIMAX_H3_VENV_PYTHON, [
-    join(PATHS.root, 'scripts', profileId === 'pika-h3-flex-mlx-6step' ? '_minimax_h3_mlx_flex.py' : '_minimax_h3_mlx_lightx2v.py'), '--probe',
+    join(PATHS.root, 'scripts', 'ml', profileId === 'pika-h3-flex-mlx-6step' ? '_minimax_h3_mlx_flex.py' : '_minimax_h3_mlx_lightx2v.py'), '--probe',
     MINIMAX_H3_REPO_DIR, MINIMAX_H3_EXPECTED_REVISION,
   ], 'MiniMax H3 MLX LightX2V');
 }
@@ -900,7 +900,7 @@ export async function resolveA2vLoraStageCapable(runtimeId, { fresh = false } = 
   if (!existsSync(info.venvPython)) return false;
   return a2vLoraStageFlight.run(runtimeId, async () => {
     const capable = await runVenvProbe(info.venvPython,
-      [join(PATHS.root, 'scripts', 'ltx_a2v_lora_probe.py')], `${runtimeId} A2V stage LoRA capability`, { unsupportedExitCode: 2 });
+      [join(PATHS.root, 'scripts', 'ml', 'ltx_a2v_lora_probe.py')], `${runtimeId} A2V stage LoRA capability`, { unsupportedExitCode: 2 });
     a2vLoraStageCache.set(runtimeId, capable);
     return capable;
   });

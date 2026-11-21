@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { listMoodBoardNames } from '../../services/apiMoodBoard.js';
 
@@ -28,7 +29,7 @@ export default function MoodBoardPicker({ id, value, onChange }) {
       >
         <option value="">Generate one from the prompt</option>
         {missing && <option value={value}>{value} (not found)</option>}
-        {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        {sortByLabel(boards).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
       </select>
       <p className="text-[11px] text-port-text-muted mt-1">Pick an existing board to reuse its style instead of generating a new one.</p>
     </div>

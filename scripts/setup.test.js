@@ -24,7 +24,7 @@ const STEP_SCRIPTS = [
   'setup-data.js', 'setup-db.js', 'setup-llm.js', 'setup-browser.js', 'setup-cert.js',
   'ensure-ffmpeg.js', 'install-slashdo.js', 'setup-guide.js'
 ];
-const WORKSPACE_LABELS = ['root', 'client', 'server', 'autofixer'];
+const WORKSPACE_LABELS = ['root', 'client', 'server'];
 
 /** The full ordered call log of a successful run, shared by the in-process and CLI tests. */
 const EXPECTED_ORDER = [
@@ -123,7 +123,7 @@ describe.skipIf(process.platform === 'win32')('node scripts/setup.js', () => {
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
     mkdirSync(join(root, 'server', 'lib'), { recursive: true });
     mkdirSync(join(root, 'bin'));
-    for (const label of ['client', 'autofixer']) mkdirSync(join(root, label));
+    mkdirSync(join(root, 'client'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     for (const file of ['setup.js', 'ensure-deps.js', 'lib/directInvocation.js', 'lib/workspaceDependencies.js']) {
       copyFileSync(join(REPO_ROOT, 'scripts', file), join(root, 'scripts', file));
@@ -256,18 +256,6 @@ describe('the wrappers do not regrow their own pipeline', () => {
 
   it.each(WRAPPERS)('%s holds no ffmpeg installer', (file) => {
     expect(read(file)).not.toMatch(INSTALLER);
-  });
-
-  it.each(['update.sh', 'update.ps1'])('%s calls both helpers inside its ffmpeg and slash-do steps', (file) => {
-    const source = read(file);
-    const stepOrder = (name, helper) => {
-      const running = source.search(new RegExp(`Step "${name}" "running"|step "${name}" "running"`, 'i'));
-      const call = source.indexOf(helper, running);
-      const done = source.slice(call).search(new RegExp(`Step "${name}" "done"|step "${name}" "done"`, 'i'));
-      return running >= 0 && call > running && done >= 0;
-    };
-    expect(stepOrder('ffmpeg', 'scripts/ensure-ffmpeg.js'), `${file} ffmpeg step`).toBe(true);
-    expect(stepOrder('slash-do', 'scripts/install-slashdo.js'), `${file} slash-do step`).toBe(true);
   });
 
   it('only the helper contains the slash-do install', () => {

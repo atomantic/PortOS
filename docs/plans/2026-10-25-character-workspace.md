@@ -1,5 +1,7 @@
 # Shared character workspace
 
+Status: Active
+
 ## Context
 
 Issue #13650 follows the catalog primitive and detail-loading work. `UniverseCanonSection` currently mounts `CanonCard` and its full `CharacterDetailEditor` for every character. `CreativeLibrary` has a separate tile, while `CatalogIngredient` combines registry fields, a read-only canon projection and an optional compact editor. This duplicates presentation and obscures the selected catalog cover.

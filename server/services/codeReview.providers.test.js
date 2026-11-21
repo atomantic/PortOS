@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
-import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
+import { codeReviewSettingsSchema } from '../lib/cos/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
@@ -174,6 +175,20 @@ describe('configured provider reviewers', () => {
     const result = await runLocalCodeReview({ backend, diff: 'example diff' });
     expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', error: expect.stringContaining('Execution speed') });
     expect(result).not.toHaveProperty('findings');
+  });
+
+  it.each([
+    ['launch', 'Check the configured Codex executable'],
+    ['timeout', 'Retry capability inspection'],
+    ['required_rpc', 'Update Codex to a compatible version'],
+  ])('reports a failed %s speed probe without returning a review verdict', async (probeFailure, action) => {
+    const raw = 'synthetic private process output';
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'codex', executionOptions: { serviceTier: 'fast' } });
+    runCliProviderPrompt.mockRejectedValueOnce(Object.assign(new Error(raw), { code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure }));
+    const result = await runLocalCodeReview({ backend, kind: 'claim-review', toolFree: true, diff: 'example diff' });
+    expect(result).toMatchObject({ ok: false, code: 'EXECUTION_OPTIONS_UNSUPPORTED', probeFailure, error: expect.stringContaining(action) });
+    expect(result).not.toHaveProperty('verdict');
+    expect(JSON.stringify(result)).not.toContain(raw);
   });
 
   it('uses only this provider default when unpinned and returns provider failure without substitution', async () => {

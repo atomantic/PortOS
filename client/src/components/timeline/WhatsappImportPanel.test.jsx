@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import WhatsappImportPanel from './WhatsappImportPanel';
 
 const api = vi.hoisted(() => ({ importWhatsappHistory: vi.fn() }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiTimeline.js', () => ({ importWhatsappHistory: api.importWhatsappHistory }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const summary = { messages: 1, uniqueSenders: 1, from: '2024-03-04T18:30:00.000Z', to: '2024-03-04T18:30:00.000Z', topSenders: [] };

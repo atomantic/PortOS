@@ -281,7 +281,7 @@ export function buildVoMuxArgs({ inputVideoPath, voLines, musicPath, musicGain =
  * caller whose video a record already names can hold the backup admission
  * lease across that replacement without holding it through the encode.
  */
-export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal, withInstall = install => install() } = {}) {
+export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = null, musicGain = DEFAULT_MUSIC_GAIN, duck = DEFAULT_DUCK, signal, withInstall = install => install(), report } = {}) {
   if (!inputVideoPath || !existsSync(inputVideoPath)) {
     return { ok: false, reason: 'input video missing' };
   }
@@ -301,17 +301,28 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
   // in the filter graph against a silent AI-gen clip would abort the whole
   // mux, and a probe failure (no ffprobe) safely defaults to the prior
   // replace-the-track behavior.
-  const clipAudio = await hasAudioStream(inputVideoPath);
+  report?.('audio-mux-input-probe');
+  const clipAudio = await hasAudioStream(inputVideoPath, {
+    signal, onLifecycle: report && (detail => report('audio-mux-input-probe', detail)),
+  });
 
   const tmpOut = `${inputVideoPath}.vomux.${randomUUID()}.mp4`;
   const args = buildVoMuxArgs({ inputVideoPath, voLines: placed, musicPath: usableMusic, musicGain, duck, clipAudio, outPath: tmpOut });
 
-  const result = await runFfmpegProcess({ bin: ffmpeg, args, signal });
+  report?.('audio-mux-encode');
+  const result = await runFfmpegProcess({
+    bin: ffmpeg, args, signal, onLifecycle: report && (detail => report('audio-mux-encode', detail)),
+  });
   if (!result.ok) {
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  const installed = await withBackupAssetPublication(() => withInstall(() => installEncodedVideo(tmpOut, inputVideoPath, 'VO mux')));
+  report?.('audio-mux-install');
+  const installed = await withBackupAssetPublication(() => withInstall(async () => {
+    if (!signal?.aborted) return installEncodedVideo(tmpOut, inputVideoPath, 'VO mux');
+    await unlink(tmpOut);
+    return { ok: false, reason: 'cancelled' };
+  }));
   if (!installed.ok) return installed;
   return { ok: true, lineCount: placed.length, ducked: !!usableMusic, clipAudio };
 }

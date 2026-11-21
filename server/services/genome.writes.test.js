@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -9,7 +9,7 @@ vi.mock('../lib/paths.js', async importOriginal => {
 
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
 const { PATHS, atomicWrite } = await import('../lib/fileUtils.js');
-const { saveMarker, updateMarkerNotes, scanCuratedMarkers, getSnpIndex } = await import('./genome.js');
+const { saveMarker, updateMarkerNotes, scanCuratedMarkers, getSnpIndex, uploadGenome, deleteMarker } = await import('./genome.js');
 
 const META = () => join(PATHS.meatspace, 'genome.json');
 const readMeta = async () => JSON.parse(await readFile(META(), 'utf8'));
@@ -48,8 +48,50 @@ describe('genome metadata writes are serialized', () => {
   });
 
   it('still refuses mutations when the metadata file is unreadable', async () => {
-    await writeFile(META(), '{not json');
-    await expect(saveMarker(marker('rsZ'))).rejects.toThrow();
-    expect(await readFile(META(), 'utf8')).toBe('{not json');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await writeFile(META(), '{not json');
+      await expect(saveMarker(marker('rsZ'))).rejects.toThrow();
+      expect(await readFile(META(), 'utf8')).toBe('{not json');
+      expect(error.mock.calls).toEqual([['❌ Genome metadata is unreadable or malformed']]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe('genome operational logs', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports upload and scan counts without the filename or resolved APOE values', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const filename = 'example-person-genome.txt';
+    const rows = Array.from({ length: 100 }, (_, i) => `rs${i + 1}\t1\t1\tAA`);
+    const content = ['# build 37', ...rows, 'rs429358\t19\t1\tCC', 'rs7412\t19\t2\tCC'].join('\n');
+
+    await expect(uploadGenome(content, filename)).resolves.toMatchObject({ filename, snpCount: 102 });
+    const { markers } = await scanCuratedMarkers();
+    const apoe = markers.find(({ rsid }) => rsid === 'apoe_haplotype');
+    expect(apoe?.genotype).toBe('ε4/ε4');
+    expect(apoe.description).toContain('~12x');
+
+    expect(log).toHaveBeenCalledWith('🧬 Genome uploaded: 102 SNPs, Build 37');
+    expect(log).toHaveBeenCalledWith(`🧬 Curated scan complete: ${markers.length} markers classified`);
+    const logged = log.mock.calls.flat().join('\n');
+    expect(logged).not.toContain(filename);
+    expect(logged).not.toContain(apoe.genotype);
+    expect(logged).not.toContain('~12x');
+  });
+
+  it('omits user-supplied marker fields from mutation logs', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { id } = await saveMarker(marker('rsExample', { name: 'Example private marker' }));
+    await updateMarkerNotes(id, 'Example private note');
+    await deleteMarker(id);
+    expect(log.mock.calls).toEqual([
+      ['🧬 Marker saved'],
+      ['🧬 Marker notes updated'],
+      ['🧬 Marker deleted'],
+    ]);
   });
 });

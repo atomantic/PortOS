@@ -817,7 +817,7 @@ boundary, so process-level mitigations alone do not prevent it.
 
 **Mitigations already in place**:
 - `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the FastVideo MLX runner
-  (`scripts/generate_fastvideo.py`); the run log shows
+  (`scripts/ml/generate_fastvideo.py`); the run log shows
   `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`. Set it to `0` in the
   environment to disable.
 - Video Gen sleeps the display automatically for local MLX runtimes while keeping the

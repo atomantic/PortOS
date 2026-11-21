@@ -9,7 +9,8 @@
 
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
-import { AUDIT_DEFINITIONS, normalizeAuditTaskType } from './auditCatalog.js';
+import { CONSOLIDATED_AUDIT_DOMAINS, auditDomainFor } from './auditDomains.js';
+import { AUDIT_DEFINITIONS, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
@@ -17,7 +18,7 @@ const SLICE_PREFIX = 'AUDIT_SLICE: ';
 const MAX_SLICE_CHARS = 500;
 
 // Each lens must explain how to find candidates before choosing a slice.
-export const AUDIT_DISCOVERY = Object.freeze({
+const profileDiscovery = Object.freeze({
   security: 'Inventory trust boundaries, credential handling, process execution and input-to-sink paths; rank reachable exploit impact under the documented trust model.',
   'code-quality': 'Inventory source directories and convention violations; search brittle conditions, duplicated policy and magic values, ranking demonstrated defects and recurring maintenance cost.',
   'test-coverage': 'Map public routes, workflows and destructive actions to integration tests; rank untested high-impact outcomes, not uncovered line counts.',
@@ -40,7 +41,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'ui-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
   observability: 'Inventory critical workflows and their failure/status signals; rank invisible data loss, silent failures and operations that cannot be diagnosed.',
   copy: 'Inventory shared messages, destructive confirmations, setup and empty/error screens; rank wording that causes wrong actions or prevents task completion.',
-  'better-complexity': 'If the target repository has server/scripts/complexity-report.js, run npm run quality:complexity from its root and use its bounded source and test shortlists for investigation. Report its ESLint classic counts as measured, including optional chains and default arguments; record scan failures and separately analyze first-party languages the report does not cover. If the command is absent or fails, use another language-aware complexity analyzer or repository-wide branching searches to shortlist functions and count decision points manually. Include the top measured functions and counts in the run narrative, not QUALITY_AUDIT_JSON; file length is only a discovery hint. A high count alone is not a finding.',
+  'better-complexity': 'If the target repository has server/scripts/complexity-report.js, run npm run quality:complexity from its root and use its bounded source and test shortlists for investigation. Report its classic cyclomatic complexity counts as measured, including optional chains and default arguments; record scan failures and separately analyze first-party languages the report does not cover. If the command is absent or fails, use another language-aware complexity analyzer or repository-wide branching searches to shortlist functions and count decision points manually. Include the top measured functions and counts in the run narrative, not QUALITY_AUDIT_JSON; file length is only a discovery hint. A high count alone is not a finding.',
   'better-cognitive-load': 'Scan deeply nested control flow, boolean flags, mixed abstraction levels and misleading names across source roots; rank reader cost in critical, widely used workflows.',
   'better-structural-drift': 'Inventory generators, duplicated registries and derived artifacts; inspect independently edited sources of truth and position-keyed records, ranking demonstrated drift and merge churn.',
   'better-runtime-safety': 'Scan asynchronous callbacks, resource cleanup, nullable access and process lifecycles across source roots; rank reachable crashes, corrupted state and leaked resources.',
@@ -55,6 +56,12 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'workflow-recovery': 'Inventory persisted server-side in-progress states for long-running, multi-minute or paid user generation workflows (excluding short request-bound operations, git worktree cleanup and in-memory re-entrancy guards) and the client chains that drive them; trace each state to the page that must show it and its resume/cancel/reattach exit, ranking user records left blocked with no visible exit first.',
   'upgrade-rehearsal': 'Inventory migrations, seeds, the migration runner and its ledger, and the backup/restore path; build scratch installs from the fixture shapes the migration tests carry and execute upgrade, restore and boot against them, ranking a migration or restore that fails or silently no-ops on a real older shape first.',
   'cost-efficiency': 'Inventory metered dependencies (paid APIs, model providers, cloud storage/query/compute, egress) and their call sites, schedules and retry paths; rank spend by frequency times unit cost and growth with usage.',
+});
+
+export const AUDIT_DISCOVERY = Object.freeze({
+  ...profileDiscovery,
+  ...Object.fromEntries(Object.entries(CONSOLIDATED_AUDIT_DOMAINS).map(([id, { members }]) =>
+    [id, members.map(member => profileDiscovery[member]).join(' ')])),
 });
 
 const MAX_DEPLOYMENT_MODEL_CHARS = 2000;
@@ -84,7 +91,7 @@ Weigh every candidate by how likely it is to happen under that model, and rank b
 
 export function auditQualityInstructions(taskType, app) {
   const category = normalizeAuditTaskType(taskType);
-  if (!Object.hasOwn(AUDIT_DEFINITIONS, category)) return '';
+  if (!isAuditTaskType(category)) return '';
   return `## Repository-wide discovery, worst offender first, and quality assessment
 
 This contract overrides narrower slice-selection or ranking advice in the mission, including customized prompts. Preserve the selected file-issues/fix mode and documented non-issues. Read the lane-health block: do not re-file a finding it lists as reverted or not-planned without new evidence.
@@ -116,7 +123,7 @@ export const appListQuerySchema = appQualityQuerySchema.extend({
 
 const scoreSchema = z.number().int().min(0).max(100).nullable();
 const historicalCategorySchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).transform(normalizeAuditTaskType);
-const categorySchema = historicalCategorySchema.refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value));
+const categorySchema = historicalCategorySchema.refine(isAuditTaskType);
 // Key order is the stored JSON order; keep the score fields where v1 wrote them.
 const reportFields = {
   worstSeverity: z.number().int().min(0).max(10),
@@ -281,8 +288,12 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const category = normalizeAuditTaskType(record.category);
     const report = (includeHistoricalCategories ? historicalQualityReportSchema : auditQualityReportSchema).safeParse(record.report);
     const valid = report.success && report.data.category === category;
-    if (!runsByCategory.has(category)) runsByCategory.set(category, []);
-    runsByCategory.get(category).push({ record, valid, report: valid ? report.data : null });
+    const domain = auditDomainFor(category);
+    const run = { record, valid, report: valid ? report.data : null };
+    for (const id of includeHistoricalCategories && category !== domain ? [domain, category] : [domain]) {
+      if (!runsByCategory.has(id)) runsByCategory.set(id, []);
+      runsByCategory.get(id).push(run);
+    }
   }
   const definitions = Object.entries(AUDIT_DEFINITIONS);
   if (includeHistoricalCategories) {
@@ -302,7 +313,7 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     // Only this install's own ruling, as the dispatch gate reads it: a peer's
     // or a release snapshot's describes a different checkout of the repository.
     const local = !record?.sourcePeerId && !record?.sourcePeerName;
-    const reportedNotApplicable = valid && !stale && local && latest.report.coverage === 'not-applicable';
+    const reportedNotApplicable = valid && !stale && local && normalizeAuditTaskType(record.category) === id && latest.report.coverage === 'not-applicable';
     const detectedReason = Object.hasOwn(inapplicable, id) ? inapplicable[id] : null;
     const applicable = contributes || !(reportedNotApplicable || detectedReason);
     const inapplicableReason = applicable ? null

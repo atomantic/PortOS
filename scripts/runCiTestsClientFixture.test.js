@@ -1,6 +1,6 @@
 // Real-tree half of the run-ci-tests contract: it plans over this repository's own client
 // test dependency graph, so a client edit can break it with no import edge into the runner.
-// It stays out of TOOLING_TESTS (scripts/ci-test-plan.js) and is selected by the memo walk as
+// It stays out of TOOLING_TESTS (scripts/lib/ciPlanRules.js) and is selected by the memo walk as
 // before; run-ci-tests.test.js keeps the fixture-only cases.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'fs';
@@ -34,7 +34,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
     // Real comment-heavy consumers and fixture templates must resolve without
     // retaining hundreds of unrelated files in the actual runner handoff.
     for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
-      'client/src/services/apiRounds.test.js', 'client/src/a11y/controlNames.conventions.test.js']) {
+      'client/src/services/apiRounds.test.js', 'client/src/test/guards/a11y.guard.test.js']) {
       expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
       expect(plan.client.files, test).not.toContain(test);
     }
@@ -43,7 +43,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
       env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
         CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
         CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
-        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);

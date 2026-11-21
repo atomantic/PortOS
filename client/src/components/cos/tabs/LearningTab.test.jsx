@@ -30,7 +30,18 @@ const socket = vi.hoisted(() => {
   };
 });
 
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiAgents.js', () => ({
+  getCosLearning: api.getCosLearning,
+  getCosLearningPerformance: api.getCosLearningPerformance,
+  getCosLearningSkipped: api.getCosLearningSkipped,
+  getCosLearningDurations: api.getCosLearningDurations,
+  getCosLearningRouting: api.getCosLearningRouting,
+  getCosLearningConfidence: api.getCosLearningConfidence,
+  getCosFeedbackStats: api.getCosFeedbackStats,
+  getDismissedCosRecommendations: api.getDismissedCosRecommendations,
+  backfillCosLearning: api.backfillCosLearning,
+}));
+vi.mock('../../../services/apiCodeReview.js', () => ({ getReviewerVerdictStats: api.getReviewerVerdictStats }));
 vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 

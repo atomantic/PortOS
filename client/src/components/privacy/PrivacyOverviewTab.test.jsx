@@ -12,7 +12,11 @@ const api = vi.hoisted(() => ({
   getPrivacyOrgs: vi.fn(),
   getPrivacyScanStatus: vi.fn(),
 }));
-vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiPrivacy.js', () => ({
+  getPrivacyStatus: api.getPrivacyStatus,
+  getPrivacyOrgs: api.getPrivacyOrgs,
+  getPrivacyScanStatus: api.getPrivacyScanStatus,
+}));
 
 import PrivacyOverviewTab from './PrivacyOverviewTab';
 

@@ -15,7 +15,7 @@ const NO_APPS = [];
 // the cheap navigation projection; a detail-oriented consumer can opt into the
 // frozen full list with includeDetails. Reconnect, tab-show and burst
 // reconciliation come from useSocketResource.
-export function useSidebarApps({ includeDetails = false } = {}) {
+export function useSidebarApps({ includeDetails = false, enabled = true } = {}) {
   const { data } = useSocketResource(
     async () => {
       const result = await getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) });
@@ -23,7 +23,7 @@ export function useSidebarApps({ includeDetails = false } = {}) {
         .filter((a) => !a.archived)
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     },
-    { events: APPS_EVENTS, resourceKey: includeDetails },
+    { enabled, events: APPS_EVENTS, resourceKey: includeDetails },
   );
   return useMemo(() => data ?? NO_APPS, [data]);
 }

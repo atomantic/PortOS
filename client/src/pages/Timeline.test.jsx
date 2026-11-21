@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiTimeline.js', () => ({
   getTimelineDay: vi.fn(() => Promise.resolve({
     date: '2026-01-02',
     today: '2026-01-02',
@@ -21,7 +21,7 @@ vi.mock('../services/api', () => ({
   importGmailMbox: vi.fn(),
 }));
 
-import * as api from '../services/api';
+import { getTimelineDay, getTimelineSources, eraseTimelineSource } from '../services/apiTimeline.js';
 import Timeline from './Timeline';
 import { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 
@@ -78,13 +78,13 @@ describe('Timeline bounded event page (#11151)', () => {
       counts: { total: 0, bySource: {}, byKind: {} }, histogram: [],
     };
     let finishRefresh;
-    api.getTimelineDay.mockResolvedValueOnce({
+    getTimelineDay.mockResolvedValueOnce({
       ...empty,
       events: [{ id: 'imported', source: 'browser', kind: 'web.visit', happenedAt: '2026-01-02T12:00:00Z', title: 'Imported event' }],
       counts: { total: 1, bySource: { browser: 1 }, byKind: { 'web.visit': 1 } },
     }).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
-    api.getTimelineSources.mockResolvedValueOnce({ sources: [{ source: 'browser', eventCount: 1 }] });
-    api.eraseTimelineSource.mockResolvedValueOnce({ deleted: 1 });
+    getTimelineSources.mockResolvedValueOnce({ sources: [{ source: 'browser', eventCount: 1 }] });
+    eraseTimelineSource.mockResolvedValueOnce({ deleted: 1 });
     await renderPage();
     await screen.findByText('Imported event');
     fireEvent.click(screen.getByRole('button', { name: `Import history (${IMPORT_SOURCE_COUNT})` }));
@@ -99,7 +99,7 @@ describe('Timeline bounded event page (#11151)', () => {
   });
 
   it('labels the listed rows as a page while totals stay full-day', async () => {
-    api.getTimelineDay.mockResolvedValueOnce({
+    getTimelineDay.mockResolvedValueOnce({
       date: '2026-01-02',
       today: '2026-01-02',
       timezone: 'UTC',

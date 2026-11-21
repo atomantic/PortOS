@@ -76,6 +76,13 @@ describe('input-image capability helpers', () => {
     expect(referenceSlotsFor(IMAGE_GEN_MODE.FAL, options)).toBe(8);
   });
 
+  it.each([
+    [IMAGE_GEN_MODE.GOOGLE, 'imagen-4.0-generate-001'],
+    [IMAGE_GEN_MODE.HIGGSFIELD, 'higgsfield-ai/soul/v2/standard'],
+  ])('offers zero reference slots for %s text-only models even with an init image', (mode, cloudModelId) => {
+    expect(referenceSlotsFor(mode, { cloudModelId, hasInitImage: true })).toBe(0);
+  });
+
   it('reserves the init slot within Qwen’s ten inputs', () => {
     const options = { localSupportsReferences: true, localInputCap: 10, maxSlots: 10 };
     expect(referenceSlotsFor(IMAGE_GEN_MODE.LOCAL, options)).toBe(10);

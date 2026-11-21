@@ -70,7 +70,7 @@ npm run install:all
 npm run dev
 ```
 
-`npm run dev` executes `scripts/dev-start.js` to initialize PostgreSQL, stop any existing PM2 processes, and start the full development process set defined in `ecosystem.config.cjs` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser`) while tailing logs.
+`npm run dev` executes `scripts/dev-start.js` to initialize PostgreSQL, stop any existing PM2 processes, and start the full development process set defined in `ecosystem.config.cjs` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-browser`) while tailing logs.
 
 **PostgreSQL is a mandatory dependency** — the server fails fast at boot without a healthy database. `npm run install:all` runs `npm run setup:db`, which provisions either the system PostgreSQL (`:5432`) or a Docker container (`:5561`, via `docker-compose.yml`). See [STORAGE.md](./STORAGE.md) and the [Postgres ADR](./decisions/2026-06-07-postgres-as-primary-datastore.md).
 
@@ -258,6 +258,17 @@ dump, so `test:db` takes a session-level Postgres advisory lock for the run
 (`server/test/dbRunExclusivity.js`). A second run from another worktree prints
 `Another DB test run holds portos_test` and waits for the first to finish.
 
+Both DB commands require at least 2 GiB available on each observable PostgreSQL
+data and write-ahead log (WAL) volume before schema or fixture writes. The
+runner checks after acquiring the run lock. It verifies the connected cluster's
+local data directory and follows `pg_wal` to its actual volume, independently
+of the checkout or test temp directory. If a known volume is too full, free
+space there or target a disposable PostgreSQL cluster with adequate storage.
+Remote databases, container filesystems, and directories hidden by permissions
+may be unobservable. The commands report any unchecked storage and continue,
+including for the hosted CI service. Check capacity on the database host in
+those cases.
+
 ### Repairing a test database whose extensions were dropped
 
 The application role cannot create extensions. `backup.db.test.js` used to
@@ -325,8 +336,8 @@ A passing run without a reproduced slow phase does not resolve the timeout.
 - **No test whose only proof is that a request value reached the mock, or that the body equals what the mock returned.** One success-path test per endpoint may check the identifying argument (the `:id`, the owner) so a swapped parameter fails; the rest of a pass-through belongs to the service suite. One normaliser gets its input matrix once, on the helper or schema, not as N route cases.
 - **Pin the argument, not the argument list.** Assert the positions and keys the route owns (`expect(fn.mock.calls[0][0]).toBe(id)`, `expect.objectContaining({ limit: 50 })`). Exact whole-call equality is for cases where absence is the contract (unknown keys stripped, no mass assignment). An optional argument added later must not break an unrelated suite.
 - **Prefer the real service when it is cheap.** A file-backed service runs behind the route over `lazyTempDataRoot` + `makePathsProxy` (`server/routes/storyboards.test.js`), asserted through follow-up requests. Mock it when it reaches Postgres, a subprocess, a provider or the network.
-- **A router with no validation and no derivation needs no suite of its own.** List it in `UNTESTED_ALLOWLIST` (`server/routeTestCoverageConventions.guard.test.js`), naming the service suite that covers it.
-- **A test that scans the tracked tree is named `<name>.guard.test.js`.** The suffix is its registration: CI and pregate run every guard on every push (a client guard on any client source change) and the test memo never skips one. Keep behavioural tests out of a guard file, since everything in it runs on every push; when a suite needs one scan, put the scan in a sibling guard file. `scripts/repo-scan-guards.guard.test.js` fails a scanner that lacks the suffix ([how guards are selected](./GITHUB_ACTIONS.md)).
+- **A router with no validation and no derivation needs no suite of its own.** List it in `UNTESTED_ALLOWLIST` (`server/test/guards/repo/routeTestCoverageConventions.test.js`), naming the service suite that covers it.
+- **A test that scans the tracked tree is a structural guard check.** Put it in the `server/test/guards/<subject>/` directory whose subject it scans (`runtime`, `modules`, `repo`; a client scan goes in `client/src/test/guards/{a11y,ui}/`); that subject's `<subject>.guard.test.js` runner loads it, CI and pregate run every server runner on every push and the client runners on any client source change, and the test memo never skips one. Read the tree through `scripts/lib/guardCorpus.js` (and `server/test/guardSources.js`) so the runner lists and reads it once. Keep behavioural tests out of a check, since everything in it runs on every push; when a suite needs one scan, move the scan into a check. `server/test/guards/repo/repo-scan-guards.test.js` fails a scanner outside a guard directory ([how guards are selected](./GITHUB_ACTIONS.md)).
 
 For server watch mode, run this alternative from the repository root:
 

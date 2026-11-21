@@ -109,7 +109,7 @@ Two sources named in the original proposal are deliberately absent, and the reas
 
 ### Training
 
-`scripts/train_jev_head.py` runs in the existing `venv-jev`, under the same hardened environment the sidecar gets — `HF_HUB_OFFLINE=1`, no API keys, no forge token, no arbitrary `PYTHONPATH`. **The encoder is frozen and never updated.** Frozen-encoder outputs are cached once per `(pair, model revision)` under `data/jev/embeddings/`, so a hyperparameter sweep costs seconds rather than re-paying a 4B forward pass per pair. The head is a linear classifier by default, or one hidden layer, over the last token's final hidden state; weights ship as bounded JSON so the compatibility check, the backup retention decision and code review are all inspectable.
+`scripts/ml/train_jev_head.py` runs in the existing `venv-jev`, under the same hardened environment the sidecar gets — `HF_HUB_OFFLINE=1`, no API keys, no forge token, no arbitrary `PYTHONPATH`. **The encoder is frozen and never updated.** Frozen-encoder outputs are cached once per `(pair, model revision)` under `data/jev/embeddings/`, so a hyperparameter sweep costs seconds rather than re-paying a 4B forward pass per pair. The head is a linear classifier by default, or one hidden layer, over the last token's final hidden state; weights ship as bounded JSON so the compatibility check, the backup retention decision and code review are all inspectable.
 
 Weak labels map the chosen option to `entailment` and the others to `neutral`, **not** `contradiction`: an option the maintainer did not take is unsupported by the change, not refuted by it — and training the third label on evidence that never meant refutation would teach the head to say *contradicts*, which is the one verdict this feature reports that a human would go and argue with.
 
@@ -161,4 +161,4 @@ Backup tiers are decided explicitly ([BACKUP.md](../BACKUP.md)): corpora and cac
 | Corpus builder (forge reads) | `server/services/jevCorpusBuilder.js`, CLI `scripts/jev-corpus.js` |
 | Head store, adoption, discard | `server/services/jevHeads.js` |
 | Training orchestration | `server/services/jevTraining.js` |
-| Trainer and shared pooling/head application | `scripts/train_jev_head.py`, `scripts/jev_head_kit.py` |
+| Trainer and shared pooling/head application | `scripts/ml/train_jev_head.py`, `scripts/ml/jev_head_kit.py` |

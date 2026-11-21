@@ -10,9 +10,9 @@ vi.mock('./runtimes.js', async (importOriginal) => ({
   ...(await importOriginal()),
   assertByovRuntimeInstalled: vi.fn(),
   LTX25_VENV_PYTHON: '/fixture/ltx-2.5-mlx/.venv/bin/python3',
-  LTX25_UPSCALE_HELPER_SCRIPT: '/fixture/scripts/upscale_ltx25.py',
+  LTX25_UPSCALE_HELPER_SCRIPT: '/fixture/scripts/ml/upscale_ltx25.py',
   LTX25_CUDA_VENV_PYTHON: '/fixture/ltx-2.5-cuda/.venv/bin/python3',
-  LTX25_CUDA_UPSCALE_HELPER_SCRIPT: '/fixture/scripts/upscale_ltx25_cuda.py',
+  LTX25_CUDA_UPSCALE_HELPER_SCRIPT: '/fixture/scripts/ml/upscale_ltx25_cuda.py',
 }));
 
 const { buildArgs, buildLtxUpscaleArgs } = await import('./renderArgs.js');
@@ -44,7 +44,7 @@ describe('buildLtxUpscaleArgs (#6511)', () => {
     expect(buildLtxUpscaleArgs({ ...upscale(), outputPath: '/fixture/out.mp4' })).toEqual({
       bin: '/fixture/ltx-2.5-mlx/.venv/bin/python3',
       args: [
-        '/fixture/scripts/upscale_ltx25.py',
+        '/fixture/scripts/ml/upscale_ltx25.py',
         '--model', '/fixture/cache/ltx25-mlx-q8',
         '--ic-lora-path', '/fixture/cache/pixel-spatial-upscaler.safetensors',
         '--ic-reference', REFERENCE,
@@ -63,7 +63,7 @@ describe('buildLtxUpscaleArgs (#6511)', () => {
   it('routes the CUDA runtime to its own interpreter and helper', () => {
     const { bin, args } = buildLtxUpscaleArgs({ ...upscale({ runtime: 'ltx25_cuda' }), outputPath: '/fixture/out.mp4' });
     expect(bin).toBe('/fixture/ltx-2.5-cuda/.venv/bin/python3');
-    expect(args[0]).toBe('/fixture/scripts/upscale_ltx25_cuda.py');
+    expect(args[0]).toBe('/fixture/scripts/ml/upscale_ltx25_cuda.py');
   });
 
   // The bounds are `run_ic_lora`'s contract and the weight registry is their

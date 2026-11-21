@@ -3,7 +3,7 @@ import { Loader2, Plus, Sparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
-import { addStoryboardBeats, extractStoryboardBeats, updateStoryboard } from '../../services/api';
+import { addStoryboardBeats, extractStoryboardBeats, updateStoryboard } from '../../services/apiStoryboards.js';
 import { formatCount, formatTimecode } from '../../utils/formatters';
 import { BEAT_EXTRACT_LIMITS } from '../../../../server/lib/storyboardBeatExtract.js';
 import { newStoryboardEntityId } from '../../../../server/lib/storyboardVocabulary.js';

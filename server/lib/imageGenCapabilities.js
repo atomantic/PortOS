@@ -15,6 +15,9 @@ import { GOOGLE_IMAGE_MAX_INPUT_IMAGES, googleImageFamily } from './googleImageM
 // Defined in the dependency-free leaf so schema-only callers skip this module.
 export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 
+export const REGEN_STRENGTH_MIN = 0.02;
+export const REGEN_STRENGTH_MAX = 0.6;
+
 // Backends that cannot take an input image at all (#3243); the SINGLE source for the fact.
 export const EDIT_INCAPABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.EXTERNAL]);
 

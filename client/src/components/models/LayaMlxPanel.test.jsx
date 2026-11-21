@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 const mocks = vi.hoisted(() => ({ status: vi.fn(), install: vi.fn(), score: vi.fn(), toggle: vi.fn(), publish: vi.fn(), enabled: true }));
-vi.mock('../../services/api', () => ({ getLayaStatus: mocks.status, installLaya: mocks.install, scoreLaya: mocks.score, updateInstanceFeature: mocks.toggle }));
+vi.mock('../../services/apiLocalLlm.js', () => ({
+  getLayaStatus: mocks.status,
+  installLaya: mocks.install,
+  scoreLaya: mocks.score,
+}));
+vi.mock('../../services/apiSystem.js', () => ({
+  updateInstanceFeature: mocks.toggle,
+}));
 vi.mock('../../hooks/useInstanceFeatures', () => ({ publishInstanceFeatures: mocks.publish, useInstanceFeatures: () => ({ features: [{ id: 'laya-mlx', enabled: mocks.enabled }] }) }));
 vi.mock('../../services/socket', async () => {
   const { EventEmitter } = await import('node:events');

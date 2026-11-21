@@ -87,7 +87,7 @@ export function formatDownloadMessage(rawText, byteInfo) {
 }
 
 /**
- * Boundary markers `scripts/generate_ltx2.py` prints on stderr around the Gemma
+ * Boundary markers `scripts/ml/generate_ltx2.py` prints on stderr around the Gemma
  * prompt encode (`install_prompt_encode_markers`). Matched EXACTLY, never by
  * prefix — `STAGE:encode-prompt-done` starts with `STAGE:encode-prompt`, so a
  * `startsWith` test would read the end of the encode as its beginning.
@@ -136,7 +136,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     if (!line) return true;
     if (pythonNoiseRe.test(line)) return true;
     // Runtime fingerprint emitted once at child startup (RUNTIME:<json> — see
-    // scripts/_runner_common.py emit_runtime_fingerprint). Stamp it onto the
+    // scripts/ml/_runner_common.py emit_runtime_fingerprint). Stamp it onto the
     // job so finalizeGeneratedVideo can persist it on the history record, and
     // log a single self-documenting line so a render that produced garbled
     // output can be tied to a specific ltx/mlx/torch + chip + OS stack.
@@ -150,7 +150,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       return true;
     }
     // What the runner ACTUALLY applied of a requested speed profile
-    // (SPEEDPROFILE:<json> — see scripts/generate_ltx2.py). PortOS asks for a
+    // (SPEEDPROFILE:<json> — see scripts/ml/generate_ltx2.py). PortOS asks for a
     // schedule declaratively, but only the child can see whether the pinned
     // pipeline accepts `enable_teacache` and whether the distilled adapter is
     // in the pack; `degraded` names every lever it could not apply. Stamped on
@@ -170,7 +170,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       }
     }
     // What the runner ACTUALLY decoded with (DRAFTDECODE:<json> — see
-    // scripts/generate_minimax_h3.py). PortOS gates the substitution
+    // scripts/ml/generate_minimax_h3.py). PortOS gates the substitution
     // declaratively, but only the child can see whether the pinned decoder
     // module tree accepts the asset's tensors; a load that fails there falls
     // back to the model's own decoder and reports `applied: false` with a
@@ -189,7 +189,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       }
     }
     // What the runner ACTUALLY resolved for block streaming (STREAMPOLICY:<json>
-    // — see scripts/generate_ltx2.py#resolve_streaming_policy /
+    // — see scripts/ml/generate_ltx2.py#resolve_streaming_policy /
     // report_streaming_policy). `meta.streamingMode` on the history record is
     // the REQUEST; this is the outcome — whether the pinned pipeline even had
     // the parameter, whether physical memory put 'auto' over the streaming
@@ -228,7 +228,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       return true;
     }
     if (line.startsWith('STAGE:')) {
-      // Gemma prompt-encode boundary (scripts/generate_ltx2.py). Stamped on the
+      // Gemma prompt-encode boundary (scripts/ml/generate_ltx2.py). Stamped on the
       // job as a three-state phase — absent = this runner never reports one,
       // 'active' = encoding right now, 'done' = finished — so a later SIGABRT can
       // be attributed to the encode without conflating "never reported" with
@@ -346,7 +346,7 @@ export function describeRenderConditioning({
 }
 
 // The one-line protocol every helper script announces its stack on at startup
-// (`scripts/_runner_common.py emit_runtime_fingerprint`). Parsed here for the
+// (`scripts/ml/_runner_common.py emit_runtime_fingerprint`). Parsed here for the
 // render path and the upscale job alike, so a payload-shape change has one
 // consumer to update.
 export const RUNTIME_LINE_PREFIX = 'RUNTIME:';
@@ -368,7 +368,7 @@ export function parseRuntimeFingerprintLine(line) {
   }
 }
 
-// How each LoRA adapter was applied (#12262): `scripts/ltx_runtime_lora.py
+// How each LoRA adapter was applied (#12262): `scripts/ml/ltx_runtime_lora.py
 // AdapterReport.emit`. A quantized pack can apply a delta at inference or merge
 // and re-quantize it (which can erase most of it), so the record keeps the
 // outcome beside the request. Shared by the render path and the upscale job.
@@ -546,7 +546,7 @@ export function isWatchdogSuccess({ completionWatchdogFired, signal, outputPath 
 // ── verified post-completion native teardown abort (#6501) ──
 //
 // The MiniMax H3 MLX runner can finish, mux the clip and print the `emit_result` completion contract
-// (scripts/_minimax_h3_common.py), THEN abort inside native interpreter teardown. The clip is complete;
+// (scripts/ml/_minimax_h3_common.py), THEN abort inside native interpreter teardown. The clip is complete;
 // unrecognized, it is absent from history and counts toward the media queue's repeated-failure hold.
 //
 // This is the narrowest possible recovery, NOT a general "the file looks fine" rule: an ordinary

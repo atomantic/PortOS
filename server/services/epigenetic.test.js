@@ -110,6 +110,26 @@ describe('epigenetic intervention persistence', () => {
 
   afterAll(cleanup);
 
+  it('reports successful mutations without logging the intervention or dose', async () => {
+    const { id } = await addIntervention({
+      id: 'example-treatment-id',
+      name: 'Example treatment',
+      dosage: '999 example units',
+      trackingUnit: 'example units',
+    });
+    await expect(logEntry(id, { amount: 999, date: '2026-09-10' })).resolves.toMatchObject({ amount: 999 });
+    await expect(updateIntervention(id, { name: 'Updated example treatment', dosage: '888 example units' }))
+      .resolves.toMatchObject({ dosage: '888 example units' });
+    await expect(deleteIntervention(id)).resolves.toEqual({ success: true });
+
+    expect(vi.mocked(console.log).mock.calls).toEqual([
+      ['🧬 Epigenetic intervention tracked'],
+      ['🧬 Epigenetic entry logged for 2026-09-10'],
+      ['🧬 Updated epigenetic intervention'],
+      ['🧬 Deleted epigenetic intervention'],
+    ]);
+  });
+
   describe('user-local day keys (#12972)', () => {
     it('files a dateless log under the user local day, not the UTC day', async () => {
       mockTimezone = 'America/Phoenix'; // UTC-7, no DST

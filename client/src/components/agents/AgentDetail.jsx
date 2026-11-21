@@ -3,7 +3,8 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
-import * as api from '../../services/api';
+import { getAgentPersonality, toggleAgentPersonality } from '../../services/apiPersonalities.js';
+import { getPlatformAccounts } from '../../services/apiAccounts.js';
 import { AGENT_DETAIL_TABS } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 import { lazyWithReload } from '../../utils/lazyWithReload';
@@ -50,7 +51,7 @@ function AgentDetailContent() {
   const fetchAgent = useCallback(async (isCurrent = () => true) => {
     const requestId = ++agentRequestRef.current;
     const requestedAgentId = agentId;
-    const data = await api.getAgentPersonality(requestedAgentId).catch(() => null);
+    const data = await getAgentPersonality(requestedAgentId).catch(() => null);
     if (
       !isCurrent() ||
       !mountedRef.current ||
@@ -84,7 +85,7 @@ function AgentDetailContent() {
     let cancelled = false;
     const requestId = ++platformRequestRef.current;
     const requestedAgentId = agentId;
-    api.getPlatformAccounts(requestedAgentId).then(accounts => {
+    getPlatformAccounts(requestedAgentId).then(accounts => {
       if (
         cancelled ||
         !mountedRef.current ||
@@ -126,7 +127,7 @@ function AgentDetailContent() {
   }, [tab, agentId, navigate]);
 
   const handleToggle = async () => {
-    await api.toggleAgentPersonality(agent.id, !agent.enabled);
+    await toggleAgentPersonality(agent.id, !agent.enabled);
     fetchAgent();
   };
 

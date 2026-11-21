@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ListTodo, X } from 'lucide-react';
-import * as api from '../../services/api';
+import { listThreads, attachToThread } from '../../services/apiBrainThreads.js';
 import toast from '../ui/Toast';
 import EntityCombobox from '../EntityCombobox';
 import ListLoadError from '../ui/ListLoadError';
@@ -25,7 +25,7 @@ import { THREAD_ACTIVE_STATUSES } from '../../lib/brainThreads';
 
 const ACTIVE_THREAD_STATUS = THREAD_ACTIVE_STATUSES.join(',');
 
-const fetchActiveThreads = () => api.listThreads({ status: ACTIVE_THREAD_STATUS }, { silent: true })
+const fetchActiveThreads = () => listThreads({ status: ACTIVE_THREAD_STATUS }, { silent: true })
   .then((res) => (Array.isArray(res?.threads) ? res.threads : Array.isArray(res) ? res : []));
 
 export default function AddToThreadButton({
@@ -93,7 +93,7 @@ export default function AddToThreadButton({
     if (!computedRef || attaching) return;
     setAttaching(true);
     try {
-      const res = await api.attachToThread({ threadId: item.id, ref: computedRef });
+      const res = await attachToThread({ threadId: item.id, ref: computedRef });
       toast.success(`Attached to thread "${res?.thread?.title || item.name}"`);
       onAttached?.(res);
       setOpen(false);
@@ -110,7 +110,7 @@ export default function AddToThreadButton({
     if (!trimmed || !computedRef || attaching) return;
     setAttaching(true);
     try {
-      const res = await api.attachToThread({ title: trimmed, ref: computedRef });
+      const res = await attachToThread({ title: trimmed, ref: computedRef });
       toast.success(`Created thread "${res?.thread?.title || trimmed}"`);
       onAttached?.(res);
       setOpen(false);

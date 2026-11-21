@@ -1,7 +1,7 @@
 /**
  * One authoritative view of the music engines this install can actually run.
  *
- * The Music UI and the federated-media provider both consume this projection.
+ * Shared by the Music UI, pipeline audio stage, commissions and federation.
  * Keeping runtime, platform, fixed-model, and CUDA readiness in one place is
  * important: a provider must never advertise work that the local UI would
  * correctly reject, especially when CUDA probing returned `unknown`.
@@ -9,6 +9,7 @@
 
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
+import { musicEngineReadinessReason } from '../lib/generationModes.js';
 import {
   ENGINES,
   DEFAULT_ENGINE_ID,
@@ -19,6 +20,8 @@ import {
   resolveEngineVramReadiness,
 } from './pipeline/musicGen.js';
 import { listEngineModels } from './audioModels.js';
+
+export { musicEngineReadinessReason };
 
 export async function listMusicEngineCapabilities() {
   const cuda = await getCudaCapability();
@@ -43,7 +46,7 @@ export async function listMusicEngineCapabilities() {
     const cudaState = engine.cudaRequired ? cuda.status : 'available';
     const vram = resolveEngineVramReadiness(engine.id, cuda);
 
-    return {
+    const capabilities = {
       id: engine.id,
       name: engine.name,
       models: await listEngineModels(engine.id),
@@ -70,13 +73,10 @@ export async function listMusicEngineCapabilities() {
       minVramGb: vram.minVramGb,
       recommendedVramGb: vram.recommendedVramGb,
       maxVramGb: vram.maxVramGb,
-      ready: runtimeReady
-        && (!engine.cudaRequired || cudaState === 'available')
-        && (!engine.cudaRequired || vram.state === 'sufficient')
-        && modelReady,
       installEnv: engine.installEnv,
       venvDefault: engine.venvDefault,
     };
+    return { ...capabilities, ready: musicEngineReadinessReason(capabilities, modelReady) === null };
   }));
 
   return { engines, defaultEngine: DEFAULT_ENGINE_ID };

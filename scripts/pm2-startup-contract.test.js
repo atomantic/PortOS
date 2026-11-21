@@ -23,7 +23,9 @@ describe('PM2 startup app sets', () => {
     expect(devApps).toContain('portos-ui');
     expect(devStart).toContain("pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));");
 
-    for (const command of ['start', 'pm2:start', 'pm2:restart']) {
+    const productionSelection = packageScripts.start.match(/pm2-start\.js ([\w,-]+)$/);
+    expect(productionSelection?.[1].split(',')).toEqual(productionApps);
+    for (const command of ['pm2:start', 'pm2:restart']) {
       const selection = packageScripts[command].match(/--only "([^"]+)"/);
       expect(selection?.[1].split(','), command).toEqual(productionApps);
     }
@@ -31,8 +33,8 @@ describe('PM2 startup app sets', () => {
 
   it('removes a stale Vite entry before production startup', () => {
     const start = packageScripts.start;
-    expect(start.indexOf('pm2 delete ecosystem.config.cjs')).toBeGreaterThan(-1);
-    expect(start.indexOf('pm2 delete ecosystem.config.cjs')).toBeLessThan(start.indexOf('pm2 start ecosystem.config.cjs'));
+    expect(start.indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);
+    expect(start.indexOf('pm2 delete portos-ui')).toBeLessThan(start.indexOf('node scripts/pm2-start.js'));
 
     for (const command of ['pm2:start', 'pm2:restart']) {
       expect(packageScripts[command].indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);
@@ -52,27 +54,5 @@ describe('PM2 startup app sets', () => {
     expect(psProduction).toBe('npm start');
     expect(setupSh).not.toContain('pm2:start');
     expect(setupPs1).not.toContain('pm2:start');
-  });
-
-  it('uses only production apps in both update scripts and their recovery starts', () => {
-    const expectedApps = productionApps.join(',');
-    const updateSh = read('update.sh');
-    const shellStarts = updateSh.split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.includes('start ecosystem.config.cjs') && !line.startsWith('#') && !line.startsWith('log '));
-    expect(updateSh).toContain(`PRODUCTION_PM2_APPS='${expectedApps}'`);
-    expect(updateSh).toContain('delete portos-ui --silent || true');
-    expect(shellStarts.length).toBeGreaterThanOrEqual(3);
-    expect(shellStarts.every((line) => line.includes('--only "$PRODUCTION_PM2_APPS"'))).toBe(true);
-
-    const updatePs1 = read('update.ps1');
-    const powershellStarts = updatePs1.split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.includes('Invoke-Logged') && line.includes('start ecosystem.config.cjs'));
-    expect(updatePs1).toContain(`$script:ProductionPm2Apps = '${expectedApps}'`);
-    expect(updatePs1).toContain('delete portos-ui --silent');
-    expect(updatePs1).toContain("@('start', $ecosystem, '--only', $script:ProductionPm2Apps)");
-    expect(powershellStarts.length).toBeGreaterThanOrEqual(2);
-    expect(powershellStarts.every((line) => line.includes('--only $script:ProductionPm2Apps'))).toBe(true);
   });
 });

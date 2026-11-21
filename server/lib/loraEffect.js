@@ -1,6 +1,6 @@
 /**
  * LoRA adapter-effect report: normalization, freshness and verdict rules. The measurement lives in
- * `scripts/lora_effect_probe.py` (needs numpy).
+ * `scripts/ml/lora_effect_probe.py` (needs numpy).
  *
  * This module owns what PortOS decides ABOUT a measurement, identical for a fresh probe result or a sidecar
  * written by an older install. It answers "does the adapter change anything" (a structurally valid LoRA can have
@@ -12,7 +12,7 @@
 
 import { isPlainObject } from './objects.js';
 
-// Bumped in lockstep with PROBE_VERSION in scripts/lora_effect_probe.py; a cached report with another version is dropped and re-probed, not reinterpreted.
+// Bumped in lockstep with PROBE_VERSION in scripts/ml/lora_effect_probe.py; a cached report with another version is dropped and re-probed, not reinterpreted.
 export const LORA_EFFECT_PROBE_VERSION = 1;
 
 export const LORA_EFFECT_STATUSES = Object.freeze({
@@ -50,7 +50,7 @@ export const normalizeLoraEffectReport = (raw, { sizeBytes = null, mtimeMs = nul
   const skippedNonFinite = nonNegativeInt(raw.skippedNonFinite);
   const skippedUnsupported = nonNegativeInt(raw.skippedUnsupported);
   // `zero` is the only status that refuses a render, so it must mean the WHOLE adapter is provably inert: at least one measurement, all zero, nothing skipped
-  // (an unread module may carry the effect). Mirrors scripts/lora_effect_probe.py and is restated because a sidecar is untrusted input.
+  // (an unread module may carry the effect). Mirrors scripts/ml/lora_effect_probe.py and is restated because a sidecar is untrusted input.
   const zeroIsBacked = measured > 0
     && zeroModules === measured
     && skippedNonFinite === 0

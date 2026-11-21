@@ -36,7 +36,9 @@ function scriptGit({ defaultBranch = 'main', currentBranch = defaultBranch, stag
     if (a === 'symbolic-ref') return ok(`origin/${defaultBranch}\n`);
     if (a === 'rev-parse' && b === '--verify') return ok('ref\n');
     if (a === 'rev-parse' && b === '--abbrev-ref') return ok(`${currentBranch}\n`);
-    if (a === 'branch' && b === '--list') return ok(`* ${currentBranch}\n  ${defaultBranch}\n`);
+    if (a === 'for-each-ref' && b === '--format=%(refname:lstrip=2)') {
+      return ok([...new Set([currentBranch, defaultBranch])].join('\n'));
+    }
     if (a === 'add') return ok('');
     if (a === 'diff') return ok(stagedPointer ? `${SUB}\n` : '');
     if (a === 'commit') return ok(`[${defaultBranch} abc1234] chore\n`);

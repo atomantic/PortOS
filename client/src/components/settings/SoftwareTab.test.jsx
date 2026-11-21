@@ -2,7 +2,13 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SoftwareTab from './SoftwareTab';
-import { getSoftwareInventory, installManagedBlender, updateNodeRuntime, updatePm2Runtime, updateYtDlp } from '../../services/api';
+import {
+  getSoftwareInventory,
+  installManagedBlender,
+  updateNodeRuntime,
+  updatePm2Runtime,
+} from '../../services/apiSystem.js';
+import { updateYtDlp } from '../../services/apiVideoDownload.js';
 
 const listeners = vi.hoisted(() => new Map());
 vi.mock('../../services/socket', () => ({ default: {
@@ -12,9 +18,17 @@ vi.mock('../../services/socket', () => ({ default: {
 const fire = (name, payload) => (listeners.get(name) || []).forEach((handler) => handler(payload));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
-vi.mock('../../services/api', () => ({
-  getSoftwareInventory: vi.fn(), updateNodeRuntime: vi.fn(), updatePm2Runtime: vi.fn(),
-  updateYtDlp: vi.fn(), upgradeLocalLlmBackend: vi.fn(), installManagedBlender: vi.fn(),
+vi.mock('../../services/apiSystem.js', () => ({
+  getSoftwareInventory: vi.fn(),
+  updateNodeRuntime: vi.fn(),
+  updatePm2Runtime: vi.fn(),
+  installManagedBlender: vi.fn(),
+}));
+vi.mock('../../services/apiVideoDownload.js', () => ({
+  updateYtDlp: vi.fn(),
+}));
+vi.mock('../../services/apiLocalLlm.js', () => ({
+  upgradeLocalLlmBackend: vi.fn(),
 }));
 const captureBaseline = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../hooks/usePortosRestartWatch', () => ({ usePortosRestartWatch: () => ({ captureBaseline }) }));

@@ -2,17 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiMeatspace.js', () => ({
   getPostProgress: vi.fn(),
-  // PostHistory (the Sessions sub-view) imports these from the same module.
   getPostSessions: vi.fn().mockResolvedValue([]),
   getPostStats: vi.fn().mockResolvedValue(null),
-  // PostHistory's useUserTimezone reads getSettings for its range-floor day key.
+}));
+vi.mock('../../../services/apiSystem.js', () => ({
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 import PostProgress from './PostProgress';
-import { getPostProgress } from '../../../services/api';
+import { getPostProgress } from '../../../services/apiMeatspace.js';
 
 const PROGRESS = {
   days: 90,

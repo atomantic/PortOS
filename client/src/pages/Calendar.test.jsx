@@ -14,7 +14,15 @@ const api = vi.hoisted(() => ({
   getChronotypeEnergySchedule: vi.fn(),
   syncCalendarAccount: vi.fn(),
 }));
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiCalendar.js', () => ({
+  getCalendarAccounts: api.getCalendarAccounts,
+  getCalendarEvents: api.getCalendarEvents,
+  getCalendarTokenStatus: api.getCalendarTokenStatus,
+  getGoogleAuthStatus: api.getGoogleAuthStatus,
+  getDailyReview: api.getDailyReview,
+  syncCalendarAccount: api.syncCalendarAccount,
+}));
+vi.mock('../services/apiGoals.js', () => ({ getChronotypeEnergySchedule: api.getChronotypeEnergySchedule }));
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 // These independent features are outside the account-loading contract.
 vi.mock('../components/FeatureProviderPicker', () => ({ default: () => null }));

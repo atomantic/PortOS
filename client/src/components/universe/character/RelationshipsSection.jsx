@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { Plus, Trash2, Users, Swords } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../../lib/bibleLimits';
 import { RELATIONSHIP_LINK_TYPES } from '../../../lib/characterFramework';
@@ -87,7 +88,7 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
           {targetMissing ? (
             <option value={link.targetCharacterId}>(missing: {link.targetCharacterId})</option>
           ) : null}
-          {others.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+          {sortByLabel(others, (c) => c.name || c.id).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
         </select>
         <select
           value={RELATIONSHIP_LINK_TYPES.includes(link.type) ? link.type : 'custom'}

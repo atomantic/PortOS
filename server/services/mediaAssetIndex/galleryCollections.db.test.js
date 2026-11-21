@@ -1,17 +1,22 @@
 import { afterAll, beforeAll, beforeEach, expect, it as vitestIt, vi } from 'vitest';
 import pg from 'pg';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { mediaDdl } from '../../lib/db/schema/media.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { mediaFixture } from '../../../scripts/perf/collectionFixtureData.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import { listGalleryCollectionSummaries, listGalleryFacets, listGalleryPage } from './gallery.js';
 import { compactGalleryRecord } from './logic.js';
-import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+import { PATHS } from '../../lib/paths.js';
 import { createDbPhaseDiagnostics } from '../../test/dbPhaseDiagnostics.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
 
 const state = vi.hoisted(() => ({ file: false, images: [], videos: [], collections: [], annotations: {}, query: vi.fn() }));
 vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => state.file }));
+vi.mock('../../lib/paths.js', async original =>
+  makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-gallery-location-') }));
 vi.mock('../../lib/db.js', () => ({ query: (...args) => state.query(...args) }));
 vi.mock('../videoGen/history.js', async () => {
   const { compactSource } = await import('./logic.js');
@@ -59,7 +64,7 @@ afterAll(async () => {
   try { await drain().finally(() => diagnostics?.drain()); }
   finally {
     try { await Promise.all([observer?.end(), client?.end()]); }
-    finally { vi.unstubAllEnvs(); }
+    finally { vi.unstubAllEnvs(); cleanupTempDataRoots(); }
   }
 });
 
@@ -74,6 +79,41 @@ async function seed(images, indexedVideos = [], phase = (_name, operation) => op
 }
 const member = (kind, ref, addedAt = '2026-01-01') => ({ kind, ref, addedAt });
 const disk = async () => state.images;
+
+it('uses original files on this machine for local gallery pages and counts on both backends', async context => {
+  if (!available) return context.skip();
+  await Promise.all([mkdir(PATHS.images, { recursive: true }), mkdir(PATHS.videos, { recursive: true })]);
+  await Promise.all([
+    writeFile(join(PATHS.images, 'copied.png'), 'local image'),
+    writeFile(join(PATHS.videos, 'render.mov'), 'local video'),
+    writeFile(join(PATHS.videos, 'hosted-preview.png'), 'preview only'),
+  ]);
+  await seed([
+    { filename: 'hosted.png', createdAt: '2026-01-04', prompt: 'Fox' },
+    { filename: 'copied.png', createdAt: '2026-01-01', prompt: 'Fox', originInstanceId: 'example-peer' },
+  ]);
+  state.videos = [
+    { id: 'hosted', filename: 'hosted.mp4', thumbnail: 'hosted-preview.png', createdAt: '2026-01-03', prompt: 'Fox' },
+    { id: 'different-from-filename', filename: 'render.mov', createdAt: '2026-01-02', prompt: 'Fox' },
+  ];
+  const options = { media: true, kind: 'all', summary: true, hidden: false, compact: true, localOnly: true, limit: 1 };
+  for (const file of [false, true]) {
+    state.file = file;
+    try {
+      const first = await listGalleryPage(options, disk);
+      expect(first).toMatchObject({ items: [{ kind: 'video', data: { filename: 'render.mov' } }],
+        total: 2, counts: { all: 2, image: 1, video: 1 } });
+      const second = await listGalleryPage({ ...options, offset: 1, q: 'fox' }, disk);
+      expect(second).toMatchObject({ items: [{ kind: 'image', data: { filename: 'copied.png' } }], total: 2 });
+      const images = await listGalleryPage({ ...options, kind: 'image' }, disk);
+      expect(images).toMatchObject({ total: 1, counts: { all: 2, image: 1, video: 1 } });
+      expect((await listGalleryPage({ localOnly: true }, disk)).items.map(row => row.filename)).toEqual(['copied.png']);
+      expect((await listGalleryPage({ ...options, localOnly: false }, disk)).total).toBe(4);
+    } finally {
+      state.file = false;
+    }
+  }
+});
 
 it('preserves cover fallback, stable membership order, visibility and stale-reference contracts at the public boundary', async context => {
   if (!available) return context.skip();

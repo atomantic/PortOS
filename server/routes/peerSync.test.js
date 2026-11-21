@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { JSON_BODY_LIMIT } from '../lib/uploadLimits.js';
 
 vi.mock('../services/sharing/peerSync.js', () => ({
   listPeerSubscriptions: vi.fn(),
@@ -52,7 +53,7 @@ import { tmpdir } from 'os';
 
 const buildApp = () => {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
   app.use('/api/peer-sync', peerSyncRoutes);
   app.use(errorMiddleware);
   return app;
@@ -465,6 +466,29 @@ describe('peer-sync routes', () => {
         });
       expect(res.status).toBe(400);
     });
+
+    it.each([[2001, 200], [5000, 200], [5001, 400]])(
+      'validates a media collection push with %i assets (HTTP %i)',
+      async (count, status) => {
+        const assetManifest = Array.from({ length: count }, (_, i) => ({
+          filename: `collection-${i}.png`, kind: 'image', sha256: 'a'.repeat(64),
+        }));
+        const record = { id: 'collection-1', items: assetManifest.map(({ filename }) => ({ kind: 'image', ref: filename })) };
+        svc.applyIncomingPush.mockResolvedValue({ missingAssets: [] });
+
+        const res = await request(buildApp())
+          .post('/api/peer-sync/push')
+          .send({ kind: 'mediaCollection', record, assetManifest, sourceInstanceId: 'peer-a' });
+
+        expect(res.status).toBe(status);
+        if (status === 200) {
+          expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({ record, assetManifest }), expect.anything());
+        } else {
+          expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+          expect(res.body.context.details).toEqual([expect.objectContaining({ path: 'assetManifest' })]);
+        }
+      },
+    );
   });
 
   describe('GET /api/peer-sync/subscriptions', () => {
@@ -805,6 +829,16 @@ describe('peer-sync routes', () => {
       expect(integritySvc.getPeerIntegrity).toHaveBeenCalledWith({
         peerId: 'peer-x',
         kind: 'mediaCollection',
+      });
+    });
+
+    it('passes a collection ID through for filename-level integrity', async () => {
+      integritySvc.getPeerIntegrity.mockResolvedValue({ available: true, records: [] });
+      const res = await request(buildApp())
+        .get('/api/peer-sync/integrity?peerId=peer-x&kind=mediaCollection&recordId=col-1');
+      expect(res.status).toBe(200);
+      expect(integritySvc.getPeerIntegrity).toHaveBeenCalledWith({
+        peerId: 'peer-x', kind: 'mediaCollection', recordId: 'col-1',
       });
     });
 

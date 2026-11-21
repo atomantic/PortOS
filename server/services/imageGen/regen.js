@@ -18,13 +18,15 @@
 
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import sharp from 'sharp';
 import { getSettings } from '../settings.js';
 import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../../lib/imageGenCapabilities.js';
+
+export { REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX };
 
 const IS_WIN = process.platform === 'win32';
 
@@ -38,8 +40,6 @@ export const DEFAULT_REGEN_STRENGTH = 0.25;
 // value that still does a faithful pass; across 0.02–0.25 the change is a flat ~8% (the VAE round-trip's own
 // reconstruction error, the irreducible minimum). The default stays at a known-good 0.25 until a lower value is
 // confirmed to still clear a detector.
-export const REGEN_STRENGTH_MIN = 0.02;
-export const REGEN_STRENGTH_MAX = 0.6;
 
 // Lighter default for sources that DON'T carry Google's SynthID (denoise is tuned by generator). The known-good
 // 0.25 is preserved for SynthID-bearing generators (never lower that path below the confirmed value), while local
@@ -117,8 +117,8 @@ export { usesTorchVenv as modelUsesFluxVenv };
 // Whether a model RELIABLY does the img2img round-trip regen needs, i.e. honors the init image rather than
 // silently degrading to txt2img (which would make `regenerated: true` a lie). Capability, not installed-state.
 //
-//   - FLUX.2 (`scripts/flux2_macos.py`): the intended i2i path; --image-path is forwarded. Regen-capable everywhere.
-//   - The diffusers family (Z-Image / ERNIE / HiDream / Qwen via `scripts/z_image_turbo.py`) is EXCLUDED: that
+//   - FLUX.2 (`scripts/ml/flux2_macos.py`): the intended i2i path; --image-path is forwarded. Regen-capable everywhere.
+//   - The diffusers family (Z-Image / ERNIE / HiDream / Qwen via `scripts/ml/z_image_turbo.py`) is EXCLUDED: that
 //     runner "falls back to txt2img and ignores the init image" for a family with no i2i sibling, so JS can't know
 //     whether the round-trip happened.
 //   - Legacy mflux: reliable i2i on macOS (`--image-path`); Windows `imagine_win.py` drops the init-image args, so
@@ -203,6 +203,7 @@ export async function getRegenAvailability({ sourceModelId } = {}) {
 // image to width/height; a mismatch distorts composition). Null on read/decode failure so the caller can fall back
 // to the sidecar's recorded dimensions.
 export async function readImageDimensions(absPath) {
+  const { default: sharp } = await import('sharp');
   const meta = await sharp(absPath).metadata().catch(() => null);
   if (meta?.width && meta?.height) return { width: meta.width, height: meta.height };
   return null;
@@ -268,6 +269,7 @@ export const PSNR_IDENTICAL = 100;
 // disk re-read). Returns `{ pixelDeltaPct, psnr }` (psnr capped at PSNR_IDENTICAL for a byte-identical pair), or
 // null on a decode failure so the caller can skip the stamp without failing the render.
 export async function computePixelDelta(a, b, sampleSize = 256) {
+  const { default: sharp } = await import('sharp');
   const toRaster = (src) => sharp(src)
     .resize(sampleSize, sampleSize, { fit: 'fill', kernel: 'cubic' })
     .removeAlpha()
@@ -300,7 +302,8 @@ export async function computePixelDelta(a, b, sampleSize = 256) {
 //   3. high-frequency perturbation (median + sharpen): perturbs the band the mark rides in.
 // HONESTLY less reliable than the VAE round-trip (no FFT phase-subtraction), so the caller MUST label it
 // best-effort. Pure-ish: sharp in, `{ data, width, height }` out. `sharpImpl` is injectable for tests.
-export async function applyLightRegen(buffer, { sharpImpl = sharp } = {}) {
+export async function applyLightRegen(buffer, { sharpImpl } = {}) {
+  if (sharpImpl === undefined) sharpImpl = (await import('sharp')).default;
   const meta = await sharpImpl(buffer).metadata().catch(() => null);
   const w = Math.round(Number(meta?.width));
   const h = Math.round(Number(meta?.height));

@@ -3,11 +3,9 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiLocalLlm.js', () => ({
   runModelCapabilityTest: vi.fn(),
   deleteModelCapabilityTest: vi.fn(),
-  // The report carries summaries only; the drawer fetches the model output and
-  // the agent transcript for the one pairing it opens.
   getModelCapabilityTestResult: vi.fn(async () => ({ output: '', transcript: '' })),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -15,7 +13,11 @@ vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), war
 // event; these tests replay frames through the registered handler.
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
-import { runModelCapabilityTest, deleteModelCapabilityTest, getModelCapabilityTestResult } from '../../services/api';
+import {
+  runModelCapabilityTest,
+  deleteModelCapabilityTest,
+  getModelCapabilityTestResult,
+} from '../../services/apiLocalLlm.js';
 import socket from '../../services/socket';
 import ModelCapabilityTests from './ModelCapabilityTests.jsx';
 

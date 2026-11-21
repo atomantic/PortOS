@@ -30,7 +30,9 @@ export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assis
 // account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
 // when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
 // AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
+export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other',
+  // By GitHub's notification reason; done / mute / leave only (REASON_RULE_KINDS).
+  'reason-comment', 'reason-subscribed', 'reason-state-change', 'reason-assign', 'reason-author']);
 export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', 'do-review', 'untrusted-review', 'merge']);
 export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
 const emptyToNullString = (value) => (value === '' ? null : value);
@@ -52,6 +54,8 @@ export const githubAgentRuleSchema = z.object({
   if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
   else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
     ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
+  } else if (rule.kind.startsWith('reason-') && !['done', 'mute', 'leave'].includes(action)) {
+    ctx.addIssue({ code: 'custom', path: ['action'], message: 'A rule by notification reason can mark done, mute or leave' });
   }
   if (['do-review', 'untrusted-review', 'merge'].includes(action) && !['dependabot-pr', 'pull-request', 'own-pr', 'review-request'].includes(rule.kind)) {
     ctx.addIssue({ code: 'custom', path: ['action'], message: 'PR actions require a pull-request notification rule' });

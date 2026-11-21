@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
-const script = fileURLToPath(new URL('./qwen3_tts_runner.py', import.meta.url));
+const script = fileURLToPath(new URL('./ml/qwen3_tts_runner.py', import.meta.url));
 
 // Exercise the production download/probe boundary with a tool-free fake Hub;
 // no model, provider, hardware, credentials, or real user directories are used.

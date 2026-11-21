@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import StoryboardDetail from './StoryboardDetail';
 import StoryboardEditor from '../components/storyboards/StoryboardEditor';
-import { updateStoryboardBeat } from '../services/api';
+import { updateStoryboardBeat } from '../services/apiStoryboards.js';
 
 const api = vi.hoisted(() => ({
   getStoryboard: vi.fn(),
@@ -31,12 +31,48 @@ const api = vi.hoisted(() => ({
   sendStoryboardPanelToFableLoom: vi.fn(),
   getUploadUrl: (filename) => `/api/uploads/${filename}`,
 }));
-vi.mock('../services/api', () => {
+vi.mock('../services/apiStoryboards.js', () => {
   const rest = ['deleteStoryboardBeat', 'deleteStoryboardPanel', 'moveStoryboardBeat', 'moveStoryboardPanel',
-    'removeStoryboardPanelTake', 'selectStoryboardPanelTake', 'updateStoryboardBeat', 'listCatalogIngredientsByIds', 'getMoodBoard',
+    'removeStoryboardPanelTake', 'selectStoryboardPanelTake', 'updateStoryboardBeat',
     'updateStoryboardPanelNode', 'getStoryboardPanelMake'];
-  return { ...api, ...Object.fromEntries(rest.map((name) => [name, vi.fn(() => Promise.resolve([]))])) };
+  return {
+    getStoryboard: api.getStoryboard,
+    updateStoryboard: api.updateStoryboard,
+    addStoryboardBeat: api.addStoryboardBeat,
+    addStoryboardPanel: api.addStoryboardPanel,
+    updateStoryboardPanel: api.updateStoryboardPanel,
+    addStoryboardPanelTake: api.addStoryboardPanelTake,
+    runStoryboardPanelNode: api.runStoryboardPanelNode,
+    correctStoryboardPanel: api.correctStoryboardPanel,
+    drawStoryboardPanel: api.drawStoryboardPanel,
+    updateStoryboardRecipe: api.updateStoryboardRecipe,
+    getStoryboardMakeEmpty: api.getStoryboardMakeEmpty,
+    startStoryboardMakeEmpty: api.startStoryboardMakeEmpty,
+    listStoryboardRecipes: api.listStoryboardRecipes,
+    saveStoryboardRecipe: api.saveStoryboardRecipe,
+    deleteStoryboardRecipe: api.deleteStoryboardRecipe,
+    extractStoryboardBeats: api.extractStoryboardBeats,
+    addStoryboardBeats: api.addStoryboardBeats,
+    sendStoryboardPanelToFableLoom: api.sendStoryboardPanelToFableLoom,
+    ...Object.fromEntries(rest.map((name) => [name, vi.fn(() => Promise.resolve([]))])),
+  };
 });
+vi.mock('../services/apiMoodBoard.js', () => ({
+  listMoodBoardNames: api.listMoodBoardNames,
+  getMoodBoard: vi.fn(() => Promise.resolve([])),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
+  createBlankSketch: api.createBlankSketch,
+  getMediaSketch: api.getMediaSketch,
+  saveMediaSketch: api.saveMediaSketch,
+}));
+vi.mock('../services/apiMedia.js', () => ({
+  uploadFile: api.uploadFile,
+  getUploadUrl: api.getUploadUrl,
+}));
+vi.mock('../services/apiCatalog.js', () => ({
+  listCatalogIngredientsByIds: vi.fn(() => Promise.resolve([])),
+}));
 const socketMock = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
 vi.mock('../services/socket', () => ({ default: socketMock }));
 vi.mock('../components/imageGen/GalleryImagePicker', () => ({ default: () => null }));

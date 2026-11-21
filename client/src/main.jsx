@@ -13,6 +13,8 @@ import { registerServiceWorker } from './lib/registerServiceWorker';
 import { suppressIosFocusZoom } from './lib/iosFocusZoom';
 import { installActionFeedback } from './services/actionFeedback';
 import DownloadManager from './components/DownloadManager';
+import { getShellBootstrap } from './services/apiSystem.js';
+import { startShellBootstrap } from './services/shellBootstrap.js';
 import App from './App';
 import './index.css';
 
@@ -112,7 +114,10 @@ const router = createBrowserRouter([
 // The QR audience route is intentionally a no-bootstrap guest surface. Avoid
 // the theme settings request on a password-gated install: its 401 redirect
 // would otherwise replace the URL and discard the fragment credentials.
-const isHostedAudienceRoute = isPublicGuestRoute(window.location.pathname);
+const { pathname } = window.location;
+const isHostedAudienceRoute = isPublicGuestRoute(pathname);
+const isChromeless = /^\/(login|ambient|eidoverse\/solo)\/?$/i.test(pathname);
+if (!isHostedAudienceRoute && !isChromeless) startShellBootstrap(() => getShellBootstrap({ silent: true }));
 const app = isHostedAudienceRoute
   ? <RouterProvider router={router} />
   : (

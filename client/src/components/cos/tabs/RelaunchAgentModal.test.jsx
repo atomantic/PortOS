@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
 
 vi.mock('../../../services/apiCore.js', () => ({ request: vi.fn().mockResolvedValue({ options: [] }) }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiAgents.js', () => ({
   relaunchCosAgent: vi.fn(),
 }));
 const apiLocalLlm = vi.hoisted(() => ({
@@ -15,7 +15,7 @@ vi.mock('../../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
 
-import * as api from '../../../services/api';
+import { relaunchCosAgent } from '../../../services/apiAgents.js';
 import toast from '../../ui/Toast';
 import RelaunchAgentModal from './RelaunchAgentModal';
 
@@ -48,7 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetToolUseModelIdsCache();
   apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
-  api.relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
+  relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
 });
 
 // A prototype getter spy would otherwise survive a failing assertion and leak
@@ -64,7 +64,7 @@ describe('RelaunchAgentModal', () => {
 
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
 
-    await waitFor(() => expect(api.relaunchCosAgent).toHaveBeenCalledWith(
+    await waitFor(() => expect(relaunchCosAgent).toHaveBeenCalledWith(
       'agent-live',
       expect.objectContaining({ provider: 'claude', model: 'claude-opus-5' }),
       { silent: true },
@@ -80,8 +80,8 @@ describe('RelaunchAgentModal', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: /provider/i }), 'codex');
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
 
-    await waitFor(() => expect(api.relaunchCosAgent).toHaveBeenCalled());
-    const [, overrides] = api.relaunchCosAgent.mock.calls[0];
+    await waitFor(() => expect(relaunchCosAgent).toHaveBeenCalled());
+    const [, overrides] = relaunchCosAgent.mock.calls[0];
     expect(overrides.provider).toBe('codex');
     // A model from the provider the user just left would be unrunnable; blank is
     // "server default", which is what clearing it means.
@@ -98,7 +98,7 @@ describe('RelaunchAgentModal', () => {
     ['superseded', /later agent/i],
   ])('reports the %s outcome without claiming the task was relaunched', async (mode, pattern) => {
     const user = userEvent.setup();
-    api.relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode });
+    relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode });
     renderModal();
 
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
@@ -134,7 +134,7 @@ describe('RelaunchAgentModal', () => {
 
   it('says the task is running when the server started it, not that it is queued', async () => {
     const user = userEvent.setup();
-    api.relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued', spawned: true });
+    relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued', spawned: true });
     renderModal();
 
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));
@@ -145,7 +145,7 @@ describe('RelaunchAgentModal', () => {
 
   it('names why a relaunched task stayed queued instead of leaving the user to hunt for it', async () => {
     const user = userEvent.setup();
-    api.relaunchCosAgent.mockResolvedValue({
+    relaunchCosAgent.mockResolvedValue({
       success: true, taskId: 'task-abc', mode: 'requeued',
       spawned: false, spawnHold: 'No available agent slots (3/3)',
     });
@@ -159,7 +159,7 @@ describe('RelaunchAgentModal', () => {
   it('keeps the dialog open and surfaces the error when the relaunch fails', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    api.relaunchCosAgent.mockRejectedValue(new Error('Agent agent-live is completed, not running'));
+    relaunchCosAgent.mockRejectedValue(new Error('Agent agent-live is completed, not running'));
     renderModal({ onClose });
 
     await user.click(screen.getByRole('button', { name: 'Relaunch Agent' }));

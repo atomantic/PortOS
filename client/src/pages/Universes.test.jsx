@@ -6,18 +6,24 @@ import { MemoryRouter } from 'react-router';
 // The page pulls in network-y siblings (sync integrity hook, share/sync peer
 // buttons) that fetch on mount. Stub them so the test only exercises the
 // duplicate-detection banner + merge flow added here.
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiUniverseBuilder.js', () => ({
   listUniverseSummaries: vi.fn(),
   deleteUniverse: vi.fn(),
+  updateUniverse: vi.fn(),
+}));
+vi.mock('../services/apiPipeline.js', () => ({
   listPipelineSeriesSummaries: vi.fn(),
+  updatePipelineSeries: vi.fn(),
+}));
+vi.mock('../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn(),
+}));
+vi.mock('../services/apiSyncReview.js', () => ({
   listUniverseDuplicates: vi.fn(),
   previewUniverseMerge: vi.fn(),
   mergeUniverses: vi.fn(),
   previewSeriesMerge: vi.fn(),
   mergeSeries: vi.fn(),
-  updateUniverse: vi.fn(),
-  updatePipelineSeries: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../components/ui/Modal', () => ({ default: ({ open, children }) => (open ? <div role="dialog">{children}</div> : null) }));
@@ -27,7 +33,10 @@ vi.mock('../components/sharing/ShareToButton', () => ({ default: () => null }));
 vi.mock('../components/sharing/SyncToPeerButton', () => ({ default: () => null }));
 vi.mock('../components/sync/SyncBadge', () => ({ default: () => null }));
 
-import * as api from '../services/api';
+import { listUniverseSummaries } from '../services/apiUniverseBuilder.js';
+import { listPipelineSeriesSummaries } from '../services/apiPipeline.js';
+import { listMediaCollections } from '../services/apiImageVideo.js';
+import { listUniverseDuplicates, previewUniverseMerge, mergeUniverses } from '../services/apiSyncReview.js';
 import Universes from './Universes';
 
 const dupGroup = {
@@ -46,18 +55,18 @@ const renderPage = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listUniverseSummaries.mockResolvedValue([
+  listUniverseSummaries.mockResolvedValue([
     { id: 'u-new', name: 'Clandestiny', createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
     { id: 'u-old', name: 'Clandestiny', createdAt: '2026-05-11T00:00:00Z', updatedAt: '2026-05-11T00:00:00Z' },
   ]);
-  api.listPipelineSeriesSummaries.mockResolvedValue([]);
-  api.listMediaCollections.mockResolvedValue([]);
-  api.listUniverseDuplicates.mockResolvedValue({ groups: [dupGroup] });
+  listPipelineSeriesSummaries.mockResolvedValue([]);
+  listMediaCollections.mockResolvedValue([]);
+  listUniverseDuplicates.mockResolvedValue({ groups: [dupGroup] });
 });
 
 describe('Universes page — duplicate detection', () => {
   it('shows the universe list error and retries without rendering the empty copy', async () => {
-    api.listUniverseSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    listUniverseSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
     const user = userEvent.setup();
     await renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universes');
@@ -67,7 +76,7 @@ describe('Universes page — duplicate detection', () => {
   });
 
   it('shows and retries a failed series-count read independently', async () => {
-    api.listPipelineSeriesSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    listPipelineSeriesSummaries.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
     const user = userEvent.setup();
     await renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load series counts');
@@ -77,7 +86,7 @@ describe('Universes page — duplicate detection', () => {
   });
 
   it('shows and retries a failed thumbnail collection read without blocking universes', async () => {
-    api.listMediaCollections.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    listMediaCollections.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
     const user = userEvent.setup();
     await renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universe thumbnails');
@@ -93,20 +102,20 @@ describe('Universes page — duplicate detection', () => {
   });
 
   it('hides the banner when no duplicates exist', async () => {
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
     await renderPage();
     await waitFor(() => expect(screen.getByText('Universes')).toBeInTheDocument());
     expect(screen.queryByText(/duplicate-named/)).not.toBeInTheDocument();
   });
 
   it('opens the merge modal, previews, executes with field choices, and re-scans', async () => {
-    api.previewUniverseMerge.mockResolvedValue({
+    previewUniverseMerge.mockResolvedValue({
       conflicts: [{ field: 'starterPrompt', survivorValue: 'A', loserValue: 'B' }],
       cascade: { seriesToRepoint: [{ id: 's1' }], loserCollectionItemCount: 3 },
     });
-    api.mergeUniverses.mockResolvedValue({ merged: true });
+    mergeUniverses.mockResolvedValue({ merged: true });
     // After the merge tombstones the loser, the re-scan returns no duplicates.
-    api.listUniverseDuplicates
+    listUniverseDuplicates
       .mockResolvedValueOnce({ groups: [dupGroup] })
       .mockResolvedValue({ groups: [] });
 
@@ -115,12 +124,12 @@ describe('Universes page — duplicate detection', () => {
     await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Merge…/ }));
-    await waitFor(() => expect(api.previewUniverseMerge).toHaveBeenCalledWith({ survivorId: 'u-new', loserId: 'u-old' }, expect.anything()));
+    await waitFor(() => expect(previewUniverseMerge).toHaveBeenCalledWith({ survivorId: 'u-new', loserId: 'u-old' }, expect.anything()));
     await waitFor(() => expect(screen.getByText('starterPrompt')).toBeInTheDocument());
     expect(screen.getByText(/child series re-pointed/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^Merge$/ }));
-    await waitFor(() => expect(api.mergeUniverses).toHaveBeenCalledWith(
+    await waitFor(() => expect(mergeUniverses).toHaveBeenCalledWith(
       { survivorId: 'u-new', loserId: 'u-old', fieldChoices: { starterPrompt: 'survivor' } },
       expect.anything(),
     ));
@@ -140,15 +149,15 @@ describe('Universes page — duplicate detection', () => {
 
 describe('Universes page — row thumbnail', () => {
   beforeEach(() => {
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
   });
 
   it('shows the projected canon count and base style image, matching the detail page', async () => {
-    api.listUniverseSummaries.mockResolvedValue([
+    listUniverseSummaries.mockResolvedValue([
       { id: 'u1', name: 'Neon Expanse', styleImageRef: 'base-style.png', canonCount: 7, updatedAt: '2026-06-01T00:00:00Z' },
     ]);
     // A media-collection image exists too, but the base style image wins.
-    api.listMediaCollections.mockResolvedValue([
+    listMediaCollections.mockResolvedValue([
       { universeId: 'u1', items: [{ kind: 'image', ref: 'contact-sheet.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
     const { container } = await renderPage();
@@ -161,10 +170,10 @@ describe('Universes page — row thumbnail', () => {
   });
 
   it('falls back to the media image when the summary has no style image', async () => {
-    api.listUniverseSummaries.mockResolvedValue([
+    listUniverseSummaries.mockResolvedValue([
       { id: 'u3', name: 'Void', styleImageRef: null, updatedAt: '2026-06-01T00:00:00Z' },
     ]);
-    api.listMediaCollections.mockResolvedValue([
+    listMediaCollections.mockResolvedValue([
       { universeId: 'u3', items: [{ kind: 'image', ref: 'media.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
     const { container } = await renderPage();
@@ -173,10 +182,10 @@ describe('Universes page — row thumbnail', () => {
   });
 
   it('falls back to the latest media-collection image when no base style image exists', async () => {
-    api.listUniverseSummaries.mockResolvedValue([
+    listUniverseSummaries.mockResolvedValue([
       { id: 'u2', name: 'Reality', updatedAt: '2026-06-01T00:00:00Z' },
     ]);
-    api.listMediaCollections.mockResolvedValue([
+    listMediaCollections.mockResolvedValue([
       { universeId: 'u2', items: [{ kind: 'image', ref: 'fallback.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
     const { container } = await renderPage();
@@ -188,12 +197,12 @@ describe('Universes page — row thumbnail', () => {
 
 describe('Universes page — factual badge (#7616)', () => {
   beforeEach(() => {
-    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
-    api.listMediaCollections.mockResolvedValue([]);
+    listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    listMediaCollections.mockResolvedValue([]);
   });
 
   it('badges only the universes whose factual flag is set', async () => {
-    api.listUniverseSummaries.mockResolvedValue([
+    listUniverseSummaries.mockResolvedValue([
       { id: 'universe-reality', name: 'Reality', factual: true, updatedAt: '2026-06-02T00:00:00Z', createdAt: '2026-06-02T00:00:00Z' },
       { id: 'u-fiction', name: 'Example Universe', factual: false, updatedAt: '2026-06-01T00:00:00Z', createdAt: '2026-06-01T00:00:00Z' },
     ]);

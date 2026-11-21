@@ -40,7 +40,20 @@ const api = vi.hoisted(() => ({
   syncDailyLogsToObsidian: vi.fn(),
   draftActivityDigest: vi.fn(),
 }));
-vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiBrain.js', () => ({
+  getDailyLog: api.getDailyLog,
+  listDailyLogs: api.listDailyLogs,
+  getDailyLogSettings: api.getDailyLogSettings,
+  updateDailyLogSettings: api.updateDailyLogSettings,
+  getActivityDigestSettings: api.getActivityDigestSettings,
+  updateActivityDigestSettings: api.updateActivityDigestSettings,
+  updateDailyLog: api.updateDailyLog,
+  appendDailyLog: api.appendDailyLog,
+  deleteDailyLog: api.deleteDailyLog,
+  syncDailyLogsToObsidian: api.syncDailyLogsToObsidian,
+  draftActivityDigest: api.draftActivityDigest,
+}));
+vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../../services/apiNotes', () => ({ getNotesVaults: vi.fn(async () => []) }));
 
 const DailyLogTab = (await import('./DailyLogTab')).default;

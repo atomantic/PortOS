@@ -9,13 +9,14 @@ import { recordedMediaChildIds } from '../../server/lib/mediaRecoveryActivity.js
 import { PORTS } from '../../server/lib/ports.js';
 import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 import { parseCommandArgs } from '../../server/lib/commandSecurity.js';
+import { isDetachedSupervisorCommand } from './posixDetachedLauncher.mjs';
 
 const runFile = promisify(execFile);
 
 /** Attribute a still-bound service to its PID, without guessing from a cwd. */
 export async function portosServiceListeners(root, { platform = process.platform, env = process.env, run = runFile } = {}) {
   const dotenv = parseEnvFile(join(root, '.env'));
-  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER, PORTS.AUTOFIXER_UI]);
+  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER_UI]);
   const runner = new URL(env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL || `http://127.0.0.1:${PORTS.COS}`);
   if (['127.0.0.1', 'localhost', '[::1]'].includes(runner.hostname)) ports.add(Number(runner.port || (runner.protocol === 'https:' ? 443 : 80)));
   if (platform === 'win32') {
@@ -127,7 +128,8 @@ export async function legacyLauncherGroups(data, control) {
   return groups;
 }
 
-export async function observedLegacyUpdate({ root, priorPid = null, priorAt = null, groups = [], platform = process.platform, selfPid = process.pid,
+export async function observedLegacyUpdate({ root, priorPid = null, priorAt = null, groups = [], settledControl = null,
+  platform = process.platform, selfPid = process.pid,
   snapshot = snapshotLegacyProcesses, probeCwds = legacyProcessCwds } = {}) {
   const rows = await snapshot(platform);
   if (!rows.some(row => row.pid === selfPid)) throw new Error('Incomplete process table');
@@ -138,15 +140,15 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const normalize = value => platform === 'win32' ? value.replaceAll('\\', '/').toLowerCase() : value;
   const canonical = value => { try { return realpathSync(value); } catch { return resolve(value); } };
   const install = normalize(canonical(root));
-  const script = /(?:^|[\s"'=])((?:\.[\\/])?(?:scripts[\\/])?(?:deferred-update\.mjs|update\.(?:sh|ps1)))(?=$|[\s"'])/i;
+  const script = /(?:^|[\s"'=])((?:\.[\\/])?(?:scripts[\\/])?(?:deferred-update\.mjs|update\.(?:sh|ps1|mjs)))(?=$|[\s"'])/i;
   const child = /(?:^|[\s"'/\\])(?:git|npm|npx|pnpm|yarn|npm-cli\.js)(?:\.exe)?(?=$|[\s"'])|scripts[\\/](?:setup-[\w-]+|run-migrations|trusted-rebuilds|pm2-[\w-]+)\.js/i;
   const candidates = rows.filter(row => !ancestors.has(row.pid) && !String(row.state ?? '').startsWith('Z')
     && (script.test(String(row.command ?? '')) || child.test(String(row.command ?? ''))
-      || /(?:update\.(?:sh|ps1)|deferred-update\.mjs)/i.test(String(row.command ?? ''))));
+      || /(?:update\.(?:sh|ps1|mjs)|deferred-update\.mjs)/i.test(String(row.command ?? ''))));
   const cwds = await probeCwds(candidates.map(row => row.pid), platform).catch(() => new Map());
   const escaped = install.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const absolute = new RegExp(`(?:^|[\\s"'=])${escaped}/(?:scripts/)?(?:deferred-update\\.mjs|update\\.(?:sh|ps1))(?=$|[\\s"'])`);
-  const expectedPaths = new Set(['update.sh', 'update.ps1', 'scripts/deferred-update.mjs']
+  const absolute = new RegExp(`(?:^|[\\s"'=])${escaped}/(?:scripts/)?(?:deferred-update\\.mjs|update\\.(?:sh|ps1|mjs))(?=$|[\\s"'])`);
+  const expectedPaths = new Set(['update.sh', 'update.ps1', 'scripts/update.mjs', 'scripts/deferred-update.mjs']
     .map(path => normalize(canonical(join(root, path)))));
   const inInstall = cwd => {
     const path = normalize(canonical(cwd));
@@ -156,7 +158,12 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const isUpdater = row => {
     const command = normalize(String(row.command ?? ''));
     const [binary, ...args] = parseCommandArgs(String(row.command ?? ''));
-    if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(basename((binary ?? '').replaceAll('\\', '/')))
+    const executable = basename((binary ?? '').replaceAll('\\', '/'));
+    // A ticket can settle while its detached shell still writes the exit file.
+    // Keep scanning for actual updater processes and their mutating children.
+    if (settledControl && executable === 'sh' && args[0] === '-c'
+      && isDetachedSupervisorCommand(command) && command.includes(` sh ${settledControl} `)) return false;
+    if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(executable)
       && args.some(arg => isAbsolute(arg) && expectedPaths.has(normalize(canonical(arg))))) return true;
     const relative = script.exec(command)?.[1];
     if (absolute.test(command) || (relative && cwds.has(row.pid)

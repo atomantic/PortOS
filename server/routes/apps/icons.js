@@ -8,7 +8,6 @@
 import { Router } from 'express';
 import { readFile, stat } from 'fs/promises';
 import { extname } from 'path';
-import sharp from 'sharp';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged } from '../../services/apps.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
@@ -26,7 +25,8 @@ const getRasterIcon = (appId, iconPath, iconStat, size, iconData) => {
     if (value.appId === appId && value.size === size && cachedKey !== key) rasterIconCache.delete(cachedKey);
   }
   if (!rasterIconCache.has(key)) {
-    const rendered = sharp(iconData).resize(size, size, { fit: 'cover', withoutEnlargement: true }).png().toBuffer()
+    const rendered = import('sharp')
+      .then(({ default: sharp }) => sharp(iconData).resize(size, size, { fit: 'cover', withoutEnlargement: true }).png().toBuffer())
       .catch((error) => {
         rasterIconCache.delete(key);
         throw error;

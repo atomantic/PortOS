@@ -4,7 +4,7 @@
  * Since #16018 every `/api` write needs operator authority by default, and the
  * principal matrix (remote anonymous, spoofed dev proxy, Basic, scoped peer,
  * local, agent session) is asserted once in services/authGate.test.js, with the
- * mounted route graph pinned by hostControlCoverage.test.js. A router suite
+ * mounted route graph pinned by server/test/guards/modules/hostControlCoverage.test.js. A router suite
  * keeps only what those cannot see: that the router still works behind the real
  * gates for a local operator and a delegated `PORTOS_API_TOKEN` agent session,
  * and the refusal of any HOST_CONTROL_GET_ROUTES read it serves.

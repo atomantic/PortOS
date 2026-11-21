@@ -89,6 +89,7 @@ const codeAnimationSubscribers = new Set();
 // global emit.
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
+const mediaQueueSubscribers = new Set();
 // Operator command-runner output (#12019). Never a global emit: the stream
 // carries host command output, and a peer relay socket (restricted to
 // `cos:subscribe`) must not receive it.
@@ -105,7 +106,7 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
 
 export function emitCodeAnimationChanged(id, kind) {
   emitCodeAnimationChangedToBus(id, kind);
@@ -238,6 +239,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
   registerSubscriber(socket, 'command', commandSubscribers);
+  registerSubscriber(socket, 'media-jobs', mediaQueueSubscribers);
   registerPeerSyncSubscriber(socket);
 }
 
@@ -422,6 +424,9 @@ function setupPeerSyncEventForwarding() {
   peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(ioInstance, event); });
   peerSyncBus.on('media-history-changed', (payload) => {
     ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
+  });
+  peerSyncBus.on('collection-primary-changed', (payload) => {
+    ioInstance?.except(PEER_SYNC_ROOM).emit('media:collection-primary:changed', payload);
   });
   peerSyncBus.on('media-holders-changed', () => {
     ioInstance?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
@@ -853,6 +858,8 @@ function setupLoopEventForwarding() {
   loopEvents.on('output', (data) => broadcastToLoops('loop:output', data));
 }
 
+function broadcastToMediaQueue(event, data) { broadcastToSet(mediaQueueSubscribers, event, data); }
+
 // Bridge both image-gen AND video-gen events from their internal EventEmitters
 // onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
 function setupMediaGenEventForwarding() {
@@ -927,6 +934,9 @@ function setupMediaGenEventForwarding() {
 
   mediaJobEvents.on('reference-sheet:changed', ({ universeId, entryId, jobId, variant, status }) => {
     ioInstance?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
+  });
+  mediaJobEvents.on('progress', ({ id, startedAt, progress, statusMsg, etaMs }) => {
+    broadcastToMediaQueue('media-jobs:progress', { id, startedAt, progress, statusMsg, etaMs });
   });
   mediaJobEvents.on('changed', () => {
     ioInstance?.emit('media-jobs:changed', {});

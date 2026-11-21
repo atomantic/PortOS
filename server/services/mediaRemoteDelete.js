@@ -29,7 +29,7 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { loadHistory, getHistoryItem, mutateVideoHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { readHeldImage, localInstanceId, applyRemoteImageTombstones } from './imageGen/imageRecords.js';
-import { isSafeFilename } from '../lib/pathSafety.js';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../lib/pathSafety.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { instanceEvents } from './instanceEvents.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
@@ -133,7 +133,7 @@ const MEDIA = {
   },
   image: {
     label: 'Image',
-    validKey: (key) => isSafeFilename(key, ['.png']),
+    validKey: (key) => isSafeFilename(key, GALLERY_IMAGE_EXTENSIONS),
     getRow: readHeldImage,
     setPending: setImagePending,
     hide: async (key) => (await import('./imageGen/local.js')).setImageHidden(key, true),

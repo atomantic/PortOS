@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiPipeline.js', () => ({
   startPipelineSeriesReview: vi.fn(),
   getPipelineSeriesReview: vi.fn(),
   getPipelineSeriesReviewStatus: vi.fn(),
@@ -38,7 +38,7 @@ import {
   getPipelineSeriesReviewStatus,
   startPipelineSeriesFix,
   getPipelineSeriesFixStatus,
-} from '../../services/api';
+} from '../../services/apiPipeline.js';
 import toast from '../ui/Toast';
 import SeriesReviewPanel from './SeriesReviewPanel';
 

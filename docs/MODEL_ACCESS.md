@@ -12,6 +12,16 @@ Entitlement is **not in the catalog response** — NVIDIA's entries carry `id`,
 PortOS cannot detect it. It is declared instead, per provider, in
 **Settings → AI Providers → Edit → Models → Model Access**.
 
+## Shipped model additions
+
+On startup, PortOS adds shipped model IDs to matching installed providers.
+The update keeps custom IDs, order, defaults and tier selections. Removing an
+ID in the Models editor records it in the provider's `removedModels` list in
+`data/providers.json`. Adding the ID back in the editor clears that opt-out.
+Existing records without an opt-out list receive missing shipped IDs on the
+first reconciliation. Service-backed presets with an explicit model allowlist
+keep that allowlist.
+
 ## What a policy does
 
 | Mode | Effect |

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PR_COMPLETIONS, PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation, prHeldForOperator } from './prDisposition.js';
+import { PR_COMPLETIONS, PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation, prHeldForOperator, resolveAutoApprovePR, resolveAdminMerge } from './prDisposition.js';
 
 describe('resolvePrCompletion', () => {
   it('prefers an explicit valid disposition', () => {
@@ -98,5 +98,25 @@ describe('prHeldForOperator (#14408)', () => {
     ['review loop left open', { prCompletion: 'review-then-merge', reviewLoopLeaveOpen: true }, true],
   ])('%s', (_label, metadata, held) => {
     expect(prHeldForOperator({ metadata })).toBe(held);
+  });
+});
+
+describe.each([
+  ['autoApprovePR', resolveAutoApprovePR],
+  ['adminMerge', resolveAdminMerge],
+])('%s opt-in resolution', (key, resolve) => {
+  it('is off by default, including for PortOS itself', () => {
+    expect(resolve(undefined)).toBe(false);
+    expect(resolve({ id: 'portos-default' })).toBe(false);
+  });
+
+  it('inherits the app value', () => {
+    expect(resolve({ [key]: true })).toBe(true);
+    expect(resolve({ [key]: false })).toBe(false);
+  });
+
+  it('lets an explicit task choice win over the app, including string forms', () => {
+    expect(resolve({ [key]: false }, { [key]: true })).toBe(true);
+    expect(resolve({ [key]: true }, { [key]: 'false' })).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ import toast from '../../ui/Toast';
 import { createTestPhaseDiagnostics } from '../../../../../lib/testPhaseDiagnostics.js';
 import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
+import { generateVideo, getVideoGenModelContext, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { problem, withProblems } from '../../../test/musicVideoProblems.js';
@@ -243,7 +243,7 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('persists the fal.ai backend pin (#8968)', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({
+    getVideoGenModelContext.mockResolvedValueOnce({
       connected: true,
       defaultModel: 'ltx23_distilled_q4',
       falEnabled: true,
@@ -261,10 +261,13 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
+    // The picker reads the probe-free catalog route; /video-gen/status (which spawns
+    // Python per call) is not part of this surface's API mock at all (#17108).
+    expect(getVideoGenModelContext).toHaveBeenCalledWith({ silent: true });
   });
 
   it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({
+    getVideoGenModelContext.mockResolvedValueOnce({
       connected: true,
       defaultModel: 'ltx23_distilled_q4',
       falEnabled: true,
@@ -298,7 +301,7 @@ describe('MusicVideo project video renderer', () => {
 
   // Uniquely catches the card's Render on pick being ignored, or rewriting the project's saved renderer.
   it('renders one shot on the fal.ai model picked on its card, priced there, without changing the project renderer', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+    getVideoGenModelContext.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
       models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }] });
     generateVideo.mockResolvedValue({ jobId: 'fal-pick-job' });
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'local' } });
@@ -338,7 +341,7 @@ describe('MusicVideo project video renderer', () => {
 
   // Uniquely catches "Local LTX" falling through to the install's default model, and a picked length being dropped.
   it('renders a Local LTX pick on the model and length its card shows, LTX-2.5 before the install default', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+    getVideoGenModelContext.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
       models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video' }, { id: 'ltx25_mlx_q8', name: 'LTX-2.5 Q8', runtime: 'ltx25' }] });
     generateVideo.mockResolvedValue({ jobId: 'local-pick-job' });
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' }, scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 3 }] }, 'produce');
@@ -358,7 +361,7 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('renders a cutaway on the picked fal.ai model at the shot-covering length, sending exactly the take it prices', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
+    getVideoGenModelContext.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
     generateVideo.mockResolvedValue({ jobId: 'fal-h3-job' });
     await openProject({
       ...PROJECT_NO_CLIP,
@@ -386,7 +389,7 @@ describe('MusicVideo project video renderer', () => {
   });
 
   it('blocks fal.ai scene generation with a clear preflight reason when no API key is configured', async () => {
-    // getVideoGenStatus's default mock omits falEnabled, so it resolves false —
+    // getVideoGenModelContext's default mock omits falEnabled, so it resolves false —
     // exactly the "no fal.ai API key configured" install this covers.
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } }, 'produce');
 
@@ -424,7 +427,7 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('names the lip-sync provider, model, song window and estimated cost, then renders on fal.ai without a clip-length pin', async () => {
-      getVideoGenStatus.mockResolvedValueOnce({
+      getVideoGenModelContext.mockResolvedValueOnce({
         connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
         models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
       });
@@ -446,7 +449,7 @@ describe('MusicVideo project video renderer', () => {
     });
 
     it('keeps the fal performance song window when overriding a Local supplied-audio project', async () => {
-      getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+      getVideoGenModelContext.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
         models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }] });
       generateVideo.mockResolvedValue({ jobId: 'fal-performance-job' });
       await openProject(performanceProject({ backend: 'local', generationMode: 'suppliedAudio' }), 'produce');

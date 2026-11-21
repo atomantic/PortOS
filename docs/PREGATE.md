@@ -7,29 +7,33 @@ reviews stay mandatory.
 
 ## What it runs
 
-`scripts/pregate.js` runs CI's planner over the committed, uncommitted and
-untracked diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural
+`scripts/pregate.js` builds the focused plan in process from the committed,
+uncommitted and untracked diff. Default `npm run pregate` runs the hidden-content
+scan, early server and client structural
 guards, lint, and focused unit tests: edited test files, sibling tests for
 changed sources, and tests within two import hops of a changed source: a
-relative `import`, `import()` or `vi.mock` specifier that resolves to it, or to
+relative `import`, `import()` or `vi.mock` specifier that resolves to it (read
+through the planner's module graph, `scripts/lib/moduleGraph.js`), or to
 a non-test module that does (a suite two modules away, such as a prompt
 assembly test reaching a prompt section through its builder). Each hop adds at
 most 25 suites per source, the second hop at most 60 per run, nearest hop
 first and an importer's own suite before its other referrers; the overflow is
 listed under `skipped` in the receipt and left to CI. The second hop never adds the heavy
-suites (gate tooling and the pool's exclusive tests, tens of seconds each). Untracked tests count.
+suites (gate tooling and the pool's exclusive tests, tens of seconds each). The
+selector overlaps up to 32 file reads and keeps its ranking independent of
+read completion order. Untracked tests count.
 A changed non-module file has no import edge (the test memo records loaded
 modules, not opened files), so suites that spell its path, or an unambiguous
 name, as a quoted string literal are selected too, at most 25 per file and not
 the heavy ones; a nested file's bare name counts only while at most 25 suites
 spell it. Deeper chains are not selected. Run a focused public-boundary regression for changed behavior that
 has no sibling test; automatic selection does not replace engineering
-judgment.
+judgment. Focused mode reports directly identifiable resource coverage. Hosted CI
+uses import closures and dependency analysis to determine its complete selection.
 
 ## Full plan (`--full`)
 
-`npm run pregate -- --full` opts into the CI-selected broad suites locally:
+`npm run pregate -- --full` runs CI's planner and opts into its selected broad suites locally:
 server and client tests, the client build, the
 boot smoke, browser suites (smoke profile, prerequisites required rather than
 skipped), and the serial `portos_test` DB suite last and alone. Each stage
@@ -41,36 +45,34 @@ which records the plan, stage outcomes and durations, the skipped suites, the
 base and HEAD SHAs, and the hash of the exact working tree validated. The
 Windows job and the Linux worker-containment job are the two suites only CI
 can prove. The
-receipt also records `validationMode` (`focused` or `ci`); focused mode marks
-server/client results as reduced coverage, and either mode is local evidence
-only.
+receipt records the tree before and after validation. A change between the two
+snapshots fails pregate and leaves a receipt with `treeStable: false`. It also
+records `validationMode` (`focused` or `ci`); focused mode marks server and client
+results as reduced coverage.
+
+With a resolved remote default or explicit base, focused planning and receipt
+verification use four Git calls for a stable clean checkout and six for a stable
+dirty checkout whose temporary index is byte-identical at both ends. Dirty
+snapshots each stage into a fresh copy of the live index. A different snapshot
+index triggers `git write-tree` to check the resulting tree, since stat changes
+can alter the index without altering tracked content. Stage subprocesses run
+their own checks, including the hidden-content scan.
 
 ## Structural guards and dependency check
 
-The early guards use the same always-run and diff-selected structural selection
-as CI and `--guards-only`. They run before broad tests and resource probes.
-Successful guards are reused within this invocation only when the working tree,
-index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. Across invocations, a structural-guard or lint stage that passed earlier
-is reused (`⏭️ … reused from <time>`, recorded as the stage's `reusedFrom`) only
-when its key matches: the exact working tree (raw bytes where Git normalizes line
-endings), tracked paths and modes, Git config, ignored paths outside caches/build
-output/`data/`, installed dependency manifests, submodules, base SHA, Node/Git
-toolchain, environment and the stage's own command and file list. HEAD is not part
-of it, so committing validated content keeps the pass. `--full`, `--guards-only`
-and `PORTOS_TEST_MEMO=off` always rerun them. The receipt records guard outcomes, reuse proofs and per-file guard
-durations (`fileDurations`). A guard file over the 3s per-file target
-(`scripts/lib/guardBudget.js`) gets a `🐢` line naming it, but never fails local
-pregate: wall time on a machine running several agent gates measures the host,
-not the guard, and a slow pass stays reusable. The scheduled hosted run enforces a 6s budget,
-calibrated to its slower runner, on its Linux server job (`CI_GUARD_BUDGET=enforce`), where the always-run guards run
-as their own Vitest pass before the rest of the selection; PR, push and release runs
-only warn (`CI_GUARD_BUDGET=report`). There are no per-file exceptions. `scripts/ensure-deps.test.js`
-is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
-`update.ps1` and the lockfiles. Persistent test
-memo rules, required stages and worker caps remain the same. Downgraded full
-plans and `--guards-only` run the guard selection once; `--full` runs it before
-the full suites.
+The early guards run before broad tests and resource probes. Use
+`node scripts/pregate.js --guards-only` to run just the structural checks.
+Focused runs execute each selected guard once and run lint on every invocation.
+Full runs perform the early checks and keep the CI planner's broad selections.
+The receipt records guard outcomes and per-guard wall times (`guardDurations`):
+each structural guard runner's checks, and every other guard file whole. A guard
+over the 2.5s per-guard target (`scripts/lib/guardBudget.js`) gets a `🐢` line
+naming it. Local runs, PRs, pushes and releases warn about slow guards.
+The scheduled Linux server job enforces a 4s budget
+(`CI_GUARD_BUDGET=enforce`) and runs the always-run guards in a separate Vitest
+pass. `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
+`update.sh`, `update.ps1` and the lockfiles. Persistent test memo rules and
+worker caps still apply.
 
 Before lint or tests, pregate checks installed package versions against all
 four workspace lockfiles without modifying dependency trees. Stale, missing or
@@ -110,9 +112,10 @@ change the POSIX signal behavior.
 ## Test process containment
 
 Test process containment keeps signal delivery separate from verified
-termination. After worker-pool closure, any discovered owned child gets a
-bounded report in `.cache/test-process-diagnostics/`; the CI launcher also
-retains `processes.json` in its attempt diagnostics. Reports contain
+termination. After worker-pool closure, the runner gives its Vitest watchdog
+a brief window to exit on IPC disconnect. Owned children that require
+containment get a bounded report in `.cache/test-process-diagnostics/`. The CI
+launcher also retains `processes.json` in its attempt diagnostics. Reports contain
 repository-relative suite names, bounded worker IDs and fixed
 lifecycle/settlement categories, never raw process arguments, environments,
 PIDs or private paths. Suite attribution is captured at child construction and
@@ -124,16 +127,3 @@ Interrupted-run sweeps retain roots while their deferred escalation is pending.
 On POSIX, incomplete process inventories also retain stale roots; a dead runner
 does not prove its children exited. Pending identity checks apply to pool-close
 cleanup as well as later sweeps.
-
-## Merged-base guard diagnostic
-
-`npm run pregate:merged -- --merged-with <base-ref>` (the same as
-`node scripts/pregate.js --guards-only --merged-with <base-ref>`) runs the
-structural guards on HEAD merged with a fetched base in an isolated temporary
-repository. It is an opt-in diagnostic for investigating an integration break,
-not a merge precondition: no PortOS merge path runs it. The pending-merge sweep
-and the quality-snapshot publisher merge when the forge reports the PR mergeable
-with its required checks green, pinned to the recorded or published head. CI
-already tests each pull request on its merge ref, skips every runner for a
-`.quality.json`-only change because no guard reads that file, and scheduled CI
-on `main` publishes `Full CI Gate` as the post-merge backstop.

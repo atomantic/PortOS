@@ -2,7 +2,7 @@
 
 Music Video's **Separate vocals** provisions a private environment only after a
 user-triggered separation or configured autopilot run. Provisioning installs the
-complete, wheel-only `scripts/requirements-demucs.lock.txt` set, never the package names
+complete, wheel-only `scripts/ml/requirements/requirements-demucs.lock.txt` set, never the package names
 `demucs soundfile` against the latest index.
 
 The lock covers CPython **3.11** on Apple Silicon **macOS 14+**, Linux x86_64 and
@@ -27,7 +27,7 @@ No model weights are downloaded by that probe.
 
 Installation requires `--require-hashes --no-deps --only-binary :all:`. No source
 build, build-backend resolution or loose-package fallback is allowed. The source
-requirements and full regeneration command are in `scripts/requirements-demucs.txt`
+requirements and full regeneration command are in `scripts/ml/requirements/requirements-demucs.txt`
 and the lock header. Use a cooldown at least seven days before regeneration,
 then audit **every** pin across all platform markers through OSV, including
 malicious-package (`MAL-`) records. Hash verification establishes artifact

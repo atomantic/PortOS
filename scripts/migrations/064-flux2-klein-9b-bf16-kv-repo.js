@@ -3,7 +3,7 @@
  * loads the `-kv` sibling repo (whose transformer is tuned for the reference-
  * editing task) instead of the base FLUX.2-klein-9B.
  *
- * scripts/flux2_macos.py now lifts the multi-reference gate on the bf16
+ * scripts/ml/flux2_macos.py now lifts the multi-reference gate on the bf16
  * (`quantization=none`) path and loads `--kv-repo` when reference images are
  * present; server/services/imageGen/local.js threads `model.kvRepo` through as
  * `--kv-repo`. Without this field the runner refuses bf16 reference renders.

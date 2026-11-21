@@ -16,6 +16,7 @@ export const getSystemHealth = (options) => request('/system/health/details', op
 // Its own route, not a field on health/details — peers scrape that payload and
 // persist it verbatim, and the build stamp must stay machine-local (#4694).
 export const getSystemBuild = (options) => request('/system/build', options);
+export const getShellBootstrap = (options) => request('/shell/bootstrap', options);
 export const runSystemResourceReport = (options = {}) => request('/system-resources/report', {
   method: 'POST',
   ...options,
@@ -417,9 +418,20 @@ export const getNotifications = (options = {}) => {
   if (options.type) params.set('type', options.type);
   if (options.unreadOnly) params.set('unreadOnly', 'true');
   if (options.limit) params.set('limit', options.limit);
-  return request(`/notifications?${params}`);
+  if (options.includeCount) params.set('includeCount', 'true');
+  const read = () => request(`/notifications?${params}`);
+  return options.coalesce ? singleFlightRead(`/notifications?${params}`, read) : read();
 };
 export const getNotificationCount = () => request('/notifications/count');
+export const getNotificationSnapshot = async ({ limit, coalesce = false }) => {
+  const result = await getNotifications({ limit, includeCount: true, coalesce });
+  // Older servers ignore includeCount and return the original list.
+  if (Array.isArray(result)) return { notifications: result, ...await getNotificationCount() };
+  if (!Array.isArray(result?.notifications) || !Number.isInteger(result.count)) {
+    throw new Error('Invalid notification snapshot');
+  }
+  return result;
+};
 export const markNotificationRead = (id) => request(`/notifications/${id}/read`, { method: 'POST' });
 export const markAllNotificationsRead = () => request('/notifications/read-all', { method: 'POST' });
 export const deleteNotification = (id) => request(`/notifications/${id}`, { method: 'DELETE' });

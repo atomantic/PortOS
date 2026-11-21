@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render as renderUI, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/apiSystem.js', () => ({
   approveTailcatDevice: vi.fn(),
   revokeTailcatDevice: vi.fn(),
   setTailcatDeviceEnforcement: vi.fn(),
@@ -32,7 +32,15 @@ import socket from '../../services/socket';
 
 afterEach(() => vi.useRealTimers());
 
-import { approveTailcatDevice, revokeTailcatDevice, setTailcatDeviceEnforcement, getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
+import {
+  approveTailcatDevice,
+  revokeTailcatDevice,
+  setTailcatDeviceEnforcement,
+  getTailcatServe,
+  startTailcatServe,
+  retryTailcatServe,
+  stopTailcatServe,
+} from '../../services/apiSystem.js';
 import TailcatServePanel from './TailcatServePanel';
 
 const stopped = {

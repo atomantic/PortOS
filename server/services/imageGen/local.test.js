@@ -62,6 +62,7 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;
+let listGallery;
 let generateImage;
 let buildSidecarMeta;
 let resolveOutputPlacement;
@@ -73,10 +74,25 @@ beforeAll(async () => {
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
+  ({ buildArgs, listGallery, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
   PATHS.images = join(tmpRegistryDir, 'images');
   mkdirSync(PATHS.images);
+});
+
+it('lists JPEG mood board outputs with their metadata sidecar', async () => {
+  const filename = 'board-collage-example.jpg';
+  const image = join(PATHS.images, filename);
+  const sidecar = join(PATHS.images, 'board-collage-example.metadata.json');
+  writeFileSync(image, 'fixture');
+  writeFileSync(sidecar, JSON.stringify({ prompt: 'Example collage' }));
+  try {
+    expect((await listGallery()).find(item => item.filename === filename))
+      .toMatchObject({ filename, prompt: 'Example collage' });
+  } finally {
+    rmSync(image);
+    rmSync(sidecar);
+  }
 });
 
 describe('imageGen local.parseImageExecutionMarker', () => {
@@ -168,7 +184,7 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
     // First arg is the script path
-    expect(args[0]).toMatch(/scripts[/\\]flux2_macos\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]flux2_macos\.py$/);
     // Required CLI fields land in the args list (order isn't important here,
     // but we want presence + the exact repo/tokenizer values).
     expect(args).toContain('--quantization');
@@ -621,7 +637,7 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
       },
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
-    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]z_image_turbo\.py$/);
     expect(args).toContain('--repo');
     expect(args[args.indexOf('--repo') + 1]).toBe('Tongyi-MAI/Z-Image-Turbo');
     expect(args).toContain('--prompt');
@@ -710,7 +726,7 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
       },
     });
     expect(bin).toBe('/fake/venv-flux2/bin/python3');
-    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args[0]).toMatch(/scripts[/\\]ml[/\\]z_image_turbo\.py$/);
     expect(args).toContain('--pipeline-class');
     expect(args[args.indexOf('--pipeline-class') + 1]).toBe('ErnieImagePipeline');
     expect(args).toContain('--use-pe');
@@ -1240,6 +1256,35 @@ describe('reviewed local references', () => {
 });
 
 describe('local render failure delivery', () => {
+  it('settles the child when a progress subscriber throws during the final stdout flush', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { getActiveJob } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+    const failProgress = () => { throw new Error('progress subscriber failed'); };
+    imageGenEvents.once('progress', failProgress);
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    const claimReleaseCount = releaseClaim.mock.calls.length;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      child.stdout.emit('data', Buffer.from('STAGE:inference\n50%|██ | 1/2'));
+      child.emit('close', 1);
+      await expect(failed).resolves.toMatchObject({ generationId: jobId, error: expect.stringContaining('Exit code 1') });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('progress subscriber failed'));
+      expect(getActiveJob()).toBeNull();
+      expect(releaseClaim).toHaveBeenCalledTimes(claimReleaseCount + 1);
+    } finally {
+      imageGenEvents.off('progress', failProgress);
+      log.mockRestore();
+    }
+  });
+
   it.each([
     ['USER_ERROR:torch_runtime_broken\n❌ Unknown diffusers pipeline class: QwenImage21Pipeline. Reinstall the runtime.\n', 'Reinstall the runtime.'],
     ['runner.py: error: invalid value for --steps\n', 'invalid value for --steps'],

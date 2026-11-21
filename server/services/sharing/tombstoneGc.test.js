@@ -54,9 +54,11 @@ vi.mock('../moodBoard/index.js', () => ({
   pruneTombstonedBoards: vi.fn().mockResolvedValue({ pruned: 0 }),
   listBoardIds: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('../fableLoom/index.js', () => ({
+vi.mock('../fableLoom/records.js', () => ({
   pruneTombstonedLooms: vi.fn().mockResolvedValue({ pruned: 0 }),
   listLooms: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../fableLoom/store.js', () => ({
   listLiveIds: vi.fn().mockResolvedValue([]),
   listIds: vi.fn().mockResolvedValue([]),
 }));
@@ -122,10 +124,8 @@ import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
 import { pruneTombstonedProjects as pruneTombstonedMusicVideoProjects } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
-import {
-  pruneTombstonedLooms, listLooms,
-  listLiveIds as listLiveLoomIds, listIds as listLoomIds,
-} from '../fableLoom/index.js';
+import { pruneTombstonedLooms, listLooms } from '../fableLoom/records.js';
+import { listLiveIds as listLiveLoomIds, listIds as listLoomIds } from '../fableLoom/store.js';
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneTombstonedCommissionFeedback } from '../creativeCommissions/feedbackStore.js';
 import { pruneTombstonedCommissions } from '../creativeCommissions/store.js';

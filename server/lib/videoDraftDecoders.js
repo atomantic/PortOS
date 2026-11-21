@@ -124,7 +124,7 @@ export const validateDraftDecoderTable = (list) => {
       fail(entry.id, 'draftDecoder.files must be a non-empty array of non-empty strings');
       continue;
     }
-    // Mirrors build_draft_decoder_shim in scripts/generate_minimax_h3.py: one named source weight, so refuse multi-shard here rather than minutes into a render.
+    // Mirrors build_draft_decoder_shim in scripts/ml/generate_minimax_h3.py: one named source weight, so refuse multi-shard here rather than minutes into a render.
     if (files.length !== 1) {
       fail(entry.id, `draftDecoder.files must name exactly one weight file (the pinned VAE loader reads one); got ${files.length}`);
       continue;

@@ -86,15 +86,39 @@ const TRIAGE_RECOMMENDATION = {
   ],
 };
 
-vi.mock('../services/api', () => ({
-  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
+vi.mock('../services/apiAgents.js', () => ({
   addCosTask: vi.fn(() => Promise.resolve({ id: 'task-1' })),
-  getReviewCounts: vi.fn(),
-  getReviewBriefing: vi.fn(() => Promise.resolve(null)),
-  getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {}, partial: false })),
+  getCosAgent: vi.fn(),
+  submitCosAgentFeedback: vi.fn(),
+}));
+vi.mock('../services/apiBrainThreads.js', () => ({
   createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
   getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
   updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
+}));
+vi.mock('../services/apiBrain.js', () => ({
+  normalizeBrainScanReportPath: vi.fn((p) => p),
+}));
+vi.mock('../services/apiGithub.js', () => ({
+  applyGitHubNotificationAction: vi.fn(),
+  resolveGitHubNotificationWithAgent: vi.fn(),
+  actOnGitHubNotificationPullRequest: vi.fn(),
+  getGitHubDeploymentReview: vi.fn(),
+  reviewGitHubDeployment: vi.fn(),
+}));
+vi.mock('../services/apiProviders.js', () => ({
+  getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
+}));
+vi.mock('../services/apiHarnesses.js', () => ({
+  getHarnessUpdateReference: vi.fn(() => Promise.resolve({ state: 'unknown' })),
+}));
+
+vi.mock('../services/apiReview.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {}, partial: false })),
+  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
+  getReviewCounts: vi.fn(),
+  getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
   dismissReviewItem: vi.fn(() => Promise.resolve({})),
   deleteReviewItem: vi.fn(() => Promise.resolve({})),
@@ -103,23 +127,6 @@ vi.mock('../services/api', () => ({
   resolveReviewQueueItem: vi.fn(() => Promise.resolve({})),
   triageReviewQueueItem: vi.fn(() => Promise.resolve({})),
   promoteAskReviewQueueItem: vi.fn(() => Promise.resolve({})),
-  getCosAgent: vi.fn(),
-  submitCosAgentFeedback: vi.fn(),
-  normalizeBrainScanReportPath: vi.fn((p) => p),
-  applyGitHubNotificationAction: vi.fn(),
-  resolveGitHubNotificationWithAgent: vi.fn(),
-  actOnGitHubNotificationPullRequest: vi.fn(),
-  getGitHubDeploymentReview: vi.fn(),
-  reviewGitHubDeployment: vi.fn(),
-  getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
-  getHarnessUpdateReference: vi.fn(() => Promise.resolve({ state: 'unknown' })),
-}));
-
-// useActionQueue reads getReviewQueue from apiReview.js directly (#16562); wire
-// the barrel mock's fn so the api.getReviewQueue setups below still drive it.
-vi.mock('../services/apiReview.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  getReviewQueue: (await import('../services/api')).getReviewQueue,
 }));
 
 vi.mock('../services/socket', () => ({
@@ -141,7 +148,23 @@ vi.mock('react-router', () => ({
 }));
 
 import Review from './Review';
-import * as api from '../services/api';
+import {
+  getReviewCounts,
+  getReviewQueue,
+  resolveReviewQueueItem,
+  triageReviewQueueItem,
+  getReviewItems,
+  getReviewBriefing,
+} from '../services/apiReview.js';
+import { getHarnessUpdateReference } from '../services/apiHarnesses.js';
+import {
+  applyGitHubNotificationAction,
+  actOnGitHubNotificationPullRequest,
+  getGitHubDeploymentReview,
+  reviewGitHubDeployment,
+} from '../services/apiGithub.js';
+import { addCosTask, getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
+import { createThread } from '../services/apiBrainThreads.js';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { __resetActionQueue } from '../hooks/useActionQueue';
@@ -166,7 +189,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   routerState.actionId = undefined;
   routerState.searchParams = new URLSearchParams();
-  api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
+  getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
 });
 
 // The items and counts resources each register a listener per event; fire all of them like the real socket.
@@ -194,7 +217,7 @@ const githubQueue = (notification = GITHUB_NOTIFICATION) => ({
 
 it('opens a software update action in the existing guarded updater', async () => {
   routerState.actionId = 'updates:node';
-  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+  getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
     id: 'updates:node', source: 'updates', sourceLabel: 'Software updates', required: true,
     title: 'Node.js security update needed', summary: 'Running v26.0.0; target v26.13.0. Restart required.',
     severity: 'high', operations: [], drillTo: '/apps/portos-default/update', drillLabel: 'Open PortOS update',
@@ -204,11 +227,11 @@ it('opens a software update action in the existing guarded updater', async () =>
   const drawer = await screen.findByRole('dialog');
   fireEvent.click(within(drawer).getByRole('button', { name: 'Open PortOS update' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/apps/portos-default/update');
-  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+  expect(resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 
 it('shows the harness update destination beside snooze in the action row', async () => {
-  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+  getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
     id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
     title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example', drillLabel: 'Open harness',
     triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
@@ -217,14 +240,14 @@ it('shows the harness update destination beside snooze in the action row', async
   expect(await screen.findByRole('combobox', { name: 'Snooze Example CLI update available' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Open harness' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/ai/harnesses/example');
-  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+  expect(resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 
 it('starts the guarded harness update from the action row without navigating away', async () => {
   const request = vi.fn(async () => new Response(JSON.stringify({ error: 'Agent work is active.' }), { status: 409, headers: { 'content-type': 'application/json' } }));
   vi.stubGlobal('fetch', request);
-  api.getHarnessUpdateReference.mockResolvedValueOnce({ state: 'unknown', ticket: '00000000-0000-4000-8000-000000000001' });
-  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+  getHarnessUpdateReference.mockResolvedValueOnce({ state: 'unknown', ticket: '00000000-0000-4000-8000-000000000001' });
+  getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
     id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
     title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example',
     harnessUpdate: { id: 'example', label: 'Example CLI', installedVersion: '1.2.3', candidateVersion: '1.2.4', updatable: true },
@@ -238,7 +261,7 @@ it('starts the guarded harness update from the action row without navigating awa
 });
 
 it('shows unverified update checks as background status instead of an action', async () => {
-  api.getReviewQueue.mockResolvedValueOnce({ partial: true, items: [], sources: {
+  getReviewQueue.mockResolvedValueOnce({ partial: true, items: [], sources: {
     updates: { label: 'Software updates', availability: 'partial', available: true, incomplete: true },
   } });
   render(<Review />);
@@ -249,7 +272,7 @@ it('shows unverified update checks as background status instead of an action', a
 
 it('uses the source destination instead of sending a semantic review descriptor as a mutation', async () => {
   routerState.actionId = 'x:draft-example';
-  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+  getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
     id: 'x:draft-example', source: 'x', sourceLabel: 'X drafts', required: true,
     title: 'Draft awaiting review', drillTo: '/x/example/drafts',
     operations: [{ id: 'review', label: 'Review', available: true }],
@@ -261,15 +284,15 @@ it('uses the source destination instead of sending a semantic review descriptor 
   expect(screen.getAllByRole('button', { name: 'Open source' })).toHaveLength(2);
   fireEvent.click(within(drawer).getByRole('button', { name: 'Open source' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/x/example/drafts');
-  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+  expect(resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 
 describe('GitHub alerts in central Actions', () => {
-  beforeEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
-  afterEach(() => api.getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
+  beforeEach(() => getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
+  afterEach(() => getReviewQueue.mockReset().mockResolvedValue({ items: [], sources: {}, partial: false }));
   it('uses the inbox controls and clears a handled alert immediately while the queue refresh is pending', async () => {
-    api.getReviewQueue.mockResolvedValueOnce(githubQueue()).mockImplementationOnce(() => new Promise(() => {}));
-    api.applyGitHubNotificationAction.mockResolvedValue({ ...GITHUB_NOTIFICATION, state: 'done', unread: false });
+    getReviewQueue.mockResolvedValueOnce(githubQueue()).mockImplementationOnce(() => new Promise(() => {}));
+    applyGitHubNotificationAction.mockResolvedValue({ ...GITHUB_NOTIFICATION, state: 'done', unread: false });
     render(<Review />);
     const title = await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title });
     expect(title).toHaveAttribute('href', '/review/github%3Aexample-account%2F42?view=today');
@@ -283,18 +306,18 @@ describe('GitHub alerts in central Actions', () => {
     expect(screen.getByRole('link', { name: /Add automation rule/ })).toHaveAttribute('href', expect.stringContaining('/devtools/github/automations?'));
     fireEvent.click(within(card).getByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.queryByRole('link', { name: GITHUB_NOTIFICATION.title })).not.toBeInTheDocument());
-    expect(api.applyGitHubNotificationAction).toHaveBeenCalledWith('example-account', '42', 'done');
-    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+    expect(applyGitHubNotificationAction).toHaveBeenCalledWith('example-account', '42', 'done');
+    expect(resolveReviewQueueItem).not.toHaveBeenCalled();
   });
 
   it('keeps failed actions visible and preserves the server refusal for suspicious alerts', async () => {
-    api.getReviewQueue.mockResolvedValueOnce(githubQueue({ ...GITHUB_NOTIFICATION, suspect: true, agent: { refused: 'suspect' } }));
-    api.applyGitHubNotificationAction.mockRejectedValueOnce(new Error('Unavailable'));
+    getReviewQueue.mockResolvedValueOnce(githubQueue({ ...GITHUB_NOTIFICATION, suspect: true, agent: { refused: 'suspect' } }));
+    applyGitHubNotificationAction.mockRejectedValueOnce(new Error('Unavailable'));
     render(<Review />);
     await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title });
     expect(screen.getByRole('button', { name: 'Resolve with agent' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(api.applyGitHubNotificationAction).toHaveBeenCalled());
+    await waitFor(() => expect(applyGitHubNotificationAction).toHaveBeenCalled());
     expect(screen.getByRole('link', { name: GITHUB_NOTIFICATION.title })).toBeInTheDocument();
   });
 
@@ -302,8 +325,8 @@ describe('GitHub alerts in central Actions', () => {
     const notification = { ...GITHUB_NOTIFICATION,
       pullRequest: { number: 42, mergeEligible: true, doReviewEligible: true, reviewEligible: false },
     };
-    api.getReviewQueue.mockResolvedValueOnce(githubQueue(notification)).mockImplementationOnce(() => new Promise(() => {}));
-    api.actOnGitHubNotificationPullRequest.mockResolvedValue({ merged: true,
+    getReviewQueue.mockResolvedValueOnce(githubQueue(notification)).mockImplementationOnce(() => new Promise(() => {}));
+    actOnGitHubNotificationPullRequest.mockResolvedValue({ merged: true,
       notification: { ...notification, pullRequest: null, decision: 'suggest-mark-read' },
     });
     render(<Review />);
@@ -311,7 +334,7 @@ describe('GitHub alerts in central Actions', () => {
     expect(screen.queryByRole('button', { name: 'Resolve with agent' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
     fireEvent.click(screen.getByRole('button', { name: 'Merge #42' }));
-    await waitFor(() => expect(api.actOnGitHubNotificationPullRequest).toHaveBeenCalledWith('example-account', '42',
+    await waitFor(() => expect(actOnGitHubNotificationPullRequest).toHaveBeenCalledWith('example-account', '42',
       { action: 'merge', method: 'merge', deleteBranch: false }, { silent: true }));
     expect(await screen.findByRole('button', { name: 'Mark done' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Merge' })).not.toBeInTheDocument();
@@ -320,13 +343,13 @@ describe('GitHub alerts in central Actions', () => {
   it('offers the full deployment review from a notification deep link', async () => {
     routerState.actionId = 'github:example-account/42';
     const notification = { ...GITHUB_NOTIFICATION, deployment: { name: 'Example deployment', runId: 12 } };
-    api.getReviewQueue.mockResolvedValueOnce(githubQueue(notification));
-    api.getGitHubDeploymentReview.mockResolvedValue({ environments: [{ environmentId: 7, name: 'Staging', canApprove: true, reviewers: [] }] });
-    api.reviewGitHubDeployment.mockResolvedValue({ ...notification, state: 'done', unread: false });
+    getReviewQueue.mockResolvedValueOnce(githubQueue(notification));
+    getGitHubDeploymentReview.mockResolvedValue({ environments: [{ environmentId: 7, name: 'Staging', canApprove: true, reviewers: [] }] });
+    reviewGitHubDeployment.mockResolvedValue({ ...notification, state: 'done', unread: false });
     render(<Review />);
     fireEvent.click(await screen.findByRole('button', { name: 'Review deployment' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Approve and deploy' }));
-    await waitFor(() => expect(api.reviewGitHubDeployment).toHaveBeenCalledWith('example-account', '42', { state: 'approved', environmentIds: [7] }));
+    await waitFor(() => expect(reviewGitHubDeployment).toHaveBeenCalledWith('example-account', '42', { state: 'approved', environmentIds: [7] }));
     expect(routerState.navigate).toHaveBeenCalledWith('/review?view=today', { replace: true });
   });
 });
@@ -385,17 +408,17 @@ describe('Review Hub queue-card triage (#3282)', () => {
 
   it('queues an app-scoped investigation without resolving the alert', async () => {
     const investigation = { app: 'example-app', description: 'Fix process failure', prompt: 'Inspect example-worker logs and verify recovery.' };
-    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
       id: 'health:process_errored:7', source: 'health', sourceLabel: 'Health anomalies',
       title: 'Errored process: example-worker', investigation,
       operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     }] });
     render(<Review />);
     fireEvent.click(await screen.findByRole('button', { name: 'Queue agent to investigate' }));
-    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith({ ...investigation, isInvestigation: true }, { silent: true }));
+    await waitFor(() => expect(addCosTask).toHaveBeenCalledWith({ ...investigation, isInvestigation: true }, { silent: true }));
     expect(await screen.findByRole('button', { name: 'Agent queued' })).toBeDisabled();
     expect(screen.getByText('Errored process: example-worker')).toBeInTheDocument();
-    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+    expect(resolveReviewQueueItem).not.toHaveBeenCalled();
   });
 
   it('lets a corrected health issue be resolved from its card', async () => {
@@ -404,15 +427,15 @@ describe('Review Hub queue-card triage (#3282)', () => {
       title: 'Low success rate: example', summary: '3% success across the last 30 runs',
       operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     };
-    api.getReviewQueue.mockResolvedValueOnce({ partial: false, items: [item], sources: {} });
+    getReviewQueue.mockResolvedValueOnce({ partial: false, items: [item], sources: {} });
     render(<Review />);
     fireEvent.click(await screen.findByRole('button', { name: 'Mark resolved' }));
-    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(item.id, { operation: 'complete' }));
+    await waitFor(() => expect(resolveReviewQueueItem).toHaveBeenCalledWith(item.id, { operation: 'complete' }));
     await waitFor(() => expect(screen.queryByText(item.title)).not.toBeInTheDocument());
   });
 
   it('forwards an explicit source operation for source-owned queue actions', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({
+    getReviewQueue.mockResolvedValueOnce({
       partial: false,
       items: [{
         id: 'memory:memory-1',
@@ -434,7 +457,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
     const approve = await screen.findByRole('button', { name: 'Approve' });
     fireEvent.click(approve);
 
-    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
+    await waitFor(() => expect(resolveReviewQueueItem).toHaveBeenCalledWith(
       'memory:memory-1',
       { operation: 'approve' },
     ));
@@ -458,7 +481,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
         reviewLoopPRUrl: 'https://github.com/example-org/example-repo/pull/9',
       },
     };
-    api.getReviewQueue.mockResolvedValueOnce({ items: [item], sources: {}, partial: false });
+    getReviewQueue.mockResolvedValueOnce({ items: [item], sources: {}, partial: false });
 
     render(<Review />);
 
@@ -473,7 +496,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 
   it('shows durable snooze and recommendation-dismiss controls', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
+    getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
 
     render(<Review />);
     const snooze = await screen.findByRole('combobox', { name: 'Snooze Optional answer ready' });
@@ -481,51 +504,51 @@ describe('Review Hub queue-card triage (#3282)', () => {
 
     fireEvent.change(snooze, { target: { value: String(60 * 60 * 1000) } });
 
-    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+    await waitFor(() => expect(triageReviewQueueItem).toHaveBeenCalledWith(
       TRIAGE_RECOMMENDATION.id,
       { operation: 'snooze', snoozedUntil: expect.any(String) },
     ));
   });
 
   it('persists dismissal only for an optional recommendation', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
+    getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
 
     render(<Review />);
     fireEvent.click(await screen.findByRole('button', { name: 'Dismiss this recommendation' }));
 
-    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+    await waitFor(() => expect(triageReviewQueueItem).toHaveBeenCalledWith(
       TRIAGE_RECOMMENDATION.id,
       { operation: 'dismiss' },
     ));
   });
 
   it('renders the agent run card inline in the queue and submits feedback without opening the drawer', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
-    api.getCosAgent.mockResolvedValue({
+    getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    getCosAgent.mockResolvedValue({
       id: 'agent-example', status: 'completed', taskId: 'user-example',
       startedAt: '2026-08-01T11:00:00Z', completedAt: '2026-08-01T12:00:00Z',
       metadata: { taskDescription: 'Full example task context', taskType: 'user' },
       output: [{ line: 'Example diagnostic output', timestamp: '2026-08-01T12:00:00Z' }],
     });
-    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating: 'positive' } } });
+    submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating: 'positive' } } });
     render(<Review />);
     expect(await screen.findByText('Full example task context')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Review run and give feedback' })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Mark as helpful' }));
-    await waitFor(() => expect(api.submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating: 'positive', comment: undefined }, { silent: true }));
+    await waitFor(() => expect(submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating: 'positive', comment: undefined }, { silent: true }));
     expect(routerState.navigate).not.toHaveBeenCalled();
   });
 
   it.each([['positive', 'Mark as helpful'], ['negative', 'Mark as not helpful']])('reviews the completed run and submits %s feedback using the shared agent card', async (rating, label) => {
     routerState.actionId = FEEDBACK_ITEM.id;
-    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
-    api.getCosAgent.mockResolvedValue({
+    getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    getCosAgent.mockResolvedValue({
       id: 'agent-example', status: 'completed', taskId: 'user-example',
       startedAt: '2026-08-01T11:00:00Z', completedAt: '2026-08-01T12:00:00Z',
       metadata: { taskDescription: 'Full example task context', taskType: 'user' },
       output: [{ line: 'Example diagnostic output', timestamp: '2026-08-01T12:00:00Z' }],
     });
-    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating } } });
+    submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating } } });
     render(<Review />);
     expect(await screen.findByText('Full example task context')).toBeInTheDocument();
     expect(await screen.findByText('No completion summary was saved. The runner transcript is available separately.')).toBeInTheDocument();
@@ -533,19 +556,19 @@ describe('Review Hub queue-card triage (#3282)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show full transcript' }));
     expect(await screen.findByText('Example diagnostic output')).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: label }));
-    await waitFor(() => expect(api.submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating, comment: undefined }, { silent: true }));
+    await waitFor(() => expect(submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating, comment: undefined }, { silent: true }));
     await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith('/review?view=today', { replace: true }));
-    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+    expect(resolveReviewQueueItem).not.toHaveBeenCalled();
   });
 
   it('keeps failed run loads retryable without exposing a separate rating form', async () => {
     routerState.actionId = FEEDBACK_ITEM.id;
-    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
-    api.getCosAgent.mockRejectedValueOnce(new Error('Unavailable'));
+    getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    getCosAgent.mockRejectedValueOnce(new Error('Unavailable'));
     render(<Review />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load this agent run');
     expect(screen.queryByRole('button', { name: 'Mark as helpful' })).not.toBeInTheDocument();
-    api.getCosAgent.mockResolvedValue({ id: 'agent-example', status: 'completed', metadata: { taskType: 'user' } });
+    getCosAgent.mockResolvedValue({ id: 'agent-example', status: 'completed', metadata: { taskType: 'user' } });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('button', { name: 'Mark as helpful' })).toBeInTheDocument();
   });
@@ -606,7 +629,7 @@ describe('Actions commitments workspace (#7739)', () => {
       title: 'Required health action', summary: 'Review this action',
       operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     };
-    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [canonicalItem] });
+    getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [canonicalItem] });
 
     render(<Review />);
 
@@ -633,7 +656,7 @@ describe('Actions commitments workspace (#7739)', () => {
       sources: { health: { label: 'Health anomalies', error: 'source unavailable' } },
       items: [],
     };
-    api.getReviewQueue.mockResolvedValueOnce(degradedQueue);
+    getReviewQueue.mockResolvedValueOnce(degradedQueue);
 
     render(<Review />);
 
@@ -646,8 +669,8 @@ describe('Actions commitments workspace (#7739)', () => {
 
   it('renders the canonical Actions workspace while stored review items are pending', async () => {
     let resolveLegacyItems;
-    api.getReviewItems.mockReturnValueOnce(new Promise((resolve) => { resolveLegacyItems = resolve; }));
-    api.getReviewQueue.mockResolvedValueOnce({
+    getReviewItems.mockReturnValueOnce(new Promise((resolve) => { resolveLegacyItems = resolve; }));
+    getReviewQueue.mockResolvedValueOnce({
       partial: false,
       sources: {},
       items: [],
@@ -665,8 +688,8 @@ describe('Actions commitments workspace (#7739)', () => {
   });
 
   it('shows and retries a canonical queue failure while stored review items are pending', async () => {
-    api.getReviewItems.mockReturnValueOnce(new Promise(() => {}));
-    api.getReviewQueue.mockRejectedValueOnce(new Error('synthetic queue failure'));
+    getReviewItems.mockReturnValueOnce(new Promise(() => {}));
+    getReviewQueue.mockRejectedValueOnce(new Error('synthetic queue failure'));
 
     render(<Review />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Actions unavailable');
@@ -674,13 +697,13 @@ describe('Actions commitments workspace (#7739)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
-    await waitFor(() => expect(api.getReviewQueue).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getReviewQueue).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Actions unavailable')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Quick add action')).toBeEnabled();
   });
 
   it('shows a local retry when stored review items fail to load', async () => {
-    api.getReviewItems
+    getReviewItems
       .mockRejectedValueOnce(new Error('synthetic legacy read failure'))
       .mockResolvedValueOnce([ITEM]);
 
@@ -700,14 +723,14 @@ describe('Actions commitments workspace (#7739)', () => {
     fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
-    await waitFor(() => expect(api.createThread).toHaveBeenCalledWith(
+    await waitFor(() => expect(createThread).toHaveBeenCalledWith(
       { title: 'Track the example follow-up' },
     ));
   });
 
   it('shows the failure and keeps the typed action when the create fails', async () => {
     const real = await vi.importActual('../services/apiBrainThreads');
-    api.createThread.mockImplementationOnce(real.createThread);
+    createThread.mockImplementationOnce(real.createThread);
     const toastError = vi.spyOn(toast, 'error').mockImplementation(() => {});
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: 'Server refused the save' }) }));
     render(<Review />);
@@ -740,7 +763,7 @@ describe('Review status request ownership (#9447)', () => {
 
   it('keeps the latest selected status results when an older success arrives last', async () => {
     let resolveCompleted;
-    api.getReviewItems
+    getReviewItems
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(new Promise(resolve => { resolveCompleted = resolve; }))
       .mockResolvedValueOnce([dismissedItem]);
@@ -765,7 +788,7 @@ describe('Review status request ownership (#9447)', () => {
     let resolveCompleted;
     let rejectCompleted;
     let resolveDismissed;
-    api.getReviewItems
+    getReviewItems
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(new Promise((resolve, reject) => { resolveCompleted = resolve; rejectCompleted = reject; }))
       .mockReturnValueOnce(new Promise(resolve => { resolveDismissed = resolve; }));
@@ -801,7 +824,7 @@ describe('Review Hub bulk status updates (#6853)', () => {
     expect(handler).toBeTypeOf('function');
 
     // The event invalidates the stored list; the server's answer is the new truth.
-    api.getReviewItems.mockResolvedValueOnce([{ ...ITEM, status: 'dismissed' }, { ...SHORT_ITEM, status: 'dismissed' }]);
+    getReviewItems.mockResolvedValueOnce([{ ...ITEM, status: 'dismissed' }, { ...SHORT_ITEM, status: 'dismissed' }]);
     await act(async () => {
       handler({ ids: [ITEM.id, SHORT_ITEM.id], status: 'dismissed', updatedAt: new Date().toISOString() });
     });
@@ -835,7 +858,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     const handler = socketHandler('review:item:updated');
     expect(handler).toBeTypeOf('function');
 
-    api.getReviewItems.mockResolvedValueOnce([]);
+    getReviewItems.mockResolvedValueOnce([]);
     await act(async () => {
       handler({ ...ITEM, status: 'completed' });
     });
@@ -875,7 +898,7 @@ describe('Review Hub triage summary (#6926)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter review items by status' }), {
       target: { value: 'completed' }
     });
-    await waitFor(() => expect(api.getReviewItems).toHaveBeenLastCalledWith({ status: 'completed' }, { silent: true }));
+    await waitFor(() => expect(getReviewItems).toHaveBeenLastCalledWith({ status: 'completed' }, { silent: true }));
 
     expect(summaryValue('Pending')).toBe('8');
     expect(summaryValue('Alerts')).toBe('3');
@@ -885,7 +908,7 @@ describe('Review Hub triage summary (#6926)', () => {
 
   it('refreshes global pending counts when a review item changes', async () => {
     const updatedCounts = { total: 7, alert: 2, todo: 1, briefing: 0, cos: 4 };
-    api.getReviewCounts
+    getReviewCounts
       .mockReset()
       .mockResolvedValueOnce(SUMMARY_COUNTS)
       .mockResolvedValueOnce(updatedCounts);
@@ -903,13 +926,13 @@ describe('Review Hub triage summary (#6926)', () => {
 
     await waitFor(() => expect(summaryValue('Pending')).toBe('7'));
     expect(summaryValue('Alerts')).toBe('2');
-    expect(api.getReviewCounts).toHaveBeenCalledTimes(2);
+    expect(getReviewCounts).toHaveBeenCalledTimes(2);
   });
 
   it('discards an obsolete count read when an event invalidates it mid-flight', async () => {
     let resolveInitial;
     let resolveRefresh;
-    api.getReviewCounts
+    getReviewCounts
       .mockReset()
       .mockImplementationOnce(() => new Promise(resolve => { resolveInitial = resolve; }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
@@ -941,8 +964,8 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
   const historyDisclosure = () => screen.getByText(/Daily briefing ·/).closest('details');
 
   it('states the all-clear and shows the pending stored items ahead of a stale briefing', async () => {
-    api.getReviewItems.mockResolvedValueOnce([SHORT_ITEM]);
-    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-04-05T12:00:00Z', content: 'Old briefing body' });
+    getReviewItems.mockResolvedValueOnce([SHORT_ITEM]);
+    getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-04-05T12:00:00Z', content: 'Old briefing body' });
     render(<Review />);
 
     expect(await screen.findByText('Nothing needs you today')).toBeInTheDocument();
@@ -957,7 +980,7 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
   });
 
   it('opens the briefing automatically when it was generated within the last day', async () => {
-    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: new Date().toISOString(), content: 'Fresh briefing body' });
+    getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: new Date().toISOString(), content: 'Fresh briefing body' });
     render(<Review />);
 
     await screen.findByText('Fresh briefing body');
@@ -965,7 +988,7 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
   });
 
   it('keeps the all-clear line off a non-empty canonical queue', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
       id: 'health:example', source: 'health', sourceLabel: 'Health anomalies', title: 'Required health action',
       summary: 'x', required: true, operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     }] });
@@ -978,7 +1001,7 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
 
 describe('Review Hub Daily Briefing fullscreen dialog (#9121)', () => {
   it('acts as a focus-trapped, Escape-dismissable dialog and returns focus to the toggle', async () => {
-    api.getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-09-29T00:00:00Z', content: 'Briefing body' });
+    getReviewBriefing.mockResolvedValueOnce({ source: 'test', generatedAt: '2026-09-29T00:00:00Z', content: 'Briefing body' });
     render(<Review />);
 
     const toggle = await screen.findByRole('button', { name: 'Fullscreen' });
@@ -1012,5 +1035,46 @@ describe('Actions view tabs wiring', () => {
     expect(panel.getAttribute('role')).toBe('tabpanel');
     expect(panel.getAttribute('aria-labelledby')).toBe(tab.id);
     expect(tab.id).toBe(`tab-${view}`);
+  });
+});
+
+describe('Legacy review-item fetch gating (#16924)', () => {
+  it('does not fetch legacy review items on mount or review:item:* events when canonical actions exist', async () => {
+    getReviewQueue.mockResolvedValue({
+      partial: false,
+      sources: {},
+      items: [{
+        id: 'threads:thread-1',
+        source: 'threads',
+        sourceRef: 'thread-1',
+        sourceLabel: 'Commitment',
+        title: 'Canonical action',
+        summary: 'Active item',
+        required: true,
+        operations: [{ id: 'complete', label: 'Complete', available: true }],
+      }],
+    });
+
+    try {
+      render(<Review />);
+      expect(await screen.findByText('Canonical action')).toBeInTheDocument();
+      expect(getReviewItems).not.toHaveBeenCalled();
+
+      await act(async () => socketHandler('review:item:created')?.({ ...CREATED_PENDING_ITEM }));
+      expect(getReviewItems).not.toHaveBeenCalled();
+    } finally {
+      getReviewQueue.mockResolvedValue({ items: [], sources: {}, partial: false });
+    }
+  });
+
+  it('fetches legacy review items only after the canonical queue resolves empty', async () => {
+    let resolveQueue;
+    getReviewQueue.mockReturnValueOnce(new Promise((resolve) => { resolveQueue = resolve; }));
+
+    render(<Review />);
+    expect(getReviewItems).not.toHaveBeenCalled();
+
+    await act(async () => resolveQueue({ partial: false, sources: {}, items: [] }));
+    await waitFor(() => expect(getReviewItems).toHaveBeenCalledTimes(1));
   });
 });

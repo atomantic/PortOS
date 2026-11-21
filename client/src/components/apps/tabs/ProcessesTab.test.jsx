@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/apiCommands.js', () => ({
   applyProcessAction: vi.fn(),
   getProcessesList: vi.fn(),
 }));

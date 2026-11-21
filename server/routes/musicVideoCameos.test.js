@@ -62,6 +62,16 @@ async function addCameo(name = 'Example Dog', extra = {}) {
 }
 
 describe('music video cameos', () => {
+  it('files added reference photos into the video\'s collection', async () => {
+    seedImage('ref-a.png');
+    const cameo = await addCameo();
+    await expectStatus(request(app).post(`${base()}/cameos/${cameo.cameoId}/references`)
+      .send({ references: [{ imageId: 'ref-a.png', source: 'gallery' }] }), 200);
+    const { getCollection, musicVideoCollectionId } = await import('../services/mediaCollections.js');
+    const collection = await getCollection(musicVideoCollectionId(project.id));
+    expect(collection.items.map((item) => `${item.kind}:${item.ref}`)).toEqual(['image:ref-a.png']);
+  });
+
   it('fills linked shots from the chosen still, refills on change, and keeps a shot\'s own take', async () => {
     seedImage('still-a.png');
     seedImage('still-b.png');

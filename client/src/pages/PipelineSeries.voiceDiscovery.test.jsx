@@ -13,17 +13,20 @@ import PipelineSeries from './PipelineSeries';
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
-const listUniverses = vi.fn();
+const listUniverseNames = vi.fn();
 const discoverSeriesVoice = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...args) => getPipelineSeries(...args),
   updatePipelineSeries: vi.fn(),
   listPipelineIssues: (...args) => listPipelineIssues(...args),
-  listUniverses: (...args) => listUniverses(...args),
   generateSeriesTitleLogo: vi.fn(),
   discoverSeriesVoice: (...args) => discoverSeriesVoice(...args),
   SERIES_TITLE_LOGO_MAX: 1_000,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({
+  listUniverseNames: (...args) => listUniverseNames(...args),
+  getUniverse: vi.fn().mockResolvedValue({ characters: [] }),
 }));
 
 vi.mock('../hooks/useArcCanvasSync', () => ({
@@ -69,7 +72,7 @@ describe('Pipeline series — voice discovery across a series switch', () => {
     vi.clearAllMocks();
     getPipelineSeries.mockImplementation(async (id) => SERIES[id]);
     listPipelineIssues.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([]);
+    listUniverseNames.mockResolvedValue([]);
   });
 
   it('drops the previous series’ discovered passages', async () => {

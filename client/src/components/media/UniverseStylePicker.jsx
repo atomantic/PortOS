@@ -1,6 +1,7 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { Globe, X } from 'lucide-react';
-import { listUniverseStyles } from '../../services/api';
+import { listUniverseStyles } from '../../services/apiUniverseBuilder.js';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 
 // Universe style is intentionally a separate picker from StylePresetPicker:
@@ -69,7 +70,7 @@ export default function UniverseStylePicker({
         className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
       >
         <option value="">None — use prompt as-is</option>
-        {styles.map((universe) => (
+        {sortByLabel(styles).map((universe) => (
           <option key={universe.id} value={universe.id}>{universe.name}</option>
         ))}
       </select>

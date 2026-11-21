@@ -77,6 +77,14 @@ vi.mock('../mediaCollections.js', async () => ({
   mergeMediaCollectionsFromSync: vi.fn(),
 }));
 
+vi.mock('../videoGen/history.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadCompactHistory: async () => {
+    const { PATHS, readJSONFile } = await import('../../lib/fileUtils.js');
+    return readJSONFile(join(PATHS.data, 'video-history.json'), []);
+  },
+}));
+
 // #1566 — the media-library sweep dynamic-imports this to rebuild the derived
 // media_assets index after bytes land. Mock it to a no-op spy so the sweep tests
 // don't touch Postgres and can assert the reconcile fired.
@@ -167,7 +175,7 @@ vi.mock('../moodBoard/index.js', async (importOriginal) => ({
   getBoard: vi.fn(),
   mergeBoardsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
-vi.mock('../fableLoom/index.js', () => ({
+vi.mock('../fableLoom/records.js', () => ({
   getLoom: vi.fn(),
   listLooms: vi.fn().mockResolvedValue([]),
   mergeLoomsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
@@ -309,7 +317,7 @@ import {
   mergeProjectsFromSync as mergeCreativeDirectorProjectsFromSync,
 } from '../creativeDirector/local.js';
 import { listBoards, getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
-import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/index.js';
+import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/records.js';
 import {
   listWorksForSync, getWorkForSync, mergeWorksFromSync,
   listFoldersForSync, getFolderForSync, mergeFoldersFromSync,
@@ -1809,6 +1817,25 @@ describe('peerSync', () => {
   });
 
   describe('getRecordPayloadForPeer', () => {
+    it('uses the collection history filename for both transfers and read-only integrity', async () => {
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.videos, 'imported.webm'), 'video bytes');
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([{ id: 'video-id', filename: 'imported.webm' }]));
+      vi.mocked(getCollection).mockResolvedValue({
+        id: 'collection-1', name: 'Test collection', items: [{ kind: 'video', ref: 'video-id' }],
+      });
+
+      const inventory = await getRecordPayloadForPeer('mediaCollection', 'collection-1', { collectionIntegrity: true });
+      expect(inventory).toMatchObject({
+        assetManifest: [{ kind: 'video', filename: 'imported.webm', sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }],
+        videoFilenames: { 'video-id.mp4': 'imported.webm' },
+      });
+      const transfer = await getRecordPayloadForPeer('mediaCollection', 'collection-1');
+      expect(transfer.assetManifest).toEqual(inventory.assetManifest);
+      expect(transfer).not.toHaveProperty('videoFilenames');
+    });
+
     it('returns a push-payload for an existing universe', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
       const payload = await getRecordPayloadForPeer('universe', 'u1');
@@ -1866,6 +1893,30 @@ describe('peerSync', () => {
       const result = await pullRecordFromPeer('peer-a', 'universe', 'u-pull');
       expect(result.pulled).toBe(true);
       expect(typeof result.missingAssets).toBe('number');
+    });
+
+    it.each([2001, 5000])('pulls a collection with %i manifest entries and admits only its referenced assets', async (count) => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        id: 'p-host', instanceId: 'peer-a', address: '192.0.2.1', port: 5555, mediaSyncMode: 'host',
+      }]);
+      const assetManifest = Array.from({ length: count }, (_, i) => ({
+        kind: 'image', filename: `collection-${i}.png`, sha256: 'a'.repeat(64),
+      }));
+      const items = assetManifest.map(({ filename }) => ({ kind: 'image', ref: filename }));
+      const record = { id: 'col-pull', name: 'Full collection', items, updatedAt: '2026-01-01T00:00:00Z' };
+      const unrelated = { kind: 'image', filename: 'unrelated.png', sha256: 'b'.repeat(64) };
+      vi.mocked(peerFetch).mockResolvedValueOnce(new Response(JSON.stringify({
+        kind: 'mediaCollection', record, sourceInstanceId: 'peer-a',
+        assetManifest: [...assetManifest.slice(0, -1), unrelated],
+      })));
+
+      expect(await pullRecordFromPeer('peer-a', 'mediaCollection', record.id)).toEqual({ pulled: true, missingAssets: 0 });
+      expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith([record], expect.anything());
+      const { listHostedEntries } = await import('../peerHostedMedia.js');
+      const hosted = await listHostedEntries();
+      expect(Object.keys(hosted)).toHaveLength(count - 1);
+      expect(hosted).toHaveProperty([`image:collection-${count - 2}.png`]);
+      expect(hosted).not.toHaveProperty(['image:unrelated.png']);
     });
 
     it('invalid-payload when sourceInstanceId does not match the contacted peer', async () => {
@@ -2599,10 +2650,13 @@ describe('peerSync', () => {
       expect(peerFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('bundles child issues with a series push', async () => {
+    it('bundles child issues with current stage content and without run history', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValue([
-        { id: 'i1', seriesId: 'ser-1', number: 1 },
+        { id: 'i1', seriesId: 'ser-1', number: 1, stages: {
+          prose: { input: 'prompt', output: 'current prose', status: 'ready', runHistory: [{ runId: 'older' }] },
+          audio: { status: 'empty', runHistory: [] },
+        } },
         { id: 'i1001', seriesId: 'ser-1', number: 1001 },
       ]);
       let captured = null;
@@ -2616,7 +2670,11 @@ describe('peerSync', () => {
       expect(captured.kind).toBe('series');
       expect(captured.issues).toHaveLength(2);
       expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i1001']);
-      expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true });
+      expect(captured.issues[0].stages).toEqual({
+        prose: { input: 'prompt', output: 'current prose', status: 'ready' },
+        audio: { status: 'empty' },
+      });
+      expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true, withHistory: false });
     });
 
     it('stamps a conflict-journal base hash for every bundled issue after a series push lands', async () => {
@@ -3087,6 +3145,48 @@ describe('peerSync', () => {
         },
       ]);
     };
+
+    it('keeps a large collection pending when the peer still enforces the old manifest limit', async () => {
+      enableCollectionPeer();
+      const record = { id: 'col-large', name: 'Large collection', items: [], updatedAt: '2026-01-01T00:00:00Z' };
+      vi.mocked(getCollection).mockResolvedValue(record);
+      const subscribe = { peerId: 'peer-a', recordKind: 'mediaCollection', recordId: record.id };
+      const sub = await subscribePeer(subscribe, { adoptedFromReverse: true });
+      vi.mocked(peerFetch).mockResolvedValueOnce(Response.json({ ackedDeletesUpTo: 1 }));
+      expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: true });
+      const before = await findPeerSubscription('peer-a', 'mediaCollection', record.id);
+      const baseHash = await getSyncBaseHash('mediaCollection', record.id);
+      const cursors = await listCursors();
+
+      const items = Array.from({ length: 2001 }, (_, i) => ({ kind: 'image', ref: `large-${i}.png` }));
+      for (let i = 0; i < items.length; i += 64) {
+        await Promise.all(items.slice(i, i + 64).map(({ ref }) => writeFile(join(PATHS.images, ref), 'image bytes')));
+      }
+      vi.mocked(getCollection).mockResolvedValue({ ...record, name: 'Updated collection', items });
+      vi.mocked(peerFetch).mockClear().mockResolvedValueOnce(Response.json({
+        code: 'VALIDATION_ERROR',
+        context: { details: [{ path: 'assetManifest', message: 'Too big: expected array to have <=2000 items' }] },
+        ackedDeletesUpTo: 2,
+      }, { status: 400 }));
+
+      expect(await pushRecordToPeer(before)).toEqual({ pushed: false, reason: 'peer-schema-behind', blockedBySchema: true });
+      expect(peerFetch).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(vi.mocked(peerFetch).mock.calls[0][1].body).assetManifest).toHaveLength(2001);
+      expect(await findPeerSubscription('peer-a', 'mediaCollection', record.id)).toMatchObject({
+        blockedBySchema: { reason: 'peer-collection-manifest-limit' },
+        lastPushedHash: before.lastPushedHash,
+        lastPushedAt: before.lastPushedAt,
+        lastConfirmedPushedAt: before.lastConfirmedPushedAt,
+      });
+      expect(await getSyncBaseHash('mediaCollection', record.id)).toBe(baseHash);
+      expect(await listCursors()).toEqual(cursors);
+
+      vi.mocked(peerFetch).mockResolvedValueOnce(Response.json({}));
+      expect(await forcePushRecord('peer-a', 'mediaCollection', record.id)).toMatchObject({ pushed: true });
+      const after = await findPeerSubscription('peer-a', 'mediaCollection', record.id);
+      expect(after.blockedBySchema).toBeFalsy();
+      expect(after.lastPushedHash).not.toBe(before.lastPushedHash);
+    });
 
     it('emits BOTH image and video manifest entries for a live mediaCollection push', async () => {
       // Regression (Bug 2): video collection items store the bare videoId; the
@@ -5894,6 +5994,38 @@ describe('peerSync', () => {
   });
 
   describe('applyIncomingPush — mediaCollection', () => {
+    it.each(['copy', 'host'])('admits alternate video bytes in %s mode only for a history-bound collection ID', async (mediaSyncMode) => {
+      PATHS.videos = join(tmp, 'videos');
+      vi.mocked(getPeers).mockResolvedValue([{ instanceId: 'peer-a', host: 'peer.example.com', port: 5555, mediaSyncMode }]);
+      const { resolveMediaLocations, listHostedEntries } = await import('../peerHostedMedia.js');
+      const clip = { kind: 'video', filename: 'imported.webm', sha256: 'a'.repeat(64) };
+      const record = { id: 'col-imported', name: 'Imported',
+        items: [{ kind: 'video', ref: 'imported-id' }], updatedAt: '2026-05-23T00:00:00.000Z' };
+      const envelope = { kind: 'mediaCollection', record, sourceInstanceId: 'peer-a', assetManifest: [
+        clip, { ...clip, filename: 'unrelated.webm' },
+      ] };
+
+      expect((await applyIncomingPush(envelope)).missingAssets).toEqual([]);
+      expect(peerFetch).not.toHaveBeenCalled();
+      expect(await listHostedEntries()).toEqual({});
+
+      await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([
+        { id: 'imported-id', filename: clip.filename }, { id: 'unrelated-id', filename: 'unrelated.webm' },
+      ]));
+      envelope.assetManifest.push({ ...clip, filename: 'imported-id.mp4' });
+      const receipt = await applyIncomingPush(envelope);
+      if (mediaSyncMode === 'host') {
+        expect(receipt.missingAssets).toEqual([]);
+        expect(peerFetch).not.toHaveBeenCalled();
+        expect((await resolveMediaLocations(record.items))[0]).toMatchObject({ location: 'remote', hostPeerId: 'peer-a' });
+        expect(Object.keys(await listHostedEntries())).toEqual(['video:imported.webm']);
+      } else {
+        expect(receipt.missingAssets).toEqual([clip]);
+        await vi.waitFor(() => expect(peerFetch).toHaveBeenCalledTimes(1));
+        expect(peerFetch).toHaveBeenCalledWith(expect.stringMatching(/\/data\/videos\/imported\.webm$/), expect.anything(), expect.anything());
+      }
+    });
+
     it('applies an incoming mediaCollection push into local collections', async () => {
       // Use the real mergeMediaCollectionsFromSync via importActual so the
       // write lands in the tmpdir and listCollections can confirm persistence.

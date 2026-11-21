@@ -20,7 +20,7 @@ Path(sys.argv[sys.argv.index("--output") + 1]).write_text("rendered")
 print(json.dumps({"phase": "denoise", "step": 1, "total_steps": 1}))
 `);
     const output = join(root, 'output.mp4');
-    const script = fileURLToPath(new URL('./generate_wan22.py', import.meta.url));
+    const script = fileURLToPath(new URL('./ml/generate_wan22.py', import.meta.url));
     const result = spawnSync(python, [
       script, '--model-repo', 'fixture', '--prompt', 'Fixture',
       '--width', '320', '--height', '256', '--output', output,

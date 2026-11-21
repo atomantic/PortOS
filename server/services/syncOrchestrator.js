@@ -23,6 +23,7 @@ import * as brainSyncLog from './brainSyncLog.js';
 import * as brainReconcile from './brainReconcile.js';
 import * as memorySync from './memorySync.js';
 import * as catalogSync from './catalog/catalogSync.js';
+import { pullMissingCatalogMediaBytes } from './catalog/catalogMediaBytesSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -181,7 +182,7 @@ async function fetchHostedInventory(peer, category, kind, { probeOlderPeers = tr
   // per-file probe (the holders list and file times take the route's answer only).
   if (!probeOlderPeers) return null;
   const { checked } = await dataSync.getHostedMediaInventory(category, kind);
-  // Whole literals so the peer-surface guard (apiAccessPolicy.guard.test.js) can see both routes.
+  // Whole literals so the peer-surface guard (server/test/guards/modules/apiAccessPolicy.test.js) can see both routes.
   const mediaRoot = kind === 'image' ? '/data/images/' : '/data/videos/';
   const found = await mapWithConcurrency(checked, 4, async (filename) => {
     const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(
@@ -964,6 +965,9 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
         attemptedCategories += 1;
         catalogResult = await syncCatalogFromPeer(peer, peerId, cursor);
         reportApplied('catalog', catalogResult.totalApplied);
+        // Rows carry keys, not files. Pulled in the background so a large download
+        // never holds this peer's sync lock; the sweep owns its own failures.
+        if (!catalogResult.blockedBySchema) void pullMissingCatalogMediaBytes(peer, { applied: catalogResult.totalApplied });
       }
     }
 

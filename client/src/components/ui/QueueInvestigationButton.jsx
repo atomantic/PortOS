@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { Bot, Check } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { addCosTask } from '../../services/api';
+import { addCosTask } from '../../services/apiAgents.js';
 import toast from './Toast';
 
 // The task's identity as an investigation (#6043) is the only posture flag sent:

@@ -2,27 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation, useSearchParams } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiTribe.js', () => ({
   getTribePeople: vi.fn(() => Promise.resolve({ people: [] })),
-  // OutreachQueue (care tab) fetches unanswered threads on mount (#2158).
   getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
   createTribeTouchpoint: vi.fn(),
   updateTribePerson: vi.fn(),
   deleteTribePerson: vi.fn(() => Promise.resolve({ success: true })),
-  // Non-blocking duplicate-identifier report (#5908); defaults to clean so
-  // tests unrelated to it never see the banner.
   getTribeDuplicateIdentifiers: vi.fn(() => Promise.resolve({ emails: [], phones: [] })),
-  // Single-person read (#99) — the "Linked on Beeper" block's data source;
-  // defaults to no identities so tests unrelated to it never see the block.
   getTribePerson: vi.fn(() => Promise.resolve({ identities: [] })),
   unlinkBeeperIdentity: vi.fn(() => Promise.resolve({ success: true })),
-  // Circle tab's aside mounts MemoryLinksPanel/TouchpointsPanel once a
-  // person is selected (`draft.id` set) — the `?person=` deep-link tests and
-  // the "Linked on Beeper" tests below both select a real person, so these
-  // need real (empty) defaults too.
   getTribeMemoryLinks: vi.fn(() => Promise.resolve({ links: [] })),
-  getMemories: vi.fn(() => Promise.resolve({ memories: [] })),
   getTribeTouchpoints: vi.fn(() => Promise.resolve({ touchpoints: [] })),
+}));
+vi.mock('../services/apiMemory.js', () => ({
+  getMemories: vi.fn(() => Promise.resolve({ memories: [] })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -30,7 +23,19 @@ vi.mock('../services/socket', () => ({
 }));
 
 import Tribe from './Tribe';
-import * as api from '../services/api';
+import {
+  getTribePeople,
+  createTribeTouchpoint,
+  updateTribePerson,
+  getTribeDuplicateIdentifiers,
+  getTribePerson,
+  unlinkBeeperIdentity,
+  getTribeMemoryLinks,
+  getTribeTouchpoints,
+  getTribeOutreach,
+  deleteTribePerson,
+} from '../services/apiTribe.js';
+import { getMemories } from '../services/apiMemory.js';
 import socket from '../services/socket';
 
 afterEach(() => {
@@ -66,8 +71,8 @@ const PEOPLE = [
 
 describe('Tribe deep-linkable tabs', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: [] });
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: [] });
     // localStorage is used for the legacy-import path; keep it empty.
     window.localStorage.clear();
   });
@@ -79,7 +84,7 @@ describe('Tribe deep-linkable tabs', () => {
   });
 
   it('falls back to the default Care Queue tab for an unknown tab value', async () => {
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     renderAt('/tribe?tab=bogus');
     // The Care Queue leads with the care filter bar and Touch buttons; the
     // Circle tab's search field is not on the first screen.
@@ -121,12 +126,12 @@ describe('Tribe deep-linkable tabs', () => {
 
 describe('Tribe create actions', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
+    getTribePeople.mockClear();
     window.localStorage.clear();
   });
 
   it('starts a new relationship from the header Add only while the roster is empty', async () => {
-    api.getTribePeople.mockResolvedValue({ people: [] });
+    getTribePeople.mockResolvedValue({ people: [] });
     renderAt('/tribe?tab=circle');
     expect(await screen.findByText('No relationships yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
@@ -136,7 +141,7 @@ describe('Tribe create actions', () => {
   });
 
   it('offers the form plus action when editing an existing relationship', async () => {
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     renderAt('/tribe?person=p2');
     await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=circle'));
     expect(screen.getByRole('heading', { name: 'Relationship' })).toBeInTheDocument();
@@ -147,8 +152,8 @@ describe('Tribe create actions', () => {
 
 describe('Tribe care filter', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     window.localStorage.clear();
   });
 
@@ -193,13 +198,13 @@ describe('Tribe care filter', () => {
 
   it('records a manual touch on the local calendar date', async () => {
     vi.setSystemTime(new Date(2026, 0, 1, 20));
-    api.createTribeTouchpoint.mockResolvedValue({ id: 'touch-1' });
+    createTribeTouchpoint.mockResolvedValue({ id: 'touch-1' });
 
     renderAt('/tribe');
     await screen.findByText('Example Person');
     fireEvent.click(screen.getAllByRole('button', { name: 'Touch' })[0]);
 
-    await waitFor(() => expect(api.createTribeTouchpoint).toHaveBeenCalledWith(
+    await waitFor(() => expect(createTribeTouchpoint).toHaveBeenCalledWith(
       'p1',
       expect.objectContaining({ localDate: '2026-01-01' }),
       { silent: true },
@@ -208,12 +213,12 @@ describe('Tribe care filter', () => {
   });
 
   it('keeps the page mounted while a tribe:changed reload is in flight', async () => {
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     renderAt('/tribe');
     const card = await screen.findByText('Example Person');
 
     let release;
-    api.getTribePeople.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    getTribePeople.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
     const handler = socket.on.mock.calls.find(([event]) => event === 'tribe:changed')[1];
     act(() => { handler(); });
 
@@ -238,8 +243,8 @@ describe('Tribe care filter', () => {
  */
 describe('Tribe person deep link (#98 part C)', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     window.localStorage.clear();
   });
 
@@ -254,20 +259,20 @@ describe('Tribe person deep link (#98 part C)', () => {
   });
 
   it('omits lastContact from the update unless the user edited it (#15356)', async () => {
-    api.updateTribePerson.mockResolvedValue({ ...PEOPLE[1] });
+    updateTribePerson.mockResolvedValue({ ...PEOPLE[1] });
     renderAt('/tribe?person=p2');
     // Wait for the deep link to select the person; editing earlier hits the blank create form.
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Sample Neighbor'));
     const notes = screen.getByLabelText('Notes');
     fireEvent.change(notes, { target: { value: 'edited' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(api.updateTribePerson).toHaveBeenCalledTimes(1));
-    expect(api.updateTribePerson.mock.calls[0][1]).not.toHaveProperty('lastContact');
+    await waitFor(() => expect(updateTribePerson).toHaveBeenCalledTimes(1));
+    expect(updateTribePerson.mock.calls[0][1]).not.toHaveProperty('lastContact');
 
     fireEvent.change(screen.getByLabelText('Last Contact'), { target: { value: '2020-01-02' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(api.updateTribePerson).toHaveBeenCalledTimes(2));
-    expect(api.updateTribePerson.mock.calls[1][1]).toMatchObject({ lastContact: '2020-01-02' });
+    await waitFor(() => expect(updateTribePerson).toHaveBeenCalledTimes(2));
+    expect(updateTribePerson.mock.calls[1][1]).toMatchObject({ lastContact: '2020-01-02' });
   });
 
   it('scrolls the matching card into view', async () => {
@@ -313,21 +318,21 @@ describe('Tribe person deep link (#98 part C)', () => {
 
 describe('Tribe shared-identifier banner (#5908)', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
-    api.getTribeDuplicateIdentifiers.mockReset();
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribeDuplicateIdentifiers.mockReset();
     window.localStorage.clear();
   });
 
   it('renders nothing when the report comes back clean', async () => {
-    api.getTribeDuplicateIdentifiers.mockResolvedValue({ emails: [], phones: [] });
+    getTribeDuplicateIdentifiers.mockResolvedValue({ emails: [], phones: [] });
     renderAt('/tribe');
     await screen.findByText('Example Person');
     expect(screen.queryByText(/shared contact info/i)).toBeNull();
   });
 
   it('names the colliding people for a shared email', async () => {
-    api.getTribeDuplicateIdentifiers.mockResolvedValue({
+    getTribeDuplicateIdentifiers.mockResolvedValue({
       emails: [{ identifier: 'shared@example.com', people: [{ id: 'p1', name: 'Example Person' }, { id: 'p2', name: 'Sample Neighbor' }] }],
       phones: [],
     });
@@ -339,7 +344,7 @@ describe('Tribe shared-identifier banner (#5908)', () => {
   });
 
   it('dismisses on click and does not reappear until the next fetch', async () => {
-    api.getTribeDuplicateIdentifiers.mockResolvedValue({
+    getTribeDuplicateIdentifiers.mockResolvedValue({
       emails: [{ identifier: 'shared@example.com', people: [{ id: 'p1', name: 'Example Person' }, { id: 'p2', name: 'Sample Neighbor' }] }],
       phones: [],
     });
@@ -359,24 +364,24 @@ describe('Tribe shared-identifier banner (#5908)', () => {
 
 describe('Tribe "Linked on Beeper" block (#99)', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
-    api.getTribePerson.mockReset();
-    api.getTribePerson.mockResolvedValue({ identities: [] });
-    api.unlinkBeeperIdentity.mockReset();
-    api.unlinkBeeperIdentity.mockResolvedValue({ success: true });
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePerson.mockReset();
+    getTribePerson.mockResolvedValue({ identities: [] });
+    unlinkBeeperIdentity.mockReset();
+    unlinkBeeperIdentity.mockResolvedValue({ success: true });
     window.localStorage.clear();
   });
 
   it('renders nothing when the selected person has no Beeper identities', async () => {
     renderAt('/tribe?tab=circle');
     fireEvent.click(await screen.findByText('Example Person'));
-    await waitFor(() => expect(api.getTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
+    await waitFor(() => expect(getTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
     expect(screen.queryByText('Linked on Beeper')).toBeNull();
   });
 
   it('renders a chip per identity with its network + handle and a thread link', async () => {
-    api.getTribePerson.mockResolvedValue({
+    getTribePerson.mockResolvedValue({
       identities: [
         {
           id: 'identity-1', personId: 'p1', kind: 'beeper-user', network: 'account-1', handle: 'user-1',
@@ -403,7 +408,7 @@ describe('Tribe "Linked on Beeper" block (#99)', () => {
   });
 
   it('unlinks an identity and removes its chip', async () => {
-    api.getTribePerson.mockResolvedValue({
+    getTribePerson.mockResolvedValue({
       identities: [{
         id: 'identity-1', personId: 'p1', kind: 'handle', network: 'discord', handle: 'ada',
         source: 'user', linkedAt: '2026-06-01T00:00:00.000Z', conversations: [],
@@ -416,24 +421,24 @@ describe('Tribe "Linked on Beeper" block (#99)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Unlink ada' }));
 
-    await waitFor(() => expect(api.unlinkBeeperIdentity).toHaveBeenCalledWith('identity-1', { silent: true }));
+    await waitFor(() => expect(unlinkBeeperIdentity).toHaveBeenCalledWith('identity-1', { silent: true }));
     await waitFor(() => expect(screen.queryByText('Linked on Beeper')).toBeNull());
   });
 });
 
 describe('Tribe memory links panel — failed reads', () => {
   beforeEach(() => {
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     window.localStorage.clear();
   });
   afterEach(() => {
-    api.getTribeMemoryLinks.mockResolvedValue({ links: [] });
-    api.getMemories.mockResolvedValue({ memories: [] });
+    getTribeMemoryLinks.mockResolvedValue({ links: [] });
+    getMemories.mockResolvedValue({ memories: [] });
   });
 
   it('shows an error with Retry instead of "No memories linked yet" when the link read fails', async () => {
-    api.getTribeMemoryLinks.mockRejectedValueOnce(new Error('links down'));
-    api.getMemories.mockRejectedValueOnce(new Error('memories down'));
+    getTribeMemoryLinks.mockRejectedValueOnce(new Error('links down'));
+    getMemories.mockRejectedValueOnce(new Error('memories down'));
 
     renderAt('/tribe?tab=circle');
     fireEvent.click(await screen.findByText('Example Person'));
@@ -442,8 +447,8 @@ describe('Tribe memory links panel — failed reads', () => {
     expect(screen.getByText(/Could not load recent memories — memories down/)).toBeTruthy();
     expect(screen.queryByText('No memories linked yet.')).toBeNull();
 
-    api.getTribeMemoryLinks.mockResolvedValueOnce({ links: [] });
-    api.getMemories.mockResolvedValueOnce({ memories: [] });
+    getTribeMemoryLinks.mockResolvedValueOnce({ links: [] });
+    getMemories.mockResolvedValueOnce({ memories: [] });
     fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
     expect(await screen.findByText('No memories linked yet.')).toBeTruthy();
     expect(screen.queryByText(/Could not load/)).toBeNull();
@@ -452,17 +457,17 @@ describe('Tribe memory links panel — failed reads', () => {
 
 describe('Tribe person panels and outreach — failed reads', () => {
   beforeEach(() => {
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
     window.localStorage.clear();
   });
   afterEach(() => {
-    api.getTribeTouchpoints.mockResolvedValue({ touchpoints: [] });
-    api.getTribePerson.mockResolvedValue({ identities: [] });
-    api.getTribeOutreach.mockResolvedValue({ threads: [] });
+    getTribeTouchpoints.mockResolvedValue({ touchpoints: [] });
+    getTribePerson.mockResolvedValue({ identities: [] });
+    getTribeOutreach.mockResolvedValue({ threads: [] });
   });
 
   it('shows an error with Retry instead of "No touchpoints logged yet" when the touchpoint read fails', async () => {
-    api.getTribeTouchpoints.mockRejectedValueOnce(new Error('touchpoints down'));
+    getTribeTouchpoints.mockRejectedValueOnce(new Error('touchpoints down'));
 
     renderAt('/tribe?tab=circle');
     fireEvent.click(await screen.findByText('Example Person'));
@@ -470,14 +475,14 @@ describe('Tribe person panels and outreach — failed reads', () => {
     expect(await screen.findByText(/Could not load touchpoints — touchpoints down/)).toBeTruthy();
     expect(screen.queryByText('No touchpoints logged yet.')).toBeNull();
 
-    api.getTribeTouchpoints.mockResolvedValueOnce({ touchpoints: [{ id: 't1', happenedAt: '2026-01-02T00:00:00.000Z', source: 'user', summary: 'Coffee catch-up' }] });
+    getTribeTouchpoints.mockResolvedValueOnce({ touchpoints: [{ id: 't1', happenedAt: '2026-01-02T00:00:00.000Z', source: 'user', summary: 'Coffee catch-up' }] });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Coffee catch-up')).toBeTruthy();
     expect(screen.queryByText(/Could not load touchpoints/)).toBeNull();
   });
 
   it('shows an error with Retry instead of hiding the Beeper block when the identity read fails', async () => {
-    api.getTribePerson.mockRejectedValueOnce(new Error('person down'));
+    getTribePerson.mockRejectedValueOnce(new Error('person down'));
 
     renderAt('/tribe?tab=circle');
     fireEvent.click(await screen.findByText('Example Person'));
@@ -485,7 +490,7 @@ describe('Tribe person panels and outreach — failed reads', () => {
     expect(await screen.findByText(/Could not load Beeper links — person down/)).toBeTruthy();
     expect(screen.queryByText('Linked on Beeper')).toBeNull();
 
-    api.getTribePerson.mockResolvedValueOnce({
+    getTribePerson.mockResolvedValueOnce({
       identities: [{ id: 'identity-1', personId: 'p1', kind: 'handle', network: 'discord', handle: 'ada', source: 'user', conversations: [] }],
     });
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -494,14 +499,14 @@ describe('Tribe person panels and outreach — failed reads', () => {
   });
 
   it('shows an error with Retry instead of hiding the reply queue when the outreach read fails', async () => {
-    api.getTribeOutreach.mockRejectedValueOnce(new Error('outreach down'));
+    getTribeOutreach.mockRejectedValueOnce(new Error('outreach down'));
 
     renderAt('/tribe');
 
     expect(await screen.findByText(/Could not load threads waiting on a reply — outreach down/)).toBeTruthy();
     expect(screen.queryByText('Waiting on a reply')).toBeNull();
 
-    api.getTribeOutreach.mockResolvedValueOnce({
+    getTribeOutreach.mockResolvedValueOnce({
       threads: [{
         conversationKey: 'conv-1', personId: 'p1', personName: 'Example Person', source: 'imessage',
         daysAgo: 3, snippet: 'Are we still on for Friday?',
@@ -515,10 +520,10 @@ describe('Tribe person panels and outreach — failed reads', () => {
 
 describe('Tribe URL-backed selection, delete confirmation, and form labels', () => {
   beforeEach(() => {
-    api.getTribePeople.mockClear();
-    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
-    api.deleteTribePerson.mockClear();
-    api.deleteTribePerson.mockResolvedValue({ success: true });
+    getTribePeople.mockClear();
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
+    deleteTribePerson.mockClear();
+    deleteTribePerson.mockResolvedValue({ success: true });
     window.localStorage.clear();
   });
 
@@ -542,16 +547,16 @@ describe('Tribe URL-backed selection, delete confirmation, and form labels', () 
     await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Example Person'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(api.deleteTribePerson).not.toHaveBeenCalled();
+    expect(deleteTribePerson).not.toHaveBeenCalled();
     expect(screen.getByText('Delete?')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel delete relationship' }));
-    expect(api.deleteTribePerson).not.toHaveBeenCalled();
+    expect(deleteTribePerson).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm delete relationship' }));
-    await waitFor(() => expect(api.deleteTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
+    await waitFor(() => expect(deleteTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
     await waitFor(() =>
       expect(screen.getByTestId('location').textContent).toBe('/tribe?tab=circle')
     );

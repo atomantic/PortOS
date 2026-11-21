@@ -26,9 +26,6 @@ import { spriteDir, runRelPath, SOURCE_CLIP_NAME, RUN_RECORD_NAME } from './path
 import { WALK_TRACK } from './animationTargets.js';
 
 import { withAnimationWriteTail } from './animationWorkflow.js';
-import { collectLocalAnimationClip } from './localAnimationRender.js';
-import { attachTuiWalkResult } from './walk.js';
-import { attachTrackTuiResult } from './animationTrackWorkflow.js';
 
 /** The tag a sprite-animation job carries, or null for every other media job. */
 const decodeSpriteAnimationJob = (job) => {
@@ -91,11 +88,16 @@ async function settleSpriteAnimationJob(job) {
     if (job.status === 'canceled') {
       console.log(`🎞️ ${label} local render canceled — filing the run as errored`);
     } else {
+      const { collectLocalAnimationClip } = await import('./localAnimationRender.js');
       await collectLocalAnimationClip({ jobId: job.id, videoAbs, label });
     }
-    await (track === WALK_TRACK
-      ? attachTuiWalkResult(recordId, runId, videoAbs)
-      : attachTrackTuiResult(track, recordId, runId, videoAbs));
+    if (track === WALK_TRACK) {
+      const { attachTuiWalkResult } = await import('./walk.js');
+      await attachTuiWalkResult(recordId, runId, videoAbs);
+    } else {
+      const { attachTrackTuiResult } = await import('./animationTrackWorkflow.js');
+      await attachTrackTuiResult(track, recordId, runId, videoAbs);
+    }
     return true;
   }));
 }

@@ -1,7 +1,7 @@
 # TRELLIS.2 CUDA runtime
 
 Install and **Repair install** use the PortOS-owned
-`scripts/setup-trellis2-cuda.py`, without running upstream `setup.sh`.
+`scripts/ml/setup-trellis2-cuda.py`, without running upstream `setup.sh`.
 The initial profile covers **Linux x86_64** (including WSL2), glibc **2.28+**,
 [CUDA toolkit **12.6 Update 3 (12.6.3)**](https://docs.nvidia.com/cuda/archive/12.6.3/cuda-toolkit-release-notes/index.html)
 with nvcc **12.6.85**, GCC/G++ **11.3.0**, NVIDIA compute capability **8.6**
@@ -17,7 +17,7 @@ Intact legacy CUDA environments remain usable for generation.
 The locked interpreter is Conda CPython **3.11.16**. Torch **2.14.1+cu126** and
 TorchVision **0.29.1+cu126** come from the official CUDA 12.6 wheel index.
 FlashAttention **2.8.3.post2** replaces the former vulnerable 2.7.3 pin.
-`scripts/trellis2-cuda-profile.json` records every Conda artifact, source archive,
+`scripts/ml/trellis2-cuda-profile.json` records every Conda artifact, source archive,
 full revision, submodule revision, URL and SHA-256. It also records the exact
 Conda builds and upload dates. There is no Conda solver during setup: verified
 local artifacts are passed to micromamba as an offline `@EXPLICIT` list.
@@ -69,16 +69,16 @@ Use a private patched uv **0.13.6**. Choose a cutoff at least seven days old,
 update `registryCutoff` in the profile, and regenerate both closures:
 
 ```sh
-uv --no-config pip compile scripts/requirements-trellis2-cuda.txt \
+uv --no-config pip compile scripts/ml/requirements/requirements-trellis2-cuda.txt \
   --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   --generate-hashes --only-binary :all: --exclude-newer <UTC-cutoff> \
-  -o scripts/requirements-trellis2-cuda.lock.txt
-uv --no-config pip compile scripts/requirements-trellis2-cuda-build.txt \
-  -c scripts/requirements-trellis2-cuda.lock.txt \
+  -o scripts/ml/requirements/requirements-trellis2-cuda.lock.txt
+uv --no-config pip compile scripts/ml/requirements/requirements-trellis2-cuda-build.txt \
+  -c scripts/ml/requirements/requirements-trellis2-cuda.lock.txt \
   --python-version 3.11 --python-platform x86_64-manylinux_2_28 \
   --generate-hashes --only-binary :all: --exclude-newer <UTC-cutoff> \
-  -o scripts/requirements-trellis2-cuda-build.lock.txt
-python3 scripts/audit-trellis2-cuda.py
+  -o scripts/ml/requirements/requirements-trellis2-cuda-build.lock.txt
+python3 scripts/ml/audit-trellis2-cuda.py
 ```
 
 The initial cutoff is **2026-11-04T00:00:00Z**. Conda artifact upload times were
@@ -103,7 +103,7 @@ replaced with the patched revision before building.
 Use an isolated runtime, then repeat the same command for Repair:
 
 ```sh
-python3 scripts/setup-trellis2-cuda.py "$PWD/.cache/trellis-cuda-validation/trellis2-cuda"
+python3 scripts/ml/setup-trellis2-cuda.py "$PWD/.cache/trellis-cuda-validation/trellis2-cuda"
 ```
 
 Place a synthetic retained asset outside `.conda` before Repair and check its
