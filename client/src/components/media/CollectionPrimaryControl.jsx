@@ -4,7 +4,23 @@ import socket from '../../services/socket';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { formatCount } from '../../utils/formatters';
 
+// One-time scopes that are not collections (server: services/mediaCollectionPrimary.js).
+export const SHARED_MEDIA_ID = 'shared-media';
+const ONE_SHOT_COPY = {
+  unsorted: {
+    name: 'Unsorted',
+    label: 'Primary machine',
+    description: 'A one-time operation for the Unsorted gallery on this machine, including items outside the current page or filters. Future items are not affected.',
+  },
+  [SHARED_MEDIA_ID]: {
+    name: 'shared media',
+    label: 'Host shared media on',
+    description: 'A one-time operation for every image and video more than one machine holds, filed or not. Media only one machine holds is not moved, and future items are not affected. Every machine keeps the history and metadata and streams the file from the primary.',
+  },
+};
+
 export default function CollectionPrimaryControl({ collectionId, oneShot = false }) {
+  const copy = oneShot ? ONE_SHOT_COPY[collectionId] ?? ONE_SHOT_COPY.unsorted : null;
   const id = useId();
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(false);
@@ -45,7 +61,7 @@ export default function CollectionPrimaryControl({ collectionId, oneShot = false
     setSelection(null);
     setConfirming(false);
     await reloadRef.current?.();
-  }, { errorMessage: oneShot ? 'Could not consolidate Unsorted' : 'Could not set the primary machine' });
+  }, { errorMessage: copy ? `Could not consolidate ${copy.name}` : 'Could not set the primary machine' });
   const busy = saving || status?.run?.running;
   const destination = status?.machines.find((machine) => machine.instanceId === chosen);
   const run = status?.run;
@@ -53,7 +69,7 @@ export default function CollectionPrimaryControl({ collectionId, oneShot = false
   return (
     <section className="rounded-lg border border-port-border bg-port-card p-3 space-y-2" aria-label="Collection storage">
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={id} className="text-sm font-medium">Primary machine</label>
+        <label htmlFor={id} className="text-sm font-medium">{copy?.label ?? 'Primary machine'}</label>
         <select
           id={id}
           value={chosen}
@@ -67,22 +83,22 @@ export default function CollectionPrimaryControl({ collectionId, oneShot = false
         </select>
         <button
           type="button"
-          onClick={oneShot ? () => setConfirming(true) : save}
+          onClick={copy ? () => setConfirming(true) : save}
           disabled={!destination || busy || error}
           className="rounded border border-port-accent/40 px-2.5 py-1.5 text-sm text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
         >
-          {busy ? 'Consolidating…' : oneShot ? 'Consolidate Unsorted' : chosen && chosen === status?.instanceId ? 'Consolidate again' : 'Set primary and consolidate'}
+          {busy ? 'Consolidating…' : copy ? `Consolidate ${copy.name}` : chosen && chosen === status?.instanceId ? 'Consolidate again' : 'Set primary and consolidate'}
         </button>
       </div>
       <p className="text-xs text-gray-400">
-        {oneShot
-          ? 'A one-time operation for the Unsorted gallery on this machine, including items outside the current page or filters. Future items are not affected.'
+        {copy
+          ? copy.description
           : 'Copy any missing collection media to the selected machine, then move matching copies on other hosts to Trash. Collection items stay available from the primary.'}
       </p>
-      {oneShot && confirming && destination && (
+      {copy && confirming && destination && (
         <div className="space-y-2 rounded border border-port-border p-2">
           <p className="text-xs text-gray-300">
-            Consolidate Unsorted on {destination.name}? Missing files will be copied there. Matching copies elsewhere move to Trash only after the file is verified on the selected machine.
+            Consolidate {copy.name} on {destination.name}? Missing files will be copied there. Matching copies elsewhere move to Trash only after the file is verified on the selected machine.
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy || error} onClick={save}

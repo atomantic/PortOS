@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 
 const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants, stitchVideos, toast, socketHandlers } = vi.hoisted(() => ({ stitchVideos: vi.fn(), toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }), socketHandlers: new Map(), fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
+const primaryApi = vi.hoisted(() => ({ getMediaCollectionPrimary: vi.fn(), setMediaCollectionPrimary: vi.fn() }));
 const deleteApi = vi.hoisted(() => ({ deleteVideoHistoryItem: vi.fn(), cancelVideoPendingDelete: vi.fn(), cancelImagePendingDelete: vi.fn(), getInstances: vi.fn() }));
 vi.mock('../services/apiImageVideo', () => ({
   listMediaGalleryPage: fetchPage,
@@ -18,6 +19,8 @@ vi.mock('../services/apiImageVideo', () => ({
   deleteVideoHistoryItem: deleteApi.deleteVideoHistoryItem,
   cancelVideoPendingDelete: deleteApi.cancelVideoPendingDelete,
   cancelImagePendingDelete: deleteApi.cancelImagePendingDelete,
+  getMediaCollectionPrimary: primaryApi.getMediaCollectionPrimary,
+  setMediaCollectionPrimary: primaryApi.setMediaCollectionPrimary,
 }));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: deleteApi.getInstances }));
 vi.mock('../services/apiMediaUsage.js', () => ({ getMediaUsages: vi.fn(async () => ({ items: {} })) }));
@@ -70,6 +73,21 @@ describe('bounded media history', () => {
     await waitFor(() => expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0, q: 'Picture 60' }), { silent: true }));
     await waitFor(() => expect(screen.queryByText('Picture 0')).toBeNull());
     expect(await screen.findByText('Picture 60')).toBeInTheDocument();
+  });
+
+  it('hosts every shared file on one machine from the Hosting panel after confirmation', async () => {
+    primaryApi.getMediaCollectionPrimary.mockResolvedValue({ instanceId: null, machines: [{ instanceId: 'inst-a', name: 'Studio' }], run: null });
+    primaryApi.setMediaCollectionPrimary.mockResolvedValue({ instanceId: 'inst-a', run: { running: true } });
+    open();
+    await screen.findByText('Picture 0');
+    expect(primaryApi.getMediaCollectionPrimary).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Hosting' }));
+    fireEvent.change(screen.getByLabelText('Host shared media on'), { target: { value: (await screen.findByRole('option', { name: 'Studio' })).value } });
+    expect(screen.getByText(/more than one machine holds/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Consolidate shared media' }));
+    expect(primaryApi.setMediaCollectionPrimary).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm consolidation' }));
+    await waitFor(() => expect(primaryApi.setMediaCollectionPrimary).toHaveBeenCalledWith('shared-media', 'inst-a', { silent: true }));
   });
 
   it('stars the card item by media key', async () => {

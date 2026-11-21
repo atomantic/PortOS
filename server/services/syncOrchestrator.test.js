@@ -130,6 +130,7 @@ vi.mock('./sharing/tombstoneGc.js', () => ({
 }));
 vi.mock('./sharing/peerSyncAssets.js', () => ({
   pullMissingAssetsFromPeer: vi.fn().mockResolvedValue(undefined),
+  diffAssetManifestAgainstLocal: vi.fn(async (manifest) => manifest),
 }));
 vi.mock('./catalog/catalogMediaBytesSync.js', () => ({
   pullMissingCatalogMediaBytes: vi.fn().mockResolvedValue(0),
@@ -288,6 +289,15 @@ describe('syncOrchestrator', () => {
         expect(pullMissingAssetsFromPeer).toHaveBeenCalledWith(mockPeer.instanceId, [{ kind: 'image', filename: 'example.png' }]);
         expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/data/images/'))).toBe(false);
         expect(writeFileGuarded).not.toHaveBeenCalled();
+      });
+
+      it('does not pull an avatar the receiver diff skips (deleted or released to a primary)', async () => {
+        const { pullMissingAssetsFromPeer, diffAssetManifestAgainstLocal } = await import('./sharing/peerSyncAssets.js');
+        diffAssetManifestAgainstLocal.mockResolvedValueOnce([]);
+        await serveAvatar('/data/images/example.png');
+        await syncWithPeer(characterPeer());
+        expect(diffAssetManifestAgainstLocal).toHaveBeenCalledWith([{ kind: 'image', filename: 'example.png' }], { includeMismatched: false });
+        expect(pullMissingAssetsFromPeer).not.toHaveBeenCalled();
       });
 
       it('does not pull a peer-supplied SVG avatar', async () => {
