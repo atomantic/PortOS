@@ -17,6 +17,7 @@ const hooks = [
   [tag('musicVideo'), () => import('../musicVideoCoverArtImageHook.js').then(m => m.initMusicVideoCoverArtImageHook())],
   [musicProject, () => import('../musicVideoCollectionHook.js').then(m => m.initMusicVideoCollectionHook())],
   [musicProject, () => import('../musicVideoRenderSpendHook.js').then(m => m.initMusicVideoRenderSpendHook())],
+  [tag('collectionName'), () => import('../requestedCollectionHook.js').then(m => m.initRequestedCollectionHook())],
   [tag('creativeDirectorMusicBed'), () => import('../creativeDirectorMusicBedHook.js').then(m => m.initCreativeDirectorMusicBedHook())],
   [tag('musicStudio'), () => import('../musicStudioHook.js').then(m => m.initMusicStudioHook())],
   [tag('spriteRef'), () => import('../spriteReferenceImageHook.js').then(m => m.initSpriteReferenceImageHook())],

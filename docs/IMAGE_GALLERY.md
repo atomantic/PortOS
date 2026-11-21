@@ -107,3 +107,12 @@ confirms the files are gone. Native recycling can partially succeed, so after
 a failure some files may already be in Trash; a retry processes remaining
 files. Restore files using the host OS. Restoring a video file does not
 automatically recreate its PortOS history entry or collection membership.
+
+## Filing a render into a collection from the API
+
+`POST /api/image-gen/generate` and `POST /api/video-gen` accept `collectionName`
+(1–80 chars). The finished render is filed into the media collection of that
+name (case-insensitive match), which is created on first use. The name rides on
+the job params, so queued, hosted and peer-lane renders all file on completion
+(`server/services/requestedCollectionHook.js`). Filing is best-effort and
+idempotent; a collection error is logged and never fails the render.

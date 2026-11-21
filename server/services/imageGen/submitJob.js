@@ -276,6 +276,11 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
     const { fileIntoMusicVideoCollection } = await import('../musicVideoCollectionHook.js');
     await fileIntoMusicVideoCollection(params.musicVideoProjectId, [{ kind: 'image', ref: result.filename }]);
   }
+  if (params.collectionName && result?.filename) {
+    const { fileIntoRequestedCollection } = await import('../requestedCollectionHook.js');
+    await fileIntoRequestedCollection(params.collectionName, { kind: 'image', ref: result.filename })
+      .catch((err) => console.error(`❌ requested-collection filing failed for "${params.collectionName}": ${err?.message || err}`));
+  }
   if (params.fableLoom && result?.filename) {
     await attachNodeImage(
       params.fableLoom.loomId,
