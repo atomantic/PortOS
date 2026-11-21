@@ -15,6 +15,7 @@ import { normalizePersistentMindMaintainer } from '../../lib/persistent/persiste
 import { knownContextWindow } from '../../lib/aiToolkit/providerStatus.js';
 import { localRuntimeForProvider } from '../../lib/localProviderRuntime.js';
 import { probeOpenAiModels } from '../../lib/openAiModelsProbe.js';
+import { localPromptCharLimit } from '../../lib/persistent/persistentMindPromptBudget.js';
 
 const FILE = join(PATHS.cos, 'maintainer-inference.json');
 const writeQueue = createFileWriteQueue();
@@ -48,8 +49,14 @@ export async function inspectMaintainerInferenceRoute({ role: rawRole, provider,
       || !policy.paidPresetIds.includes(thinkingPresetId) || policy.maxPaidCallsPerDay === 0)) {
     return { ok: false, reason: 'Maintainer curation requires a local API model. Select an explicitly permitted paid preset in a human message to escalate.' };
   }
-  if (!Number.isInteger(promptChars) || promptChars < 0 || promptChars > policy.maxPromptChars
+  if (!Number.isInteger(promptChars) || promptChars < 0
       || !Number.isSafeInteger(promptBytes) || promptBytes < promptChars) {
+    return { ok: false, reason: 'Maintainer prompt size is unknown; the call was not measured.' };
+  }
+  // The fixed character cap bounds PAID escalation only. A local route is
+  // bounded by the model's real window below, so a large-window model is not
+  // held to a size picked for small ones.
+  if (paid && promptChars > policy.maxPromptChars) {
     return { ok: false, reason: `Maintainer prompt exceeds the ${policy.maxPromptChars} character limit; reduce context or report batch size.` };
   }
   let contextTokens = knownContextWindow(provider, model);
@@ -61,9 +68,16 @@ export async function inspectMaintainerInferenceRoute({ role: rawRole, provider,
     if (Number.isFinite(served) && served > 0) contextTokens = contextTokens ? Math.min(contextTokens, served) : served;
     if (!contextTokens) return { ok: false, reason: 'Local maintainer context capacity is unknown; configure or verify the runtime context window.' };
   }
-  // UTF-8 bytes are a deliberately conservative text token bound; reserve
-  // room for output and transport framing without pretending to know usage.
-  if (contextTokens && promptBytes + 9216 > contextTokens) return { ok: false, reason: 'Maintainer context does not fit the configured model; shrink context or choose a larger local window.' };
+  if (runtime) {
+    // Same estimate the adapter fits each round to, so a fitted prompt is
+    // never refused here.
+    const limit = localPromptCharLimit(contextTokens);
+    if (!limit || promptChars > limit) return { ok: false, reason: `Maintainer prompt (${promptChars} chars) does not fit the ${contextTokens}-token local window; shrink context or choose a larger local window.` };
+  } else if (contextTokens && promptBytes + 9216 > contextTokens) {
+    // Paid lane: UTF-8 bytes are a deliberately conservative token bound;
+    // reserve room for output and transport framing.
+    return { ok: false, reason: 'Maintainer context does not fit the configured model; shrink context or choose a larger local window.' };
+  }
   return { ok: true, enforced: true, lane: paid ? 'authorized-escalation' : 'local-curation', contextTokens, policy };
 }
 
