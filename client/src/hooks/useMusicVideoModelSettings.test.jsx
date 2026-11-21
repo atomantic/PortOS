@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
-const api = vi.hoisted(() => ({ getVideoGenStatus: vi.fn(), listLorasFull: vi.fn() }));
+const api = vi.hoisted(() => ({ getVideoGenModelContext: vi.fn(), listLorasFull: vi.fn() }));
 vi.mock('../services/apiImageVideo.js', () => api);
 vi.mock('../services/apiMusicVideo.js', () => ({ updateMusicVideoProject: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn() } }));
@@ -17,13 +17,13 @@ const REACTIVE = { backend: 'local', generationMode: 'audioReactive' };
 
 describe('useMusicVideoModelSettings catalog status', () => {
   beforeEach(() => {
-    api.getVideoGenStatus.mockReset();
+    api.getVideoGenModelContext.mockReset();
     api.listLorasFull.mockReset();
     api.listLorasFull.mockResolvedValue([]);
   });
 
   it('reports a failed status read as a read failure, not a missing key or LoRA', async () => {
-    api.getVideoGenStatus.mockRejectedValue(new Error('boom'));
+    api.getVideoGenModelContext.mockRejectedValue(new Error('boom'));
     const { result } = render();
     await waitFor(() => expect(result.current.catalogStatus).toBe('error'));
     for (const pick of [FAL, RUNWAY, HIGGSFIELD, REACTIVE]) {
@@ -32,7 +32,7 @@ describe('useMusicVideoModelSettings catalog status', () => {
   });
 
   it('does not report a failed LoRA read as a missing audio-reactive LoRA', async () => {
-    api.getVideoGenStatus.mockResolvedValue({ models: [], falEnabled: false });
+    api.getVideoGenModelContext.mockResolvedValue({ models: [], falEnabled: false });
     api.listLorasFull.mockRejectedValue(new Error('boom'));
     const { result } = render();
     await waitFor(() => expect(result.current.catalogStatus).toBe('error'));
@@ -40,7 +40,7 @@ describe('useMusicVideoModelSettings catalog status', () => {
   });
 
   it('keeps the key-missing reason when a successful read says fal is unconfigured', async () => {
-    api.getVideoGenStatus.mockResolvedValue({ models: [], falEnabled: false, runwayEnabled: false });
+    api.getVideoGenModelContext.mockResolvedValue({ models: [], falEnabled: false, runwayEnabled: false });
     const { result } = render();
     await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
     expect(result.current.blockedReasonFor(FAL)).toMatch(/No fal.ai API key/);
@@ -48,7 +48,7 @@ describe('useMusicVideoModelSettings catalog status', () => {
   });
 
   it('unblocks after a successful retry', async () => {
-    api.getVideoGenStatus.mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ models: [], falEnabled: true });
+    api.getVideoGenModelContext.mockRejectedValueOnce(new Error('boom')).mockResolvedValue({ models: [], falEnabled: true });
     const { result } = render();
     await waitFor(() => expect(result.current.catalogStatus).toBe('error'));
     act(() => result.current.retryCatalog());
@@ -58,22 +58,22 @@ describe('useMusicVideoModelSettings catalog status', () => {
 });
 
 it('gates Higgsfield shot renders on the live credential status', async () => {
-  api.getVideoGenStatus.mockResolvedValue({ models: [], higgsfieldEnabled: false });
+  api.getVideoGenModelContext.mockResolvedValue({ models: [], higgsfieldEnabled: false });
   const { result } = render();
   await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
   expect(result.current.blockedReasonFor(HIGGSFIELD)).toMatch(/No Higgsfield credential/);
-  api.getVideoGenStatus.mockResolvedValue({ models: [], higgsfieldEnabled: true });
+  api.getVideoGenModelContext.mockResolvedValue({ models: [], higgsfieldEnabled: true });
   act(() => result.current.retryCatalog());
   await waitFor(() => expect(result.current.higgsfieldEnabled).toBe(true));
   expect(result.current.blockedReasonFor(HIGGSFIELD)).toBeNull();
 });
 
 it('gates Google shot renders on the live credential status', async () => {
-  api.getVideoGenStatus.mockResolvedValue({ models: [], googleEnabled: false });
+  api.getVideoGenModelContext.mockResolvedValue({ models: [], googleEnabled: false });
   const { result } = render();
   await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
   expect(result.current.blockedReasonFor(GOOGLE)).toMatch(/No Google credential/);
-  api.getVideoGenStatus.mockResolvedValue({ models: [], googleEnabled: true });
+  api.getVideoGenModelContext.mockResolvedValue({ models: [], googleEnabled: true });
   act(() => result.current.retryCatalog());
   await waitFor(() => expect(result.current.googleEnabled).toBe(true));
   expect(result.current.blockedReasonFor(GOOGLE)).toBeNull();

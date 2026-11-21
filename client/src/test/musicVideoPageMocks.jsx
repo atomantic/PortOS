@@ -298,7 +298,6 @@ vi.mock('../services/apiImageVideo.js', () => ({
   listMediaCollections: vi.fn(async () => []),
   createMediaCollection: vi.fn(),
   listImageModels: vi.fn(async () => []),
-  getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: sharedMedia.generateVideo,
   listOvernightRenders: vi.fn(async () => ({ batches: [] })),
   queueOvernightRenders: vi.fn(),
@@ -318,7 +317,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
     loraCompatKey: 'ltx-video',
     recommendedScale: 1.2,
   }]),
-  getVideoGenStatus: vi.fn(async () => ({
+  getVideoGenModelContext: vi.fn(async () => ({
     connected: true,
     defaultModel: 'ltx23_distilled_q4',
     models: [

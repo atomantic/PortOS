@@ -146,6 +146,18 @@ const videoModelContext = async (loadedSettings = null) => {
     // back-solve so it can reject out-of-budget keyframe indices before
     // submit instead of letting the worker 400 mid-render.
     fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
+    // Backend usability for the two metered-API video providers (#6213/#6214).
+    // Computed server-side through the SAME resolver `isVideoModeUsable` uses
+    // to gate an actual render, so a key set only via FAL_KEY/REACTOR_API_KEY
+    // env var (no Settings-form entry) still surfaces the backend switcher —
+    // the client can't see env vars, and re-deriving "has a key" from the
+    // settings object alone missed that case entirely.
+    falEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL),
+    reactorEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.REACTOR),
+    runwayEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.RUNWAY),
+    geminiEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.GEMINI),
+    higgsfieldEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.HIGGSFIELD),
+    googleEnabled: isVideoModeUsable(settings, VIDEO_GEN_MODE.GOOGLE),
   };
 };
 
@@ -229,18 +241,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // wakes the display, re-introducing the exact GPU-watchdog contention the
     // sleep is there to avoid.
     displaySleepOnRender: isDisplaySleepEnabled(s.videoGen),
-    // Backend usability for the two metered-API video providers (#6213/#6214).
-    // Computed server-side through the SAME resolver `isVideoModeUsable` uses
-    // to gate an actual render, so a key set only via FAL_KEY/REACTOR_API_KEY
-    // env var (no Settings-form entry) still surfaces the backend switcher —
-    // the client can't see env vars, and re-deriving "has a key" from the
-    // settings object alone missed that case entirely.
-    falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
-    reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
-    runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
-    geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
-    higgsfieldEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.HIGGSFIELD),
-    googleEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GOOGLE),
   });
 }));
 
