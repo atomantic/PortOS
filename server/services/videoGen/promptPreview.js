@@ -2,11 +2,9 @@
  * Compose-time preview of what a Video Gen render sends to its model (#11317):
  * the same backend resolution and the same per-backend prompt builders the
  * render runs, without staging uploads or queueing anything. An upload the form
- * holds is named in place of its staged path, and the grok scratch folder names
- * the job folder it will get.
+ * holds is represented by a placeholder in place of its staged path.
  */
-import { basename, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { basename } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
@@ -107,7 +105,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     return { backend, ...grokVideoSentPrompt({ startFrameLayout,
       prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, ...grokSize,
-      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, castReferences, ...guidance,
+      duration: body.grokDuration, sourceImagePath, promptAdditions, castReferences, ...guidance,
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.FAL) {

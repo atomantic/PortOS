@@ -42,7 +42,7 @@ import {
   IMAGE_GEN_MODE, describeFidelity, grokImageTool, nearestAspectRatio, visualReferenceRole,
 } from './modes.js';
 import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
-import { resolveInputImages, stageSanitizedInputImages } from './inputImages.js';
+import { cliPromptImageNames, resolveInputImages, stageCliPromptImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
@@ -61,6 +61,7 @@ const GROK_TIMEOUT_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
 })();
 
+const OUTPUT_NAME = 'output.png';
 const DEFAULT_BIN = 'grok';
 const DEFAULT_HARVEST_TIMEOUT_MS = 5000;
 let harvestTimeoutMs = DEFAULT_HARVEST_TIMEOUT_MS;
@@ -110,9 +111,10 @@ export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail,
 // how PortOS's reference slots are fed. The init image, when present, leads the
 // array and is the one the fidelity phrase describes.
 export function buildGrokPrompt({
-  prompt, negativePrompt, aspectRatio, stagingPath,
-  initImagePath, initImageStrength, referenceImagePaths = [],
+  prompt, negativePrompt, aspectRatio,
+  inputImages, initImageStrength,
 }) {
+  const { initPath: initImagePath, referencePaths: referenceImagePaths } = cliPromptImageNames(inputImages);
   const refCount = referenceImagePaths.length;
   const refList = referenceImagePaths.join(', ');
   const refNoun = refCount === 1 ? 'this reference image' : `these ${refCount} reference images`;
@@ -138,7 +140,7 @@ export function buildGrokPrompt({
   lines.push(`${initImagePath ? 'Edit instruction' : 'Image prompt'}: ${prompt.trim()}`);
   if (negativePrompt?.trim()) lines.push(`Avoid: ${negativePrompt.trim()}`);
   if (aspectRatio) lines.push(`Use aspect_ratio "${aspectRatio}".`);
-  lines.push(`Save the generated image as a PNG file at exactly this path: ${stagingPath}`);
+  lines.push(`Save the generated image as a PNG file at exactly this path in the working directory: ${OUTPUT_NAME}`);
   lines.push(noFabricationClause(toolName));
   lines.push('Do not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image and write it to that path. When the file is written, you are done.');
   return lines.join('\n');
@@ -148,7 +150,7 @@ export function buildGrokPrompt({
  * The exact message grok receives and the record of what PortOS added to the
  * user's prompt (#11317). Shared by the render and the compose preview.
  */
-export function grokSentPrompt({ prompt = '', negativePrompt, width, height, aspectRatio, stagingPath, inputImages, initImageStrength, promptAdditions = [] }) {
+export function grokSentPrompt({ prompt = '', negativePrompt, width, height, aspectRatio, inputImages, initImageStrength, promptAdditions = [] }) {
   // Caller dimensions win (mapped to the closest supported ratio); the saved
   // per-provider default applies when no dimensions were sent; otherwise the
   // tool's own default. Validate the saved value against the known ratios so
@@ -158,9 +160,7 @@ export function grokSentPrompt({ prompt = '', negativePrompt, width, height, asp
   const effectiveRatio = derived || configured;
 
   const buildWith = (text) => buildGrokPrompt({
-    prompt: text, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
-    initImagePath: inputImages.initPath, initImageStrength,
-    referenceImagePaths: inputImages.referencePaths,
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, inputImages, initImageStrength,
   });
   const fullPrompt = buildWith(prompt);
   return {
@@ -211,22 +211,20 @@ async function generateImagePrepared({
   // child's cwd (see the containment note in the module header). Every
   // terminal path removes the whole dir.
   const scratchDir = join(tmpdir(), `portos-grok-${jobId}`);
-  const stagingPath = join(scratchDir, 'output.png');
+  const stagingPath = join(scratchDir, OUTPUT_NAME);
 
-  // The scratch dir is the last fallible step before the job exists, so a
-  // refusal above leaves nothing behind; from here on the runner owns it.
-  await mkdir(scratchDir, { recursive: true });
-  let cliInputImages;
+  // Before registration, clean up here if reference validation or staging fails.
+  await mkdir(scratchDir, { recursive: true, mode: 0o700 });
   try {
     const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-    cliInputImages = await stageSanitizedInputImages({ inputImages, scratchDir, reviewedReferenceBytes });
+    await stageCliPromptImages({ paths: inputImages.paths, scratchDir, reviewedReferenceBytes });
   } catch (error) {
     await runner.removeScratchDirectory(scratchDir);
     throw error;
   }
 
   const { fullPrompt, effectiveRatio, record: sentRecord } = grokSentPrompt({
-    prompt, negativePrompt, width, height, aspectRatio, stagingPath, inputImages: cliInputImages, initImageStrength, promptAdditions,
+    prompt, negativePrompt, width, height, aspectRatio, inputImages, initImageStrength, promptAdditions,
   });
 
   // No model arg — grok's image tools run on xAI's fixed image backend and

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { pinPlatform, posixPath } from '../../lib/testHelper.js';
+import { pinPlatform } from '../../lib/testHelper.js';
 
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -45,7 +45,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
         try { promptFromFile = readFileSync(pfPath, 'utf8'); } catch { promptFromFile = null; }
       }
       const jobId = options?.cwd ? basename(options.cwd).replace(/^portos-grok-video-/, '') : null;
-      spawnCalls.push({ bin, args, child, promptFromFile, jobId });
+      spawnCalls.push({ bin, args, child, promptFromFile, jobId, cwd: options.cwd });
       return child;
     }),
   };
@@ -56,6 +56,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 const TEST_ROOT = join(tmpdir(), `portos-grok-video-test-${process.pid}-${Date.now()}`);
 const FAKE_VIDEOS_DIR = join(TEST_ROOT, 'data-videos');
 const FAKE_DATA_DIR = join(TEST_ROOT, 'data');
+const SOURCE_FRAME = join(TEST_ROOT, 'frame.png');
 const fixture = vi.hoisted(() => ({ admission: null }));
 vi.mock('../../lib/maintenanceAdmission.js', async importOriginal => ({
   ...await importOriginal(),
@@ -132,6 +133,7 @@ beforeEach(async () => {
   grok._internals.setHarvestTimeoutForTests(10);
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
   await mkdir(FAKE_DATA_DIR, { recursive: true });
+  await writeFile(SOURCE_FRAME, 'synthetic source frame');
   fixture.admission = createMaintenanceAdmission(FAKE_DATA_DIR);
   rmGuarded.mockReset().mockImplementation(realFiles.rmGuarded);
   unlinkGuarded.mockReset().mockImplementation(realFiles.unlinkGuarded);
@@ -157,18 +159,21 @@ describe('videoGen/grok — generateVideo', () => {
     expect(prompt).toContain('image_gen');
     expect(prompt).toContain('image_to_video');
     expect(prompt).toContain('a fox running');
-    expect(prompt).toContain(stagingPathFor(job.jobId));
+    expect(prompt).toContain('save it as base.png');
+    expect(prompt).toContain('working directory: output.mp4');
+    expect(prompt).not.toContain(scratchDirFor(job.jobId));
     // Default duration is the shortest supported clip.
     expect(prompt).toContain('6 seconds');
     await closeChild();
   });
 
   it('skips the base-image step when a source image is supplied', async () => {
-    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', duration: 10 });
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME, duration: 10 });
     const prompt = promptOf();
     expect(prompt).not.toContain('image_gen');
     expect(prompt).toContain('image_to_video');
-    expect(posixPath(prompt)).toContain('/abs/frame.png');
+    expect(prompt).toContain('source image at input-1.png');
+    expect(prompt).not.toContain(TEST_ROOT);
     expect(prompt).toContain('10 seconds');
     await closeChild();
   });
@@ -176,20 +181,32 @@ describe('videoGen/grok — generateVideo', () => {
   it('pins the still as first_frame and sends the cast sheets to reference_to_video', async () => {
     const started = vi.fn();
     videoGenEvents.on('started', started);
+    const lead = join(TEST_ROOT, 'lead.png');
+    const guest = join(TEST_ROOT, 'guest.jpg');
+    await writeFile(lead, 'synthetic lead sheet');
+    await writeFile(guest, 'synthetic guest sheet');
     await grok.generateVideo({
-      prompt: 'a subject steps into view', sourceImagePath: '/abs/frame.png', width: 1280, height: 720,
-      castReferences: [{ path: '/abs/lead.png', label: 'Lead — character sheet' }, { path: '/abs/guest.png', label: 'Guest · alternate look' }],
+      prompt: 'a subject steps into view', sourceImagePath: SOURCE_FRAME, width: 1280, height: 720,
+      castReferences: [{ path: lead, label: 'Lead — character sheet' }, { path: guest, label: 'Guest · alternate look' }],
     });
-    const prompt = posixPath(promptOf());
+    const prompt = promptOf();
     expect(prompt).toContain('reference_to_video tool (not image_to_video)');
-    expect(prompt).toContain('Set first_frame to /abs/frame.png');
-    expect(prompt).toContain('in this order: /abs/lead.png, /abs/guest.png');
+    expect(prompt).toContain('Set first_frame to input-1.png');
+    expect(prompt).toContain('in this order: input-2.png, input-3.jpg');
     // With first_frame set, the first images entry is <IMAGE_1>.
     expect(prompt).toContain('<IMAGE_1> shows how Lead looks; <IMAGE_2> shows how Guest looks.');
     expect(prompt).toContain('a subject steps into view');
     expect(prompt).toContain('Call reference_to_video with resolution_name "720p"');
     expect(prompt).toContain('aspect_ratio "16:9"');
-    expect(started).toHaveBeenCalledWith(expect.objectContaining({ castReferenceFiles: ['lead.png', 'guest.png'] }));
+    expect(prompt).not.toContain(TEST_ROOT);
+    expect(prompt).not.toContain(spawnCalls[0].cwd);
+    expect(await Promise.all(['input-1.png', 'input-2.png', 'input-3.jpg'].map(name =>
+      readFile(join(spawnCalls[0].cwd, name), 'utf8')))).toEqual([
+      'synthetic source frame', 'synthetic lead sheet', 'synthetic guest sheet',
+    ]);
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({
+      castReferenceFiles: ['lead.png', 'guest.jpg'], sentPrompt: prompt,
+    }));
     await closeChild();
   });
 
@@ -201,35 +218,34 @@ describe('videoGen/grok — generateVideo', () => {
       prompt: 'a subject steps into view', sourceImagePath: source, uploadedTempPath: source, uploadedTempPaths: references,
       castReferences: [{ path: references[0], label: 'First — front' }, { path: references[1], label: 'Second' }],
     });
-    expect(posixPath(promptOf())).toContain('reference_to_video');
+    expect(promptOf()).toContain('reference_to_video');
     if (outcome === 'is canceled') expect(grok.cancel(jobId)).toBe(true);
     await closeChild();
     await vi.waitFor(() => expect(paths.map((path) => existsSync(path))).toEqual([false, false, false]));
   });
 
   it('sends a layout-only start frame as the first image so its people can take the cast likeness', () => {
-    const prompt = grok.buildGrokVideoPrompt({ prompt: 'she rides', sourceImagePath: '/abs/frame.png', duration: 6,
-      stagingPath: '/tmp/result.mp4', scratchDir: '/tmp/shot', startFrameLayout: true,
+    const { fullPrompt: prompt } = grok.grokVideoSentPrompt({ prompt: 'she rides', sourceImagePath: SOURCE_FRAME, duration: 6,
+      startFrameLayout: true,
       castReferences: [{ path: '/abs/rider.png', label: 'Rider — sheet' }, { path: '/abs/bike.png', label: 'Bike', role: 'prop' }] });
     expect(prompt).toContain('Do not set first_frame.');
     expect(prompt).not.toContain('Set first_frame to');
-    expect(prompt).toContain('in this order: /abs/frame.png, /abs/rider.png, /abs/bike.png');
+    expect(prompt).toContain('in this order: input-1.png, input-2.png, input-3.png');
     expect(prompt).toContain('The people in <IMAGE_1> are stand-ins');
     expect(prompt).toContain('<IMAGE_2> shows how Rider looks; <IMAGE_3> is the prop reference for Bike.');
     expect(prompt).toContain('she rides');
   });
 
   it('describes a selected prop as a prop rather than a person', () => {
-    const prompt = grok.buildGrokVideoPrompt({ prompt: 'she rides', sourceImagePath: '/abs/frame.png', duration: 6,
-      stagingPath: '/tmp/result.mp4', scratchDir: '/tmp/shot',
+    const { fullPrompt: prompt } = grok.grokVideoSentPrompt({ prompt: 'she rides', sourceImagePath: SOURCE_FRAME, duration: 6,
       castReferences: [{ path: '/abs/rider.png', label: 'Rider' }, { path: '/abs/bike.png', label: 'Bike', role: 'prop' }] });
     expect(prompt).toContain('<IMAGE_1> shows how Rider looks; <IMAGE_2> is the prop reference for Bike.');
     expect(prompt).toContain('Use each reference only for its named subject');
-    expect(prompt).toContain('Set first_frame to /abs/frame.png');
+    expect(prompt).toContain('Set first_frame to input-1.png');
   });
 
   it('keeps image_to_video for a still with no cast, and for a clip with no still', async () => {
-    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', castReferences: [] });
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME, castReferences: [] });
     expect(promptOf()).not.toContain('reference_to_video');
     await closeChild();
     await grok.generateVideo({ prompt: 'a fox', castReferences: [{ path: '/abs/guest.png', label: 'Guest' }] });
@@ -251,13 +267,13 @@ describe('videoGen/grok — generateVideo', () => {
   });
 
   it('asks image_to_video for 720p when the request is 720p, and names no size when none was requested', async () => {
-    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 1280, height: 720 });
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME, width: 1280, height: 720 });
     expect(promptOf()).toContain('resolution_name "720p"');
     await closeChild();
-    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 854, height: 480 });
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME, width: 854, height: 480 });
     expect(promptOf(1)).toContain('resolution_name "480p"');
     await closeChild(1);
-    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png' });
+    await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME });
     expect(promptOf(2)).not.toContain('resolution_name');
     await closeChild(2);
   });
@@ -318,11 +334,17 @@ describe('videoGen/grok — harvest and finalize', () => {
   it('builds a photographic first frame from the storyboard panel and references, then keeps it beside the clip', async () => {
     const completed = vi.fn();
     videoGenEvents.on('completed', completed);
-    const job = await grok.generateVideo({ prompt: 'she laces her skates', guidanceImagePath: '/gallery/panel.png', referenceImagePaths: ['/gallery/cast.png'] });
+    const panel = join(TEST_ROOT, 'panel.png');
+    const cast = join(TEST_ROOT, 'cast.png');
+    await writeFile(panel, 'synthetic storyboard');
+    await writeFile(cast, 'synthetic cast');
+    const job = await grok.generateVideo({ prompt: 'she laces her skates', guidanceImagePath: panel, referenceImagePaths: [cast] });
     const prompt = promptOf();
     expect(prompt).toContain('image_edit');
-    expect(prompt).toContain('in this order: /gallery/panel.png, /gallery/cast.png');
-    expect(prompt).toContain('/gallery/panel.png is a storyboard panel');
+    expect(prompt).toContain('in this order: input-1.png, input-2.png');
+    expect(prompt).toContain('input-1.png is a storyboard panel');
+    expect(prompt).toContain('animate first-frame.png');
+    expect(prompt).not.toContain(TEST_ROOT);
     expect(prompt).toContain('never the storyboard panel');
     expect(prompt).not.toContain('animate the source image');
     const scratch = scratchDirFor(job.jobId);
@@ -334,7 +356,7 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(completed.mock.calls[0][0]).toMatchObject({ firstFrameFile: `${job.jobId}-first-frame.png` });
     expect(existsSync(join(TEST_ROOT, 'data-images', `${job.jobId}-first-frame.png`))).toBe(true);
     const [entry] = await loadHistory();
-    expect(entry).toMatchObject({ mode: 'text', firstFrameFile: `${job.jobId}-first-frame.png`,
+    expect(entry).toMatchObject({ mode: 'text', sentPrompt: prompt, firstFrameFile: `${job.jobId}-first-frame.png`,
       storyboardGuidance: { guidanceImageFile: 'panel.png', referenceImageFiles: ['cast.png'] } });
     expect(entry.promptAdditions.map((a) => a.id)).toEqual(['storyboard-guidance', 'agent-instructions']);
   });
@@ -369,7 +391,7 @@ describe('videoGen/grok — harvest and finalize', () => {
     const completed = vi.fn();
     videoGenEvents.on('completed', completed);
 
-    const job = await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', width: 1280, height: 720 });
+    const job = await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: SOURCE_FRAME, width: 1280, height: 720 });
     await mkdir(scratchDirFor(job.jobId), { recursive: true });
     await writeFile(stagingPathFor(job.jobId), MP4_BYTES);
     await closeChild(0, 0);

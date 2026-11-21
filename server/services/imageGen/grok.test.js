@@ -43,7 +43,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const { readFileSync } = await import('fs');
   return {
     ...actual,
-    spawn: vi.fn((bin, args) => {
+    spawn: vi.fn((bin, args, options) => {
       const child = makeFakeChild();
       // On Windows grok cannot read /dev/stdin, so prepareGrokPromptFile writes
       // the prompt to a temp file and rewrites --prompt-file to point at it —
@@ -56,7 +56,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
       if (pfPath && pfPath !== '/dev/stdin') {
         try { promptFromFile = readFileSync(pfPath, 'utf8'); } catch { promptFromFile = null; }
       }
-      spawnCalls.push({ bin, args, child, promptFromFile });
+      spawnCalls.push({ bin, args, cwd: options?.cwd, child, promptFromFile });
       return child;
     }),
   };
@@ -183,7 +183,8 @@ describe('grok provider — generateImage', () => {
     const prompt = promptOf();
     expect(prompt).toContain('image_gen');
     expect(prompt).toContain('a small fox');
-    expect(prompt).toContain(stagingPathFor(job.jobId));
+    expect(prompt).toContain('working directory: output.png');
+    expect(prompt).not.toContain(stagingPathFor(job.jobId));
     await closeChild();
   });
 
@@ -228,7 +229,10 @@ describe('grok provider — generateImage', () => {
     await grok.generateImage({ prompt: 'cover art', initImagePath: 'proof.png', initImageStrength: 0.2 });
     const prompt = promptOf();
     expect(prompt).toContain('image_edit');
-    expect(prompt).toContain(join(FAKE_IMAGES_DIR, 'proof.png'));
+    expect(prompt).toContain('source image at input-1.png');
+    expect(prompt).not.toContain(FAKE_IMAGES_DIR);
+    expect(prompt).not.toContain('proof.png');
+    expect(await readFile(join(spawnCalls[0].cwd, 'input-1.png'), 'utf8')).toBe('fake');
     // Low strength → composition-preserving fidelity phrase (shared with codex).
     expect(prompt).toMatch(/preserve composition/i);
     expect(prompt).toContain('cover art');
@@ -243,8 +247,8 @@ describe('grok provider — generateImage', () => {
     const prompt = promptOf();
     expect(prompt).toContain('image_edit');
     expect(prompt).toContain('`image` array');
-    expect(prompt).toContain(join(FAKE_IMAGES_DIR, 'ref-a.png'));
-    expect(prompt).toContain(join(FAKE_IMAGES_DIR, 'ref-b.png'));
+    expect(prompt).toContain('input-1.png, input-2.png');
+    expect(prompt).not.toContain(FAKE_IMAGES_DIR);
     // No source image, so no fidelity phrase — these are references, not an edit.
     expect(prompt).not.toMatch(/transform the source image/i);
     await closeChild();
@@ -259,10 +263,10 @@ describe('grok provider — generateImage', () => {
       referenceImagePaths: ['ref-a.png'],
     });
     const prompt = promptOf();
-    expect(prompt).toMatch(/source image at .*proof\.png/);
+    expect(prompt).toContain('source image at input-1.png');
     expect(prompt).toContain('FIRST in the tool');
-    expect(prompt.indexOf(join(FAKE_IMAGES_DIR, 'proof.png')))
-      .toBeLessThan(prompt.indexOf(join(FAKE_IMAGES_DIR, 'ref-a.png')));
+    expect(prompt).toMatch(/source image at input-1\.png.*after it.*input-2\.png/s);
+    expect(prompt).not.toContain(FAKE_IMAGES_DIR);
     await closeChild();
   });
 
@@ -319,18 +323,13 @@ describe('grok provider — directed-path harvest', () => {
       expect(existsSync(join(FAKE_IMAGES_DIR, job.filename)), 'provider completion must wait outside a held snapshot').toBe(false);
     } finally { releaseCut(); }
 
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-
-    expect(completedListener).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(completedListener).toHaveBeenCalledTimes(1));
     const finalPath = join(FAKE_IMAGES_DIR, job.filename);
     expect(existsSync(finalPath)).toBe(true);
     const written = await readFile(finalPath);
     expect(Buffer.compare(written, fakePngBytes)).toBe(0);
-    // The whole per-job scratch dir is cleaned up after the move.
-    expect(existsSync(join(tmpdir(), `portos-grok-${job.jobId}`))).toBe(false);
+    // Scratch settlement runs alongside the terminal event.
+    await vi.waitFor(() => expect(existsSync(spawnCalls[0].cwd)).toBe(false));
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
@@ -339,6 +338,7 @@ describe('grok provider — directed-path harvest', () => {
     // than asserted against a literal, so this stays a contract test and not a
     // timing flake.
     const meta = JSON.parse(await readFile(sidecar, 'utf8'));
+    expect(meta.sentPrompt).toBe(promptOf());
     expect(meta.renderMs).toBeGreaterThanOrEqual(0);
     expect(meta.initImageFilename).toBe('source.png');
     expect(meta.inputProvenance).toBe('cli-requested');
@@ -627,10 +627,10 @@ describe('grok provider — launch refusal settlement', () => {
   });
 
   it('terminates a live child whose setup fails and releases resources only after it physically closes', async () => {
-    spawn.mockImplementationOnce((bin, args) => {
+    spawn.mockImplementationOnce((bin, args, options) => {
       const child = makeFakeChild();
       child.stdout.on = () => { throw new Error('synthetic stream setup failure'); };
-      spawnCalls.push({ bin, args, child, promptFromFile: null });
+      spawnCalls.push({ bin, args, cwd: options?.cwd, child, promptFromFile: null });
       return child;
     });
     const failed = vi.fn();

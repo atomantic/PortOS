@@ -18,7 +18,7 @@
  */
 
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, extname, join } from 'path';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { stripImageMetadata } from '../../lib/imageClean.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -73,6 +73,28 @@ export function resolveInputImages({ mode, initImagePath = null, referenceImageP
     initPath: resolvedInit,
     referencePaths: resolvedInit ? paths.slice(1) : paths,
   };
+}
+
+const CLI_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.avif', '.heic', '.heif']);
+
+export function cliPromptImageName(path, index) {
+  const ext = extname(path).toLowerCase();
+  return `input-${index + 1}${CLI_IMAGE_EXTENSIONS.has(ext) ? ext : '.png'}`;
+}
+
+export function cliPromptImageNames({ paths, initPath }) {
+  const names = paths.map(cliPromptImageName);
+  return { paths: names, initPath: initPath ? names[0] : null, referencePaths: initPath ? names.slice(1) : names };
+}
+
+/** Use the same cwd-relative names in previews and on disk. Preserve reviewed
+ * bytes when supplied and strip container metadata before the CLI can read it. */
+export async function stageCliPromptImages({ paths, scratchDir, reviewedReferenceBytes = null }) {
+  for (const [index, path] of paths.entries()) {
+    const bytes = (index === 0 && reviewedReferenceBytes) || await readFile(path);
+    const { data } = stripImageMetadata(bytes);
+    await writeFile(join(scratchDir, cliPromptImageName(path, index)), data, { mode: 0o600 });
+  }
 }
 
 /**
