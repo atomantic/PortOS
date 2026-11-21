@@ -8,6 +8,9 @@ const api = vi.hoisted(() => ({
   syncMessageAccount: vi.fn(),
   testMessageSelectors: vi.fn(),
   addCosTask: vi.fn(),
+  getMessageTokenStatus: vi.fn(),
+  testMessageToken: vi.fn(),
+  clearMessageToken: vi.fn(),
 }));
 const toast = vi.hoisted(() => Object.assign(vi.fn(), {
   error: vi.fn(),
@@ -21,6 +24,9 @@ vi.mock('../../services/apiMessages.js', () => ({
   updateMessageSelectors: api.updateMessageSelectors,
   syncMessageAccount: api.syncMessageAccount,
   testMessageSelectors: api.testMessageSelectors,
+  getMessageTokenStatus: api.getMessageTokenStatus,
+  testMessageToken: api.testMessageToken,
+  clearMessageToken: api.clearMessageToken,
 }));
 vi.mock('../../services/apiAgents.js', () => ({ addCosTask: api.addCosTask }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
@@ -33,6 +39,7 @@ const renderTab = () => render(<SyncTab accounts={[]} onRefresh={vi.fn()} />);
 beforeEach(() => {
   vi.clearAllMocks();
   api.getMessageSelectors.mockResolvedValue({});
+  api.getMessageTokenStatus.mockResolvedValue({ providers: [] });
 });
 
 describe('SyncTab DOM selector test', () => {
@@ -240,5 +247,50 @@ describe('Messages sync live progress', () => {
     expect(onProgress).toBeTypeOf('function');
     unmount();
     expect(socket.off).toHaveBeenCalledWith('messages:sync:progress', onProgress);
+  });
+});
+
+describe('SyncTab token debug', () => {
+  const statuses = {
+    providers: [
+      { provider: 'outlook', hasToken: true, expiresAt: '2026-11-21T12:00:00.000Z' },
+      { provider: 'teams', hasToken: false },
+    ],
+  };
+
+  it('renders token status for outlook and teams', async () => {
+    api.getMessageTokenStatus.mockResolvedValue(statuses);
+    renderTab();
+
+    expect(await screen.findByText('Token present')).toBeTruthy();
+    expect(screen.getByText('No token')).toBeTruthy();
+    expect(screen.getByText(/Expires:/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Test teams token' })).toBeTruthy();
+    // Only providers holding a token offer Clear
+    expect(screen.getAllByRole('button', { name: /^Clear .* token$/ })).toHaveLength(1);
+  });
+
+  it('tests a token and refreshes status', async () => {
+    api.getMessageTokenStatus.mockResolvedValue(statuses);
+    api.testMessageToken.mockResolvedValue({ token: { provider: 'teams' }, api: { success: true } });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test teams token' }));
+
+    await waitFor(() => expect(api.testMessageToken).toHaveBeenCalledWith('teams'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('teams token is valid'));
+    expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a cached token', async () => {
+    api.getMessageTokenStatus.mockResolvedValue(statuses);
+    api.clearMessageToken.mockResolvedValue({ cleared: true, provider: 'outlook' });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear outlook token' }));
+
+    await waitFor(() => expect(api.clearMessageToken).toHaveBeenCalledWith('outlook'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('outlook token cleared'));
+    expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
   });
 });
