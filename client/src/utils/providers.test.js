@@ -2358,3 +2358,18 @@ describe('isFleetHostConfigured', () => {
     expect(isFleetHostConfigured(host, providers)).toBe(false);
   });
 });
+
+describe('localToolUseHint for Ollama-backed wrappers', () => {
+  const ids = { ollama: new Set(['brand-new-family:7b']) };
+  const tui = { id: 'claude-ollama-tui', type: 'tui', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } };
+
+  it('borrows the managed ollama list for a loopback wrapper without a regex entry', () => {
+    expect(localToolUseHint('brand-new-family:7b', tui, ids)).toEqual({ toolCapable: true });
+    expect(localToolUseHint('brand-new-family:7b', { ...tui, envVars: {}, endpoint: 'http://127.0.0.1:11434/v1' }, ids)).toEqual({ toolCapable: true });
+  });
+
+  it('stays regex-only for a wrapper pointed at another host', () => {
+    const remote = { ...tui, envVars: { ANTHROPIC_BASE_URL: 'http://gpu-box.example.com:11434' } };
+    expect(localToolUseHint('brand-new-family:7b', remote, ids)).toEqual({ toolCapable: false });
+  });
+});

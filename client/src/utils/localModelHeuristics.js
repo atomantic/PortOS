@@ -8,7 +8,7 @@
  * with the backend's own capability report (`useToolUseModelIds` / `useVisionModelIds`).
  */
 
-import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
+import { isLocalEndpoint, isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
 import { filterSelectableModels } from './providerModels.js';
 import { commandBasename, isOllamaBackedProvider } from './providerTypes.js';
 import { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server/lib/localModelHeuristics.js';
@@ -25,6 +25,19 @@ export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server
 export const isVisionCapableCliProvider = (provider) =>
   provider?.type === 'cli'
   && ['codex', 'claude', 'grok'].includes(commandBasename(provider.command));
+
+/**
+ * The provider id whose entry in the server's per-provider capability maps vouches
+ * for `provider`'s models. Normally its own id; an Ollama-backed CLI/TUI wrapper
+ * (`claude-ollama-tui`, ...) is not enumerated by the server but talks to the
+ * managed local daemon, so it borrows `ollama`'s entry, only when its base URL is
+ * loopback. A wrapper with no URL, or pointed at another host, keeps its own id and stays regex-only.
+ */
+const capabilityProviderId = (provider) => {
+  if (!provider || provider.id === 'ollama' || !isOllamaBackedProvider(provider)) return provider?.id;
+  const base = String(provider.envVars?.ANTHROPIC_BASE_URL || provider.endpoint || '').trim();
+  return base !== '' && isLocalEndpoint(base) ? 'ollama' : provider.id;
+};
 
 /**
  * Agent-picker tool-use annotation for a model id: a model that can't emit native
@@ -47,7 +60,7 @@ export const isVisionCapableCliProvider = (provider) =>
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
   (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
     && typeof id === 'string' && id.length > 0
-    ? { toolCapable: toolUseIdsByProvider?.[provider?.id]?.has(id) === true || isToolUseModel(id) }
+    ? { toolCapable: toolUseIdsByProvider?.[capabilityProviderId(provider)]?.has(id) === true || isToolUseModel(id) }
     : null;
 
 /**
