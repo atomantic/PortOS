@@ -342,10 +342,10 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
 // instead of a silently canceled browser download. The server reads the persisted
 // per-series export settings, so callers gate on the form being saved.
 export const PROSE_EXPORT_NO_CONTENT = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
-const PROSE_EXPORT_FILES = {
-  md: 'manuscript.md',
-  epub: 'book.epub',
-  pdf: 'interior.pdf',
+const proseExportPath = {
+  md: (id) => `${API_BASE}/pipeline/series/${id}/export/manuscript.md`,
+  epub: (id) => `${API_BASE}/pipeline/series/${id}/export/book.epub`,
+  pdf: (id) => `${API_BASE}/pipeline/series/${id}/export/interior.pdf`,
 };
 
 const filenameFromDisposition = (header, fallback) => {
@@ -355,9 +355,10 @@ const filenameFromDisposition = (header, fallback) => {
 
 /** Resolves to `{ blob, filename }`; rejects with the shared API error shape (`.code`, `.status`). */
 export async function fetchProseExport(seriesId, kind) {
-  const file = PROSE_EXPORT_FILES[kind];
-  if (!file) throw new Error(`Unknown export kind: ${kind}`);
-  const response = await fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(seriesId)}/export/${file}`)
+  const pathFor = proseExportPath[kind];
+  if (!pathFor) throw new Error(`Unknown export kind: ${kind}`);
+  const file = pathFor('').split('/').pop();
+  const response = await fetch(pathFor(encodeURIComponent(seriesId)))
     .catch(() => null);
   if (!response) {
     const err = new Error('Server unreachable — check your connection and try again');
