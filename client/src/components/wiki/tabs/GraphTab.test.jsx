@@ -77,3 +77,50 @@ describe('GraphTab touch gestures', () => {
     expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
   });
 });
+
+describe('GraphTab keyboard access', () => {
+  let rectSpy;
+  let ctxSpy;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
+    ctxSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, {
+      get: () => () => {},
+      set: () => true,
+    }));
+  });
+  afterEach(() => {
+    rectSpy.mockRestore();
+    ctxSpy.mockRestore();
+  });
+
+  it('is focusable with an accessible name', async () => {
+    const canvas = await renderCanvas();
+    expect(canvas.tabIndex).toBe(0);
+    expect(screen.getByRole('application', { name: /knowledge graph/i })).toBe(canvas);
+  });
+
+  it('pans with arrow keys (node moves under the old pointer spot)', async () => {
+    const canvas = await renderCanvas();
+    fireEvent.keyDown(canvas, { key: 'ArrowLeft' });
+    // offset.x +40: node now at client x 655.
+    fireEvent.pointerDown(canvas, touch({ clientX: 655, clientY: 300 }));
+    fireEvent.pointerUp(canvas, touch({ clientX: 655, clientY: 300 }));
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
+  });
+
+  it('cycles nodes, announces them politely, and opens the active note with Enter', async () => {
+    const canvas = await renderCanvas();
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('');
+    fireEvent.keyDown(canvas, { key: 'Enter' });
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/graph');
+
+    fireEvent.keyDown(canvas, { key: ']' });
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toMatch(/alpha, root, 0 connections/);
+    fireEvent.keyDown(canvas, { key: 'Enter' });
+    expect(screen.getByTestId('location').textContent).toBe('/wiki/browse?note=wiki%2Falpha.md');
+  });
+});
