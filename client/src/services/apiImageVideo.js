@@ -501,6 +501,11 @@ export const addMediaCollectionItem = (id, { kind, ref }, { silent = false } = {
   body: JSON.stringify({ kind, ref }),
   silent,
 });
+export const removeMediaCollectionItems = (id, keys, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/bulk`, {
+  method: 'POST',
+  body: JSON.stringify({ remove: keys }),
+  silent,
+});
 export const removeMediaCollectionItem = (id, key, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
   method: 'DELETE',
   silent,

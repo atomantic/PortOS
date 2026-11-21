@@ -15,18 +15,20 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import useMounted from '../../hooks/useMounted';
-import { RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2 } from 'lucide-react';
+import { RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { getMediaCollection } from '../../services/apiImageVideo.js';
+import { getMediaCollection, removeMediaCollectionItems } from '../../services/apiImageVideo.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { getPipelineSeries } from '../../services/apiPipeline.js';
 import { syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/apiPeerSync.js';
 import MediaImage from '../MediaImage';
 import { formatCount } from '../../utils/formatters.js';
+import { pluralize } from '../../lib/textUtils';
+import { MEDIA_COLLECTION_BULK_MAX } from '../../../../server/lib/mediaItemKey.js';
 
 // ── Per-kind record fetcher ──────────────────────────────────────────────────
 // Returns a promise resolving to { name, ...rest } for use in the drawer header.
@@ -183,7 +185,18 @@ const ASSET_AVAILABILITY = {
   peer: 'Stored only on this peer',
 };
 
-function AssetDifferences({ differences, peerName }) {
+function AssetDifferences({ differences, peerName, collectionId, onRefresh }) {
+  // A file no machine holds can't be synced back, so the only fix is dropping
+  // the dangling item. The server sends `itemKey` only for those.
+  const removableKeys = collectionId
+    ? [...new Set((differences ?? []).map((asset) => asset.itemKey).filter(Boolean))].slice(0, MEDIA_COLLECTION_BULK_MAX)
+    : [];
+  const [removeMissing, removing] = useAsyncAction(async () => {
+    const result = await removeMediaCollectionItems(collectionId, removableKeys, { silent: true });
+    const n = result?.removed ?? 0;
+    toast.success(`Removed ${pluralize(n, 'missing item')} from the collection`);
+    onRefresh();
+  }, { errorMessage: 'Failed to remove the missing items' });
   if (!differences?.length) return null;
   return (
     <div className="mt-2 space-y-1 text-xs text-gray-400">
@@ -196,6 +209,18 @@ function AssetDifferences({ differences, peerName }) {
         return (
           <details key={availability} open={availability === 'neither' || undefined}>
             <summary className="cursor-pointer">{availability === 'peer' ? `Stored only on ${peerName}` : label} ({formatCount(assets.length)})</summary>
+            {availability === 'neither' && removableKeys.length > 0 && (
+              <button
+                type="button"
+                onClick={() => removeMissing()}
+                disabled={removing}
+                className="my-1 flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-error/15 hover:bg-port-error/30 text-port-error disabled:opacity-40"
+                title="These files exist on no machine, so sync can't restore them. Remove their entries from this collection."
+              >
+                {removing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                Remove {formatCount(removableKeys.length)} from collection
+              </button>
+            )}
             <ul className="max-h-48 overflow-y-auto pl-4">
               {assets.map(({ kind, filename }) => (
                 <li key={`${kind}:${filename}`} className="break-all py-0.5">{filename}</li>
@@ -284,7 +309,12 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
           )}
         </div>
       </div>
-      <AssetDifferences differences={assetDifferences} peerName={peerName} />
+      <AssetDifferences
+        differences={assetDifferences}
+        peerName={peerName}
+        collectionId={kind === 'mediaCollection' ? recordId : null}
+        onRefresh={onRefresh}
+      />
     </div>
   );
 }

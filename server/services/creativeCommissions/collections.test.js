@@ -27,13 +27,16 @@ describe('consolidateCommissionCollections', () => {
     await collections.addItem(runB.collectionId, { kind: 'video', ref: 'clip-b' });
     const stray = await collections.createCollection({ name: 'Creative Director: Daily Video' });
     await collections.addItem(stray.id, { kind: 'video', ref: 'clip-c' });
+    // A dated run collection whose project was deleted is found by its name alone.
+    const orphan = await collections.createCollection({ name: 'Creative Director: Daily Video — 2026-07-15' });
+    await collections.addItem(orphan.id, { kind: 'video', ref: 'clip-d' });
 
-    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 3, repointedProjects: 0, failedJobs: 0 });
+    expect(await consolidateCommissionCollections()).toEqual({ jobs: 1, mergedCollections: 4, repointedProjects: 0, failedJobs: 0 });
 
     const live = await collections.listCollections();
     const job = live.find((c) => c.id === 'cdc-commission-daily');
     expect(job.name).toBe('Creative Director: Daily Video');
-    expect(job.items.map((i) => i.ref).sort()).toEqual(['clip-a', 'clip-b', 'clip-c']);
+    expect(job.items.map((i) => i.ref).sort()).toEqual(['clip-a', 'clip-b', 'clip-c', 'clip-d']);
     expect(live.filter((c) => c.name.startsWith('Creative Director: Daily Video') && c.id !== namesake.collectionId)).toHaveLength(1);
     expect((await getProject(runA.id)).collectionId).toBe(job.id);
     expect((await getProject(runB.id)).collectionId).toBe(job.id);
