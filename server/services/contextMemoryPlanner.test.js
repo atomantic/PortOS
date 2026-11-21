@@ -19,6 +19,10 @@ describe('contextMemoryPlanner', () => {
     const plan = await planModelContext({ id: 'gguf', size: 17e9 }, { cacheType: 'q8_0', budgetBytes: 96 * 1024 ** 3 });
     expect(plan).toMatchObject({ lazyCache: false, layoutKnown: true, recommended: 262144 });
   });
+  it('recommends nothing for a GGUF model when the host budget is unknown, but keeps the MLX native maximum', async () => {
+    expect((await planModelContext({ id: 'gguf', size: 17e9 }, { cacheType: 'q8_0', budgetBytes: null })).recommended).toBeNull();
+    expect((await planModelContext({ id: 'mlx-model', size: 20e9 }, { cacheType: 'q8_0', budgetBytes: null })).recommended).toBe(1048576);
+  });
   it('reads the cache type from env first, then a brew service plist, else f16', async () => {
     expect(await resolveDaemonKvCacheType({ env: { OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_FLASH_ATTENTION: '1' } })).toEqual({ cacheType: 'q8_0', source: 'env' });
     const plist = '<key>OLLAMA_FLASH_ATTENTION</key>\n<string>1</string>\n<key>OLLAMA_KV_CACHE_TYPE</key>\n<string>q4_0</string>';

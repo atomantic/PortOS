@@ -73,7 +73,9 @@ export async function planModelContext(model, { cacheType, budgetBytes }) {
     runner,
     lazyCache,
     ...plan,
-    recommended: plan.recommended ?? (lazyCache ? nativeContext : null),
+    // Without a budget every step reads `fits: null`, so a reserved (GGUF) cache's pick would be
+    // a guess; only a lazily grown (MLX) cache is safe at its native maximum then.
+    recommended: lazyCache ? (plan.recommended ?? nativeContext) : budgetBytes ? plan.recommended : null,
   }
 }
 
