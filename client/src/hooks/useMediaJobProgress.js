@@ -11,6 +11,12 @@ import { usePreviousSync } from './usePrevious.js';
 import useMounted from './useMounted';
 import { subscribeVisibility } from './useVisibilityEvent';
 
+// Event names are built as `${prefix}:<phase>` below; naming the audio set here
+// keeps them greppable for the socket event inventory's client-listener check.
+export const MEDIA_JOB_EVENT_NAMES = {
+  audio: ['audio-gen:started', 'audio-gen:progress', 'audio-gen:completed', 'audio-gen:failed'],
+};
+
 /**
  * Subscribe to live progress for a single mediaJobQueue job. `kind`
  * selects the socket namespace: 'image' (default) → image-gen, 'video' →

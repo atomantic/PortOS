@@ -172,8 +172,8 @@ join tokens or instance ids.
 | Semantic event | Payload | Private hosted mapping |
 |---|---|---|
 | `session:snapshot` | `{runtimeVersion, currentNodeId, playbackPhase, activeHoldIndex, turnPhase, status}` | `hosted:session:sync`; project the bounded fields, never export the full private snapshot/transcript. |
-| `player:node-enter` | `{nodeId, phase, activeHoldIndex}` | Host sends `hosted:playback:update` with `nodeId`, `phase`, `activeHoldIndex`; server sends `hosted:playback:sync`. |
-| `player:phase` | `{nodeId, phase, activeHoldIndex}` | Same update/sync pair for a phase-only change. |
+| `player:node-enter` | `{nodeId, phase, activeHoldIndex}` | Host sends `hosted:playback:update` with `nodeId`, `phase`, `activeHoldIndex`; server broadcasts `hosted:session:sync`. |
+| `player:phase` | `{nodeId, phase, activeHoldIndex}` | Same update/`hosted:session:sync` pair for a phase-only change. |
 | `turn:phase` | `{phase: "idle" \| "listening" \| "thinking" \| "speaking", turnId?, text?}` | `hosted:turn:phase`. Text is narration, not a new graph. |
 | `turn:speech` | `{turnId, audio, mimeType, target: "host" \| "audience"}` | `hosted:turn:tts`; audio is base64 WAV in the private transport. |
 | `turn:speech-complete` | `{turnId, status: "ended" \| "failed" \| "aborted"}` | Client sends `hosted:speech:done`. Only `ended` from the designated output commits. |
