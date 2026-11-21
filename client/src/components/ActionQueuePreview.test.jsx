@@ -57,10 +57,14 @@ describe('canonical action previews', () => {
     expect(within(daily).getByText('0 required in this view')).toBeInTheDocument();
     expect(within(daily).queryByText('Disk needs attention')).not.toBeInTheDocument();
     expect(within(daily).queryByText('Thread needs follow-up')).not.toBeInTheDocument();
-    expect(within(daily).getByText('Optional recommendations')).toBeInTheDocument();
+    expect(within(daily).getByRole('heading', { name: 'Optional recommendations', level: 3 })).toBeInTheDocument();
     expect(within(daily).getByRole('link', { name: 'View all actions' })).toHaveAttribute('href', '/review?view=today');
+    const actions = screen.getByRole('region', { name: 'Actions' });
+    expect(within(actions).getByRole('heading', { name: 'Actions', level: 2 })).toBeInTheDocument();
+    expect(within(actions).getByRole('heading', { name: 'Required', level: 3 })).toBeInTheDocument();
     fireEvent.click(bell);
     const panel = screen.getByRole('region', { name: 'Notifications' });
+    expect(within(panel).getByRole('heading', { name: 'Required', level: 3 })).toBeInTheDocument();
     expect(mock.getReviewQueue).toHaveBeenCalledTimes(1);
     for (const link of screen.getAllByRole('link', { name: /Disk needs attention/ })) {
       expect(link).toHaveAttribute('href', '/review/health%3Adisk?view=today');

@@ -242,7 +242,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
             <Eye className="w-6 h-6 text-purple-400" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-lg font-semibold text-white truncate">Decision Log</h3>
+            <h2 className="text-lg font-semibold text-white truncate">Decision Log</h2>
             <p className="text-sm text-gray-500 truncate">
               {last24Hours.total > 0
                 ? `${last24Hours.total} decisions in last 24h`

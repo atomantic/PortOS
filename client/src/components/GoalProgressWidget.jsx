@@ -88,7 +88,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
         <div className="flex items-center gap-3">
           <Target className="w-6 h-6 text-port-accent" aria-hidden="true" />
           <div>
-            <h3 className="text-lg font-semibold text-white">Goals</h3>
+            <h2 className="text-lg font-semibold text-white">Goals</h2>
             <p className="text-sm text-gray-500">
               {goals.length} active &middot; {avgProgress}% avg
             </p>

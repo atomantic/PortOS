@@ -85,7 +85,7 @@ export default function QuickIdeaCapture() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-white">Quick Idea</h3>
+        <h2 className="text-sm font-semibold text-white">Quick Idea</h2>
         <Link to="/catalog" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
           Catalog &rarr;
         </Link>

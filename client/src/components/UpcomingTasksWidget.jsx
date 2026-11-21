@@ -43,7 +43,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
           <div className="flex items-center gap-3">
             <Clock className="w-6 h-6 text-gray-500" aria-hidden="true" />
             <div>
-              <h3 className="text-lg font-semibold text-white">Upcoming Tasks</h3>
+              <h2 className="text-lg font-semibold text-white">Upcoming Tasks</h2>
               <p className="text-sm text-port-warning">Schedule unavailable — retrying…</p>
             </div>
           </div>
@@ -103,7 +103,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
             <Clock className="w-6 h-6 text-port-accent" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-white">Upcoming Tasks</h3>
+            <h2 className="text-lg font-semibold text-white">Upcoming Tasks</h2>
             <p className="text-sm text-gray-500">
               {readyTasks.length > 0 ? (
                 <span className="text-port-success">{readyTasks.length} ready now</span>

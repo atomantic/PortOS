@@ -11,7 +11,7 @@ export default function AppsGridWidget({ dashboardState }) {
         <div className="flex justify-center mb-4 text-port-accent/70">
           <MicroGlyph variant="reticle" size={48} state="accent" />
         </div>
-        <h3 className="text-xl font-semibold text-white mb-2">No apps registered</h3>
+        <h2 className="text-xl font-semibold text-white mb-2">No apps registered</h2>
         <p className="text-gray-500 mb-6">Register your first app to get started</p>
         <Link
           to="/apps/create"

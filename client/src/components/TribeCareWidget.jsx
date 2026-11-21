@@ -17,7 +17,7 @@ export default function TribeCareWidget({ dashboardState }) {
     <div className="bg-port-card border border-port-border rounded-xl p-4 h-full flex flex-col">
       <div className="flex items-center gap-2 mb-3">
         <Users size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Tribe Care</h3>
+        <h2 className="text-sm font-semibold text-white">Tribe Care</h2>
         <Link to="/tribe" className="ml-auto flex items-center gap-1 text-xs text-port-accent hover:underline">
           Open <ArrowRight size={12} />
         </Link>

@@ -113,7 +113,7 @@ export default function WhileAwayWidget() {
             <Moon className="w-5 h-5 text-port-accent" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base @sm:text-lg font-semibold text-white">While You Were Away</h3>
+            <h2 className="text-base @sm:text-lg font-semibold text-white">While You Were Away</h2>
             <p className="text-sm text-gray-500 truncate">
               {total > 0
                 ? `${total} agent run${total !== 1 ? 's' : ''} since ${timeAgo(windowSince)}`
