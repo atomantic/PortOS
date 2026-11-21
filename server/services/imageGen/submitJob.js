@@ -5,6 +5,7 @@
  */
 
 import { assertCatalogIdentityWritable } from '../catalogDB/identityAccess.js';
+import { unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { REFERENCE_IMAGE_FIELDS } from '../../lib/imageGenValidation.js';
@@ -80,14 +81,25 @@ export async function enqueueLoggedImage(job, { source = null } = {}) {
 // the HTTP route cleans every upload after dispatch settles. A caller with no uploads
 // gets an empty list.
 export async function executeImageGenerate(data, files = {}, { source = null } = {}) {
-  const finish = (responseBody) => ({ body: responseBody, uploadedTempPaths, params });
   if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
-  const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
+  const { data: params, mode, settings, uploadedTempPaths, stagedRefPaths = [] } = await prepareGenerateParams({
     data,
     files,
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
+  let dispatched;
+  try {
+    dispatched = await dispatchPreparedImage({ data, params, mode, settings, source });
+  } catch (error) {
+    await Promise.allSettled([...stagedRefPaths, ...uploadedTempPaths].map(path => unlinkGuarded(path)));
+    throw error;
+  }
+  const body = 'result' in dispatched ? await completeSynchronousImage(params, dispatched.result) : dispatched.body;
+  return { body, uploadedTempPaths, params };
+}
+
+async function dispatchPreparedImage({ data, params, mode, settings, source }) {
   await prepareFableLoomImageParams({ params, mode, settings });
 
   if (data.quickEdit && (!data.reviewedReferenceDigest || data.reviewedPromptDigest !== await quickEditCompositionDigest({ params, mode, settings }))) {
@@ -209,12 +221,12 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
       kind: 'image',
       params: { ...jobParams, remoteMedia },
     }, { source });
-    return finish(queuedImageResponse({
+    return { body: queuedImageResponse({
       ...queued,
       mode: null,
       model: request.modelId,
       mediaProviderPeerId: peer.id,
-    }));
+    }) };
   }
 
   // `cloudModel` and its provenance flag are dispatcher-level knobs, not
@@ -237,7 +249,7 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
     // `cloud.modelId` is the *effective* model so the response metadata reports
     // what actually renders (gpt-6-luna by default) instead of "codex"/null.
     const queued = await enqueueLoggedImage({ kind: 'image', params: { ...cloud.jobParams, ...params } }, { source });
-    return finish(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
+    return { body: queuedImageResponse({ ...queued, mode, model: cloud.modelId }) };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const { pythonPath: py, selectedModel } = resolveLocalImageModel(settings, params);
@@ -252,11 +264,11 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
     // selectedModel reflects the actual fallback chain resolveLocalImageModel
     // applied (caller modelId → 'dev' → allModels[0]) rather than just the
     // requested id.
-    return finish(queuedImageResponse({
+    return { body: queuedImageResponse({
       ...queued,
       mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || params.modelId || 'dev',
-    }));
+    }) };
   }
   // Selective section revision (#9011): the external/agy lane renders
   // synchronously and never touches enqueueLoggedImage's guard above, so it
@@ -270,7 +282,12 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
     const { assertCatalogRenderParams } = await import('../musicVideo/clipCastReferences.js');
     await assertCatalogRenderParams(params);
   }
-  let result = await imageGen.generateImage(params);
+  return { result: await imageGen.generateImage(params) };
+}
+
+// A successful render may reference its staged inputs in metadata. Keep them
+// if a later gallery or record attachment fails.
+async function completeSynchronousImage(params, result) {
   if (params.visualProfile && result?.filename) result = await finishVisualProfileImage({ result, profile: params.visualProfile, signal: new AbortController().signal });
   if (params.musicVideoProjectId && result?.filename) {
     const { fileIntoMusicVideoCollection } = await import('../musicVideoCollectionHook.js');
@@ -299,5 +316,5 @@ export async function executeImageGenerate(data, files = {}, { source = null } =
     }).catch(() => {});
     catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
   }
-  return finish(result);
+  return result;
 }

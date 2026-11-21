@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 vi.mock('../../lib/paths.js', async (importOriginal) =>
@@ -158,7 +158,34 @@ beforeEach(() => {
   getUniverseVisualProfile.mockResolvedValue(null);
 });
 
+it('removes a staged init copy when a named reference fails resolution', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  const uploadPath = join(lazyTempDataRoot('portos-greybox-image-'), 'init-upload.png');
+  writeFileSync(uploadPath, 'fixture');
+  getSettings.mockResolvedValueOnce({ imageGen: CODEX_ON });
+  await expect(prepareGenerateParams({
+    data: { mode: 'codex', prompt: 'p', referenceImageFiles: ['missing-fixture.png'] },
+    files: { initImage: { path: uploadPath, mimetype: 'image/png' } },
+    referenceImageFields: [],
+  })).rejects.toMatchObject({ code: 'REFERENCE_IMAGE_NOT_FOUND' });
+  expect(existsSync(uploadPath)).toBe(false);
+  expect(readdirSync(PATHS.imageRefs)).toEqual([]);
+});
+
 describe('music-video render-target resolution (#3231 Phase 4)', () => {
+  it('removes temp uploads when a direct caller fails during the music-video project lookup', async () => {
+    const uploadPath = join(lazyTempDataRoot('portos-greybox-image-'), 'lookup-upload.png');
+    writeFileSync(uploadPath, 'fixture');
+    const failure = new Error('Fixture project lookup failed');
+    getProject.mockRejectedValueOnce(failure);
+    await expect(prepareGenerateParams({
+      data: { prompt: 'p', musicVideo: { projectId: 'mv-1', sceneId: 's1' } },
+      files: { initImage: { path: uploadPath } },
+      referenceImageFields: [],
+    })).rejects.toBe(failure);
+    expect(existsSync(uploadPath)).toBe(false);
+  });
+
   it('resolves the owning project record pin and stamps its model onto cloudModel', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'local', ...CODEX_ON } });
     getProject.mockResolvedValue({ id: 'mv-1', imageMode: 'codex', imageModelId: 'record-model' });

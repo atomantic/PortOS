@@ -43,7 +43,7 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { access, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join as pathJoin } from 'path';
 
@@ -248,7 +248,7 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
-  it('removes multipart uploads when queue submission fails after staging', async () => {
+  it('removes both the multipart upload and its staged copy when queue submission fails', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'codex', codex: { enabled: true } } });
     mediaJobQueue.enqueueJob.mockRejectedValueOnce(new Error('Synthetic queue failure'));
     const unlink = vi.spyOn(fileUtils, 'unlinkGuarded');
@@ -260,13 +260,43 @@ describe('Image Gen Routes', () => {
       const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
       expect(response.status).toBe(500);
       await response.json();
-      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
-      expect(unlink).toHaveBeenCalled();
-      const uploadPath = unlink.mock.calls[0][0];
-      await expect(import('fs/promises').then(({ access }) => access(uploadPath))).rejects.toMatchObject({ code: 'ENOENT' });
+      const stagedPath = mediaJobQueue.enqueueJob.mock.calls[0][0].params.initImagePath;
+      expect(stagedPath).toBe(pathJoin(fileUtils.PATHS.imageRefs, basename(stagedPath)));
+      const uploadPath = unlink.mock.calls.map(([path]) => path).find(path => path !== stagedPath);
+      expect(uploadPath).toBeTruthy();
+      await expect(access(uploadPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
       unlink.mockRestore();
+      await closeLoopbackServer(server);
+    }
+  });
+
+  it('removes a staged reference after local model validation fails and preserves the gallery reference', async () => {
+    const galleryName = 'dispatch-owned-by-gallery.png';
+    await mkdir(fileUtils.PATHS.images, { recursive: true });
+    const galleryPath = pathJoin(fileUtils.PATHS.images, galleryName);
+    await writeFile(galleryPath, 'synthetic gallery image');
+    getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } } });
+    const copy = vi.spyOn(fileUtils, 'copyFileGuarded');
+    const server = await startLoopbackServer(app);
+    try {
+      const form = new FormData();
+      form.set('prompt', 'a red cube');
+      form.set('modelId', 'unknown-fixture-model');
+      form.set('referenceImageFiles', galleryName);
+      form.set('referenceImage1', new Blob(['synthetic reference'], { type: 'image/png' }), 'uploaded.png');
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
+      expect([response.status, (await response.json()).code]).toEqual([400, 'IMAGE_GEN_UNKNOWN_MODEL']);
+      expect(copy).toHaveBeenCalledOnce();
+      const [uploadPath, stagedPath] = copy.mock.calls[0];
+      await expect(access(uploadPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(access(galleryPath)).resolves.toBeUndefined();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
       await closeLoopbackServer(server);
     }
   });
