@@ -10,7 +10,7 @@
  * Manifest filename convention:
  *   <iso-ts>-<sender-id>-<manifest-id>.json
  *
- * Using an ISO-prefixed timestamp gives chokidar's lexicographic event order a
+ * Using an ISO-prefixed timestamp gives the watcher's lexicographic event order a
  * stable replay order if multiple manifests land in the same poll cycle.
  */
 
@@ -29,7 +29,7 @@ export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'medi
 
 /** Deterministic filename for an instance's annotation manifest in a bucket.
  *  One file per (bucket, instanceId) — re-exports overwrite in place so peers
- *  see updates via chokidar `change` events, same pattern as subscriptions. */
+ *  see updates via watcher `change` events, same pattern as subscriptions. */
 export function annotationManifestFilename(senderInstanceId) {
   const safeId = String(senderInstanceId || UNKNOWN_INSTANCE_ID).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
   return `annotations-${safeId}.json`;
@@ -105,7 +105,7 @@ export async function markProcessed(bucketId, manifestFilename, manifestId = nul
 /**
  * Remove a filename from the cursor entirely (used on `unlink` so a future
  * re-share of the same record under the same filename re-imports cleanly).
- * No-op short-circuit when the filename isn't tracked — chokidar fires
+ * No-op short-circuit when the filename isn't tracked — the watcher fires
  * `unlink` for arbitrary files in the watched dir, not just our manifests.
  */
 export async function forgetProcessed(bucketId, manifestFilename) {
@@ -173,7 +173,7 @@ export function hasBeenProcessed(cursor, manifestFilename, manifestId = null) {
  * `subscription`, when provided as `{ recordKind, recordId }`, marks this
  * manifest as a persistent subscription rather than a one-shot share. The
  * filename is then deterministic per (recordKind, recordId), so re-exports
- * overwrite in place and recipients see updates via chokidar `change`
+ * overwrite in place and recipients see updates via watcher `change`
  * events. Importer cursor keys on the manifest id (fresh per export) so
  * content-changes re-process correctly.
  */
@@ -280,7 +280,7 @@ export function legacySubscriptionFilename({ recordKind, recordId }) {
  *
  * For subscription manifests we use a deterministic name keyed on the
  * (recordKind, recordId, senderInstanceId) tuple so re-exports overwrite the
- * same file — bucket recipients see updates via chokidar `change` events, not
+ * same file — bucket recipients see updates via watcher `change` events, not
  * as accumulating new files. Including the senderInstanceId means two peers
  * each subscribed to the same record write to distinct files instead of
  * clobbering each other. For one-shot manifests we use the legacy
@@ -340,7 +340,7 @@ export const DEFAULT_MANIFEST_RETENTION = 500;
  * `handleUnshare` for our own archive moves — those would otherwise reset
  * cursor entries and emit a misleading "peer unshared" socket event.
  *
- * Held for ~5s after each rename to outlast chokidar's awaitWriteFinish
+ * Held for ~5s after each rename to outlast the watcher's awaitWriteFinish
  * debounce; the entry is unref'd from the event loop so it never blocks
  * shutdown.
  */

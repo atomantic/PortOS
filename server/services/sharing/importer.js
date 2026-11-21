@@ -1105,7 +1105,7 @@ export async function processManifest(bucketId, manifestFilename) {
   const portosFullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const portosDiff = scopeVersionDiff(portosFullDiff, relevantSchemaCategoriesForManifest(manifest));
   if (portosDiff.ahead.length > 0) {
-    // Record the refusal so subsequent chokidar fan-outs (every asset/record
+    // Record the refusal so subsequent watcher fan-outs (every asset/record
     // file landing under the bucket triggers a backlog scan that re-walks
     // every manifest) don't re-fire this event 100× per bundle. Mirrors
     // the sibling `incompatible-version` branch above. The record is bound to
