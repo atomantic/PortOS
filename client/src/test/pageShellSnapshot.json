@@ -190,7 +190,6 @@
   "/universes/:universeId/sync": "full",
   "/universes/new": "full",
   "/uploads": "full",
-  "/video": "full",
   "/video/generate": "full",
   "/voice/call-host": "padded",
   "/voices": "full",
