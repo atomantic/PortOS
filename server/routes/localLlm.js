@@ -77,7 +77,7 @@ import {
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
 import {
-  getStatus, listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
+  getStatus, listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall, runModelAbuseScan } from '../services/modelAbuseGuard.js'
@@ -168,6 +168,12 @@ router.get('/status', asyncHandler(async (req, res) => {
 // LoRA caption-model picker.
 router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
+}))
+
+// GET /api/local-llm/context-plans — per installed Ollama model: KV-cache size at each
+// window step under the daemon's cache type, what fits this host, and the recommended window.
+router.get('/context-plans', asyncHandler(async (_req, res) => {
+  res.json(await listContextPlans())
 }))
 
 // GET /api/local-llm/tool-use-models — tool-use (function-calling) capable

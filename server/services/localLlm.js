@@ -1410,8 +1410,37 @@ export async function installModel(backend, modelId, onProgress, options = {}) {
       ...localModelInventoryRow({ backend, modelId }),
       source: 'download',
     })
+    if (backend === 'ollama') await applyRecommendedContextWindow(modelId).catch((err) => console.warn(`⚠️ Context window for ${modelId} not set: ${err.message}`))
   }
   return result
+}
+
+/**
+ * List installed Ollama models with their context plans (KV size per window, recommended window).
+ * @returns {Promise<{ budgetBytes: number|null, cacheType: string, cacheTypeSource: string, plans: object[] }>}
+ */
+export async function listContextPlans() {
+  const { planInstalledModels } = await import('./contextMemoryPlanner.js')
+  const models = await listModels('ollama').catch(() => [])
+  return planInstalledModels(models)
+}
+
+/**
+ * Give a newly installed Ollama model the largest window that fits this host
+ * (its native maximum when memory allows), as a per-model num_ctx on the
+ * built-in Ollama provider. Leaves an override the user already set alone.
+ */
+async function applyRecommendedContextWindow(modelId) {
+  const provider = await getProviderById('ollama')
+  if (!provider || provider.modelNumCtx?.[modelId]) return null
+  const { planModelContext, resolveContextPlanHost } = await import('./contextMemoryPlanner.js')
+  const model = (await listModels('ollama', true).catch(() => [])).find((m) => m.id === modelId) || { id: modelId }
+  // planModelContext returns no recommendation when the host budget is unknown and the cache is reserved.
+  const plan = await planModelContext(model, await resolveContextPlanHost())
+  if (!plan.recommended) return null
+  await updateProvider('ollama', { modelNumCtx: { ...(provider.modelNumCtx || {}), [modelId]: plan.recommended } })
+  console.log(`📏 ${modelId}: per-model num_ctx set to ${plan.recommended} (largest window that fits this host)`)
+  return plan.recommended
 }
 
 /**
