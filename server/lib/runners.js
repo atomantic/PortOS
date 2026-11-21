@@ -88,7 +88,7 @@ export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
 export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
 
 // Model runs through the generic diffusers runner script (`scripts/ml/z_image_turbo.py`): Z-Image, ERNIE, HiDream and Qwen share one entry point that branches on `--pipeline-class` / `--text-encoder-repo`.
-// Keep aligned with the dispatch in `server/services/imageGen/local.js`.
+// Keep aligned with the dispatch in `server/services/imageGen/localArgs.js`.
 export const usesDiffusersRunner = (model) =>
   isZImage(model) || isErnie(model) || isHiDream(model) || isQwen(model);
 

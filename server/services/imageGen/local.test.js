@@ -1256,6 +1256,35 @@ describe('reviewed local references', () => {
 });
 
 describe('local render failure delivery', () => {
+  it('settles the child when a progress subscriber throws during the final stdout flush', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { getActiveJob } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+    const failProgress = () => { throw new Error('progress subscriber failed'); };
+    imageGenEvents.once('progress', failProgress);
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    const claimReleaseCount = releaseClaim.mock.calls.length;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      child.stdout.emit('data', Buffer.from('STAGE:inference\n50%|██ | 1/2'));
+      child.emit('close', 1);
+      await expect(failed).resolves.toMatchObject({ generationId: jobId, error: expect.stringContaining('Exit code 1') });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('progress subscriber failed'));
+      expect(getActiveJob()).toBeNull();
+      expect(releaseClaim).toHaveBeenCalledTimes(claimReleaseCount + 1);
+    } finally {
+      imageGenEvents.off('progress', failProgress);
+      log.mockRestore();
+    }
+  });
+
   it.each([
     ['USER_ERROR:torch_runtime_broken\n❌ Unknown diffusers pipeline class: QwenImage21Pipeline. Reinstall the runtime.\n', 'Reinstall the runtime.'],
     ['runner.py: error: invalid value for --steps\n', 'invalid value for --steps'],
