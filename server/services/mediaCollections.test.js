@@ -94,6 +94,17 @@ describe('mediaCollections service', () => {
     expect(await svc.listCollections()).toEqual([]);
   });
 
+  it('rejects a partial inventory when the caller needs every membership', async () => {
+    const valid = await svc.createCollection({ name: 'Example Collection' });
+    const broken = join(COLLECTIONS_DIR, 'broken-record');
+    await mkdir(broken);
+    await writeFile(join(broken, 'index.json'), '{');
+
+    expect((await svc.listCollections()).map(collection => collection.id)).toEqual([valid.id]);
+    await expect(svc.listCollections({ requireComplete: true }))
+      .rejects.toMatchObject({ code: svc.ERR_INCOMPLETE_INVENTORY });
+  });
+
   it('createCollection persists a new collection', async () => {
     const c = await svc.createCollection({ name: 'Project A' });
     expect(c.id).toBe('uuid-1');

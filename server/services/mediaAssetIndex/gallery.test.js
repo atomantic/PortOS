@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { listGalleryPage, listGalleryFacets, listGalleryCollectionSummaries, listImageVariants } from './gallery.js';
+import { listGalleryPage, listGalleryFacets, listGalleryCollectionSummaries, listImageVariants, listUnsortedGalleryFiles } from './gallery.js';
 import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
@@ -281,5 +281,43 @@ describe('image variant lookup', () => {
     const [sql, params] = query.mock.calls.find(([sql]) => sql.includes("data->>'cleanedFrom'"));
     expect(sql).toContain('kind = $1');
     expect(params).toEqual(['image', 'fox.png']);
+  });
+});
+
+describe('Unsorted transfer inventory', () => {
+  it('reads the entire image gallery and excludes real memberships and video file aliases', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    const refs = Array.from({ length: 250 }, (_, i) => ({ ref: `image-${i}.png` }));
+    query.mockResolvedValue({ rows: refs });
+    loadHistory.mockResolvedValue([
+      { id: 'filed', filename: 'shared.mp4' },
+      { id: 'alias', filename: 'shared.mp4' },
+      { id: 'unfiled', filename: 'free.webm' },
+      { id: 'unfiled-alias', filename: 'free.webm' },
+      { id: 'legacy-filed', filename: 'legacy.mp4' },
+    ]);
+    listCollections.mockResolvedValue([{ items: [
+      { kind: 'image', ref: 'image-0.png' },
+      { kind: 'video', ref: 'filed' },
+      { kind: 'video', ref: 'legacy.mp4' },
+    ] }]);
+
+    const entries = await listUnsortedGalleryFiles();
+    expect(entries).toEqual([
+      ...refs.slice(1).map(({ ref }) => ({ kind: 'image', filename: ref })),
+      { kind: 'video', filename: 'free.webm' },
+    ]);
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('SELECT ref');
+    expect(listCollections).toHaveBeenCalledWith({ requireComplete: true });
+  });
+
+  it('does not treat inaccessible memberships as an empty collection set', async () => {
+    loadHistory.mockResolvedValue([]);
+    listCollections.mockRejectedValue(new Error('Unavailable'));
+    await expect(listUnsortedGalleryFiles(async () => [{ filename: 'image.png' }]))
+      .rejects.toThrow('Unavailable');
   });
 });
