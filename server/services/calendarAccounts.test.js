@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -43,9 +43,7 @@ describe('calendarAccounts', () => {
       expect(acc.lastSyncAt).toBeNull();
       expect(acc.lastSyncStatus).toBeNull();
       expect(acc.createdAt).toBeTruthy();
-      expect(acc.syncConfig.maxAge).toBe('90d');
-      expect(acc.syncConfig.syncInterval).toBe(300000);
-      expect(acc.syncConfig.calendarIds).toEqual(['default']);
+      expect(acc.syncConfig).toBeUndefined();
     });
 
     it('defaults email to empty string when not provided', async () => {
@@ -83,6 +81,18 @@ describe('calendarAccounts', () => {
       expect(updated.name).toBe('Updated Cal');
       expect(updated.email).toBe('a@b.com'); // untouched
       expect(updated.type).toBe('outlook-calendar'); // untouched
+    });
+
+    it('loads and updates accounts that still carry legacy syncConfig keys', async () => {
+      const dir = join(TEST_DATA_ROOT, 'calendar');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'accounts.json'), JSON.stringify({
+        legacy: { id: 'legacy', name: 'Old', type: 'outlook-calendar', email: '', enabled: true,
+          syncConfig: { maxAge: '90d', syncInterval: 300000, calendarIds: ['default'] } }
+      }));
+      const updated = await calendarAccounts.updateAccount('legacy', { name: 'New' });
+      expect(updated.name).toBe('New');
+      expect((await calendarAccounts.getAccount('legacy')).name).toBe('New');
     });
 
     it('returns null for a missing id', async () => {
