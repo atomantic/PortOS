@@ -156,6 +156,9 @@ export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
 
 /**
  /** Resolve a gallery image filename to an absolute path under `PATHS.images`, or `null` (see `makePathResolver`). */
+// Formats already written to the gallery by rendering and import workflows.
+export const GALLERY_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif']);
+
 export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 
 /**

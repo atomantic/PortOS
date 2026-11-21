@@ -33,7 +33,7 @@ export async function readFilmLookSource(filename) {
   const { assertGalleryFilename, readImageSidecar } = await import('./local.js');
   const seen = new Set();
   for (let depth = 0; depth < 32; depth++) {
-    assertGalleryFilename(filename);
+    assertGalleryFilename(filename, { pngOnly: true });
     if (seen.has(filename)) throw new ServerError('Film look source lineage contains a cycle', { status: 422, code: 'FILM_LOOK_LINEAGE' });
     seen.add(filename);
     const { metadata } = await readImageSidecar(filename);

@@ -137,7 +137,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
     expect(first.body.filename).toBe('render-3_clean-resize-squeeze.png');
   });
 
-  it('rejects non-PNG filenames (gallery is PNG-only)', async () => {
+  it('rejects non-PNG sources for this operation', async () => {
     const res = await request(app).post('/api/image-gen/render.jpg/clean').send({});
     expect(res.status).toBe(400);
   });

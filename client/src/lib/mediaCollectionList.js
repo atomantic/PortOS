@@ -14,6 +14,11 @@ export const AUTO_NAME_PREFIXES = [
   'Writers Room: ',
   'Universe: ',
   'Series: ',
+  'Deck: ',
+  'Storyboard: ',
+  'Fable Loom: ',
+  'Timeline: ',
+  'Sprite: ',
 ].map((prefix) => ({ prefix, badge: prefix.replace(/[:\s]+$/, '') }));
 
 // Descriptions stamped by the auto-creators. A user can't produce these by

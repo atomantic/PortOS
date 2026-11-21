@@ -18,6 +18,7 @@
  */
 import { readdir, stat } from 'fs/promises';
 import { join } from 'path';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../lib/pathSafety.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
@@ -83,7 +84,7 @@ async function unattributedFiles(kind, localId) {
   const { readImageSidecar } = await import('./imageGen/sidecarStore.js');
   // The whole gallery, not only collection-referenced images (#14137).
   const filenames = (await readdir(PATHS.images, { withFileTypes: true }).catch(() => []))
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.png')).map((e) => e.name);
+    .filter((e) => e.isFile() && isSafeFilename(e.name, GALLERY_IMAGE_EXTENSIONS)).map((e) => e.name);
   for (const filename of filenames) {
     const record = await readHeldImage(filename);
     if (!record || isNonBlankStr(record.suppliedByInstanceId) || hosted[hostedKey('image', filename)]) continue;

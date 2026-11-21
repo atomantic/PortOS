@@ -19,7 +19,10 @@ vi.mock('./local.js', () => ({
 vi.mock('../videoGen/local.js', () => ({ loadHistory: async () => state.history, mutateVideoHistory: async mutate => { state.history = mutate(state.history); return state.history; } }));
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-owner' }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: async () => {} }));
-vi.mock('../mediaCollections.js', () => ({ addItem: async (_id, item) => { state.collection.push(item); } }));
+vi.mock('../mediaCollections.js', async importOriginal => ({
+  ...await importOriginal(),
+  addItem: async (_id, item) => { state.collection.push(item); },
+}));
 vi.mock('../tracks/index.js', () => ({ getTrack: async id => state.tracks.find(track => track.id === id) }));
 // Keep library lookup inside this test's music directory while exercising the real mux.
 vi.mock('../pipeline/musicLibrary.js', () => ({ statMusicTrack: async filename => ({ filename }) }));

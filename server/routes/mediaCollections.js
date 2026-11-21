@@ -80,6 +80,11 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(await svc.createCollection(body));
 }));
 
+router.post('/auto-organize', asyncHandler(async (_req, res) => {
+  const { autoOrganizeMediaCollections } = await import('../services/mediaCollectionAutoOrganize.js');
+  res.json(await autoOrganizeMediaCollections());
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
   const locations = await resolveMediaLocations(c.items);

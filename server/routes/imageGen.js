@@ -104,7 +104,7 @@ const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
 // source, files it into the source's collections, and returns it.
 router.post('/:filename/film-look', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
-  local.assertGalleryFilename(filename);
+  local.assertGalleryFilename(filename, { pngOnly: true });
   const { look } = validateRequest(filmLookBakeSchema, req.body ?? {});
   const { metadata: sourceMeta } = await local.readImageSidecar(filename);
   res.json(await applyFilmLookBake({ filename, sourceMeta, look }));
@@ -505,7 +505,7 @@ router.patch('/:filename/prompt', asyncHandler(async (req, res) => {
 
 router.post('/:filename/clean', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
-  local.assertGalleryFilename(filename);
+  local.assertGalleryFilename(filename, { pngOnly: true });
   const { metadata: sourceMeta } = await local.readImageSidecar(filename);
   res.json(await applyImageClean({ filename, sourceMeta }));
 }));
@@ -519,7 +519,7 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
 // variant + sidecar, files it into the source's collections, and returns it.
 router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
-  local.assertGalleryFilename(filename);
+  local.assertGalleryFilename(filename, { pngOnly: true });
   const body = validateRequest(removeWatermarkSchema, req.body || {});
   const { metadata: sourceMeta } = await local.readImageSidecar(filename);
   res.json(await applyWatermarkRemoval({ filename, sourceMeta, size: body.size, region: body.region }));
@@ -534,7 +534,7 @@ router.post('/:filename/remove-watermark', asyncHandler(async (req, res) => {
 // gated — 400s with an actionable message when no local FLUX runner exists.
 router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   const filename = req.params.filename;
-  local.assertGalleryFilename(filename);
+  local.assertGalleryFilename(filename, { pngOnly: true });
   const body = validateRequest(regenerateSchema, req.body || {});
 
   const sourceAbsPath = resolveGalleryImage(filename);

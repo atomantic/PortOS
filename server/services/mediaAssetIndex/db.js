@@ -30,6 +30,8 @@
 
 import { readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../../lib/pathSafety.js';
+import { sidecarPathForImage } from '../../lib/assetHash.js';
 import { query, withTransaction } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
@@ -385,13 +387,13 @@ async function readGalleryForRestore() {
   try { files = await readdir(PATHS.images); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const images = [];
-  for (const filename of files.filter(name => /\.png$/i.test(name))) {
+  for (const filename of files.filter(name => isSafeFilename(name, GALLERY_IMAGE_EXTENSIONS))) {
     const info = await stat(join(PATHS.images, filename));
     if (!info.isFile()) throw new Error('Media gallery contains a non-file image');
     let metadata = {};
-    for (const sidecar of [filename.replace(/\.png$/i, '.metadata.json'), `${filename}.metadata.json`]) {
+    for (const sidecar of [sidecarPathForImage(filename), join(PATHS.images, `${filename}.metadata.json`)]) {
       let raw;
-      try { raw = await readFile(join(PATHS.images, sidecar), 'utf8'); }
+      try { raw = await readFile(sidecar, 'utf8'); }
       catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       metadata = JSON.parse(raw);
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {

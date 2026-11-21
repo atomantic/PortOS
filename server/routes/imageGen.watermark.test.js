@@ -179,7 +179,7 @@ describe('POST /api/image-gen/:filename/remove-watermark', () => {
     expect(res.body.watermarkRegion).toEqual({ x: 60, y: 60, w: 40, h: 40 });
   });
 
-  it('rejects non-PNG filenames (gallery is PNG-only)', async () => {
+  it('rejects non-PNG sources for this operation', async () => {
     const res = await request(app).post('/api/image-gen/photo.jpg/remove-watermark').send({});
     expect(res.status).toBe(400);
   });
