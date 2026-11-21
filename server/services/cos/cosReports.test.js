@@ -16,14 +16,16 @@ vi.mock('./cosState.js', () => ({
 
 // The date-bucket index is derived from the same fixture as the on-disk buckets,
 // mirroring the real invariant: every archived agent has an index entry.
-vi.mock('./cosAgentIndex.js', () => ({
-  getAgentsByDate: vi.fn(async (date) => mock.agentsByDate[date] || []),
-  getAgentIdsForDates: vi.fn(async (dates) => new Map(
-    dates.map(date => [date, (mock.agentsByDate[date] || []).map(a => a.id)])
-  ))
-}));
+vi.mock('./cosAgentIndex.js', async () => {
+  const { projectArchivedAgent } = await import('../../lib/cos/cosAgentCompletionOrder.js');
+  return {
+    selectArchivedCompletions: vi.fn(async ({ dates }) => dates.flatMap(day =>
+      (mock.agentsByDate[day] || []).map(agent => ({ id: agent.id, day, projection: projectArchivedAgent(agent) })))),
+    readArchivedAgentMetadata: vi.fn(async (day, id) => (mock.agentsByDate[day] || []).find(a => a.id === id) || null),
+  };
+});
 
-import { getAgentsByDate } from './cosAgentIndex.js';
+import { readArchivedAgentMetadata } from './cosAgentIndex.js';
 import { getRecentTasks, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
 
 // Build a completed agent record at a fixed completedAt offset (ms before now).
@@ -177,6 +179,18 @@ describe('getWhileAwayActivity', () => {
     expect(result.stats.completed).toBe(24);
   });
 
+  it('reads full records only for the cards it returns when the window is archived (#17309)', async () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    mock.agentsByDate[todayStr] = Array.from({ length: 20 }, (_, i) => agentAt(`arch${i}`, { msAgo: (i + 1) * 60000 }));
+
+    const result = await getWhileAwayActivity(new Date(Date.now() - 3600000 * 3).toISOString());
+
+    expect(result.stats.completed).toBe(20);
+    expect(result.accomplishments).toHaveLength(8);
+    expect(readArchivedAgentMetadata).toHaveBeenCalledTimes(8);
+    expect(result.accomplishments[0].id).toBe('arch0');
+  });
+
   it('skips the archive read entirely when every indexed id is still live (#3501)', async () => {
     const live = agentAt('a1', { msAgo: 30 * 60000 });
     mock.state = stateWith([live]);
@@ -186,7 +200,7 @@ describe('getWhileAwayActivity', () => {
     const result = await getWhileAwayActivity(new Date(Date.now() - 3600000).toISOString());
 
     expect(result.stats.completed).toBe(1);
-    expect(getAgentsByDate).not.toHaveBeenCalled();
+    expect(readArchivedAgentMetadata).not.toHaveBeenCalled();
   });
 });
 
@@ -247,7 +261,7 @@ describe('getTodayActivity (#3501 date-bucket sourcing)', () => {
     const activity = await getTodayActivity();
 
     expect(activity.stats).toMatchObject({ completed: 1, running: 1, successRate: 100 });
-    expect(getAgentsByDate).not.toHaveBeenCalled();
+    expect(readArchivedAgentMetadata).not.toHaveBeenCalled();
   });
 
   it('does not count a live relaunched run as a failed task', async () => {

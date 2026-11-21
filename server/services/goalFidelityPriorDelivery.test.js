@@ -11,7 +11,16 @@ import { join } from 'node:path';
 
 const agents = vi.hoisted(() => ({ resident: [], archived: [] }));
 vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agents.resident) }));
-vi.mock('./cos/cosAgentIndex.js', () => ({ getAgentsByDate: vi.fn(async () => agents.archived) }));
+vi.mock('./cos/cosAgentIndex.js', async () => {
+  const { projectArchivedAgent } = await import('../lib/cos/cosAgentCompletionOrder.js');
+  const rows = (taskIds) => agents.archived.map(a => ({ id: a.id, day: '2026-01-01', projection: projectArchivedAgent(a) }))
+    .filter(row => !taskIds || taskIds.includes(row.projection.taskId));
+  return {
+    getAgentsByDate: vi.fn(async () => agents.archived),
+    selectArchivedCompletions: vi.fn(async ({ taskIds }) => rows(taskIds)),
+    readArchivedAgentMetadata: vi.fn(async (_day, id) => agents.archived.find(a => a.id === id) || null),
+  };
+});
 
 import { priorTaskDelivery } from './goalFidelityPriorDelivery.js';
 

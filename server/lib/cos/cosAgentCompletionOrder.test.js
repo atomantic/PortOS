@@ -14,13 +14,23 @@ import {
 } from './cosAgentCompletionOrder.js';
 
 const projection = (overrides = {}) => ({
-  completedAt: '2026-05-06T08:00:00.000Z', completed: true, feedbackEligible: true, ...overrides,
+  completedAt: '2026-05-06T08:00:00.000Z', completed: true, feedbackEligible: true,
+  startedAt: '2026-05-06T07:00:00.000Z', taskId: 'task-a', app: 'app-a', taskApp: null,
+  success: true, handoff: false, resultDuration: 3600000, ...overrides,
 });
 
 describe('completion-order projection', () => {
   it('records completion order and whether the run is still an answerable feedback ask', () => {
-    const base = { id: 'agent-example', status: 'completed', completedAt: '2026-05-06T08:00:00.000Z', metadata: { taskType: 'user' } };
+    const base = {
+      id: 'agent-example', status: 'completed', completedAt: '2026-05-06T08:00:00.000Z',
+      startedAt: '2026-05-06T07:00:00.000Z', taskId: 'task-a', result: { success: true, duration: 3600000 },
+      metadata: { taskType: 'user', app: 'app-a' },
+    };
     expect(projectArchivedAgent(base)).toEqual(projection());
+    expect(projectArchivedAgent({ ...base, result: { success: false, resumed: true } }))
+      .toMatchObject({ success: false, handoff: true, resultDuration: null });
+    expect(projectArchivedAgent({ ...base, taskId: undefined, metadata: { taskId: 'task-m', taskApp: 'app-b' } }))
+      .toMatchObject({ taskId: 'task-m', app: null, taskApp: 'app-b' });
     expect(projectArchivedAgent({ ...base, feedback: { rating: 'neutral' } }).feedbackEligible).toBe(false);
     expect(projectArchivedAgent({ ...base, metadata: { taskType: 'internal' } }).feedbackEligible).toBe(false);
     expect(projectArchivedAgent({ ...base, status: 'running' })).toMatchObject({ completed: false, feedbackEligible: false });
@@ -54,18 +64,24 @@ describe('completion-order document', () => {
     const decoded = decodeCompletionOrder({
       version: COMPLETION_ORDER_VERSION,
       entries: {
-        'agent-ok': ['2026-05-06T08:00:00.000Z', 3],
-        'agent-short': ['2026-05-06T08:00:00.000Z'],
-        'agent-bad-flags': ['2026-05-06T08:00:00.000Z', 'eligible'],
-        'agent-bad-stamp': [1746518400000, 3],
+        'agent-ok': ['2026-05-06T08:00:00.000Z', 3, null, null, null, null, null],
+        'agent-short': ['2026-05-06T08:00:00.000Z', 3],
+        'agent-bad-flags': ['2026-05-06T08:00:00.000Z', 'eligible', null, null, null, null, null],
+        'agent-bad-stamp': [1746518400000, 3, null, null, null, null, null],
+        'agent-bad-task': ['2026-05-06T08:00:00.000Z', 3, null, 7, null, null, null],
       },
     });
     expect([...decoded.keys()]).toEqual(['agent-ok']);
+  });
+
+  it('decodes a version-1 document as absent so the next reader backfills version 2', () => {
+    expect(decodeCompletionOrder({ version: 1, entries: { 'agent-a': ['2026-05-06T08:00:00.000Z', 3] } }).size).toBe(0);
   });
 
   it('treats an unknown id as different from every projection, so a first write is never skipped', () => {
     expect(sameCompletionProjection(undefined, projection())).toBe(false);
     expect(sameCompletionProjection(projection(), projection())).toBe(true);
     expect(sameCompletionProjection(projection(), projection({ feedbackEligible: false }))).toBe(false);
+    expect(sameCompletionProjection(projection(), projection({ taskId: 'task-b' }))).toBe(false);
   });
 });
