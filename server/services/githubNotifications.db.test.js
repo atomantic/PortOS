@@ -565,6 +565,48 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect((await query('SELECT * FROM github_notification_rules WHERE account_id = $1', [account.id])).rows).toEqual([]);
   });
 
+  it('resolves the account token once for a bulk clear and once for an audit mute, not once per thread', async () => {
+    mockGh((args) => githubListing(args, [thread('721'), thread('722'), thread('723')]));
+    await syncAccountNotifications(account.id);
+    await query(`UPDATE github_notifications SET unread = FALSE, read_on_github_at = NOW() WHERE account_id = $1`, [account.id]);
+    mockGh(() => listing([]));
+    vi.mocked(execGh).mockClear();
+    const tokenLookups = () => vi.mocked(execGh).mock.calls.filter(([args]) => args[0] === 'auth').length;
+    expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 3, failed: 0 });
+    expect(tokenLookups()).toBe(1);
+
+    vi.mocked(execGh).mockClear();
+    await query(`UPDATE github_notifications SET state = 'open' WHERE account_id = $1`, [account.id]);
+    await query(
+      `INSERT INTO github_notification_audit_changes (account_id, kind, repo_full_name, detail) VALUES ($1, 'mute-handled', 'octocat/hello', $2::jsonb)`,
+      [account.id, JSON.stringify({ threadIds: ['721', '722', '723'] })],
+    );
+    const { rows: [change] } = await query('SELECT id FROM github_notification_audit_changes WHERE account_id = $1', [account.id]);
+    await undoAuditChange(change.id);
+    expect(tokenLookups()).toBe(1);
+  });
+
+  it('reads managed-app remotes once per Autopilot PR pass, not once per pull request', async () => {
+    account = await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge' }] });
+    const repo = `${account.login}/hello`;
+    for (const number of [2301, 2302, 2303]) {
+      await query(`INSERT INTO github_notifications (account_id, thread_id, repo_full_name, repo_owner, reason, subject_type,
+        subject_api_url, gh_updated_at, state, decision, trust, suspect, evidence)
+        VALUES ($1, $2, $3, $4, 'subscribed', 'PullRequest', $5, NOW(), 'open', 'needs-you', 'trusted', FALSE,
+          '{"actor":"dependabot[bot]","actorType":"Bot","repoOwned":true,"subjectState":"open"}'::jsonb)`,
+      [account.id, String(number), repo, account.login, `https://api.github.com/repos/${repo}/pulls/${number}`]);
+    }
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(execGh).mockImplementation(async (args) => JSON.stringify({ number: Number(args[2]), state: 'OPEN',
+      author: { login: 'app/dependabot', is_bot: true }, headRefOid: 'f'.repeat(40), headRefName: 'dependabot/example', baseRefName: 'main',
+      isDraft: false, mergeStateStatus: 'BLOCKED', mergeable: 'MERGEABLE', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] }));
+    const { readOriginRemoteUrl } = await import('../lib/gitRemote.js');
+    vi.mocked(readOriginRemoteUrl).mockClear();
+    const { automateNotificationPullRequests } = await import('./githubNotificationPullRequest.js');
+    await automateNotificationPullRequests(account, { GH_TOKEN: 'synthetic-account-token' });
+    expect(readOriginRemoteUrl).toHaveBeenCalledTimes(1);
+  });
+
   it('links a deployment approval to its waiting run, keeps it in front of you, and clears it once the run stops waiting', async () => {
     await updateAccount(account.id, { mode: 'assist' });
     const login = account.login;

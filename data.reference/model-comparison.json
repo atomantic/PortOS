@@ -62418,6 +62418,66 @@
       },
       "quota": null,
       "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+    },
+    {
+      "id": "aa-web-v5.0.1-inkling-2-mini",
+      "provider": "Thinking Machines",
+      "model": "inkling-2-mini",
+      "effort": "unspecified",
+      "configuration": "Inkling 2 Mini",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 (9 evaluations); score as displayed on the public model page (rounded to an integer; reported elsewhere as 20.1). Full-precision hosted model; no effort variants published."
+        }
+      },
+      "costPerTask": {
+        "value": 0.59,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 cost per Intelligence Index task (weighted average USD) on the Thinking Machines API at $0.15 input / $0.50 output per 1M tokens; the page lists 161M total output tokens for the index."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.15,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens (Thinking Machines API, only listed provider; 90% cache discount)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens (Thinking Machines API)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 9.72,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis time to first answer token, seconds, hosted API."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 280,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-mini",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis end-to-end output speed, tokens/s, hosted API; not a local Ollama/NVFP4 throughput."
+        }
+      },
+      "quota": null,
+      "notes": "Open weights (Apache 2.0), 26B total / 5.4B active looped MoE, released 2026-11-20. Score and prices are for the hosted full-precision model; a local NVFP4 quantization may score lower and local inference has $0 API charges but those prices are an API reference only."
     }
   ]
 }

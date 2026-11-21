@@ -20,6 +20,7 @@ import {
   reviewStackerNewsAction,
   executeStackerNewsAction,
 } from '../services/apiStackerNews.js';
+import socket from '../services/socket';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -193,9 +194,9 @@ export default function StackerNews() {
 
   const resourceReady = (key) => resourcesAccountId === accountId && resourceReads[key]?.status === 'ready';
 
-  const loadAccounts = useCallback(async () => {
+  const loadAccounts = useCallback(async (refresh = false) => {
     const requestId = ++accountsLoadRef.current;
-    setAccountRead({ status: 'loading' });
+    if (!refresh) setAccountRead({ status: 'loading' });
     const result = await getStackerNewsAccounts({ silent: true }).catch((err) => ({ error: err.message }));
     if (accountsLoadRef.current !== requestId) return;
     if (result?.error) setAccountRead({ status: 'error', error: result.error });
@@ -205,11 +206,11 @@ export default function StackerNews() {
     }
   }, []);
 
-  const loadResource = useCallback(async (key) => {
+  const loadResource = useCallback(async (key, refresh = false) => {
     const requestedAccountId = accountId;
     const requestId = (selectedLoadRef.current[key] || 0) + 1;
     selectedLoadRef.current[key] = requestId;
-    setResourceReads((previous) => ({ ...previous, [key]: { status: 'loading' } }));
+    if (!refresh) setResourceReads((previous) => ({ ...previous, [key]: { status: 'loading' } }));
     const readers = { territories: getStackerNewsTerritories, items: getStackerNewsItems, actions: getStackerNewsActions };
     const setters = { territories: setTerritories, items: setItems, actions: setActions };
     const result = await readers[key](requestedAccountId, { silent: true }).catch((err) => ({ error: err.message }));
@@ -221,12 +222,14 @@ export default function StackerNews() {
     }
   }, [accountId]);
 
-  const loadSelected = useCallback(async () => {
+  const loadSelected = useCallback(async (refresh = false) => {
     setResourcesAccountId(accountId);
-    setTerritories([]); setItems([]); setActions([]);
-    setResourceReads({});
+    if (!refresh) {
+      setTerritories([]); setItems([]); setActions([]);
+      setResourceReads({});
+    }
     if (!accountId) return;
-    await Promise.all(['territories', 'items', 'actions'].map(loadResource));
+    await Promise.all(['territories', 'items', 'actions'].map((key) => loadResource(key, refresh)));
   }, [accountId, loadResource]);
 
   const renderReadStatus = (key) => {
@@ -240,6 +243,16 @@ export default function StackerNews() {
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadSelected(); }, [loadSelected]);
+  useEffect(() => {
+    const onChanged = (payload) => {
+      void loadAccounts(true);
+      if (accountId && (payload?.accountId == null || payload.accountId === accountId)) {
+        void loadSelected(true);
+      }
+    };
+    socket.on('stacker-news:changed', onChanged);
+    return () => { socket.off('stacker-news:changed', onChanged); };
+  }, [accountId, loadAccounts, loadSelected]);
   useEffect(() => {
     setEditingTerritoryId(null);
     setEditTerritory(emptyTerritory);

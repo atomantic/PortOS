@@ -43,11 +43,6 @@ export async function createAccount(data) {
       type: data.type, // outlook-calendar
       email: data.email || '',
       enabled: true,
-      syncConfig: {
-        maxAge: data.syncConfig?.maxAge || '90d',
-        syncInterval: data.syncConfig?.syncInterval || 300000,
-        calendarIds: data.syncConfig?.calendarIds || ['default']
-      },
       lastSyncAt: null,
       lastSyncStatus: null,
       createdAt: new Date().toISOString()
@@ -78,11 +73,10 @@ export async function updateAccount(id, updates) {
   return queueWrite(async () => {
     const accounts = await loadAccounts();
     if (!accounts[id]) return null;
-    const { name, email, enabled, syncConfig } = updates;
+    const { name, email, enabled } = updates;
     if (name !== undefined) accounts[id].name = name;
     if (email !== undefined) accounts[id].email = email;
     if (enabled !== undefined) accounts[id].enabled = enabled;
-    if (syncConfig) accounts[id].syncConfig = { ...accounts[id].syncConfig, ...syncConfig };
     if (updates.syncMethod !== undefined) accounts[id].syncMethod = updates.syncMethod;
     accounts[id].updatedAt = new Date().toISOString();
     await saveAccounts(accounts);

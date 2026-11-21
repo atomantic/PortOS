@@ -181,7 +181,11 @@ export async function updateVaultRecord(id, patch) {
        WHERE id = $${params.length} RETURNING ${RECORD_COLUMNS}`,
       params,
     );
-    if (patch.shareWithTwin === false) await scrubVaultRecord(existing);
+    if (patch.value !== undefined || patch.shareWithTwin === false) await scrubVaultRecord(existing);
+    if (patch.value !== undefined && EVIDENCE_SOURCE_TYPES.has(existing.type)) {
+      const { clearSubjectIdentityEvidence } = await import('./privacyBrokers.js');
+      await clearSubjectIdentityEvidence(existing.subject_id, { client });
+    }
     console.log(`🔐 Updated vault record ${id} (type=${existing.type})`);
     return rowToRecord(rows[0]);
   });

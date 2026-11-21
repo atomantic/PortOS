@@ -22,23 +22,13 @@ const router = express.Router();
 const createAccountSchema = z.object({
   name: z.string().min(1),
   type: z.enum(['outlook-calendar', 'google-calendar']),
-  email: z.union([z.string().email(), z.literal('')]).optional().default(''),
-  syncConfig: z.object({
-    maxAge: z.string().optional(),
-    syncInterval: z.number().int().positive().optional(),
-    calendarIds: z.array(z.string()).optional()
-  }).optional()
+  email: z.union([z.string().email(), z.literal('')]).optional().default('')
 });
 
 const updateAccountSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.union([z.string().email(), z.literal('')]).optional(),
   enabled: z.boolean().optional(),
-  syncConfig: z.object({
-    maxAge: z.string().optional(),
-    syncInterval: z.number().int().positive().optional(),
-    calendarIds: z.array(z.string()).optional()
-  }).optional(),
   syncMethod: z.enum(['claude-mcp', 'google-api']).optional()
 });
 

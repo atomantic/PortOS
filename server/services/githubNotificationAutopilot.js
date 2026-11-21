@@ -94,7 +94,7 @@ async function queueAppLane(taskType, app, origin, pin) {
   return request?.error ? { error: request.error } : { requestId: request.id };
 }
 
-async function queueLane(plan, app, origin, { account, rows, immediate = false }) {
+async function queueLane(plan, app, origin, { account, rows, immediate = false, env = null }) {
   const pin = plan.pin || {};
   if (plan.lane === 'security-fix') {
     const advisories = plan.repo ? [] : rows.map((row) => advisoryIdFromUrl(row.subject_api_url, account.host)).filter(Boolean);
@@ -105,7 +105,7 @@ async function queueLane(plan, app, origin, { account, rows, immediate = false }
     // The stored html url is rebuilt from GitHub's own API url on the account's host.
     const url = rows[0]?.html_url || '';
     if (!url.endsWith(`/pull/${plan.pullNumber}`)) return { error: 'No pull request link for this notification' };
-    const githubAccount = await githubReviewAccountSelector(account, await requireAccountEnv(account));
+    const githubAccount = await githubReviewAccountSelector(account, env || await requireAccountEnv(account));
     const queued = await spawnPrDoReviewTask({ app, pullRequest: { number: plan.pullNumber, url }, repoFullName: plan.repo, githubAccount, ...pin, immediate, notificationAccount: account, notificationOrigin: origin });
     if (!queued.task) return { error: 'The review could not be queued' };
     return queued.duplicate ? { duplicate: true, taskId: queued.task.id } : { taskId: queued.task.id };
@@ -237,7 +237,7 @@ export async function autopilotAccountNotifications(account, env = null) {
     }
     // A lane that throws (a schedule write failing) is a recorded skip, so
     // it never stops Assist or the rest of the sync for this account.
-    const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION, { account, rows: entries.map((entry) => entry.row) })
+    const queued = await queueLane(batchPlan, app, ON_DEMAND_ORIGINS.GITHUB_NOTIFICATION, { account, env, rows: entries.map((entry) => entry.row) })
       .catch((error) => ({ error: error.message }));
     const outcome = queued.error
       ? { skipped: 'lane-unavailable', error: String(queued.error).slice(0, 300) }
