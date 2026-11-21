@@ -6,7 +6,7 @@ import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../../server/lib/u
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
-const listUniverses = vi.fn();
+const listUniverseNames = vi.fn();
 let mockBibleDirty = false;
 
 vi.mock('../services/apiPipeline.js', () => ({
@@ -18,7 +18,8 @@ vi.mock('../services/apiPipeline.js', () => ({
   SERIES_TITLE_LOGO_MAX: 1_000,
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({
-  listUniverses: (...args) => listUniverses(...args),
+  listUniverseNames: (...args) => listUniverseNames(...args),
+  getUniverse: vi.fn().mockResolvedValue({ characters: [] }),
 }));
 
 vi.mock('../hooks/useArcCanvasSync', () => ({
@@ -54,7 +55,7 @@ describe('Pipeline series detail — mobile layout', () => {
     mockBibleDirty = false;
     getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series' });
     listPipelineIssues.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([]);
+    listUniverseNames.mockResolvedValue([]);
   });
 
   it('opens on issues, exposes direct destinations, and keeps inactive panels mounted', async () => {
@@ -90,7 +91,7 @@ describe('Pipeline series detail — mobile layout', () => {
   });
 
   it('shows a retriable universe read error in the linked-universe picker', async () => {
-    listUniverses.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    listUniverseNames.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
     renderPage();
     expect(await screen.findByRole('heading', { name: 'Example Series' })).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load universes');
@@ -105,7 +106,7 @@ describe('Pipeline series detail — unsaved bible edits (#8423)', () => {
     mockBibleDirty = true;
     getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series' });
     listPipelineIssues.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([]);
+    listUniverseNames.mockResolvedValue([]);
   });
 
   it('parks a switch to another series behind the discard prompt', async () => {

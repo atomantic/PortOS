@@ -18,7 +18,7 @@ import {
   createUniverse,
   deleteUniverse,
   getUniverse,
-  listUniverses,
+  listUniverseSummaries,
   listWorldRuns,
   removeUniverseStyleReference,
   updateUniverse,
@@ -218,7 +218,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     // is what made a transient blip look identical to an unconfigured install — and, for
     // settings, silently rewrote the user's saved image-gen mode (see below).
     const [list, providerData, models, loras, settings] = await Promise.all([
-      listUniverses().catch(() => FETCH_FAILED),
+      listUniverseSummaries({ silent: true }).catch(() => FETCH_FAILED),
       getProviders().catch(() => FETCH_FAILED),
       listImageModels().catch(() => FETCH_FAILED),
       listLorasFull().catch(() => FETCH_FAILED),

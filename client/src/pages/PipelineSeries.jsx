@@ -38,7 +38,7 @@ import {
   discoverSeriesVoice,
   SERIES_TITLE_LOGO_MAX,
 } from '../services/apiPipeline.js';
-import { listUniverses } from '../services/apiUniverseBuilder.js';
+import { getUniverse, listUniverseNames } from '../services/apiUniverseBuilder.js';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
 import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../components/VoiceExemplarEditor';
 import { buildImporterLink } from '../lib/importerDeepLink';
@@ -129,7 +129,7 @@ export default function PipelineSeries() {
   const [editorTab, setEditorTab] = useDrawerTab('view', 'issues', EDITOR_TABS.map((tab) => tab.id));
   const [series, setSeries] = useState(null);
   const [issues, setIssues] = useState([]);
-  const fetchUniverses = useCallback(() => listUniverses({ silent: true }), []);
+  const fetchUniverses = useCallback(() => listUniverseNames({ silent: true }), []);
   const universesResource = useListResource(fetchUniverses);
   const { items: universes } = universesResource;
   const [loading, setLoading] = useState(true);
@@ -511,7 +511,7 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
 
       <FactReferenceSection series={series} patchSeries={patchSeries} />
 
-      <CharacterArcsSection series={series} universes={universes} patchSeries={patchSeries} />
+      <CharacterArcsSection series={series} patchSeries={patchSeries} />
 
       <div className="block">
         <div className="flex items-center justify-between mb-1">
@@ -928,11 +928,31 @@ function FactReferenceSection({ series, patchSeries }) {
 // over-long field rejects the ENTIRE series PATCH — name, logline, premise, style
 // guide and all — and without a `maxLength` the field that bricks every
 // subsequent save is invisible in the UI.
-function CharacterArcsSection({ series, universes, patchSeries }) {
+function CharacterArcsSection({ series, patchSeries }) {
+  const { universeId } = series;
+  const [castRead, setCastRead] = useState(null);
+  const [castAttempt, setCastAttempt] = useState(0);
+  useEffect(() => {
+    if (!universeId) return;
+    let active = true;
+    getUniverse(universeId, { silent: true })
+      .then((universe) => {
+        if (active) setCastRead({ universeId, cast: universe.characters || [] });
+      })
+      .catch((error) => {
+        if (active) setCastRead({ universeId, error });
+      });
+    return () => { active = false; };
+  }, [universeId, castAttempt]);
+  // Match the linked ID before displaying a result, including the render
+  // between a link change and its new effect. Arc editing stays mounted.
+  const currentRead = castRead?.universeId === universeId ? castRead : null;
+  const cast = currentRead?.cast || [];
+  const retryCast = () => {
+    setCastRead(null);
+    setCastAttempt((attempt) => attempt + 1);
+  };
   const arcs = Array.isArray(series.characterArcs) ? series.characterArcs : [];
-  // The linked universe's cast, for the read-only psychology baseline beside
-  // each lens. Absent when no universe is linked — the lens still authors fine.
-  const cast = universes?.find((u) => u.id === series.universeId)?.characters || [];
   const setArcs = (next) => patchSeries({ characterArcs: next });
   const setArc = (i, patch) => setArcs(arcs.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
   const addArc = () => setArcs([...arcs, { characterName: '', want: '', need: '', startState: '', endState: '', transitions: [] }]);
@@ -972,6 +992,7 @@ function CharacterArcsSection({ series, universes, patchSeries }) {
         these against the manuscript and flags characters with no change scenes.
       </p>
 
+      {currentRead?.error && <ListLoadError what="the linked universe cast" error={currentRead.error} onRetry={retryCast} className="mb-2" />}
       {arcs.length === 0 && (
         <p className="text-[11px] text-gray-600 italic mb-2">No character arcs yet.</p>
       )}

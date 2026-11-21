@@ -7,7 +7,7 @@
  * marked rather than silently dropped.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
@@ -17,7 +17,7 @@ import {
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
-const listUniverses = vi.fn();
+const request = vi.fn();
 
 vi.mock('../services/apiPipeline.js', () => ({
   getPipelineSeries: (...args) => getPipelineSeries(...args),
@@ -27,8 +27,9 @@ vi.mock('../services/apiPipeline.js', () => ({
   discoverSeriesVoice: vi.fn(),
   SERIES_TITLE_LOGO_MAX: 1_000,
 }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({
-  listUniverses: (...args) => listUniverses(...args),
+vi.mock('../services/apiCore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  request: (...args) => request(...args),
 }));
 
 vi.mock('../hooks/useArcCanvasSync', () => ({
@@ -90,7 +91,17 @@ describe('Pipeline series — character-arc evolution lens', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listPipelineIssues.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([universe]);
+    request.mockImplementation(async (path) => {
+      if (path === '/universe-builder/names') return [
+        { id: universe.id, name: universe.name },
+        { id: 'uni-2', name: 'Other Universe' },
+      ];
+      if (path === '/universe-builder/uni-1') return universe;
+      if (path === '/universe-builder/uni-2') return {
+        characters: [{ ...universe.characters[0], psychology: { theoryOfControl: 'Trust is earned.' } }],
+      };
+      throw new Error(`Unexpected request: ${path}`);
+    });
   });
 
   it('caps every arc input at the server limits the PATCH route enforces', async () => {
@@ -168,9 +179,36 @@ describe('Pipeline series — character-arc evolution lens', () => {
     getPipelineSeries.mockResolvedValue(seriesWith());
     renderPage();
     await openLens(user);
-    await user.click(screen.getByText('Universe baseline (read-only)'));
+    await user.click(await screen.findByText('Universe baseline (read-only)'));
 
     expect(screen.getByText('If I stay useful, nobody leaves.')).toBeVisible();
     expect(screen.queryByRole('textbox', { name: /theory of control/i })).not.toBeInTheDocument();
   });
+  it('lists universe names and drops a slow cast response after changing the link', async () => {
+    const user = userEvent.setup();
+    const oldCast = Promise.withResolvers();
+    const requestUniverse = request.getMockImplementation();
+    request.mockImplementation((path) => path === '/universe-builder/uni-1' ? oldCast.promise : requestUniverse(path));
+    getPipelineSeries.mockResolvedValue(seriesWith());
+    renderPage();
+    await screen.findByRole('option', { name: 'Other Universe' });
+    const picker = screen.getByRole('combobox', { name: 'Linked universe' });
+    expect(within(picker).getAllByRole('option').map((option) => option.text)).toEqual(['Example Universe', 'Other Universe']);
+    expect(request).toHaveBeenCalledWith('/universe-builder/uni-1', { silent: true });
+
+    await user.selectOptions(picker, 'uni-2');
+    await user.click(screen.getByText('Evolution lens'));
+    await user.click(await screen.findByText('Universe baseline (read-only)'));
+    expect(screen.getByText('Trust is earned.')).toBeVisible();
+
+    await act(async () => oldCast.resolve(universe));
+    expect(screen.queryByText('If I stay useful, nobody leaves.')).not.toBeInTheDocument();
+    expect(screen.getByText('Trust is earned.')).toBeVisible();
+    expect(request.mock.calls).toEqual([
+      ['/universe-builder/names', { silent: true }],
+      ['/universe-builder/uni-1', { silent: true }],
+      ['/universe-builder/uni-2', { silent: true }],
+    ]);
+  });
+
 });
