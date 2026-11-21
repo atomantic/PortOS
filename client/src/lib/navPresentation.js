@@ -189,7 +189,6 @@ export const NAV_PRESENTATION = {
   '/creative-commission': { icon: CalendarClock },
   '/code-animation': { icon: FileCode2 },
   '/creative-director': { icon: Clapperboard },
-  '/video': { icon: Clapperboard },
   '/pipeline/editorial-checks': { icon: ListChecks },
   '/fableloom': { icon: Waypoints },
   '/game': { icon: Gamepad2 },

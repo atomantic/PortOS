@@ -201,16 +201,6 @@ function UniverseRouteRedirect({ fromPrefix, to }) {
   return <Navigate to={`${to}${rest.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
-// Rebase a legacy route prefix onto its current one, preserving the trailing
-// path (ids, tabs), query string, and hash. Used where the old prefix is still a
-// live route (`/video` is a page, so `/video/:id` can't be a `previousPaths`
-// entry without capturing it). `from` must be an anchored regex.
-function PrefixRedirect({ from, to }) {
-  const { pathname, search, hash, state } = useLocation();
-  const rest = pathname.replace(from, '');
-  return <Navigate to={`${to}${rest}${search}${hash}`} state={state} replace />;
-}
-
 // The retired /ai/harnesses/:harnessId/connections[/:connectionId] drawer
 // (#6369 → #7567): a connection id names a service, so a deep link into one
 // lands on that service; the bare harness-scoped list lands on the harness.
@@ -223,7 +213,6 @@ function HarnessConnectionsRedirect() {
   return <Navigate to={`${target}${search}${hash}`} replace />;
 }
 
-const VIDEO_PROJECT_PREFIX = /^\/video/;
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -448,7 +437,6 @@ export default function App() {
             <Route path="sprites/:id" element={<Sprites />} />
             {/* Creative Director — a top-level Create page (moved out of the
                 Media Gen tabs); /video is its browse-only view. */}
-            <Route path="video" element={<CreativeDirector browseOnly />} />
             {/* VideoGen still uses the Media Gen tab shell (header + tabs +
                 overflow-auto body); VideoGen has no internal scroller of its
                 own, so rendering it bare in the full-width main clips the form. */}
@@ -592,9 +580,6 @@ export default function App() {
           <Route path="meatspace" element={<Navigate to="/meatspace/overview" replace />} />
           <Route path="post" element={<Navigate to="/post/launcher" replace />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
-          <Route path="video/:id" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
-          <Route path="video/:id/:tab/:sceneId" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
-          <Route path="video/:id/:tab" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           {/* :id with no tab lands on the overview tab, carrying any query string
               + hash, so /creative-director/abc?x#y → /creative-director/abc/overview?x#y. */}
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
