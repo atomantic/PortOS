@@ -302,7 +302,15 @@ export default function SongBookImport() {
                 id="import-url"
                 type="text"
                 value={url}
-                onChange={(e) => { setUrl(e.target.value); setFetchError(null); }}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setFetchError(null);
+                  // The shown draft belongs to the URL it was fetched from. Once the
+                  // field changes, drop it (and its auto-filled metadata) so neither
+                  // Save path can post it while the visible URL has no draft yet.
+                  setFetched(null);
+                  applyMetaDefaults({});
+                }}
                 placeholder="https://example.com/tabs/example-song"
                 className={inputClass}
               />
