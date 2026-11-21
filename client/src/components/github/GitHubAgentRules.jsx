@@ -3,7 +3,7 @@ import { Bot, Pencil, Plus, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { formatCount } from '../../utils/formatters';
-import { AGENT_RULE_KINDS, RULE_ACTIONS, actionsForKind, ruleActionOf } from './githubTriageLabels';
+import { AGENT_RULE_KINDS, REASON_RULE_KIND_VALUES, RULE_ACTIONS, actionsForKind, ruleActionOf } from './githubTriageLabels';
 import { describeAgentPin } from './GitHubAgentPinForm';
 import { MergeOptions, DEFAULT_MERGE_METHOD, MERGE_METHOD_LABELS } from '../apps/tabs/PullRequestActionControls';
 import { isPullRequestAgentAction } from '../../../../lib/pullRequestActions.js';
@@ -32,7 +32,8 @@ function pinLabel(rule, providers) {
 function ruleMatchCount({ openByKind, rules, editingId, kind, repo, action }) {
   if (!Array.isArray(openByKind)) return null;
   const metric = action === 'done' || action === 'mute' ? 'actionable' : 'total';
-  const ofKind = openByKind.filter((entry) => entry.kind === kind);
+  const byReason = REASON_RULE_KIND_VALUES.includes(kind);
+  const ofKind = openByKind.filter((entry) => (byReason ? entry.reasonKind : entry.kind) === kind);
   const scope = repo.toLowerCase();
   const other = rules.filter((rule) => rule.kind === kind && rule.id !== editingId).map((rule) => rule.repo.toLowerCase());
   return ofKind.filter((entry) => {

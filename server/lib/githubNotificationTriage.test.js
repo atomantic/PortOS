@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   agentHandoff, agentRuleScope, agentRunPin, ruleAction, applyLearnedRule, assistAction, autopilotHandoff, computeThreadTrust, decideThread, decisionFromVerdict, matchWaitingRun, parseCiBranch,
-  selectNotificationProvider, spamSignals,
+  selectNotificationProvider, spamSignals, threadAgentKind, threadReasonKind,
   MASS_MENTION_THRESHOLD,
 } from './githubNotificationTriage.js';
 
@@ -321,6 +321,25 @@ describe('ruleAction', () => {
     const invitation = { state: 'open', reason: 'invitation', subject_type: 'RepositoryInvitation', repo_full_name: 'acme/app', rule: 'invitation-never-accepted' };
     expect(ruleAction({ account, row: invitation })).toBeNull();
     expect(ruleAction({ account, row: { ...invitation, reason: 'subscribed', subject_type: 'Discussion', rule: 'default' } })).toBe('mute');
+  });
+
+  it('lets a reason rule mark a followed-thread comment done while the issue kind keeps its lane', () => {
+    const comment = { state: 'open', reason: 'comment', subject_type: 'Issue', repo_full_name: 'acme/app', rule: 'default' };
+    expect(threadAgentKind(comment)).toBe('issue-activity');
+    expect(threadReasonKind(comment)).toBe('reason-comment');
+    const account = { agentRules: [{ kind: 'reason-comment', repo: 'acme/*', action: 'done' }] };
+    expect(ruleAction({ account, row: comment })).toBe('done');
+    // Another reason on the same issue kind is untouched.
+    expect(ruleAction({ account, row: { ...comment, reason: 'mention' } })).toBeNull();
+    // A reason rule wins over the subject kind's, even when it only leaves the thread.
+    const both = { agentRules: [{ kind: 'issue-activity', repo: '*', action: 'done' }, { kind: 'reason-comment', repo: '*', action: 'leave' }] };
+    expect(ruleAction({ account: both, row: comment })).toBeNull();
+    // It keeps the thread from the issue watcher, and an agent action on a reason kind is ignored.
+    const outside = { ...comment, decision: 'needs-you', trust: 'outside' };
+    const autopilot = (rules) => autopilotHandoff({ account: { mode: 'autopilot', agentRules: rules }, row: outside });
+    expect(autopilot([])?.lane).toBe('issue-watcher');
+    expect(autopilot(account.agentRules)).toBeNull();
+    expect(ruleAction({ account: { agentRules: [{ kind: 'reason-comment', repo: '*', action: 'agent' }] }, row: comment })).toBeNull();
   });
 
   it('reads a stored legacy agent boolean as agent or leave', () => {

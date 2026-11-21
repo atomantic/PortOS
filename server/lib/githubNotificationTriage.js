@@ -234,7 +234,22 @@ const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 // The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS
 // in lib/githubValidation.js).
 export const AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
-const RULE_KINDS = new Set(AGENT_RULE_KINDS);
+// Rule kinds named by GitHub's own notification reason rather than the subject.
+// A subject kind owns a lane (issue watcher, PR actions), so these never move a
+// thread out of it: they take done / mute / leave only, and a matching one wins
+// over the subject kind's rule. `approval_requested`, `invitation` and
+// `security_alert` have no kind: they are never acted on automatically.
+export const REASON_RULE_KIND_REASONS = Object.freeze({
+  'reason-comment': ['comment'],
+  'reason-subscribed': ['subscribed', 'manual'],
+  'reason-state-change': ['state_change'],
+  'reason-assign': ['assign'],
+  'reason-author': ['author'],
+});
+export const REASON_RULE_KINDS = Object.freeze(Object.keys(REASON_RULE_KIND_REASONS));
+const REASON_KIND_OF = new Map(Object.entries(REASON_RULE_KIND_REASONS).flatMap(([kind, reasons]) => reasons.map((reason) => [reason, kind])));
+const RULE_KINDS = new Set([...AGENT_RULE_KINDS, ...REASON_RULE_KINDS]);
+const REASON_RULE_ACTIONS = new Set(['done', 'mute', 'leave']);
 // What a rule does with a matching thread (#13192). A stored legacy rule's
 // `agent: true/false` reads as `agent` / `leave`.
 export const AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', ...PULL_REQUEST_ACTIONS]);
@@ -280,6 +295,15 @@ export const KIND_SQL = `(CASE
     WHEN subject_type = 'Release' THEN 'release'
     ELSE 'other' END)`;
 
+/** The reason rule kind of a thread, or null when its reason has none. */
+export const threadReasonKind = (row) => REASON_KIND_OF.get(row?.reason) || null;
+
+// The SQL mirror of `threadReasonKind`; '' (never NULL, which would make
+// `NOT (… = 'kind')` NULL and drop the row) when the reason has no kind.
+export const REASON_KIND_SQL = `(CASE
+${Object.entries(REASON_RULE_KIND_REASONS).map(([kind, reasons]) => `    WHEN reason IN (${reasons.map((reason) => `'${reason}'`).join(', ')}) THEN '${kind}'`).join('\n')}
+    ELSE '' END)`;
+
 /** A stored rule's action: its `action`, else the legacy `agent` boolean, else null. */
 function agentRuleAction(rule) {
   if (AGENT_RULE_ACTIONS.includes(rule?.action)) return rule.action;
@@ -304,6 +328,7 @@ const validRules = (rules, kind) => (Array.isArray(rules) ? rules : []).flatMap(
   if (typeof rule.repo !== 'string' || !RULE_REPO_RE.test(rule.repo)) return [];
   const action = agentRuleAction(rule);
   if (!action || (AGENT_ONLY_RULE_KINDS.has(kind) && action !== 'agent' && action !== 'leave')) return [];
+  if (REASON_RULE_KIND_REASONS[kind] && !REASON_RULE_ACTIONS.has(action)) return [];
   if (PULL_REQUEST_ACTIONS.includes(action) && !PULL_REQUEST_RULE_KINDS.includes(kind)) return [];
   if (action === 'merge' && kind !== 'dependabot-pr') return [];
   return [{ ...rule, action }];
@@ -345,9 +370,13 @@ const withDefaults = (account) => [...(Array.isArray(account?.agentRules) ? acco
 export function ruleAction({ account, row }) {
   if (!row || row.suspect || row.state !== 'open') return null;
   if (PINNED_RULES.has(row.rule ?? row.evidence?.rule) || row.reason === 'security_alert') return null;
-  const action = matchAgentRule(withDefaults(account), threadAgentKind(row), row.repo_full_name)?.action;
+  const rules = withDefaults(account);
+  const action = (matchReasonRule(rules, row) || matchAgentRule(rules, threadAgentKind(row), row.repo_full_name))?.action;
   return action === 'done' || action === 'mute' ? action : null;
 }
+
+/** The reason-kind rule that covers a thread, any action (it wins over the subject kind's rule). */
+export const matchReasonRule = (rules, row) => matchAgentRule(rules, threadReasonKind(row), row.repo_full_name);
 
 function matchAgentRule(rules, kind, repo) {
   if (!kind) return null;
@@ -382,6 +411,18 @@ export const agentRuleScopeSql = (n) => `(CASE
   WHEN (split_part(lower(repo_full_name), '/', 1) || '/*') = ANY($${n + 2}::text[]) THEN TRUE
   WHEN (split_part(lower(repo_full_name), '/', 1) || '/*') = ANY($${n + 1}::text[]) THEN FALSE
   ELSE $${n}::boolean END)`;
+
+/**
+ * SQL mirror of `matchReasonRule` being non-null: rows some reason-kind rule
+ * covers, whatever its action. Parameters start at `$first`, three per kind.
+ */
+export function reasonRuledFilter(rules, first) {
+  const scopes = REASON_RULE_KINDS.map((kind) => agentRuleScope(rules, kind, { optIn: true, actions: [...REASON_RULE_ACTIONS] }));
+  return {
+    sql: `(${REASON_RULE_KINDS.map((kind, index) => `(${REASON_KIND_SQL} = '${kind}' AND ${agentRuleScopeSql(first + index * 3)})`).join(' OR ')})`,
+    params: scopes.flatMap(({ all, except, only }) => [all, except, only]),
+  };
+}
 
 /** `agentRuleScope` over the account's rules plus the built-in defaults, for Assist's done/mute rules. */
 export const ruleActionScope = (account, kind) => (AGENT_ONLY_RULE_KINDS.has(kind)
@@ -532,6 +573,8 @@ export function agentRunPin({ perRun, rulePin: rule, defaults } = {}) {
  */
 export function autopilotHandoff({ account, row }) {
   if (account?.mode !== 'autopilot') return null;
+  // A reason rule (done, mute or leave) keeps the thread from every lane.
+  if (matchReasonRule(account.agentRules, row)) return null;
   const plan = agentHandoff({ account, row });
   if (!plan || (plan.rule && plan.rule.action !== 'agent')) return null;
   if (plan.lane === GENERIC_AGENT_LANE) {

@@ -32,7 +32,7 @@ import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
 import {
-  agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, threadAgentKind,
+  agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, REASON_KIND_SQL, threadAgentKind, threadReasonKind,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { notificationPullRequestView } from '../lib/githubNotificationPullRequest.js';
@@ -400,6 +400,7 @@ const toApi = (row, accountsById) => {
     signals: Array.isArray(row.evidence?.signals) ? row.evidence.signals : [],
     // The automation-rule kind, so a row can prefill Add automation rule (#13192).
     ruleKind: threadAgentKind(row),
+    reasonRuleKind: threadReasonKind(row),
     agent: agentView(account, row),
     agentFailed: agentFailedView(row),
     pullRequest: notificationPullRequestView(account, row),
@@ -734,18 +735,18 @@ export async function getAutomationsOverview() {
     // rule matches now. `actionable` leaves out the threads a pinned triage rule
     // decided, which a done or mute rule never touches.
     query(
-      `SELECT account_id, ${KIND_SQL} AS kind, lower(repo_full_name) AS repo, COUNT(*)::int AS total,
+      `SELECT account_id, ${KIND_SQL} AS kind, ${REASON_KIND_SQL} AS reason_kind, lower(repo_full_name) AS repo, COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE NOT (COALESCE(evidence->>'rule', '') = ANY($2::text[])))::int AS actionable
        FROM github_notifications WHERE account_id = ANY($1::text[]) AND state = 'open' AND NOT suspect
          AND decision IS DISTINCT FROM 'handed-off'
-       GROUP BY 1, 2, 3`,
+       GROUP BY 1, 2, 3, 4`,
       [ids, PINNED_TRIAGE_RULES],
     ),
   ]);
   const openById = new Map();
   for (const row of openRows.rows) {
     if (!openById.has(row.account_id)) openById.set(row.account_id, []);
-    openById.get(row.account_id).push({ kind: row.kind, repo: row.repo, total: row.total, actionable: row.actionable });
+    openById.get(row.account_id).push({ kind: row.kind, reasonKind: row.reason_kind, repo: row.repo, total: row.total, actionable: row.actionable });
   }
   const reposById = new Map(repoRows.rows.map((row) => [row.account_id, row.repos.slice(0, 200)]));
   const syncById = new Map(syncRows.rows.map((row) => [row.account_id, row]));
