@@ -193,6 +193,20 @@ describe('scheduled audit measurement workflow', () => {
     } });
   });
 
+  it('names every legacy series a consolidated domain row folds in, measured or not', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const rows = [
+      ['ux', 70, '2026-09-10T09:00:00Z'], ['ux', 50, '2026-09-09T09:00:00Z'],
+      ['design', 90, '2026-07-01T09:00:00Z'], ['design-usability', 80, '2026-09-10T10:00:00Z'],
+    ].map(([category, score, at]) => ({ category, assessedAt: at, report: report({ category, score }) }));
+    const row = summarizeAppQuality(rows, now).categories.find(c => c.id === 'design-usability');
+    expect(row.members.map(({ id, score, stale }) => [id, score, stale])).toEqual([
+      ['design-usability', 80, false], ['design', 90, true], ['ux', 70, false], ['mobile-responsive', null, false],
+    ]);
+    expect(row.members.find(m => m.id === 'ux').label).toBe('UX');
+    expect(summarizeAppQuality(rows, now).categories.find(c => c.id === 'security')).not.toHaveProperty('members');
+  });
+
   it('selects the same numeric winner for local and published records at an exact timestamp tie', () => {
     const at = '2026-09-10T10:00:00.000Z';
     const a = { category: 'security', assessedAt: at, agentId: 'a', report: report({ category: 'security', score: 40 }) };
