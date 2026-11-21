@@ -1,6 +1,6 @@
 import { it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { buildQualitySnapshot } from './appQualityFederation.js';
+import { buildQualitySnapshot, originLookupCacheSize } from './appQualityFederation.js';
 
 // Default path only: no injected getOriginInfo, so repositoryKey reaches the
 // process-wide origin cache. The counting double stands in for the git spawn.
@@ -51,4 +51,13 @@ it('does not cache a failed origin lookup', async () => {
   await expect(buildQualitySnapshot(app, 30, deps)).rejects.toThrow('git unavailable');
   expect((await buildQualitySnapshot(app, 30, deps)).repository).toMatch(/^[a-f0-9]{64}$/);
   expect(spawns()).toBe(2);
+});
+
+it('drops expired origin lookups when a new checkout is looked up, so the cache tracks only the last window', async () => {
+  for (const name of ['a', 'b', 'c']) await buildQualitySnapshot(appAt(`/repos/sweep-${name}`), 30, deps);
+  const beforeSweep = originLookupCacheSize();
+  vi.setSystemTime(now + 60_001);
+  await buildQualitySnapshot(appAt('/repos/sweep-d'), 30, deps);
+  // a, b and c expired and are swept; d is added. Other tests may hold live entries, so compare against the pre-sweep size.
+  expect(originLookupCacheSize()).toBeLessThanOrEqual(beforeSweep - 2);
 });

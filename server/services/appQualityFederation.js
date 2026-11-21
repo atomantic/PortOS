@@ -71,11 +71,21 @@ const appRepoPath = app => app.repoPath || (app.id === PORTOS_APP_ID ? PATHS.roo
 const REPOSITORY_KEY_TTL_MS = 60_000;
 const originLookups = new Map();
 
+// Sweeping on each miss keeps the map to lookups from the last window; without it,
+// a checkout path that is never requested again would stay for the process lifetime.
+export function originLookupCacheSize() {
+  return originLookups.size;
+}
+
 function cachedOriginInfo(repoPath) {
+  const now = Date.now();
   const cached = originLookups.get(repoPath);
-  if (cached && cached.expiresAt > Date.now()) return cached.promise;
+  if (cached && cached.expiresAt > now) return cached.promise;
+  for (const [key, entry] of originLookups) {
+    if (entry.expiresAt <= now) originLookups.delete(key);
+  }
   const promise = getOriginInfo(repoPath);
-  const entry = { promise, expiresAt: Date.now() + REPOSITORY_KEY_TTL_MS };
+  const entry = { promise, expiresAt: now + REPOSITORY_KEY_TTL_MS };
   originLookups.set(repoPath, entry);
   promise.catch(() => {
     if (originLookups.get(repoPath) === entry) originLookups.delete(repoPath);
