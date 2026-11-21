@@ -174,4 +174,25 @@ describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
     expect(draftArg.body).toContain('new@me.example'); // new value plaintext for the org
     expect(draftArg.generatedBy).toBe('privacy-change');
   });
+
+  it('refuses sensitive replacement types and non-holding orgs without drafting', async () => {
+    const oldRec = await vault.createVaultRecord({ type: 'ssn', label: 'Old SSN', value: '111-22-3333' });
+    createdVaultRecords.push(oldRec.id);
+    const holder = await orgs.createOrg({ name: 'Holder Co', contact: { email: 'h@holder.example' } });
+    const stranger = await orgs.createOrg({ name: 'Stranger Co', contact: { email: 's@stranger.example' } });
+    createdOrgs.push(holder.id, stranger.id);
+    await orgs.setOrgHoldings(holder.id, [{ vaultRecordId: oldRec.id, status: 'current' }]);
+    const event = await changes.declareChange({
+      vaultRecordId: oldRec.id,
+      replacement: { label: 'New SSN', value: '444-55-6666' },
+    });
+    createdEvents.push(event.id);
+    createdVaultRecords.push(event.replacementRecordId);
+
+    const { createDraft } = await import('./messageDrafts.js');
+    const before = createDraft.mock.calls.length;
+    await expect(changes.draftUpdateEmail(event.id, stranger.id)).rejects.toMatchObject({ status: 404, code: 'HOLDING_NOT_FOUND' });
+    await expect(changes.draftUpdateEmail(event.id, holder.id)).rejects.toMatchObject({ status: 400, code: 'SENSITIVE_TYPE_EMAIL_FORBIDDEN' });
+    expect(createDraft).toHaveBeenCalledTimes(before);
+  });
 });
