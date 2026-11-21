@@ -600,7 +600,9 @@ router.post('/install', asyncHandler(async (req, res) => {
 router.post('/install/cancel', asyncHandler(async (req, res) => {
   const { backend, modelId } = validateRequest(localLlmInstallSchema, req.body)
   const result = cancelModelInstall(backend, modelId)
-  if (!result.success) throw new ServerError(result.error, { status: 404, code: result.code })
+  if (!result.success) {
+    throw new ServerError(result.error, { status: result.code === 'INSTALL_NOT_CANCELABLE' ? 409 : 404, code: result.code })
+  }
   res.json(result)
 }))
 

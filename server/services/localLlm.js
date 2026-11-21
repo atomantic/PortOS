@@ -1369,7 +1369,7 @@ const installCanceled = (modelId) => ({ success: false, canceled: true, code: 'I
 
 /** The model downloads this process is running now, for the status payload. */
 export function listActiveInstalls() {
-  return [...activeInstalls.values()].map(({ backend, modelId, startedAt }) => ({ backend, modelId, startedAt }))
+  return [...activeInstalls.values()].map(({ backend, modelId, startedAt, cancelable }) => ({ backend, modelId, startedAt, cancelable }))
 }
 
 /**
@@ -1379,6 +1379,12 @@ export function listActiveInstalls() {
 export function cancelModelInstall(backend, modelId) {
   const entry = activeInstalls.get(installKey(backend, modelId))
   if (!entry) return { success: false, code: 'INSTALL_NOT_RUNNING', error: `No download of ${modelId} is running on ${backend}` }
+  // An Ollama Safetensors import stages the checkpoint and then runs `ollama create`
+  // under its own staging lifecycle, which takes no signal; answering success here
+  // would leave it running behind a "canceled" banner.
+  if (!entry.cancelable) {
+    return { success: false, code: 'INSTALL_NOT_CANCELABLE', error: `${modelId} is an Ollama import and can't be canceled once started` }
+  }
   console.log(`🛑 Local LLM: canceling ${backend} download of ${modelId}`)
   entry.controller.abort()
   return { success: true }
@@ -1390,7 +1396,8 @@ export async function installModel(backend, modelId, onProgress, options = {}) {
     return { success: false, code: 'INSTALL_IN_PROGRESS', error: `${modelId} is already downloading on ${backend}`, modelId }
   }
   const controller = new AbortController()
-  activeInstalls.set(key, { backend, modelId, controller, startedAt: new Date().toISOString() })
+  const cancelable = !(backend === 'ollama' && getOllamaImportSpec(modelId))
+  activeInstalls.set(key, { backend, modelId, controller, cancelable, startedAt: new Date().toISOString() })
   const result = await performInstallModel(backend, modelId, onProgress, { ...options, signal: controller.signal })
     .finally(() => activeInstalls.delete(key))
   if (controller.signal.aborted && !result?.success) return installCanceled(modelId)

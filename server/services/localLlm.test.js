@@ -432,6 +432,16 @@ describe('localLlm', () => {
       }, onProgress);
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
     });
+    it('refuses to cancel a Safetensors import, which cannot be stopped mid-create', async () => {
+      let finish;
+      mocks.ollama.importModelFromHfSafetensors.mockImplementationOnce(({ modelId }) => new Promise((resolve) => { finish = () => resolve({ success: true, modelId }); }));
+      const install = svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit');
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      expect(svc.listActiveInstalls()).toEqual([expect.objectContaining({ modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', cancelable: false })]);
+      expect(svc.cancelModelInstall('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit')).toMatchObject({ success: false, code: 'INSTALL_NOT_CANCELABLE' });
+      finish();
+      await expect(install).resolves.toMatchObject({ success: true });
+    });
     it('routes Ollama delete to deleteModel', async () => {
       await svc.deleteModel('ollama', 'llama3.2');
       expect(mocks.ollama.deleteModel).toHaveBeenCalledWith('llama3.2');

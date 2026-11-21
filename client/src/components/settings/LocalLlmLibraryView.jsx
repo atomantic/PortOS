@@ -393,7 +393,7 @@ export default function LocalLlmLibraryView() {
                     <BrailleSpinner />
                     <span className="break-all">Downloading {download.modelId} on {labelFor(download.backend)}</span>
                   </div>
-                  <button
+                  {download.cancelable !== false && <button
                     type="button"
                     onClick={() => cancelDownload(download)}
                     disabled={cancelling.has(key)}
@@ -402,7 +402,7 @@ export default function LocalLlmLibraryView() {
                   >
                     {cancelling.has(key) ? <BrailleSpinner /> : <X size={12} />}
                     Cancel
-                  </button>
+                  </button>}
                 </div>
                 {Number.isFinite(percent) && (
                   <div className="h-1.5 rounded bg-port-border overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={`${download.modelId} download progress`}>

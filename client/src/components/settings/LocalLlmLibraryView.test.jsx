@@ -319,6 +319,19 @@ describe('LocalLlmLibraryView installed models', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(cancelLocalLlmInstall).toHaveBeenCalledWith('ollama', 'example-model:7b');
     await act(async () => {});
+    // The canceled install ends on an `error` frame; the reloaded status no longer lists it.
+    getLocalLlmStatus.mockResolvedValue(status);
+    const progressHandler = socket.on.mock.calls.find(([event]) => event === 'localLlm:progress')[1];
+    act(() => progressHandler({ event: 'error', message: 'example-model:7b download canceled' }));
+    await waitFor(() => expect(screen.queryByText('Downloading example-model:7b on Ollama')).toBeNull());
+  });
+
+  it('shows no Cancel for a server-reported install that cannot be canceled', async () => {
+    const status = await getLocalLlmStatus();
+    getLocalLlmStatus.mockResolvedValue({ ...status, installs: [{ backend: 'ollama', modelId: 'example-model:7b', cancelable: false, startedAt: '2026-01-01T00:00:00.000Z' }] });
+    await renderLibrary();
+    expect(screen.getByText('Downloading example-model:7b on Ollama')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 
   it('limits comparisons to six models and navigates with those targets', async () => {

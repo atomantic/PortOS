@@ -312,6 +312,10 @@ describe('local LLM playground routes', () => {
     cancelModelInstall.mockReturnValueOnce({ success: false, code: 'INSTALL_NOT_RUNNING', error: 'No download of llama3.2 is running on ollama' });
     const missing = await request(makeApp()).post('/api/local-llm/install/cancel').send({ backend: 'ollama', modelId: 'llama3.2' });
     expect(missing.status).toBe(404);
+
+    cancelModelInstall.mockReturnValueOnce({ success: false, code: 'INSTALL_NOT_CANCELABLE', error: 'llama3.2 is an Ollama import and can\'t be canceled once started' });
+    const held = await request(makeApp()).post('/api/local-llm/install/cancel').send({ backend: 'ollama', modelId: 'llama3.2' });
+    expect(held.status).toBe(409);
   });
 
   it('POST /install without force still pulls as a regular install', async () => {
