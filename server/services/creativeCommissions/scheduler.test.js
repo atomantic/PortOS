@@ -438,8 +438,8 @@ describe('runScheduledCommission gates', () => {
     }));
   });
 
-  it('records an explicit skip when the configured music renderer is unavailable', async () => {
-    resolveMusicEngineSelectionMock.mockResolvedValueOnce({ status: 'unavailable', reason: 'music-model-unavailable' });
+  it.each(['music-engine-unavailable', 'music-model-unavailable'])('records a %s skip before project creation', async (reason) => {
+    resolveMusicEngineSelectionMock.mockResolvedValueOnce({ status: 'unavailable', reason });
     getCommissionMock.mockResolvedValue(videoCommission({
       targetAbility: 'music',
       brief: { intent: 'ambient', musicTaste: { source: 'digital-twin', musicEngineId: 'acestep', musicModelId: 'removed-model' } },
@@ -447,7 +447,7 @@ describe('runScheduledCommission gates', () => {
     }));
     await runScheduledCommission('commission-1');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({
-      status: 'skipped', reason: 'music-model-unavailable',
+      status: 'skipped', reason,
     }));
     expect(createProjectMock).not.toHaveBeenCalled();
   });

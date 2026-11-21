@@ -49,7 +49,7 @@ import {
   listJobs,
 } from './mediaJobQueue/index.js';
 import { MEDIA_QUEUE_FULL } from './mediaJobQueue/admission.js';
-import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
+import { listMusicEngineCapabilities, musicEngineReadinessReason } from './musicEngineCapabilities.js';
 import { BYOV_VIDEO_RUNTIMES, isByovRuntimeReady } from './videoGen/runtimes.js';
 import { minimaxH3ControlError } from './videoGen/minimaxH3Controls.js';
 import { wan22FrameCountError } from './videoGen/wan22Controls.js';
@@ -382,23 +382,6 @@ export async function authorizeFederatedMediaPeer(req, { statusProbe = false } =
   return { callerId, config };
 }
 
-function readinessReason(engine, modelReady) {
-  if (!engine) return 'unknown-engine';
-  if (!engine.platformSupported) return 'platform-unsupported';
-  if (!engine.runtimeReady) return 'runtime-unavailable';
-  if (engine.cudaRequired && engine.cudaState !== 'available') {
-    return engine.cudaState === 'unknown' ? 'cuda-unknown' : 'cuda-absent';
-  }
-  // Mixed-version compatibility: older capability payloads omit vramState and
-  // retain the pre-VRAM behavior, while newer local capabilities fail closed
-  // for an insufficient or unmeasured CUDA execution profile.
-  if (engine.cudaRequired && engine.vramState && engine.vramState !== 'sufficient') {
-    return engine.vramState === 'unknown-size' ? 'vram-unknown-size' : 'vram-insufficient';
-  }
-  if (!modelReady) return 'model-unavailable';
-  return null;
-}
-
 async function configuredAudioCapabilities(config) {
   const { engines } = await listMusicEngineCapabilities();
   const enginesById = new Map(engines.map((engine) => [engine.id, engine]));
@@ -406,7 +389,7 @@ async function configuredAudioCapabilities(config) {
     const engine = enginesById.get(selected.engine);
     const model = engine?.models.find((candidate) => candidate.id === selected.modelId);
     const modelReady = !!model && (!engine.fixedModelInstall || engine.modelReadyById?.[model.id] === true);
-    const reason = model ? readinessReason(engine, modelReady) : (engine ? 'unknown-model' : 'unknown-engine');
+    const reason = model ? musicEngineReadinessReason(engine, modelReady) : (engine ? 'unknown-model' : 'unknown-engine');
     return {
       kind: 'audio',
       engine: selected.engine,

@@ -28,11 +28,11 @@ vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () 
 // The style-source picker links to universe / mood-board pages.
 const render = (ui) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
 
-function Harness({ assignment } = {}) {
+function Harness({ assignment, musicTaste } = {}) {
   const [form, setForm] = useState(toForm({
     assignment,
     targetAbility: 'music',
-    brief: { intent: 'original ambient track', musicTaste: { source: 'digital-twin' } },
+    brief: { intent: 'original ambient track', musicTaste: { source: 'digital-twin', ...musicTaste } },
     generation: { lengthSeconds: 45 },
   }));
   return (
@@ -77,6 +77,8 @@ describe('CommissionConfigForm music taste controls', () => {
     await waitFor(() => expect(screen.getByLabelText('Music engine')).toContainHTML('MusicGen'));
     expect(screen.getByLabelText('Music model')).toContainHTML('Default model');
     expect(api.listMusicEngines).toHaveBeenCalledWith({ silent: true });
+    expect(screen.queryByText('Choose an installed engine', { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByText('Install them from Music', { exact: false })).not.toBeInTheDocument();
   });
 
   it('shows an actionable warning when the selected default runtime is unavailable', async () => {
@@ -92,24 +94,41 @@ describe('CommissionConfigForm music taste controls', () => {
   });
 
   it('warns when a configured model disappeared from the live engine catalog', async () => {
-    function MissingModelHarness() {
-      const [form, setForm] = useState(toForm({
-        targetAbility: 'music', brief: {
-          intent: 'original ambient track',
-          musicTaste: { source: 'digital-twin', musicEngineId: 'musicgen', musicModelId: 'removed-model' },
-        },
-      }));
-      return (
-        <CommissionConfigForm
-          form={form}
-          patchForm={(path, value) => setForm((prev) => patchFormState(prev, path, value))}
-          saving={false}
-          onSave={() => {}}
-        />
-      );
-    }
-    render(<MissingModelHarness />);
+    render(<Harness musicTaste={{ musicEngineId: 'musicgen', musicModelId: 'removed-model' }} />);
     expect(await screen.findByText(/configured music model is no longer available/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['insufficient', /requires at least 20 GB of VRAM/i],
+    ['unknown-size', /VRAM requirement.*has not been measured/i],
+  ])('warns that the selected CUDA engine has %s VRAM', async (vramState, warning) => {
+    api.listMusicEngines.mockResolvedValueOnce({
+      defaultEngine: 'minimax',
+      engines: [{
+        id: 'minimax', name: 'MiniMax', platformSupported: true, runtimeReady: true,
+        cudaRequired: true, cudaState: 'available', vramState, minVramGb: 20, maxVramGb: 12,
+        fixedModelInstall: true, modelReady: true, modelReadyById: { default: true },
+        models: [{ id: 'default', name: 'Default' }], defaultModelId: 'default',
+      }],
+    });
+    render(<Harness />);
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+  });
+
+  it('warns for uncached selected weights even when the default weights are cached', async () => {
+    api.listMusicEngines.mockResolvedValueOnce({
+      defaultEngine: 'minimax-mlx',
+      engines: [{
+        id: 'minimax-mlx', name: 'MiniMax MLX', platformSupported: true, runtimeReady: true,
+        fixedModelInstall: true, modelReady: true, modelReadyById: { '8bit': true, bf16: false },
+        models: [{ id: '8bit', name: '8-bit' }, { id: 'bf16', name: 'BF16' }], defaultModelId: '8bit',
+      }],
+    });
+    render(<Harness musicTaste={{ musicModelId: 'bf16' }} />);
+    const warning = /selected MiniMax MLX model weights are not installed/i;
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Music model'), { target: { value: '8bit' } });
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
   });
 
   it('lets the user disable taste mode without losing the music commission', async () => {
