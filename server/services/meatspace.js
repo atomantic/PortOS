@@ -216,7 +216,7 @@ export async function getConfig() {
         freshConfig.sexSource = 'genome';
         freshConfig.updatedAt = new Date().toISOString();
         await saveConfig(freshConfig);
-        console.log(`🧬 Sex auto-detected from genome: ${detectedSex}`);
+        console.log('🧬 Sex auto-detected from genome');
         return freshConfig;
       });
     }

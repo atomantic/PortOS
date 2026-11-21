@@ -51,7 +51,7 @@ async function loadMeta({ forWrite = false } = {}) {
   if (ok && raw === null) return freshMeta();
   const parsed = ok ? parseMeta(raw) : null;
   if (parsed) return parsed;
-  console.error(`❌ Genome metadata is unreadable or malformed: ${META_FILE}`);
+  console.error('❌ Genome metadata is unreadable or malformed');
   if (forWrite) throw unreadableStoreError(META_FILE);
   return freshMeta();
 }
@@ -168,7 +168,7 @@ async function storeGenomeUnqueued(content, filename, index, build) {
   meta.build = build || 'Unknown';
   await saveMeta(meta);
 
-  console.log(`🧬 Genome uploaded: ${filename} — ${index.size} SNPs, ${build || 'unknown build'}`);
+  console.log(`🧬 Genome uploaded: ${index.size} SNPs, ${build || 'unknown build'}`);
 
   return {
     snpCount: index.size,
@@ -280,7 +280,6 @@ async function scanWithIndex(index) {
 
       meta.savedMarkers[apoeId] = apoeMarker;
       results.push({ id: apoeId, ...apoeMarker });
-      console.log(`🧬 APOE haplotype resolved: ${apoeResult.haplotype} (${apoeResult.riskMultiplier} risk)`);
     }
   }
 
@@ -372,7 +371,7 @@ export async function saveMarker(data) {
 
     meta.savedMarkers[id] = marker;
     await saveMeta(meta);
-    console.log(`🧬 Marker saved: ${data.rsid} (${data.name})`);
+    console.log('🧬 Marker saved');
 
     return { id, ...marker };
   });
@@ -390,7 +389,7 @@ export async function updateMarkerNotes(id, notes) {
 
     meta.savedMarkers[id].notes = notes;
     await saveMeta(meta);
-    console.log(`🧬 Marker notes updated: ${meta.savedMarkers[id].rsid}`);
+    console.log('🧬 Marker notes updated');
 
     return { id, ...meta.savedMarkers[id] };
   });
@@ -406,10 +405,9 @@ export async function deleteMarker(id) {
       return { error: 'Marker not found' };
     }
 
-    const rsid = meta.savedMarkers[id].rsid;
     delete meta.savedMarkers[id];
     await saveMeta(meta);
-    console.log(`🧬 Marker deleted: ${rsid}`);
+    console.log('🧬 Marker deleted');
 
     return { success: true };
   });

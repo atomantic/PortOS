@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Birth dates are personal data, so every fixture below is computed relative to
 // "now" instead of being transcribed from anywhere — which also keeps the
@@ -14,6 +14,7 @@ vi.mock('./store.js', () => ({
     h.goalsData = await fn(h.goalsData);
     return h.goalsData;
   }),
+  SSA_BASELINE_LIFE_EXPECTANCY: 78.5,
   GOALS_FILE: 'goals.json',
   LONGEVITY_FILE: 'longevity.json',
   DEFAULT_GOALS: { goals: [], birthDate: null, lifeExpectancy: null, timeHorizons: null },
@@ -29,7 +30,7 @@ vi.mock('../genome.js', () => ({ getGenomeSummary: vi.fn(async () => ({ savedMar
 vi.mock('../meatspaceCalendar.js', () => ({ getActivities: vi.fn(async () => []) }));
 
 const { computeTimeHorizons } = await import('./markers.js');
-const { applyFreshTimeHorizons, readLongevity, getLongevity } = await import('./longevity.js');
+const { applyFreshTimeHorizons, readLongevity, getLongevity, deriveLongevity } = await import('./longevity.js');
 const { createGoal, getGoals, getGoalsTree, computeGoalUrgency } = await import('./goals.js');
 const { saveJSON } = await import('./store.js');
 
@@ -153,6 +154,18 @@ describe('applyFreshTimeHorizons', () => {
     const stored = { lifeExpectancy: { adjusted: null }, timeHorizons: null, derivedAt: null };
 
     expect(applyFreshTimeHorizons(stored, birthDateYearsAgo(45))).toBe(stored);
+  });
+});
+
+describe('deriveLongevity', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reports marker count without logging the adjusted life expectancy', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { lifeExpectancy } = await deriveLongevity(birthDateYearsAgo(45));
+    expect(lifeExpectancy.adjusted).toBeGreaterThan(0);
+    expect(log).toHaveBeenCalledWith('🧬 Longevity derived: 0 markers');
+    expect(log.mock.calls.flat().join('\n')).not.toContain(String(lifeExpectancy.adjusted));
   });
 });
 
