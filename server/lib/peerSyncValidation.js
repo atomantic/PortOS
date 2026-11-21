@@ -395,4 +395,7 @@ export const peerCollectionIntegrityPayloadSchema = z.object({
   record: peerWireRecordSchema,
   assetManifest: z.array(peerAssetManifestEntrySchema),
   videoFilenames: z.record(z.string().max(255), z.string().max(255)).optional(),
+  // `<kind>:<filename>` → peers the responder streams that file from (host
+  // mode). Optional: older peers omit it and every gap stays a difference.
+  hostedBy: z.record(z.string().max(270), z.array(z.string().max(128)).max(16)).optional(),
 });

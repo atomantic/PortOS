@@ -9,7 +9,9 @@ const CHIP = 'px-1.5 py-0.5 rounded inline-flex items-center gap-0.5';
 function hostName({ name, instanceId, self }) {
   if (self) return 'This machine';
   const label = typeof name === 'string' ? name.trim() : '';
-  return label && label.toLowerCase() !== 'null' ? label : `Unnamed host (${instanceId})`;
+  // Machine names are user-chosen and may be literal words like "null" or
+  // "NaN"; only a blank name is unnamed.
+  return label || `Unnamed host (${instanceId})`;
 }
 
 const names = (list) => list.map(hostName).join(', ');

@@ -26,7 +26,7 @@ const streamRequest = vi.fn();
 vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args) }));
 const { peerStreamRequest: realPeerStreamRequest } = await vi.importActual('../lib/peerHttpClient.js');
 
-const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations, __resetPeerCooldown } = await import('./peerHostedMedia.js');
+const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations, hostedByForCollectionItems, hostedCountsByPeer, __resetPeerCooldown } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
 const { saveHistory } = await import('./videoGen/history.js');
 
@@ -51,6 +51,18 @@ const upstream = (body, status = 200, headers = {}) => ({
   status,
   headers: { 'content-type': 'image/png', 'content-length': String(body.length), ...headers },
   stream: Readable.from([Buffer.from(body)]),
+});
+
+describe('hostedByForCollectionItems', () => {
+  it('maps only absent, hosted collection files to their hosts', async () => {
+    await markHosted(PEER.instanceId, [{ kind: 'image', filename: 'remote.png' }, { kind: 'image', filename: 'local.png' }]);
+    await markHosted('peer-instance-2', [{ kind: 'image', filename: 'remote.png' }]);
+    const hostedBy = await hostedByForCollectionItems([
+      { kind: 'image', ref: 'local.png' }, { kind: 'image', ref: 'remote.png' }, { kind: 'image', ref: 'nowhere.png' },
+    ]);
+    expect(hostedBy).toEqual({ 'image:remote.png': [PEER.instanceId, 'peer-instance-2'] });
+    expect(hostedCountsByPeer(hostedBy)).toEqual({ [PEER.instanceId]: 1, 'peer-instance-2': 1 });
+  });
 });
 
 describe('resolveMediaLocations', () => {
