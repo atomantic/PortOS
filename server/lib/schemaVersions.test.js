@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
+  RENDER_PIN_SENDER_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
   compareSchemaVersions,
   scopeVersionDiff,
@@ -23,17 +24,18 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     }
   });
 
-  it('pins the render-backend alphabets that sync versions must move with', () => {
-    // Older receivers coerce an unknown imageMode/videoMode to auto/null, then
-    // LWW the lost pin back. Adding a backend means updating this snapshot AND
-    // bumping creativeCommissions + fableLoom in schemaVersions.js.
-    expect({
-      image: [...IMAGE_GEN_MODES],
-      video: [...VIDEO_GEN_MODES],
-    }).toEqual({
-      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'google'],
-      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'],
-    });
+  it('requires a supported sender version for every pinnable backend in both record kinds', () => {
+    for (const category of ['creativeCommissions', 'fableLoom']) {
+      const modes = RENDER_PIN_SENDER_VERSIONS[category];
+      // External images cannot be queued or pinned.
+      expect(Object.keys(modes.image).sort()).toEqual(IMAGE_GEN_MODES.filter((mode) => mode !== 'external').sort());
+      expect(Object.keys(modes.video).sort()).toEqual([...VIDEO_GEN_MODES].sort());
+      for (const version of [...Object.values(modes.image), ...Object.values(modes.video)]) {
+        expect(Number.isInteger(version)).toBe(true);
+        expect(version).toBeGreaterThan(0);
+        expect(version).toBeLessThanOrEqual(PORTOS_SCHEMA_VERSIONS[category]);
+      }
+    }
   });
 
   it('caps each entry\'s comment block at 6 lines so the registry cannot regrow history', () => {

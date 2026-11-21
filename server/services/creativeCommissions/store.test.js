@@ -756,6 +756,20 @@ describe('commission BRIEF federation (#2686)', () => {
       const current = merge(local, remote, 3).next;
       expect(current.generation).toMatchObject({ imageCount: 4, imageMode: 'auto', imageModelId: null });
     });
+
+    it.each([{}, { imageMode: 'auto' }])('keeps a Google pin across a v8 brief edit (%j) and applies a v9 clear', (generation) => {
+      const local = localRecord({
+        targetAbility: 'music-video',
+        generation: { imageMode: 'google', imageModelId: 'still-a', videoMode: 'grok', videoModelId: 'clip-a' },
+      });
+      const remote = { targetAbility: 'music-video', generation: { ...generation, videoMode: 'auto' } };
+      expect(merge(local, remote, 8).next).toMatchObject({
+        name: 'Renamed on peer',
+        generation: { imageMode: 'google', imageModelId: 'still-a', videoMode: 'auto', videoModelId: null },
+      });
+      expect(merge(local, { ...remote, generation: { imageMode: 'auto' } }, 9).next.generation)
+        .toMatchObject({ imageMode: 'auto', imageModelId: null });
+    });
   });
 
   it('a stale remote loses to a newer local (no clobber)', () => {
