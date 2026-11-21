@@ -23,6 +23,10 @@ const { queryMock, withTransactionMock } = vi.hoisted(() => ({
 
 vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransactionMock }));
 
+// The real draft store is a machine-local file; the erasure wiring is asserted via these doubles.
+const { eraseMock, scrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), scrubMock: vi.fn(async () => 0) }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: scrubMock }));
+
 const {
   resolveSubjectId, createSubject, updateSubject, deleteSubject,
   listSubjects, assertSubject, assertSubjectConsent, recordConsent,
@@ -38,6 +42,8 @@ const subjectRow = (overrides = {}) => ({
 beforeEach(() => {
   queryMock.mockReset();
   withTransactionMock.mockReset();
+  eraseMock.mockClear();
+  scrubMock.mockClear();
 });
 
 describe('resolveSubjectId', () => {
@@ -126,6 +132,20 @@ describe('deleteSubject', () => {
     withTransactionMock.mockImplementation(fn => fn(client));
     expect(await deleteSubject('s2')).toEqual({ ok: true });
     expect(client.query).toHaveBeenLastCalledWith(expect.stringMatching(/DELETE FROM privacy_subjects/), ['s2']);
+  });
+
+  it('erases the subject\'s privacy drafts before the cascade, selecting by provenance only', async () => {
+    const client = { query: vi.fn(async sql => ({ rows: sql.includes('SELECT id') ? [{ id: 's2' }] : [] })) };
+    withTransactionMock.mockImplementation(fn => fn(client));
+    await deleteSubject('s2');
+    expect(eraseMock).toHaveBeenCalledTimes(1);
+    const [predicate, opts] = eraseMock.mock.calls[0];
+    expect(opts).toBeUndefined();
+    expect(predicate({ privacyMeta: { subjectId: 's2' } })).toBe(true);
+    expect(predicate({ privacyMeta: { subjectId: 's3' } })).toBe(false);
+    expect(predicate({})).toBe(false);
+    expect(scrubMock).toHaveBeenCalledTimes(1);
+    expect(eraseMock.mock.invocationCallOrder[0]).toBeLessThan(client.query.mock.invocationCallOrder.at(-1));
   });
 
   it('404s an unknown subject', async () => {
@@ -258,6 +278,23 @@ describe('revokeConsent (#8332)', () => {
     expect(params).toEqual(['s2', 'broker_optout']);
     // Audit history and the subject survive: no DELETE of any kind.
     expect(queryMock.mock.calls.some(([q]) => /DELETE/.test(q))).toBe(false);
+  });
+
+  it('removes only unsent opt-out drafts of that subject when broker_optout is withdrawn (#17233)', async () => {
+    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
+      ? { rows: [subjectRow({ id: 's2' })] } : { rows: [{ revoked_at: 'now' }] }));
+    await revokeConsent({ subjectId: 's2', scope: 'broker_optout' });
+    const [predicate, opts] = eraseMock.mock.calls[0];
+    expect(opts).toEqual({ onlyUnsent: true, generatedBy: ['privacy-optout'] });
+    expect(predicate({ privacyMeta: { subjectId: 's2' } })).toBe(true);
+    expect(predicate({ privacyMeta: { subjectId: 's3' } })).toBe(false);
+  });
+
+  it('leaves drafts alone when a different scope is withdrawn', async () => {
+    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
+      ? { rows: [subjectRow({ id: 's2' })] } : { rows: [{ revoked_at: 'now' }] }));
+    await revokeConsent({ subjectId: 's2', scope: 'broker_scan' });
+    expect(eraseMock).not.toHaveBeenCalled();
   });
 
   it('refuses to revoke local-vault consent (that still means deleting the subject)', async () => {

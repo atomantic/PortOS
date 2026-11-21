@@ -28,8 +28,11 @@ vi.mock('./privacySubjects.js', () => ({
   recordConsent: recordConsentMock,
 }));
 
+const { eraseMock, scrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), scrubMock: vi.fn(async () => 0) }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: scrubMock }));
+
 const {
-  createVaultRecord, listVaultRecords, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
+  deleteVaultRecord, createVaultRecord, listVaultRecords, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
 } = await import('./privacyVault.js');
 const { encryptValue } = await import('../lib/vaultCrypto.js');
 
@@ -207,5 +210,31 @@ describe('getVaultStatus', () => {
       subjectId: SELF,
       recordCounts: { email: 2, ssn: 1 },
     });
+  });
+});
+
+describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
+  it('erases drafts that cite the record and scrubs its decrypted value from legacy drafts', async () => {
+    eraseMock.mockClear(); scrubMock.mockClear();
+    const client = { query: vi.fn(async () => ({ rows: [{
+      id: 'r1', type: 'phone', subject_id: 'subject-2', value_enc: encryptValue('555-0100'),
+    }] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await deleteVaultRecord('r1');
+    const [predicate] = eraseMock.mock.calls[0];
+    expect(predicate({ privacyMeta: { vaultRecordIds: ['x', 'r1'] } })).toBe(true);
+    expect(predicate({ privacyMeta: { vaultRecordIds: ['x'] } })).toBe(false);
+    expect(predicate({})).toBe(false);
+    expect(scrubMock).toHaveBeenCalledWith(['555-0100']);
+  });
+
+  it('never decrypts a sensitive-type value for the legacy scrub', async () => {
+    scrubMock.mockClear();
+    const client = { query: vi.fn(async () => ({ rows: [{
+      id: 'r2', type: 'ssn', subject_id: 'subject-2', value_enc: encryptValue('000-00-0000'),
+    }] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await deleteVaultRecord('r2');
+    expect(scrubMock).toHaveBeenCalledWith([]);
   });
 });

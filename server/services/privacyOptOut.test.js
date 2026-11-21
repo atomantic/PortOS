@@ -203,8 +203,9 @@ describe('emailLane', () => {
   const broker = { id: 'mylife', name: 'MyLife', optout: { method: 'email', email: 'privacy@mylife.com' }, disclosureFields: ['full_name', 'email'] };
   const payload = { full_name: 'Jane Q Doe', email: 'jane@example.com' };
   it('creates a draft locked to the broker address and transitions to submitted', async () => {
-    const res = await emailLane(broker, { id: 'c1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: false });
+    const res = await emailLane(broker, { id: 'c1', subjectId: 'sub-1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: false });
     expect(res.outcome).toBe('submitted');
+    expect(createDraft.mock.calls.at(-1)[0].privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: [], caseId: 'c1' });
     expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['privacy@mylife.com'], generatedBy: 'privacy-optout' }));
     expect(approveDraft).not.toHaveBeenCalled();
     const states = transitionCase.mock.calls.map((c) => c[1]);
