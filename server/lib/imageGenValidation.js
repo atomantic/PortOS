@@ -204,6 +204,9 @@ export const generateSchema = z.object({
   // queued lanes, inline below for the synchronous one. Collection only; the
   // render itself is unchanged.
   musicVideoProjectId: z.string().min(1).max(200).optional(),
+  // File the finished render into the collection with this name, creating it
+  // when absent (requestedCollectionHook; inline for the synchronous image lane).
+  collectionName: z.string().trim().min(1).max(80).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
   // ingredient even if the page that started the render has since unmounted —
