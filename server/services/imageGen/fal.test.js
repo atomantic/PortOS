@@ -233,6 +233,46 @@ describe('imageGen/fal — generateImage', () => {
     expect(await sharp(sent).metadata()).toMatchObject({ width: 1200, height: 1200 });
   });
 
+  it('strips GPS EXIF from an in-budget JPEG without re-encoding its compressed scan data', async () => {
+    const source = await sharp(await noiseImage(64, 64, 'jpeg'))
+      .withExif({ IFD0: { Make: 'TestPhone' }, IFD3: { GPSLatitudeRef: 'N', GPSLongitudeRef: 'W' } })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    expect((await sharp(source).metadata()).exif).toBeDefined();
+    await writeFile(join(FAKE_IMAGES_DIR, 'photo-gps.jpg'), source);
+    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
+
+    const job = await fal.generateImage({ prompt: 'edit photo', referenceImagePaths: ['photo-gps.jpg'] });
+    expect((await waitForTerminal(job.jobId)).type).toBe('completed');
+
+    const putCall = calls.find((c) => c.method === 'PUT' && c.url.startsWith('https://fal.media/upload/'));
+    expect(putCall.headers['Content-Type']).toBe('image/jpeg');
+    const sent = Buffer.isBuffer(putCall.body) ? putCall.body : Buffer.from(putCall.body);
+    const sentMeta = await sharp(sent).metadata();
+    expect(sentMeta.exif).toBeUndefined();
+    // Compressed JPEG scan data (from SOS 0xFF 0xDA to EOI) is byte-identical.
+    const sosMarker = Buffer.from([0xff, 0xda]);
+    expect(sent.subarray(sent.indexOf(sosMarker)).equals(source.subarray(source.indexOf(sosMarker)))).toBe(true);
+  });
+
+  it('strips a PNG eXIf chunk on the in-budget pass-through path', async () => {
+    const source = await sharp(await noiseImage(64, 64, 'png'))
+      .withExif({ IFD0: { Make: 'TestPhone' }, IFD3: { GPSLatitudeRef: 'N' } })
+      .png()
+      .toBuffer();
+    expect((await sharp(source).metadata()).exif).toBeDefined();
+    await writeFile(join(FAKE_IMAGES_DIR, 'photo-exif.png'), source);
+    const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
+
+    const job = await fal.generateImage({ prompt: 'edit png', referenceImagePaths: ['photo-exif.png'] });
+    expect((await waitForTerminal(job.jobId)).type).toBe('completed');
+
+    const putCall = calls.find((c) => c.method === 'PUT' && c.url.startsWith('https://fal.media/upload/'));
+    expect(putCall.headers['Content-Type']).toBe('image/png');
+    const sent = Buffer.isBuffer(putCall.body) ? putCall.body : Buffer.from(putCall.body);
+    expect((await sharp(sent).metadata()).exif).toBeUndefined();
+  });
+
   it('refuses before any paid call when the model is outside the catalog or no key is configured', async () => {
     const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro' });
     await expect(fal.generateImage({ model: 'fal-ai/not-curated', prompt: 'x' }))

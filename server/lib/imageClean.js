@@ -109,6 +109,20 @@ function pngHasC2PA(buf) {
  * chunk-count overrun. Never throws — caller decides whether to write the
  * result back or skip.
  */
+function spliceOutRanges(buffer, ranges) {
+  const droppedBytes = ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
+  const out = Buffer.allocUnsafe(buffer.length - droppedBytes);
+  let writeOffset = 0;
+  let readOffset = 0;
+  for (const { start, end } of ranges) {
+    buffer.copy(out, writeOffset, readOffset, start);
+    writeOffset += start - readOffset;
+    readOffset = end;
+  }
+  buffer.copy(out, writeOffset, readOffset);
+  return out;
+}
+
 function stripPngChunks(buffer, dropTypes) {
   const passThrough = {
     data: buffer, stripped: false, droppedTypes: [],
@@ -143,18 +157,150 @@ function stripPngChunks(buffer, dropTypes) {
   if (!sawIEND) return passThrough;
   if (ranges.length === 0) return passThrough;
 
-  const droppedBytes = ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
-  const out = Buffer.allocUnsafe(buffer.length - droppedBytes);
-  let writeOffset = 0;
-  let readOffset = 0;
-  for (const { start, end } of ranges) {
-    buffer.copy(out, writeOffset, readOffset, start);
-    writeOffset += start - readOffset;
-    readOffset = end;
-  }
-  // Copy the tail after the last dropped chunk.
-  buffer.copy(out, writeOffset, readOffset);
+  const out = spliceOutRanges(buffer, ranges);
   return { data: out, stripped: true, droppedTypes: [...dropped], sizeBefore: buffer.length, sizeAfter: out.length };
+}
+
+// Cap segment/chunk walks so crafted inputs cannot spin the event loop.
+const MAX_JPEG_SEGMENTS = 10000;
+const MAX_WEBP_CHUNKS = 10000;
+
+// JPEG markers carrying privacy-sensitive or non-rendering container metadata:
+// APP1 (0xE1: EXIF GPS/device tags, XMP, ExtendedXMP), APP13 (0xED: Photoshop/IPTC),
+// and COM (0xFE: free-form comments). JFIF (APP0) and ICC profiles (APP2) stay intact.
+const JPEG_METADATA_MARKERS = new Map([
+  [0xe1, 'APP1'],
+  [0xed, 'APP13'],
+  [0xfe, 'COM'],
+]);
+
+/**
+ * Lossless JPEG metadata strip — walks markers before Start of Scan (SOS) and
+ * splices out APP1 (EXIF/XMP), APP13 (IPTC/Photoshop), and COM segments. The
+ * compressed image scan data (from SOS through EOI) is copied byte-for-byte
+ * with no decode or re-encode.
+ *
+ * Returns `{ data, stripped, droppedTypes, sizeBefore, sizeAfter }`, passing
+ * non-JPEG or malformed inputs through untouched (`stripped: false`).
+ */
+export function stripJpegMetadataSegments(buffer) {
+  const passThrough = {
+    data: buffer, stripped: false, droppedTypes: [],
+    sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0,
+  };
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4 || detectFormat(buffer) !== 'jpeg') {
+    return passThrough;
+  }
+  const ranges = [];
+  const dropped = new Set();
+  let offset = 2; // skip SOI (FF D8)
+  let count = 0;
+  let sawSos = false;
+  while (offset < buffer.length) {
+    if (++count > MAX_JPEG_SEGMENTS) return passThrough;
+    if (buffer[offset] !== 0xff) return passThrough;
+    const segmentStart = offset;
+    let markerOffset = offset + 1;
+    while (markerOffset < buffer.length && buffer[markerOffset] === 0xff) markerOffset += 1;
+    if (markerOffset >= buffer.length) return passThrough;
+    const marker = buffer[markerOffset];
+    if (marker === 0x00) return passThrough;
+    if (marker === 0xda) { sawSos = true; break; }
+    if (marker === 0xd9) break;
+    // Standalone markers (TEM, RST0..RST7, SOI) carry no length field.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+      offset = markerOffset + 1;
+      continue;
+    }
+    if (markerOffset + 3 > buffer.length) return passThrough;
+    const length = buffer.readUInt16BE(markerOffset + 1);
+    if (length < 2) return passThrough;
+    const segmentEnd = markerOffset + 1 + length;
+    if (segmentEnd > buffer.length) return passThrough;
+    const label = JPEG_METADATA_MARKERS.get(marker);
+    if (label) {
+      ranges.push({ start: segmentStart, end: segmentEnd });
+      dropped.add(label);
+    }
+    offset = segmentEnd;
+  }
+  if (!sawSos || ranges.length === 0) return passThrough;
+
+  const out = spliceOutRanges(buffer, ranges);
+  return { data: out, stripped: true, droppedTypes: [...dropped], sizeBefore: buffer.length, sizeAfter: out.length };
+}
+
+const WEBP_METADATA_CHUNKS = new Set(['EXIF', 'XMP ']);
+const WEBP_VP8X_EXIF_FLAG = 0x08;
+const WEBP_VP8X_XMP_FLAG = 0x04;
+
+/**
+ * Lossless WebP metadata strip — removes `EXIF` and `XMP ` RIFF chunks, updates
+ * the RIFF header size, and clears the EXIF/XMP bits in `VP8X` without decoding
+ * or re-encoding image frames.
+ *
+ * Returns `{ data, stripped, droppedTypes, sizeBefore, sizeAfter }`, passing
+ * non-WebP or malformed inputs through untouched (`stripped: false`).
+ */
+export function stripWebpMetadataChunks(buffer) {
+  const passThrough = {
+    data: buffer, stripped: false, droppedTypes: [],
+    sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0,
+  };
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12 || detectFormat(buffer) !== 'webp') {
+    return passThrough;
+  }
+  const riffSize = buffer.readUInt32LE(4);
+  const riffEnd = 8 + riffSize;
+  if (riffSize < 4 || riffEnd > buffer.length) return passThrough;
+
+  const ranges = [];
+  const dropped = new Set();
+  let vp8xFlagsOffset = -1;
+  let offset = 12;
+  let count = 0;
+  while (offset + 8 <= riffEnd) {
+    if (++count > MAX_WEBP_CHUNKS) return passThrough;
+    const fourCC = buffer.toString('ascii', offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const paddedSize = chunkSize + (chunkSize & 1);
+    const chunkEnd = offset + 8 + paddedSize;
+    if (chunkEnd > riffEnd) return passThrough;
+    if (fourCC === 'VP8X' && chunkSize >= 10 && vp8xFlagsOffset === -1) {
+      vp8xFlagsOffset = offset + 8;
+    }
+    if (WEBP_METADATA_CHUNKS.has(fourCC)) {
+      ranges.push({ start: offset, end: chunkEnd });
+      dropped.add(fourCC.trim());
+    }
+    offset = chunkEnd;
+  }
+  if (offset !== riffEnd || ranges.length === 0) return passThrough;
+
+  const droppedBytes = ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
+  const out = spliceOutRanges(buffer, ranges);
+  out.writeUInt32LE(riffSize - droppedBytes, 4);
+  if (vp8xFlagsOffset !== -1) {
+    const shift = ranges.reduce((sum, r) => (r.end <= vp8xFlagsOffset ? sum + (r.end - r.start) : sum), 0);
+    out[vp8xFlagsOffset - shift] &= ~(WEBP_VP8X_EXIF_FLAG | WEBP_VP8X_XMP_FLAG);
+  }
+  return { data: out, stripped: true, droppedTypes: [...dropped], sizeBefore: buffer.length, sizeAfter: out.length };
+}
+
+/**
+ * Lossless container-metadata strip across PNG, JPEG, and WebP — removes EXIF
+ * (including GPS/device tags), XMP, IPTC, comments, and C2PA chunks without
+ * re-encoding pixels. Unsupported or clean inputs pass through untouched.
+ */
+export function stripImageMetadata(buffer) {
+  const format = detectFormat(buffer);
+  if (format === 'png') return stripPngMetadataChunks(buffer);
+  if (format === 'jpeg') return stripJpegMetadataSegments(buffer);
+  if (format === 'webp') return stripWebpMetadataChunks(buffer);
+  return {
+    data: buffer, stripped: false, droppedTypes: [],
+    sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0,
+  };
 }
 
 /**

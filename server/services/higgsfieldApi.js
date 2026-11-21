@@ -22,6 +22,7 @@ import { readFile } from 'fs/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { stripImageMetadata } from '../lib/imageClean.js';
 import { detectImageFormat } from '../lib/mimeTypes.js';
 
 export const HIGGSFIELD_API_BASE = 'https://api.higgsfield.ai';
@@ -90,7 +91,8 @@ export async function uploadHiggsfieldFile({ apiKey, bytes, contentType, signal 
 
 /** Upload a local image (PNG/JPEG/WebP/GIF) and return its public URL. */
 export async function uploadHiggsfieldImage({ apiKey, path, bytes = null, signal }) {
-  const data = bytes || await readFile(path);
+  const raw = bytes || await readFile(path);
+  const data = stripImageMetadata(raw).data;
   const format = detectImageFormat(data)?.format;
   const contentType = UPLOAD_TYPES[format];
   if (!contentType) throw new ServerError('Higgsfield accepts PNG, JPEG, WebP or GIF images', { status: 400, code: 'HIGGSFIELD_INPUT_INVALID' });

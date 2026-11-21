@@ -42,7 +42,7 @@ import {
   IMAGE_GEN_MODE, describeFidelity, grokImageTool, nearestAspectRatio, visualReferenceRole,
 } from './modes.js';
 import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
-import { resolveInputImages } from './inputImages.js';
+import { resolveInputImages, stageSanitizedInputImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
@@ -213,8 +213,20 @@ async function generateImagePrepared({
   const scratchDir = join(tmpdir(), `portos-grok-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
 
+  // The scratch dir is the last fallible step before the job exists, so a
+  // refusal above leaves nothing behind; from here on the runner owns it.
+  await mkdir(scratchDir, { recursive: true });
+  let cliInputImages;
+  try {
+    const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+    cliInputImages = await stageSanitizedInputImages({ inputImages, scratchDir, reviewedReferenceBytes });
+  } catch (error) {
+    await runner.removeScratchDirectory(scratchDir);
+    throw error;
+  }
+
   const { fullPrompt, effectiveRatio, record: sentRecord } = grokSentPrompt({
-    prompt, negativePrompt, width, height, aspectRatio, stagingPath, inputImages, initImageStrength, promptAdditions,
+    prompt, negativePrompt, width, height, aspectRatio, stagingPath, inputImages: cliInputImages, initImageStrength, promptAdditions,
   });
 
   // No model arg — grok's image tools run on xAI's fixed image backend and
@@ -234,15 +246,6 @@ async function generateImagePrepared({
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };
-  // The scratch dir is the last fallible step before the job exists, so a
-  // refusal above leaves nothing behind; from here on the runner owns it.
-  await mkdir(scratchDir, { recursive: true });
-  try {
-    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  } catch (error) {
-    await runner.removeScratchDirectory(scratchDir);
-    throw error;
-  }
   const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir });
   runner.run(job, {
     bin: grokPath || undefined, scratchDir, meta, cleanC2PA, denoise,
