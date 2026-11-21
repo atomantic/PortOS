@@ -8,9 +8,10 @@
  *
  * OFF by default: the scheduler is only registered when the user has connected
  * Spotify AND opted in via Settings → Spotify (`settings.spotify.enabled`). The
- * ~25-min default cadence keeps the timeline current. The interval value is
- * locked at registration (changing it needs a restart), but the `enabled`
- * toggle is re-read on every tick so disabling it stops runs without a restart.
+ * ~25-min default cadence keeps the timeline current. The interval and `enabled`
+ * are reconciled on every settings save by `createSyncScheduler`
+ * (createSettingsGatedSyncScheduler.js), and `enabled` is also re-read on every
+ * tick so disabling mid-tick skips the run.
  *
  * No LLM calls happen on this path — ingestion is deterministic — so the
  * no-cold-bootstrap AI policy does not gate it; the opt-in is purely about user
