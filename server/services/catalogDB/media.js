@@ -219,6 +219,17 @@ export async function getMissingMediaForIngredient(ingredientId, { media } = {})
     .map((m) => ({ mediaKey: m.mediaKey, kind: m.kind }));
 }
 
+// Every distinct live media file the catalog names, for the receiver-side byte
+// heal. Federation ships these keys without the files, so this is the list a
+// peer's missing bytes are found from. Merged and soft-deleted rows are skipped.
+export async function listLiveMediaFileKeys() {
+  const { rows } = await query(
+    `SELECT DISTINCT media_key, kind FROM catalog_ingredient_media
+      WHERE deleted = false AND kind IN ('portrait', 'reference', 'audio', 'video', 'model')`,
+  );
+  return rows.map((row) => ({ mediaKey: row.media_key, kind: row.kind }));
+}
+
 // Casting reference library: merge a variant/tags/guide patch into one live
 // media row. Turning a guide ON is serialized on the owning ingredient row and
 // refused (409) past MAX_CAST_GUIDES so the render picker's cap holds.
