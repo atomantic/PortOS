@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { CONSOLIDATED_AUDIT_DOMAINS, auditDomainFor } from './auditDomains.js';
-import { AUDIT_DEFINITIONS, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES, isAuditTaskType, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
@@ -323,7 +323,8 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     return { id, label: definition.label, ...(valid ? latestFields : { coverage: 'unavailable' }),
       score: window.length ? windowScore(window) : runScore, runScore, slice: valid ? slice ?? null : null,
       window: { runs: window.length, worstSeverity: window.length ? Math.max(...window.map(run => run.report.worstSeverity)) : null },
-      assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason };
+      assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason,
+      ...(Object.hasOwn(CONSOLIDATED_AUDIT_DOMAINS, id) ? { members: domainMemberSeries(id, runs, now) } : {}) };
   });
   const rated = categories.filter(c => c.contributes);
   return {
@@ -333,6 +334,27 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     applicableCategories: categories.filter(c => c.applicable).length,
     categories: categories.map(({ contributes: _contributes, ...category }) => category),
   };
+}
+
+/**
+ * Each series a consolidated domain row folds in (the domain's own runs, then
+ * every member profile), with that series' newest run. The row's score already
+ * counts these runs; this keeps each legacy series visible by name so folding a
+ * profile into a domain never hides its measurement. A member with no run is
+ * listed with a null score, so the row shows what it covers.
+ */
+function domainMemberSeries(domainId, runs, now) {
+  return [domainId, ...CONSOLIDATED_AUDIT_DOMAINS[domainId].members].map(seriesId => {
+    const latest = runs.find(run => run.valid && normalizeAuditTaskType(run.record.category) === seriesId);
+    return {
+      id: seriesId,
+      label: seriesId === domainId ? 'Combined audit' : AUDIT_EXECUTION_PROFILES[seriesId]?.label || seriesId,
+      score: latest ? qualityRunScore(latest.report) : null,
+      coverage: latest?.report.coverage ?? null,
+      assessedAt: latest?.record.assessedAt ?? null,
+      stale: latest ? !isFreshAssessment(latest.record.assessedAt, now) : false,
+    };
+  });
 }
 
 export const appQualityHistoryQuerySchema = z.object({ days: z.enum(['30', '90', '365']).default('90').transform(Number) });

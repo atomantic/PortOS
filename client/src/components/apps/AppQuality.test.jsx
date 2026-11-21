@@ -110,6 +110,20 @@ it('shows the rolling window and the latest slice behind the category score', as
   expect(screen.getByRole('row', { name: /UX/ })).not.toHaveTextContent(/run/);
 });
 
+it('lists the measured legacy series inside a consolidated domain row', async () => {
+  const app = { id: 'example', quality: { score: 72, ratedCategories: 1, categories: [
+    { id: 'design-usability', label: 'Design and usability', score: 72, coverage: 'broad', confidence: 'high', members: [
+      { id: 'design-usability', label: 'Combined audit', score: 72, assessedAt: '2026-09-10T10:00:00Z', stale: false },
+      { id: 'ux', label: 'UX', score: 74, assessedAt: '2026-08-01T10:00:00Z', stale: true },
+      { id: 'mobile-responsive', label: 'Mobile responsive', score: null, assessedAt: null, stale: false },
+    ] },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  const row = await screen.findByRole('row', { name: /Design and usability/ });
+  expect(row).toHaveTextContent('Includes Combined audit 72 · UX 74 (stale)');
+  expect(row).not.toHaveTextContent('Mobile responsive');
+});
+
 it('sorts the category breakdown by worst score or oldest last run', async () => {
   const app = { id: 'example', quality: { categories: [
     { id: 'ux', label: 'UX', score: 80, coverage: 'broad', assessedAt: '2026-09-12T00:00:00Z' },
