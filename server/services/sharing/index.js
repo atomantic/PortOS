@@ -1,7 +1,7 @@
 /**
  * Share Bucket — lifecycle entry point.
  *
- * Called from server/index.js once on boot. Attaches a chokidar watcher to
+ * Called from server/index.js once on boot. Attaches a directory watcher to
  * each registered bucket's `manifests/` directory, processes any backlog from
  * while the server was offline, and wires Socket.IO so the UI can react to
  * inbox updates / watcher errors live.

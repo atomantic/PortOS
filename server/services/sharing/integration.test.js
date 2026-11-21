@@ -1343,7 +1343,7 @@ describe('sharing round-trip', () => {
     expect(r1.processed || r1.skipped).toBeTruthy();
 
     // Unsubscribe — deletes the file. Watcher's `unlink` calls handleUnshare
-    // (here we invoke it directly since chokidar is not running in tests).
+    // (here we invoke it directly since the watcher is not running in tests).
     const events = [];
     const onUnshared = (p) => events.push(p);
     sharingEvents.on('unshared', onUnshared);

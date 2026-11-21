@@ -221,7 +221,7 @@ describe('sharing routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ id: 'b1' });
       // Order matters: watcher must be detached before the bucket entry is removed
-      // (otherwise the watcher leaks a chokidar handle to an unregistered id).
+      // (otherwise the watcher leaks a watcher handle to an unregistered id).
       const detachOrder = watcher.detachWatcher.mock.invocationCallOrder[0];
       const deleteOrder = buckets.deleteBucket.mock.invocationCallOrder[0];
       expect(detachOrder).toBeLessThan(deleteOrder);

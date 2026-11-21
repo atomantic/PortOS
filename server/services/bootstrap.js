@@ -947,7 +947,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       startAutomaticUpdateReservationRecovery();
     },
 
-    // Sharing: attach chokidar watchers to every registered share bucket so
+    // Sharing: attach directory watchers to every registered share bucket so
     // incoming manifests from peers are picked up live. Backlog processing
     // (manifests that arrived while the server was offline) runs as part of
     // initSharing.

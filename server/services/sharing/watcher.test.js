@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { posix, win32 } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('chokidar', () => ({ watch: vi.fn() }));
+vi.mock('../../lib/fsWatcher.js', () => ({ watchPaths: vi.fn() }));
 vi.mock('./importer.js', () => ({
   processManifest: vi.fn(), processBacklog: vi.fn(), handleUnshare: vi.fn(),
   sharingEvents: { emit: vi.fn() },
@@ -15,7 +15,7 @@ vi.mock('./manifest.js', () => ({ isManifestPruning: vi.fn(), pruneBucketManifes
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn() }));
 vi.mock('./subscriptions.js', () => ({ reconcileSubscriptionsOnBoot: vi.fn() }));
 
-import { watch } from 'chokidar';
+import { watchPaths as watch } from '../../lib/fsWatcher.js';
 import { processBacklog, processManifest, handleUnshare } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning } from './manifest.js';

@@ -1,11 +1,11 @@
 /**
- * Share Bucket — chokidar watcher on each bucket's `manifests/` and `assets/`
+ * Share Bucket — fsWatcher on each bucket's `manifests/` and `assets/`
  * directories.
  *
  * When a peer's cloud-sync app drops a new manifest into the shared folder,
- * chokidar fires `add` and we ingest it via importer.processManifest. When
+ * the watcher fires `add` and we ingest it via importer.processManifest. When
  * asset files arrive after the manifest, we rescan the backlog so pending
- * manifests can finish. The chokidar options are persistent + ignoreInitial +
+ * manifests can finish. The watcher options are persistent + ignoreInitial +
  * awaitWriteFinish so we don't pick up the file mid-write.
  *
  * Per-bucket watchers are kept in a map keyed by bucket id so a bucket
@@ -13,7 +13,6 @@
  * everything.
  */
 
-import { watch } from 'chokidar';
 import { join, basename, sep } from 'path';
 import { processManifest, processBacklog, handleUnshare, sharingEvents } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
@@ -22,7 +21,7 @@ import { reconcileSubscriptionsOnBoot } from './subscriptions.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
-const watchers = new Map(); // bucketId → chokidar instance
+const watchers = new Map(); // bucketId → fsWatcher instance
 const backlogQueues = new Map(); // bucketId → { running: Promise, queued: Promise|null }
 const queueLifecycle = createFileWriteQueue();
 let shutdownAdmitted = false;
@@ -86,7 +85,9 @@ async function attachWatcherNow(bucketId) {
   // manifest before the larger record JSONs. Watch the dir so a late-arriving
   // record file re-triggers backlog and the importer can retry the manifest.
   const recordsDir = join(bucket.path, 'records');
-  const w = watch([manifestsDir, assetsDir, recordsDir], {
+  // Deferred: the boot import closure is capped (lib/importScoping.test.js).
+  const { watchPaths } = await import('../../lib/fsWatcher.js');
+  const w = watchPaths([manifestsDir, assetsDir, recordsDir], {
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
@@ -99,7 +100,7 @@ async function attachWatcherNow(bucketId) {
   const live = (handler) => async (path) => { if (!exitQuiesced) await handler(path); };
 
   // try/catch around async event handlers — see AGENTS.md "PTY/child-process
-  // /setTimeout/setInterval callbacks" rule (chokidar events fire outside the
+  // /setTimeout/setInterval callbacks" rule (watcher events fire outside the
   // request lifecycle, no Express middleware to bubble the throw to).
   w.on('add', live(async (path) => {
     try {
@@ -213,8 +214,8 @@ export async function shutdownAllWatchers() {
 
 /**
  * Process-exit teardown: stop admission and drop further events, but leave the
- * handles open for process.exit to release. Closing a chokidar watcher stops
- * its macOS FSEvents streams synchronously on the main thread — several seconds
+ * handles open for process.exit to release. Closing a watcher stops
+ * its native macOS handles synchronously on the main thread — several seconds
  * per bucket on a live install (#12853), long enough to starve every shutdown
  * timer behind it. Use shutdownAllWatchers() when the process keeps running.
  */

@@ -32,7 +32,6 @@
  * one that can occur is the repair agent in step 4, which is itself switchable.
  */
 
-import { watch } from 'chokidar';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
@@ -94,18 +93,19 @@ function invalidateStatus() {
 // git status itself can refresh it, which would make a read/notify feedback loop.
 // Working-tree-only edits reconcile on activity, scheduler ticks and tab show.
 //
-// Must stay `persistent: true`: chokidar only attaches its `error` listener to
-// the native fs.watch handle on that path. A non-persistent watcher returns the
-// bare handle, and on Windows deleting a watched ref directory (git prunes
-// `refs/heads/<prefix>/` once a worktree branch is deleted) emits EPERM with no
-// listener — an uncaught exception that exits the server.
+// watchPaths always listens for errors on its native handles: on Windows,
+// deleting a watched ref directory (git prunes `refs/heads/<prefix>/` once a
+// worktree branch is deleted) emits EPERM, which would otherwise be an uncaught
+// exception that exits the server.
 async function watchRepoChanges() {
   const [{ stdout: gitDir }, { stdout: commonDir }] = await Promise.all([
     execGit(['rev-parse', '--absolute-git-dir'], PATHS.root),
     execGit(['rev-parse', '--git-common-dir'], PATHS.root),
   ]);
   const roots = [...new Set([gitDir.trim(), resolve(PATHS.root, commonDir.trim())])];
-  repoWatcher = watch(roots.flatMap(root => [
+  // Deferred: the boot import closure is capped (lib/importScoping.test.js).
+  const { watchPaths } = await import('../lib/fsWatcher.js');
+  repoWatcher = watchPaths(roots.flatMap(root => [
     join(root, 'HEAD'), join(root, 'refs'), join(root, 'packed-refs'),
   ]), { ignoreInitial: true, persistent: true, ignored: /\.lock$/ });
   repoWatcher.on('all', invalidateStatus);

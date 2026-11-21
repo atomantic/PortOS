@@ -224,7 +224,7 @@ export async function unsubscribe(id) {
   // Delete the deterministic file from the bucket. Best-effort: the bucket
   // path may be unmounted; the subscription record removal still wins so the
   // user's "I want to stop sharing" intent is honored regardless. Importers
-  // on other peers see the file vanish via chokidar `unlink`.
+  // on other peers see the file vanish via the watcher `unlink`.
   //
   // Also clean up the pre-sharing-v2 legacy filename (`sub-<kind>-<id>.json`)
   // if it exists AND was authored by THIS instance — a peer that subscribed
