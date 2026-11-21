@@ -9,6 +9,14 @@ import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
 // Pointer travel under this is a tap (open note) rather than a pan.
 const TAP_SLOP_PX = 6;
+// Arrow-key pan distance in viewport pixels.
+const KEY_PAN_STEP_PX = 40;
+const PAN_KEYS = {
+  ArrowUp: [0, KEY_PAN_STEP_PX],
+  ArrowDown: [0, -KEY_PAN_STEP_PX],
+  ArrowLeft: [KEY_PAN_STEP_PX, 0],
+  ArrowRight: [-KEY_PAN_STEP_PX, 0]
+};
 
 export default function GraphTab({ vaultId }) {
   const navigate = useNavigate();
@@ -223,6 +231,40 @@ export default function GraphTab({ vaultId }) {
   const handlePointerUp = useCallback((e) => endGesture(e, { allowTap: true }), [endGesture]);
   const handlePointerCancel = useCallback((e) => endGesture(e, { allowTap: false }), [endGesture]);
 
+  // Keyboard parity with the pointer handlers. The canvas is role="application", which the global
+  // hotkey guard (shouldIgnoreGlobalKey) already yields to, so Space here never triggers push-to-talk.
+  const handleKeyDown = useCallback((e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const pan = PAN_KEYS[e.key];
+    if (pan) {
+      e.preventDefault();
+      setOffset(prev => ({ x: prev.x + pan[0], y: prev.y + pan[1] }));
+    } else if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      setZoom(z => Math.min(z + 0.2, 3));
+    } else if (e.key === '-') {
+      e.preventDefault();
+      setZoom(z => Math.max(z - 0.2, 0.3));
+    } else if (e.key === '0') {
+      e.preventDefault();
+      setZoom(1);
+      setOffset({ x: 0, y: 0 });
+    } else if (e.key === '[' || e.key === ']') {
+      e.preventDefault();
+      const nodes = nodesRef.current;
+      if (nodes.length === 0) return;
+      const step = e.key === ']' ? 1 : -1;
+      const current = nodes.findIndex(n => n.path === hoveredNode);
+      const next = current === -1 ? (step === 1 ? 0 : nodes.length - 1) : (current + step + nodes.length) % nodes.length;
+      setHoveredNode(nodes[next].path);
+    } else if ((e.key === 'Enter' || e.key === ' ') && hoveredNode) {
+      e.preventDefault();
+      openNote(hoveredNode);
+    }
+  }, [hoveredNode, openNote]);
+
+  const activeNode = hoveredNode ? nodesRef.current.find(n => n.path === hoveredNode) : null;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -281,8 +323,18 @@ export default function GraphTab({ vaultId }) {
         ))}
       </div>
 
+      <div role="status" aria-live="polite" className="sr-only">
+        {activeNode
+          ? `${activeNode.name}, ${activeNode.group}, ${connectionCountsRef.current.get(activeNode.path) || 0} connections. Press Enter to open.`
+          : ''}
+      </div>
+
       <canvas
         ref={canvasRef}
+        tabIndex={0}
+        role="application"
+        aria-label="Knowledge graph. Arrow keys pan, plus and minus zoom, zero resets, left and right brackets cycle pages, Enter opens the selected page."
+        onKeyDown={handleKeyDown}
         className="w-full h-full touch-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
