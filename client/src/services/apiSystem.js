@@ -99,6 +99,25 @@ export const installManagedBlender = ({ acknowledgeBusy = false, ...options } = 
   body: JSON.stringify(acknowledgeBusy ? { acknowledgeBusy } : {}),
   ...options,
 });
+// Homebrew upgrade manager (macOS): outdated packages with their risk for PortOS,
+// upgrades and the post-upgrade check-and-repair (progress on `software:homebrew`).
+export const getHomebrewStatus = ({ fresh = false, ...options } = {}) =>
+  request(`/update/software/homebrew${fresh ? '?fresh=1' : ''}`, options);
+export const upgradeHomebrewPackages = (names, { acknowledgeRisk = false, acknowledgeBusy = false, ...options } = {}) => request('/update/software/homebrew/upgrade', {
+  method: 'POST',
+  body: JSON.stringify({ names, ...(acknowledgeRisk ? { acknowledgeRisk } : {}), ...(acknowledgeBusy ? { acknowledgeBusy } : {}) }),
+  ...options,
+});
+export const repairHomebrewFallout = ({ acknowledgeBusy = false, ...options } = {}) => request('/update/software/homebrew/repair', {
+  method: 'POST',
+  body: JSON.stringify(acknowledgeBusy ? { acknowledgeBusy } : {}),
+  ...options,
+});
+export const holdHomebrewPackages = (names, hold, options = {}) => request('/update/software/homebrew/hold', {
+  method: 'POST',
+  body: JSON.stringify({ names, hold }),
+  ...options,
+});
 export const repairNodeStartup = () => request('/update/node-runtime/startup', { method: 'POST' });
 export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/sync-fork', {
   method: 'POST',
