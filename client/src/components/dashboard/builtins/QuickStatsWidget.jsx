@@ -2,7 +2,7 @@ export default function QuickStatsWidget({ dashboardState }) {
   const { appStats } = dashboardState;
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 h-full">
-      <h3 className="text-sm font-semibold text-white mb-3">Quick Stats</h3>
+      <h2 className="text-sm font-semibold text-white mb-3">Quick Stats</h2>
       <div className="grid grid-cols-2 @lg:grid-cols-4 gap-2">
         <StatCard label="Total Apps" value={appStats.total} icon="📦" />
         <StatCard label="Online" value={appStats.online} icon="🟢" />

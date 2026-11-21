@@ -21,6 +21,7 @@ describe('QuickTaskWidget', () => {
     api.getApps.mockRejectedValueOnce(new Error('apps 502'));
     renderWidget();
 
+    expect(screen.getByRole('heading', { name: 'Quick Task', level: 2 })).toBeInTheDocument();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load apps — apps 502');
     expect(screen.queryByTestId('task-form')).not.toBeInTheDocument();
 

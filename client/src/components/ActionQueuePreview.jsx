@@ -43,7 +43,7 @@ export default function ActionQueuePreview({ title = 'Actions', sources, queue, 
       {data && !lowerBound && items.length === 0 && <p className="text-sm text-port-text-muted">{scopeDescription ? 'No recommendations in this view.' : 'All caught up!'}</p>}
       {groups.map((group) => group.items.length > 0 && (
         <div key={group.label} className="mb-3">
-          <h4 className="text-xs text-port-text-muted mb-1">{group.label}</h4>
+          <h3 className="text-xs text-port-text-muted mb-1">{group.label}</h3>
           <ul aria-label={group.label} className="space-y-1">
             {group.items.slice(0, 5).map((item) => (
               <li key={item.id} data-action-id={item.id}>

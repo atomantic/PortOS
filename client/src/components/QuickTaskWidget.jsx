@@ -18,7 +18,7 @@ export default function QuickTaskWidget() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between mb-3 shrink-0">
-        <h3 className="text-sm font-semibold text-white">Quick Task</h3>
+        <h2 className="text-sm font-semibold text-white">Quick Task</h2>
         <Link to="/cos/tasks" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
           Tasks &rarr;
         </Link>

@@ -99,7 +99,7 @@ function AutoFixMetricsWidget() {
   const header = (
     <div className="flex items-center gap-2 mb-3">
       <Wrench size={16} className="text-gray-500" />
-      <h3 className="text-sm font-semibold text-white">Auto-Fix Telemetry</h3>
+      <h2 className="text-sm font-semibold text-white">Auto-Fix Telemetry</h2>
       <Link to="/cos" className="ml-auto flex items-center gap-1 text-xs text-port-accent hover:underline">
         Open <ArrowRight size={12} />
       </Link>

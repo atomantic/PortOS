@@ -113,7 +113,7 @@ export default function DailyDriverWidget({ dashboardState }) {
     <div className="bg-port-card border border-port-accent/40 rounded-xl p-4 h-full flex flex-col overflow-hidden">
       <div className="flex items-center gap-2 mb-3">
         <Sparkles size={16} className="text-port-accent" />
-        <h3 className="text-sm font-semibold text-white">Daily Driver</h3>
+        <h2 className="text-sm font-semibold text-white">Daily Driver</h2>
         {firstVisitToday && (
           <span className="px-2 py-0.5 bg-port-accent/15 text-port-accent text-xs rounded-full">
             New day
