@@ -580,6 +580,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
             <button
               type="button"
               aria-label={expandedSections[item.label] ? `Collapse ${item.label}` : `Expand ${item.label}`}
+              aria-expanded={!!expandedSections[item.label]}
               onClick={() => toggleSection(item.label)}
               className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg"
             >
@@ -766,7 +767,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         </div>
 
         {/* Nav items */}
-        <nav className="flex-1 py-4 overflow-y-auto overflow-x-hidden min-w-0">
+        <nav aria-label="Primary navigation" className="flex-1 py-4 overflow-y-auto overflow-x-hidden min-w-0">
           {!collapsed && (pinned.length > 0 || recent.length > 0) && (
             <div className="mb-2">
               {pinned.length > 0 && (
