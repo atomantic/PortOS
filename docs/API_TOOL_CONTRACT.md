@@ -332,10 +332,11 @@ exposable merely because they appear in the internal OpenAPI inventory.
 5. **Disabled MCP manifest nuance.** The MCP execution route is blocked while
    the feature is disabled, but a previously saved semantic action grant can
    still appear in the readable manifest because advertised semantic tools are
-   derived from action grants independently of `enabled`. This is a discovery
-   inconsistency, not an execution bypass; a follow-up should either suppress
-   semantic advertisements while disabled or document the intentionally
-   inspectable grant state more prominently.
+   derived from action grants independently of `enabled`. This is intentional:
+   the manifest stays readable while disabled and reports `enabled: false`, so
+   the grant state remains inspectable, while execution stays refused
+   (`POST /api/agent-context/mcp` returns 403 `AGENT_CONTEXT_DISABLED`). The
+   manifest is not suppressed.
 
 Evidence anchors for these findings are the route catalog `stats` served by
 `GET /api/api-docs/catalog.json`,

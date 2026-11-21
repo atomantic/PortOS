@@ -234,8 +234,6 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 - **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
 - **Podcast/recording studio** — full audio-recording production tooling beyond generative music (Music Studio, FR-56, is implemented; a dedicated recording/podcast workflow is not).
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
-- **Federated media-provider routing for image/video generation** — the queued-job delegation contract (FR-52/FR-53) is implemented and live for audio/music generation today; extending the same provider/consumer contract to image and video generation is tracked separately (issue #4348), not yet built.
-- **User-directed assignment of a CoS task to a specific federated peer instance** — task coordination across peers is currently opportunistic only (first peer to see a synced task claims it via the existing lease mechanism); an explicit "run this task on instance X" control is a decided, ready-to-work follow-up (issue #4520), not yet implemented.
 - **Per-domain backup-style exports** — PortOS is locally hosted and is itself the backup of record (automatic snapshots); exports exist only for sharing or handoff to other tools, per NR-10.
 
 ---
@@ -263,11 +261,8 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 
 ## Risks & Open Questions
 
-- **POST drill/benchmark system is mid-buildout** — cognitive-training domain coverage is still expanding; tracked in the issue tracker (#4442, #4443).
-- **Image/video federated media-provider routing is unbuilt** — the audio/music delegation contract (FR-52/FR-53) is live, but extending it to image/video generation is tracked separately (#4348).
-- **Explicit peer task assignment is unbuilt** — CoS task coordination across peers is opportunistic (claim-based) only today; directed "run on instance X" assignment is a decided, ready-to-work follow-up (#4520).
 
-No other open questions remain unresolved as of this revision. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./docs/CONTRIBUTING.md) now exists.
+No open questions remain unresolved as of this revision. Image/video queued-job delegation to federated peers (#4348) and explicit peer assignment of CoS tasks (#4520) have shipped, and the POST drill/benchmark buildout tracked in #4442/#4443 is complete; any further POST expansion lives in the issue tracker. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./docs/CONTRIBUTING.md) now exists.
 
 ---
 
