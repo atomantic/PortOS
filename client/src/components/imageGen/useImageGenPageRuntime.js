@@ -350,7 +350,7 @@ export function useImageGenPageRuntime() {
     };
   })();
   const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, {
-    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing,
+    enabled: !form.remix.pending && !derived.cloudNeedsPrompt && !derived.editImageMissing && !derived.unsupportedCloudInputs,
   });
 
   const submitGenerationPayload = async () => {
@@ -420,7 +420,7 @@ export function useImageGenPageRuntime() {
   const handleGenerate = async (event) => {
     event?.preventDefault?.();
     if (form.cloudModelPicker.unavailable || form.remix.pending || derived.loraHandoffBlocked || derived.unsupportedLocalInputs) return;
-    if (derived.editImageMissing || derived.cloudNeedsPrompt) return;
+    if (derived.editImageMissing || derived.cloudNeedsPrompt || derived.unsupportedCloudInputs) return;
     if (derived.localBackendPending || (!remoteTargetActive && derived.notConnected)) return;
     if (remoteTargetActive) {
       if (derived.remoteUnsupportedInputs) {

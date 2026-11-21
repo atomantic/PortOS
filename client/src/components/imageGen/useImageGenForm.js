@@ -20,6 +20,7 @@ import {
   deriveAvailableBackends,
   imageGenReadiness,
   isI2iCapableMode,
+  maxInputImages,
   pickI2iMode,
   referenceSlotsFor,
   supportsReferenceStrength,
@@ -507,9 +508,6 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const isEditOnlyModel = currentModel?.editOnly === true;
   const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
   const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
-  const i2iCapable = remoteTargetActive
-    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
-    : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
   const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
   // A model that declares its own reference cap (separate from any init image).
@@ -521,6 +519,11 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       [IMAGE_GEN_MODE.RUNWAY]: backend.runwayImageModels,
     },
   });
+  const textOnlyCloudModel = !remoteTargetActive && isCloudMode
+    && maxInputImages(effectiveMode, cloudModelPicker.resolvedModel) === 0;
+  const i2iCapable = remoteTargetActive
+    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
+    : !textOnlyCloudModel && isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const referenceSlotCount = remoteTargetActive
     ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
     : referenceSlotsFor(effectiveMode, {
@@ -554,6 +557,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     () => referenceImages.slice(referenceSlotCount).filter((slot) => slot.file != null).length,
     [referenceImages, referenceSlotCount],
   );
+  const unsupportedCloudInputs = textOnlyCloudModel && (initImage.source != null || droppedRefCount > 0);
   const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
     && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
   const remoteUnsupportedInputs = useMemo(() => {
@@ -575,7 +579,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   const remoteBlocked = remoteTargetActive
     ? (remoteTarget.blockedReason || remoteUnsupportedInputs)
     : null;
-  const hasCloudInputImage = initImage.source != null || populatedRefs.length > 0;
+  const hasCloudInputImage = (i2iCapable && initImage.source != null) || populatedRefs.length > 0;
   const cloudNeedsPrompt = cloudPromptRequired(effectiveMode, hasCloudInputImage) && !prompt.trim();
   const cloudPromptHint = hasCloudInputImage
     ? `${cloudModeLabel} always needs a prompt, even with a reference image`
@@ -781,6 +785,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     derived: {
       loraHandoffBlocked,
       unsupportedLocalInputs,
+      unsupportedCloudInputs,
       currentModel,
       isFlux2Model,
       sharesFlux2Venv,
