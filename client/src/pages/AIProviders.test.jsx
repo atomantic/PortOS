@@ -61,6 +61,8 @@ vi.mock('../services/apiCore.js', async importOriginal => {
 vi.mock('../services/apiLocalLlm.js', async (importOriginal) => ({
   ...await importOriginal(),
   getLocalPersistentMindSetup: vi.fn(async () => null),
+  // The Generation tab's context planner reads on mount; it has its own suite.
+  getContextPlans: vi.fn(async () => ({ budgetBytes: null, plans: [] })),
 }));
 vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
@@ -156,6 +158,8 @@ const renderPage = async (initialPath) => {
 // switch (the drawer renders only the active panel).
 const openEditorTab = async (label) => {
   fireEvent.click(await screen.findByRole('tab', { name: label }));
+  // Settle tab-mount reads (the Generation tab's context planner) inside act.
+  await act(async () => {});
 };
 
 // The rare page actions (Compare local models, Fleet setup, Load Samples) sit
