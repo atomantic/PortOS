@@ -42,8 +42,11 @@ const accentBtn = `${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-po
  * "running" is all that can honestly be reported — there is no external-vs-ours
  * distinction to draw.
  */
-function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
+function backendRow({ id, label, icon, data, onStart, onStop, onInstall, onUpgrade }) {
   const state = !data ? 'unknown' : data?.disabled ? 'disabled' : data?.available ? 'running' : data?.installed ? 'stopped' : 'missing';
+  // Same update contract as the PM2 rows, so an outdated backend shows on the
+  // roster rather than only inside its detail card. Only Ollama reports one.
+  const updateAvailable = Boolean(data?.installed && data?.updateAvailable === true);
   return {
     id,
     label,
@@ -57,6 +60,12 @@ function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
     downloadUrl: !data?.installed && !data?.canAutoInstall ? data?.downloadUrl : null,
     onStart: data?.installed && !data?.available ? onStart : null,
     onStop: data?.available ? onStop : null,
+    version: data?.installed ? data?.version || null : null,
+    latestVersion: data?.latestVersion || null,
+    updateAvailable,
+    updateVia: data?.latestVersionSource === 'homebrew' ? 'Homebrew' : null,
+    onUpgrade: updateAvailable && data?.canUpgrade && onUpgrade ? onUpgrade : null,
+    updateUrl: updateAvailable && !data?.canUpgrade ? data?.downloadUrl || null : null,
   };
 }
 
@@ -328,6 +337,7 @@ export default function RuntimeServersCard({
   actionInProgress,
   onRefresh,
   onControlOllama,
+  onUpgradeOllama,
   onControlLmStudio,
   onInstallBackend,
   onInstallLlama,
@@ -375,6 +385,7 @@ export default function RuntimeServersCard({
       onInstall: () => onInstallBackend('ollama'),
       onStart: () => onControlOllama('start'),
       onStop: () => onControlOllama('stop'),
+      onUpgrade: onUpgradeOllama,
     }),
     backendRow({
       id: 'lmstudio',

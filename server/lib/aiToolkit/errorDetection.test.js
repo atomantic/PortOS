@@ -222,6 +222,16 @@ describe('Error Detection', () => {
       expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
     });
 
+    it('classifies a runtime too old for the GGUF architecture as model-not-found with an update fix', () => {
+      // Ollama relays its bundled llama-server's load failure verbatim. The
+      // daemon is healthy; only this model needs a newer runtime, so it must
+      // not land in UNKNOWN and escalate to an investigation.
+      const result = analyzeError('Ollama returned 500: {"error":"llama-server process has terminated: exit status 1: error: Failed to load CLIP model from /models/blobs/sha256-0000\\nerror loading model: unknown model architecture: \'newarch_loop\'"}', 1);
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
+      expect(result.suggestedFix).toMatch(/Update the runtime/);
+    });
+
     it('should detect network errors', () => {
       const result = analyzeError('Error: ECONNREFUSED 127.0.0.1:8080');
       expect(result.hasError).toBe(true);

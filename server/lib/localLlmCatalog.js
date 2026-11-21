@@ -620,6 +620,27 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'unsloth/Qwen3.8-27B-GGUF'
   },
   {
+    // GGUF arch `inkling2_loop` is new: llama.cpp gained it in b12406 and these
+    // quants were made with b12600, so an older runtime (any Ollama or LM
+    // Studio whose bundled llama.cpp predates it) fails the load with
+    // "unknown model architecture" rather than producing wrong output.
+    // No MLX entry yet: the MLX builds need an unmerged mlx-lm PR.
+    key: 'inkling-2-mini',
+    name: 'Inkling 2 Mini',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision'],
+    params: '26B / 3.4B active',
+    size: '18.7 GB',
+    family: 'inkling',
+    description: 'Thinking Machines’ looped MoE: the middle layers run three times per token, giving ~5.4B effective active parameters, with a 1M context, vision, tools and adjustable thinking effort. Apache-2.0.',
+    note: 'Needs a runtime whose llama.cpp is b12406 or newer (Ollama 0.40.17 pre-release or later; update LM Studio’s llama.cpp runtime). Vendor card: cap output tokens and agent turns, since long reasoning loops can occur.',
+    repository: 'thinkingmachines/Inkling-2-Mini',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 1048576,
+    ollama: 'hf.co/bartowski/thinkingmachines_Inkling-2-Mini-GGUF:Q4_K_M',
+    lmstudio: 'lmstudio-community/Inkling-2-Mini-GGUF'
+  },
+  {
     key: 'qwen3.6-27b',
     name: 'Qwen3.6 27B',
     category: 'general',

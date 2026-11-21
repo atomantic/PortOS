@@ -22,7 +22,10 @@ import { getNavPageForPath } from '../lib/navManifest.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 
 const ENABLED_KEY = 'PORTOS_FLEET_LLM_ENABLED';
-const MODEL = 'qwen3.8-27b';
+// The id the validated RTX 3090 compose recipe serves. Only a FALLBACK: status
+// reports whatever checkpoint the runtime actually serves (`servedModelId`), so a
+// host whose compose project was pointed at another model advertises that one.
+const RECIPE_MODEL = 'qwen3.8-27b';
 const upstream = `http://127.0.0.1:${PORTS.VLLM_QWEN}`;
 let gateway = null;
 let setupRunning = false;
@@ -49,6 +52,12 @@ export function recommendFleetLlmHost(specs) {
     title: specs.cuda?.status === 'unknown' ? 'Hardware detection needs attention' : 'Connect to a model host',
     reason: `No validated automatic Qwen3.8-27B host recipe matches this machine. Connect to an existing host${performancePage ? `, or compare installed models on ${performancePage}` : ''}.`,
   };
+}
+
+/** The model id the runtime serves (one container, one checkpoint), or null while it is unreachable or still loading. */
+export function servedModelId(probe) {
+  const id = probe?.models?.find((value) => typeof value === 'string' && value.trim());
+  return id || null;
 }
 
 async function readHostEnv() {
@@ -192,8 +201,9 @@ export async function getFleetLlmHostStatus() {
   const host = recommendation.supported && docker ? await readHostEnv().catch(() => null) : null;
   const probe = host ? await probeOpenAiModels(`${upstream}/v1`, { apiKey: host.apiKey, timeoutMs: 4000 }) : null;
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
+  const served = servedModelId(probe);
   return {
-    recommendation, specs, enabled, serving: Boolean(gateway && probe?.models?.includes(MODEL)), setupRunning,
+    recommendation, specs, enabled, serving: Boolean(gateway && served), setupRunning,
     // What a Stop action would actually have to turn off. Reported separately
     // from `serving` because the case the operator hits is precisely the one
     // where those disagree: a container answering on the runtime port while the
@@ -202,13 +212,13 @@ export async function getFleetLlmHostStatus() {
     listening: Boolean(gateway), runtimeReachable: Boolean(probe?.reachable),
     stoppable: Boolean(gateway) || Boolean(probe?.reachable) || enabled,
     endpoint: tailnet.running && tailnet.dnsName ? `http://${tailnet.dnsName}:${PORTS.FLEET_LLM}/v1` : null,
-    model: MODEL, hasApiKey: Boolean(host?.apiKey),
+    model: served || RECIPE_MODEL, hasApiKey: Boolean(host?.apiKey),
     queue: getFleetLlmHostQueue(),
     checks: [
       { id: 'hardware', label: 'Supported hardware', ok: recommendation.supported },
       { id: 'docker', label: 'Docker engine responding', ok: Boolean(docker), detail: docker ? 'Ready' : 'Start Docker Desktop; if it is already running, restart its engine and retry.' },
       { id: 'weights', label: 'Prepared model and API key', ok: host ? host.project.hasWeights : null },
-      { id: 'runtime', label: 'Qwen model loaded', ok: probe ? Boolean(probe.models?.includes(MODEL)) : null },
+      { id: 'runtime', label: 'Model loaded', ok: probe ? Boolean(served) : null, ...(served ? { detail: served } : {}) },
       { id: 'tailnet', label: 'Tailscale connected', ok: tailnet.running },
       ...(specs.platform === 'win32' ? [{ id: 'startup', label: 'Windows login recovery registered', ok: loginTask }] : []),
       { id: 'gateway', label: 'Shared API queue listening', ok: Boolean(gateway) },
@@ -247,7 +257,7 @@ export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
           peerHost: peer.host || null,
           peerAddress: peer.address,
           endpoint,
-          model: status.model || MODEL,
+          model: status.model || RECIPE_MODEL,
           serving: Boolean(status.serving),
           enabled: Boolean(status.enabled),
           hasApiKey: Boolean(status.hasApiKey),
@@ -344,7 +354,10 @@ async function configure({ emit, isCancelled }) {
   const { providers } = await getAllProviders();
   const endpoint = `http://127.0.0.1:${PORTS.FLEET_LLM}/v1`;
   const existing = providers.find((provider) => provider.type === 'api' && provider.endpoint === endpoint);
-  const record = { name: 'Dedicated Qwen API', type: 'api', endpoint, apiKey, models: [MODEL], defaultModel: MODEL, vllmBacked: true, enabled: true, thinking: false, temperature: 0.7, timeout: 600000 };
+  // The container is still cold-loading here, so the served id is usually not
+  // answerable yet; a re-run of setup after it loads picks up the real one.
+  const model = servedModelId(await probeOpenAiModels(`${upstream}/v1`, { apiKey, timeoutMs: 3000 })) || RECIPE_MODEL;
+  const record = { name: 'Dedicated model host API', type: 'api', endpoint, apiKey, models: [model], defaultModel: model, vllmBacked: true, enabled: true, thinking: false, temperature: 0.7, timeout: 600000 };
   for (const provider of providers) {
     const localRuntime = localRuntimeForProvider(provider);
     if (['lmstudio', 'ollama', 'llama', 'sglang', 'slotstream'].includes(localRuntime?.kind)) {
@@ -362,6 +375,6 @@ async function configure({ emit, isCancelled }) {
   }
   if (existing) await updateProvider(existing.id, record);
   else await createProvider(record);
-  emit('Persistent container and shared API queue configured. Refresh host status until Qwen is loaded, then connect another instance. Docker must start with Windows for reboot recovery.');
+  emit('Persistent container and shared API queue configured. Refresh host status until the model is loaded, then connect another instance. Docker must start with Windows for reboot recovery.');
   return { success: true };
 }

@@ -11,6 +11,7 @@ const renderCard = (props = {}) => {
   const handlers = {
     onRefresh: vi.fn(),
     onControlOllama: vi.fn(),
+    onUpgradeOllama: vi.fn(),
     onControlLmStudio: vi.fn(),
     onInstallBackend: vi.fn(),
     onInstallLlama: vi.fn(),
@@ -130,6 +131,35 @@ describe('RuntimeServersCard', () => {
     fireEvent.click(within(llama).getByRole('button', { name: 'Update to v0.3.0' }));
 
     expect(handlers.onUpgradeLlama).toHaveBeenCalledWith();
+  });
+
+  it('shows an Ollama update on its roster row, not only inside the backend card', () => {
+    const handlers = renderCard({
+      status: {
+        ollama: { installed: true, available: true, version: '0.40.16', latestVersion: '0.40.17', updateAvailable: true, canUpgrade: true, latestVersionSource: 'homebrew' },
+        lmstudio: {},
+      },
+    });
+    const ollama = row('Ollama');
+
+    expect(within(ollama).getByText('v0.40.16')).toBeInTheDocument();
+    expect(within(ollama).getByText('v0.40.17 available')).toBeInTheDocument();
+    fireEvent.click(within(ollama).getByRole('button', { name: 'Update to v0.40.17' }));
+
+    expect(handlers.onUpgradeOllama).toHaveBeenCalledWith();
+  });
+
+  it('links to the Ollama download when PortOS cannot update it in place', () => {
+    renderCard({
+      status: {
+        ollama: { installed: true, available: true, version: '0.40.16', latestVersion: '0.40.17', updateAvailable: true, canUpgrade: false, downloadUrl: 'https://ollama.com/download' },
+        lmstudio: {},
+      },
+    });
+    const ollama = row('Ollama');
+
+    expect(within(ollama).queryByRole('button', { name: /Update to/ })).toBeNull();
+    expect(within(ollama).getByRole('link', { name: /Update available/ })).toHaveAttribute('href', 'https://ollama.com/download');
   });
 
   it('links to llama.cpp release notes when Homebrew cannot update the installation', () => {

@@ -95,7 +95,7 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
         provider: {
           vllm: {
             npm: '@ai-sdk/openai-compatible',
-            name: 'Fleet vLLM Qwen3.8-27B',
+            name: `Fleet vLLM ${model.trim()}`,
             options: { baseURL: endpoint },
           },
         },

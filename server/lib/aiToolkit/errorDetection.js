@@ -222,6 +222,18 @@ const ERROR_PATTERNS = [
     suggestedFix: 'Choose a model supported by the signed-in Codex account, or clear the model override to use the CLI default. Changing to API-key authentication uses separate API billing.'
   },
   {
+    // llama.cpp's load-time refusal of a GGUF whose `general.architecture` it
+    // was built without, as relayed by Ollama, LM Studio or llama-server. The
+    // weights and the daemon are both fine; only this model needs a newer
+    // runtime build, so it is request-specific like a missing model id rather
+    // than an UNKNOWN that escalates to an investigation task.
+    pattern: /unknown model architecture/i,
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'This runtime\'s llama.cpp build predates the model\'s architecture. Update the runtime (Ollama, LM Studio\'s llama.cpp engine, or llama-server) to a release that supports it, then retry.'
+  },
+  {
     pattern: /unauthorized|invalid.?api.?key|authentication|forbidden|401|403/i,
     category: ERROR_CATEGORIES.AUTH_ERROR,
     requiresFallback: true,

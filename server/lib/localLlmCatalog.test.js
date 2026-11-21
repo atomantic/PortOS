@@ -187,6 +187,19 @@ describe('localLlmCatalog', () => {
       expect(LOCAL_LLM_CATALOG.every((e) => !/(?:^|:)cloud$/.test(e.ollama || ''))).toBe(true);
     });
 
+    it('offers Inkling 2 Mini on both GGUF runtimes without featuring it', () => {
+      const ollama = getCatalog('ollama').find((m) => m.key === 'inkling-2-mini');
+      expect(ollama).toMatchObject({
+        id: 'hf.co/bartowski/thinkingmachines_Inkling-2-Mini-GGUF:Q4_K_M',
+        category: 'general',
+        contextLength: 1048576,
+        capabilities: expect.arrayContaining(['tools', 'vision', 'reasoning']),
+        publisherReview: 'established-publisher',
+      });
+      expect(ollama.featured).toBeFalsy();
+      expect(getCatalog('lmstudio').find((m) => m.key === 'inkling-2-mini')?.id).toBe('lmstudio-community/Inkling-2-Mini-GGUF');
+    });
+
     it('ships the refreshed local models for reasoning, coding, and multilingual categories', () => {
       const ollama = getCatalog('ollama');
       expect(ollama.find((m) => m.key === 'deepseek-r1-8b')?.id).toBe('deepseek-r1:8b');
