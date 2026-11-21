@@ -26,6 +26,7 @@ import {
 } from '../services/provider/providerServices.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { requestHasHostControl } from '../services/authGate.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
@@ -304,8 +305,17 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     const { revealFleetPeerHostKey } = await import('../services/fleetLlmHost.js');
     res.set('Cache-Control', 'no-store').json(await revealFleetPeerHostKey(req.params.peerId));
   }));
-  // Explicit reveal; secrets are never included in status, URLs or install logs.
+  // The peer API surface bypasses the default host-control gate. Check the
+  // verified caller here before reading the credential.
   router.post('/fleet-host/key', asyncHandler(async (req, res) => {
+    const auth = req.portosAuthContext;
+    const verifiedPeerCredential = auth?.authenticated === true
+      && (auth.method === 'peer' || auth.method === 'basic');
+    if (!verifiedPeerCredential && !requestHasHostControl(req)) {
+      throw new ServerError('Fleet host key access requires a local connection, operator session or verified peer credential.', {
+        status: 403, code: 'FLEET_HOST_KEY_FORBIDDEN',
+      });
+    }
     const { revealFleetLlmKey } = await import('../services/fleetLlmHost.js');
     res.set('Cache-Control', 'no-store').json({ apiKey: await revealFleetLlmKey() });
   }));
