@@ -447,6 +447,25 @@ describe('errorHandler.js', () => {
       expect(body.error).toBe('kaboom');
     });
 
+    it('answers a missing Postgres extension library with a 503 and one log line, no stack', async () => {
+      const { req, res } = makeReqRes({ emit: vi.fn() });
+      // The shape db.js's translateExtensionLibraryError throws.
+      const coded = Object.assign(new Error('PostgreSQL cannot load the "vector" extension library … run: npm run setup:db'), {
+        status: 503, code: 'DB_EXTENSION_UNAVAILABLE',
+      });
+
+      await asyncHandler(async () => { throw coded; })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      const body = res.json.mock.calls[0][0];
+      expect(body.code).toBe('DB_EXTENSION_UNAVAILABLE');
+      expect(body.error).toContain('npm run setup:db');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]).toHaveLength(1);
+      expect(errorSpy.mock.calls[0][0]).toMatch(/^🗄️ Database extension unavailable \[/);
+    });
+
     // Mid-stream the envelope can't land, so the catch hands off to the error
     // chain WITHOUT reporting locally — errorMiddleware logs/emits it once and
     // then lets finalhandler destroy the socket.

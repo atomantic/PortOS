@@ -100,8 +100,9 @@ function hasCompose() {
 }
 
 // Domain-level readiness check: the configured PG_USER role can authenticate
-// to PG_DATABASE AND the `memories` table from init-db.sql exists in the
-// public schema. This is what `db.sh setup-native` produces. The probe
+// to PG_DATABASE, the `memories` table from init-db.sql exists in the
+// public schema, AND the server can load the pgvector library. This is what
+// `db.sh setup-native` produces. The probe
 // itself is a single cheap psql round-trip; passing it lets us skip the
 // full setup-native path (brew checks, ALTER USER, schema reapply) on
 // every `npm start`/`npm run dev`, which would otherwise reset the role's
@@ -123,7 +124,10 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
         '-U', PG_USER,
         '-d', PG_DATABASE,
         '-tAc',
-        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"
+        // The vector cast makes the server load the pgvector library: a
+        // `brew upgrade` that drops the PostgreSQL 17 build leaves the schema
+        // intact but every vector query failing, and must not pass as ready.
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' AND '[1]'::vector IS NOT NULL LIMIT 1"
       ],
       { stdio: 'pipe', env: PG_CHILD_ENV }
     ).toString();

@@ -34,7 +34,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { isTestDatabase, checkHealth, getServerMajorVersion, query, assertWriteAllowed } from './db.js';
+import { isTestDatabase, checkHealth, getServerMajorVersion, query, assertWriteAllowed, translateExtensionLibraryError } from './db.js';
 import { isTestRunner } from './runtimeEnv.js';
 
 const poolQuery = vi.hoisted(() => vi.fn(async () => ({ rows: [] })));
@@ -428,5 +428,26 @@ describe('assertWriteAllowed broadened write forms (#1333)', () => {
     expect(() => assertWriteAllowed('MERGE INTO authors a USING src s ON a.id = s.id')).not.toThrow();
     expect(() => assertWriteAllowed("COPY authors FROM '/tmp/x.csv'")).not.toThrow();
     expect(() => assertWriteAllowed('SELECT 1; DELETE FROM authors')).not.toThrow();
+  });
+});
+
+const pgError = (code, message) => Object.assign(new Error(message), { code });
+
+describe('translateExtensionLibraryError', () => {
+  it('turns a missing extension library into a coded 503 naming the fix', () => {
+    const original = pgError('58P01', 'could not access file "$libdir/vector": No such file or directory');
+    const err = translateExtensionLibraryError(original);
+    expect(err).not.toBe(original);
+    expect(err).toMatchObject({ status: 503, code: 'DB_EXTENSION_UNAVAILABLE', library: 'vector', cause: original });
+    expect(err.message).toContain('"vector"');
+    expect(err.message).toContain('npm run setup:db');
+  });
+
+  it('leaves other undefined-file errors and other SQLSTATEs alone', () => {
+    const otherFile = pgError('58P01', 'could not open file "base/16384/1234": No such file or directory');
+    const unique = pgError('23505', 'duplicate key value violates unique constraint');
+    expect(translateExtensionLibraryError(otherFile)).toBe(otherFile);
+    expect(translateExtensionLibraryError(unique)).toBe(unique);
+    expect(translateExtensionLibraryError(undefined)).toBeUndefined();
   });
 });
