@@ -22,7 +22,7 @@ import socket from '../../services/socket';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatCount, formatTimeOfDaySeconds } from '../../utils/formatters';
 import {
-  getVideoGenStatus,
+  getVideoGenModelContext,
   getVideoHistoryItem,
   getTopazJobStatus,
   cancelTopazRemoteJob,
@@ -1040,7 +1040,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
 
   useEffect(() => {
-    getVideoGenStatus({ silent: true })
+    getVideoGenModelContext({ silent: true })
       .then((status) => setModels(Array.isArray(status?.models) ? status.models : []))
       .catch(() => {});
   }, []);
@@ -1059,7 +1059,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // in state would strand the form on a value the user cannot see or change and
   // the server would reject on submit. Mirrors the same snap-back in
   // useVideoGenForm — including the deferral: `models` loads async from
-  // getVideoGenStatus, so an unresolved `currentModel` means "not known yet",
+  // getVideoGenModelContext, so an unresolved `currentModel` means "not known yet",
   // never "cannot honor it".
   useEffect(() => {
     if (isDefaultI2vReferenceMode(i2vReferenceMode)) return;
