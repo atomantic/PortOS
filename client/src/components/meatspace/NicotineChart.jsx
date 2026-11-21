@@ -115,7 +115,7 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
         />
       ) : (
         <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+          <BarChart title="Daily nicotine intake" desc="Bar chart of nicotine intake per day over the selected period." data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
             <XAxis
               dataKey="label"

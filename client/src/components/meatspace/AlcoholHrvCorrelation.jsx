@@ -73,7 +73,7 @@ export default function AlcoholHrvCorrelation({ data, range }) {
       </div>
 
       <ResponsiveContainer width="100%" height={220}>
-        <ComposedChart data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
+        <ComposedChart title="Alcohol versus heart rate variability" desc="Combined chart comparing daily alcohol consumption with heart rate variability over time." data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
           <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
           <YAxis

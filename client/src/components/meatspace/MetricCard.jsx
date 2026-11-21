@@ -53,7 +53,7 @@ export default function MetricCard({ data = [], loading = false, config, latestV
             <span className="text-sm text-gray-500 ml-2">{summaryLabel}</span>
           </div>
           <ResponsiveContainer width="100%" height={150}>
-            <LineChart data={chartData} margin={{ top: 2, right: 8, bottom: 2, left: 0 }}>
+            <LineChart title={`${label} trend`} desc={`Line chart of ${label} (${unit}) by date; the average is shown in the card.`} data={chartData} margin={{ top: 2, right: 8, bottom: 2, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
               <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tick={{ fill: chartColors.axis, fontSize: 11 }} width={55} domain={['auto', 'auto']}
