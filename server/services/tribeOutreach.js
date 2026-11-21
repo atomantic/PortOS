@@ -614,6 +614,7 @@ async function generateOutreachDraftImpl({
     sendVia: 'review',
   });
 
-  console.log(`🤝 Outreach draft filed for ${person?.name || 'a Tribe contact'} (${source || 'timeline'})`);
+  // Ids only: contact names/handles never reach operational logs.
+  console.log(`🤝 Outreach draft filed draft=${draft.id} person=${person?.id || 'unlinked'} source=${source || 'timeline'}`);
   return { draft, person: person ? { id: person.id, name: person.name } : null };
 }
