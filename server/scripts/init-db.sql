@@ -2521,6 +2521,8 @@ ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPT
 
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS read_on_github_at TIMESTAMPTZ;
 
+CREATE INDEX IF NOT EXISTS idx_github_notifications_resolve_task ON github_notifications ((evidence->'handoff'->>'taskId')) WHERE state = 'open' AND evidence->'handoff'->>'lane' = 'notification-resolve';
+
 CREATE TABLE IF NOT EXISTS github_notification_sync (
     account_id TEXT PRIMARY KEY,
     last_modified TEXT,
@@ -2541,6 +2543,8 @@ CREATE TABLE IF NOT EXISTS github_notification_events (
   );
 
 CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_github_notification_events_automation ON github_notification_events (account_id, created_at DESC, id DESC) WHERE actor = 'automation';
 
 CREATE TABLE IF NOT EXISTS github_notification_rules (
     id BIGSERIAL PRIMARY KEY,
