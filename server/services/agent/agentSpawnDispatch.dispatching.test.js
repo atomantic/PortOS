@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const f = vi.hoisted(() => ({ registerGate: null, prep: null, updateResult: { ok: true }, provider: null, tui: false }));
+const f = vi.hoisted(() => ({ prompt: 'example prompt', registerGate: null, prep: null, updateResult: { ok: true }, provider: null, tui: false }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
 const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
@@ -31,7 +31,7 @@ vi.mock('../../lib/workTracker.js', async (importOriginal) => ({
 }));
 vi.mock('../../lib/primaryCheckoutGuard.js', () => ({ capturePrimaryCheckoutState: async () => null }));
 vi.mock('./agentPromptBuilder.js', () => ({
-  buildAgentPrompt: async () => 'example prompt',
+  buildAgentPrompt: async () => f.prompt,
   getAppWorkspace: async () => '/repos/example',
   isClaimFlowTask: () => false,
   promptOpensOwnPr: () => false,
@@ -56,6 +56,9 @@ const markAppIssueClaimed = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('../appIssues.js', () => ({ markAppIssueClaimed }));
 vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: () => ({ command: 'codex', args: [] }), spawnTuiAgent: vi.fn(async () => 'agent-x') }));
 
+import { writeFileGuarded } from '../../lib/fileUtils.js';
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../../lib/privacyPrompt.js';
+import { fenceBlock } from '../../lib/promptFencing.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { getActiveAgentIds, protectedAgentIds, setUseRunner } from './agentState.js';
 import { spawnDirectly } from './agentCliSpawning.js';
@@ -81,11 +84,47 @@ beforeEach(() => {
   vi.clearAllMocks();
   releaseDisposition.mockResolvedValue(null);
   setUseRunner(false);
+  f.prompt = 'example prompt';
   f.registerGate = Promise.resolve();
   f.updateResult = { ok: true };
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
   f.provider = { id: 'example-cli', type: 'cli', command: 'codex' };
   f.tui = false;
+});
+
+
+it('keeps opted-in vault facts in the API dispatch only and makes its archive machine-local', async () => {
+  const fact = 'Skylar Example';
+  f.provider = { id: 'example-api', type: 'api' };
+  f.prompt = fenceBlock('Digital twin reference data', [
+    PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, `- Name — legal_name: ${fact}`, '', '---', '', 'Keep this reference.',
+  ].join('\n'), 4000);
+  const context = newContext();
+
+  await dispatchAgentRun(context);
+
+  expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ prompt: f.prompt }));
+  const [path, stored] = vi.mocked(writeFileGuarded).mock.calls[0];
+  expect(path).toMatch(/prompt\.txt$/);
+  expect(stored).not.toContain(fact);
+  expect(stored).toContain('Identity facts were included in the provider request and are not stored.');
+  expect(stored).toContain('Keep this reference.');
+  expect(registerAgent).toHaveBeenCalledWith(context.agentId, task.id, expect.objectContaining({ machineLocal: true }));
+  expect(task.metadata).not.toHaveProperty('machineLocal');
+  expect(updateTask.mock.calls[0][1].metadata).not.toHaveProperty('machineLocal');
+});
+
+it.each([
+  { policy: 'no task marker', metadata: {}, machineLocal: false },
+  { policy: 'explicit task marker', metadata: { machineLocal: true }, machineLocal: true },
+  { policy: 'legacy string task marker', metadata: { machineLocal: 'true' }, machineLocal: true },
+])('preserves a prompt without vault facts and applies $policy', async ({ metadata, machineLocal }) => {
+  const context = { ...newContext(), task: { ...task, metadata } };
+
+  await dispatchAgentRun(context);
+
+  expect(writeFileGuarded).toHaveBeenCalledWith(expect.stringMatching(/prompt\.txt$/), f.prompt);
+  expect(registerAgent).toHaveBeenCalledWith(context.agentId, task.id, expect.objectContaining({ machineLocal }));
 });
 
 describe('dispatchAgentRun with a server-provisioned claim checkout (#15517)', () => {

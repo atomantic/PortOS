@@ -50,6 +50,7 @@ export function buildAgentRegistration({
   prOpenedBy,
   mergesOwnPr = false,
   claimFlowTask,
+  privacyFactsIncluded = false,
   selectedModel,
   effort = null,
   modelSelection,
@@ -138,7 +139,7 @@ export function buildAgentRegistration({
     // HANDOFF (`lib/agent/agentOutcome.js`); this lets the card say what it is continuing.
     resumedFromAgentId: task.metadata?.resumedFromAgentId || null,
     // Preserve privacy after the task becomes an archived agent.
-    machineLocal: isTruthyMeta(task.metadata?.machineLocal),
+    machineLocal: privacyFactsIncluded || isTruthyMeta(task.metadata?.machineLocal),
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,

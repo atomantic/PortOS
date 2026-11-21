@@ -21,6 +21,7 @@
  * never fails just because Privacy Center isn't set up.
  */
 
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../lib/privacyPrompt.js';
 import { query } from '../lib/db.js';
 import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 // vaultCrypto is imported lazily (inside getPrivacyTwinContext) so merely
@@ -102,14 +103,12 @@ export async function getPrivacyTwinContext() {
     const lines = records.map((row) => {
       const value = decryptValue(row.value_enc); // decrypt at injection time only
       const suffix = row.status === 'previous' ? ' (previous)' : '';
-      return `- ${row.label} — ${row.type}${suffix}: ${value}`;
+      // Keep the generated fact section single-paragraph even when a custom
+      // label or value contains a blank line or Markdown separator.
+      return `- ${row.label} — ${row.type}${suffix}: ${value}`
+        .replace(/\r/g, '\\r').replace(/\n/g, '\\n');
     });
-    sections.push(
-      '# Identity Facts (Privacy Vault)\n'
-      + 'Authoritative, user-verified identity facts. Treat these as the source '
-      + "of truth for the user's legal name, contact details, and addresses.\n"
-      + lines.join('\n'),
-    );
+    sections.push([PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, ...lines].join('\n'));
   }
 
   // Org summary + broker posture only when their tables exist (graceful degrade).

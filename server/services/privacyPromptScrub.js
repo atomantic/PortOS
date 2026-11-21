@@ -1,0 +1,100 @@
+/**
+ * Scrub revoked vault values from local Digital Twin and CoS run artifacts before forgetting their ciphertext.
+ */
+
+import { lstat, readdir, readFile } from 'fs/promises';
+import { basename, join } from 'path';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { atomicWrite, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { COS_AGENT_ID_RE, COS_ARCHIVE_DATE_RE } from '../lib/peerSyncValidation.js';
+import { hasStoredPrivacyFacts, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
+import { escapeRegExp } from '../lib/textUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
+
+const scrubQueue = createFileWriteQueue();
+
+async function missingAsNull(work) {
+  return work.catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+}
+
+async function readArtifact(path) {
+  const stat = await missingAsNull(lstat(path));
+  if (!stat?.isFile()) return null;
+  return missingAsNull(readFile(path, 'utf8'));
+}
+
+async function* childDirectories(root, pattern) {
+  const entries = await missingAsNull(readdir(root, { withFileTypes: true }));
+  for (const entry of entries || []) {
+    if (entry.isDirectory() && pattern.test(entry.name)) yield join(root, entry.name);
+  }
+}
+
+async function* agentDirectories(root) {
+  for await (const path of childDirectories(root, COS_AGENT_ID_RE)) {
+    if (COS_ARCHIVE_DATE_RE.test(basename(path))) {
+      yield* childDirectories(path, COS_AGENT_ID_RE);
+    } else {
+      yield path;
+    }
+  }
+}
+
+async function scrubDirectory(directory, scrubValue, privateAgentIds, isAgent) {
+  const promptPath = join(directory, 'prompt.txt');
+  const prompt = await readArtifact(promptPath);
+  const promptHasFacts = prompt !== null && hasStoredPrivacyFacts(prompt);
+  const metadataPath = join(directory, 'metadata.json');
+  const metadata = isAgent ? null : safeJSONParse(await readArtifact(metadataPath), null);
+  const preview = typeof metadata?.prompt === 'string' ? metadata.prompt : null;
+  const previewHasFacts = preview !== null && hasStoredPrivacyFacts(preview);
+  if (!promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
+
+  if (isAgent) privateAgentIds.add(basename(directory));
+  const stored = promptHasFacts ? redactStoredPrivacyPrompt(prompt) : prompt;
+  const outputPath = join(directory, 'output.txt');
+  const output = await readArtifact(outputPath);
+  if (output !== null) {
+    const cleaned = scrubValue(output);
+    if (cleaned !== output) await atomicWrite(outputPath, cleaned);
+  }
+  if (previewHasFacts || (promptHasFacts && preview !== null)) {
+    const storedPreview = (promptHasFacts ? stored : redactStoredPrivacyPrompt(preview)).slice(0, 500);
+    if (storedPreview !== preview) await atomicWrite(metadataPath, { ...metadata, prompt: storedPreview });
+  }
+  // Preserve the provenance marker after the rewrite so later vault
+  // revocations can still find outputs from the same historical request.
+  if (stored !== prompt) await atomicWrite(promptPath, stored);
+}
+
+export async function scrubRevokedPrivacyFacts(encryptedValues) {
+  if (encryptedValues.length === 0) return;
+  // Keep ciphertext only while waiting for the scrub turn. Convert any failure
+  // to a fixed error so paths, parse excerpts and values cannot reach a log.
+  await scrubQueue(() => withBackupAssetPublication(async () => {
+    const { decryptValue } = await import('../lib/vaultCrypto.js');
+    const values = [...new Set(encryptedValues.map(decryptValue).filter(value => value.trim()))];
+    if (values.length === 0) return;
+    const alternatives = values.sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+    // A custom fact may be a short word. Do not redact it inside another
+    // word, and only look for it in runs with evidence of vault injection.
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`, 'gu');
+    const scrubValue = text => text.replace(pattern, '[redacted]');
+    const privateAgentIds = new Set();
+    for await (const directory of agentDirectories(PATHS.cosAgents)) {
+      await scrubDirectory(directory, scrubValue, privateAgentIds, true);
+    }
+    for await (const directory of childDirectories(PATHS.runs, COS_AGENT_ID_RE)) {
+      await withRuntimeFileTurn(join(directory, 'output.txt'), () => scrubDirectory(directory, scrubValue, privateAgentIds, false));
+    }
+  })).catch(() => {
+    throw new ServerError('Could not scrub local Digital Twin run artifacts', {
+      status: 500, code: 'PRIVACY_RUN_SCRUB_FAILED',
+    });
+  });
+}

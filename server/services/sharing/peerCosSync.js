@@ -8,14 +8,14 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isMachineLocalCosTask } from '../../lib/cos/cosFederationPolicy.js';
+import { isFederatableCosArchive, isMachineLocalCosTask } from '../../lib/cos/cosFederationPolicy.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { mkdtemp, readFile, readdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createHash } from 'crypto';
-import { PATHS, atomicWrite, ensureDir, rmGuarded, sha256File, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, rmGuarded, sha256File } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -105,8 +105,7 @@ export async function buildCosHistoryManifest() {
     const agentIds = (await readdir(dateDir).catch(() => [])).filter((a) => COS_AGENT_ID_RE.test(a));
     for (const agentId of agentIds.sort()) {
       const agentDir = join(dateDir, agentId);
-      const metadata = safeJSONParse(await tryReadFile(join(agentDir, 'metadata.json')), null);
-      if (!isPlainObject(metadata) || isMachineLocalCosTask(metadata)) continue;
+      if (!await isFederatableCosArchive(agentDir)) continue;
       for (const file of COS_ARCHIVE_FILES) {
         const full = join(agentDir, file);
         if (!existsSync(full)) continue;
