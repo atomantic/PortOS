@@ -265,4 +265,25 @@ describe('MediaAnnotate saved-state safety', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
     expect(screen.getByTitle('Save sketch')).toBeDisabled();
   });
+
+  it('keeps an annotated image saveable after Retry (the image does not re-report its size)', async () => {
+    getMediaSketch.mockRejectedValueOnce(new Error('503'));
+    getRegenAvailability.mockResolvedValue({ available: false });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/image:foo.png']}>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    const retry = await screen.findByRole('button', { name: /Retry/ });
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    fireEvent.click(retry);
+    fireEvent.click(await awaitEnabled(() => screen.getByTitle('Save annotation')));
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
+      'image:foo.png',
+      expect.objectContaining({ width: 100, height: 80, strokes: SAVED }),
+      { silent: true },
+    ));
+  });
 });

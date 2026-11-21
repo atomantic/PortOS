@@ -78,6 +78,7 @@ export default function MediaAnnotate() {
   // frame can offer Save against the previous key's (or an unknown) saved state.
   const [loadResult, setLoadResult] = useState({ key: null, status: 'pending' });
   const [loadNonce, setLoadNonce] = useState(0);
+  const resetKeyRef = useRef(null);
   // A→B→A navigation must not resurrect A's earlier 'loaded' result while its new
   // read is in flight, so a key change drops the stored result during render.
   const [seenKey, setSeenKey] = useState(mediaKey);
@@ -121,14 +122,19 @@ export default function MediaAnnotate() {
   useEffect(() => {
     if (!isSupported) return;
     let active = true;
-    setStrokes([]);
-    // In image mode dims come from the <img> onLoad, which re-fires when the src
-    // changes — so reset to null and let it re-report. In blank mode dims derive
-    // from the (stable-per-key) URL size params; the child's dims effect won't
-    // re-fire when navigating sketch→sketch at the same w/h, so clearing here
-    // would strand Save disabled (`!dims`). Leave blank dims in place.
-    if (!isBlank) setDims(null);
-    setImageError(false);
+    // A Retry reruns this effect for the SAME key: resetting dims then would strand
+    // Save disabled, since the unchanged <img> never fires onLoad again.
+    if (resetKeyRef.current !== mediaKey) {
+      resetKeyRef.current = mediaKey;
+      setStrokes([]);
+      // In image mode dims come from the <img> onLoad, which re-fires when the src
+      // changes — so reset to null and let it re-report. In blank mode dims derive
+      // from the (stable-per-key) URL size params; the child's dims effect won't
+      // re-fire when navigating sketch→sketch at the same w/h, so clearing here
+      // would strand Save disabled (`!dims`). Leave blank dims in place.
+      if (!isBlank) setDims(null);
+      setImageError(false);
+    }
     getMediaSketch(mediaKey, { silent: true })
       .then((res) => {
         if (!active) return;
