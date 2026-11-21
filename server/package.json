@@ -21,7 +21,7 @@
     "test:db:ci": "vitest run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
   },
   "dependencies": {
-    "@babel/parser": "8.1.2",
+    "@babel/parser": "8.1.3",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.2.0",
     "@novnc/novnc": "1.7.0",
@@ -37,7 +37,7 @@
     "socket.io": "4.8.4",
     "socket.io-client": "4.8.4",
     "three": "0.187.0",
-    "undici": "8.12.4",
+    "undici": "8.13.1",
     "ws": "8.23.0",
     "zod": "4.6.7"
   },
