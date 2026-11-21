@@ -9,7 +9,7 @@ import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Combine, Image as ImageIcon, Film, Search, X, ShieldCheck } from 'lucide-react';
+import { Combine, Image as ImageIcon, Film, Search, X, ShieldCheck, HardDrive } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -20,6 +20,7 @@ import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import RatingFilterChips from '../components/media/RatingFilterChips';
 import BatchVerificationBar from '../components/media/BatchVerificationBar';
+import CollectionPrimaryControl, { SHARED_MEDIA_ID } from '../components/media/CollectionPrimaryControl';
 import { verifyImageNow } from '../services/apiImageVerifier';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -55,6 +56,7 @@ export default function MediaHistory() {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [stitchMode, setStitchMode] = useState(false);
+  const [showHosting, setShowHosting] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
   // Stitch job ids still running server-side; the toast waits for the job's own
@@ -407,6 +409,18 @@ export default function MediaHistory() {
           >
             <Combine className="w-3.5 h-3.5" /> {stitchMode ? `Cancel (${selected.length})` : 'Stitch'}
           </button>
+          <button
+            type="button"
+            aria-expanded={showHosting}
+            onClick={() => setShowHosting((v) => !v)}
+            className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border ${
+              showHosting
+                ? 'bg-port-accent/20 border-port-accent text-port-accent'
+                : 'border-port-border text-gray-300 hover:text-white hover:bg-port-border/50'
+            }`}
+          >
+            <HardDrive className="w-3.5 h-3.5" /> Hosting
+          </button>
           {stitchMode && selected.length >= 2 && (
             <button
               type="button"
@@ -419,6 +433,8 @@ export default function MediaHistory() {
           )}
         </div>
       </div>
+
+      {showHosting && <CollectionPrimaryControl collectionId={SHARED_MEDIA_ID} oneShot />}
 
       {verifyMode && (
         <BatchVerificationBar

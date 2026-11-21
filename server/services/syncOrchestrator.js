@@ -31,7 +31,7 @@ import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../li
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
+import { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -216,10 +216,12 @@ async function syncImageFromPeer(peer, avatarPath) {
   const exists = await access(localPath).then(() => true).catch(() => false);
   if (exists) return;
 
-  // The shared asset pull owns the tombstone check, sidecar + supplier
-  // recording, extension/manifest/hash guards, size caps and in-flight dedup.
-  // Dynamic import keeps peerSyncAssets' graph out of orchestrator load.
-  await pullMissingAssetsFromPeer(peer.instanceId, [{ kind: 'image', filename }]);
+  // The receiver diff skips a deleted image and one released to a Make-primary
+  // host (streamed from there on purpose). The shared asset pull owns the
+  // sidecar + supplier recording, extension/manifest/hash guards, size caps
+  // and in-flight dedup.
+  const missing = await diffAssetManifestAgainstLocal([{ kind: 'image', filename }], { includeMismatched: false });
+  if (missing.length > 0) await pullMissingAssetsFromPeer(peer.instanceId, missing);
 }
 
 // --- Status ---

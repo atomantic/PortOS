@@ -13,10 +13,12 @@ vi.mock('../../lib/fileUtils.js', () => ({
 }));
 vi.mock('./catalogDB.js', () => ({ listLiveMediaFileKeys: vi.fn() }));
 vi.mock('../sharing/peerSyncAssets.js', () => ({ pullMissingAssetsFromPeer: vi.fn() }));
+vi.mock('../peerHostedMedia.js', () => ({ releasedHostedKeys: vi.fn() }));
 
 import { existsSync as existsSyncReal } from 'fs';
 import { listLiveMediaFileKeys } from './catalogDB.js';
 import { pullMissingAssetsFromPeer } from '../sharing/peerSyncAssets.js';
+import { releasedHostedKeys } from '../peerHostedMedia.js';
 import { pullMissingCatalogMediaBytes, resetCatalogMediaBytesSyncForTests, CATALOG_BYTES_RETRY_MS } from './catalogMediaBytesSync.js';
 
 const peer = { instanceId: 'peer-a', name: 'Peer A' };
@@ -34,6 +36,7 @@ describe('pullMissingCatalogMediaBytes', () => {
     writeFileSync(join(dirs.images, 'have.png'), 'x');
     listLiveMediaFileKeys.mockResolvedValue(rows);
     pullMissingAssetsFromPeer.mockResolvedValue(undefined);
+    releasedHostedKeys.mockResolvedValue(new Set());
   });
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -45,6 +48,14 @@ describe('pullMissingCatalogMediaBytes', () => {
     // The gallery pull left the image missing, so image-refs is asked next.
     expect(pullMissingAssetsFromPeer.mock.calls[1][1].map((e) => `${e.kind}:${e.filename}`)).toEqual(['image-ref:upload-1.png']);
     expect(remaining).toBe(2);
+  });
+
+  it('leaves a file released to a Make-primary host on that host', async () => {
+    listLiveMediaFileKeys.mockResolvedValue([...rows, { mediaKey: 'clip.mp4', kind: 'video' }]);
+    releasedHostedKeys.mockResolvedValue(new Set(['image:upload-1.png', 'video:clip.mp4']));
+    const remaining = await pullMissingCatalogMediaBytes(peer, { applied: 1 });
+    expect(pullMissingAssetsFromPeer.mock.calls.flatMap((call) => call[1]).map((e) => `${e.kind}:${e.filename}`)).toEqual(['audio:memo.webm']);
+    expect(remaining).toBe(1);
   });
 
   it('stops asking once the files landed', async () => {

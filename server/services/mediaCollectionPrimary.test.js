@@ -5,6 +5,7 @@ const fixtures = vi.hoisted(() => ({
   getCollection: vi.fn(),
   setCollectionPrimaryMachine: vi.fn(),
   listMediaPrimaryMachines: vi.fn(),
+  listMediaHolders: vi.fn(),
   prepareMediaConsolidation: vi.fn(),
   listUnsortedGalleryFiles: vi.fn(),
   emitCollectionPrimaryChanged: vi.fn(),
@@ -16,12 +17,37 @@ vi.mock('./mediaCollections.js', () => ({
 }));
 vi.mock('./mediaHolders.js', () => ({
   listMediaPrimaryMachines: fixtures.listMediaPrimaryMachines,
+  listMediaHolders: fixtures.listMediaHolders,
   prepareMediaConsolidation: fixtures.prepareMediaConsolidation,
 }));
 vi.mock('./mediaAssetIndex/gallery.js', () => ({ listUnsortedGalleryFiles: fixtures.listUnsortedGalleryFiles }));
 vi.mock('./peerSyncEventBus.js', () => ({ emitCollectionPrimaryChanged: fixtures.emitCollectionPrimaryChanged }));
 
 beforeEach(() => vi.resetAllMocks());
+
+describe('shared media primary consolidation', () => {
+  it('moves only files more than one machine holds, without touching a collection', async () => {
+    const move = vi.fn().mockResolvedValue({ released: [{ instanceId: 'other' }], pending: [], kept: [] });
+    fixtures.listMediaPrimaryMachines.mockResolvedValue([{ instanceId: 'test-peer' }]);
+    fixtures.prepareMediaConsolidation.mockResolvedValue(move);
+    fixtures.listMediaHolders.mockResolvedValue({
+      self: 'self',
+      items: {
+        'image:shared.png': { kind: 'image', filename: 'shared.png', holders: [{ instanceId: 'self' }, { instanceId: 'other' }] },
+        'video:shared.mp4': { kind: 'video', filename: 'shared.mp4', holders: [{ instanceId: 'self' }, { instanceId: 'other' }] },
+        'image:elsewhere.png': { kind: 'image', filename: 'elsewhere.png', holders: [{ instanceId: 'other' }] },
+      },
+    });
+
+    expect(await startCollectionPrimary('shared-media', 'test-peer')).toMatchObject({ run: { total: 2 } });
+    await vi.waitFor(async () => {
+      expect(await getCollectionPrimaryStatus('shared-media')).toMatchObject({ instanceId: null, run: { running: false, completed: 2, released: 2 } });
+    });
+    expect(move.mock.calls.map(([entry]) => `${entry.kind}:${entry.filename}`)).toEqual(['image:shared.png', 'video:shared.mp4']);
+    expect(fixtures.getCollection).not.toHaveBeenCalled();
+    expect(fixtures.setCollectionPrimaryMachine).not.toHaveBeenCalled();
+  });
+});
 
 describe('Unsorted primary consolidation', () => {
   it('consolidates the server inventory once without persisting a collection or primary', async () => {

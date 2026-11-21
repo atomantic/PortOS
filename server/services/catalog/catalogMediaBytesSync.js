@@ -16,6 +16,7 @@ import { join } from 'path';
 import { PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { listLiveMediaFileKeys } from './catalogDB.js';
 import { pullMissingAssetsFromPeer } from '../sharing/peerSyncAssets.js';
+import { releasedHostedKeys } from '../peerHostedMedia.js';
 
 // A quiet sweep re-checks disk this often; a sweep after applied rows runs at once.
 export const CATALOG_BYTES_SWEEP_INTERVAL_MS = 10 * 60_000;
@@ -37,6 +38,10 @@ const failedAt = new Map(); // `${peerInstanceId}\0${assetKind}\0${key}` → ms
 const isPresent = ({ mediaKey, kind }) => (FILE_DIRS[kind]
   ? existsSync(join(FILE_DIRS[kind].dir(), mediaKey))
   : resolveImageInputPath(mediaKey) !== null);
+
+// A gallery image or video this machine released to a Make-primary host
+// (services/mediaHolders.js) streams from there on purpose: it is not missing.
+const releasedKey = ({ mediaKey, kind }) => kind === 'video' ? `video:${mediaKey}` : FILE_DIRS[kind] ? null : `image:${mediaKey}`;
 
 const retryKey = (peerId, entry) => `${peerId}\0${entry.kind}\0${entry.filename}`;
 
@@ -65,7 +70,8 @@ export async function pullMissingCatalogMediaBytes(peer, { applied = 0, now = Da
   inFlight.add(peerId);
   lastSweepAt.set(peerId, now);
   try {
-    const missing = (await listLiveMediaFileKeys()).filter((m) => !isPresent(m));
+    const released = await releasedHostedKeys().catch(() => new Set());
+    const missing = (await listLiveMediaFileKeys()).filter((m) => !isPresent(m) && !released.has(releasedKey(m)));
     if (missing.length === 0) return 0;
     // Image keys name gallery files; a reference kept only as an upload lives in
     // image-refs on the sender, so ask there for whatever the gallery lacks.
