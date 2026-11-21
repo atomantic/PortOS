@@ -47,6 +47,54 @@ describe('pipeline issues service', () => {
       return { series, v1, v2 };
     };
 
+    it('reads full records only for the affected series and writes only changed siblings', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      await svc.createIssue({ seriesId: 'ser-unrelated', title: 'Other' });
+      const anchor = await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'Anchor' });
+      const tail = await svc.createIssue({
+        seriesId: series.id, seasonId: v2.id, title: 'Tail',
+        stages: { prose: { runHistory: [{ runId: 'earlier', output: 'draft' }] } },
+      });
+      const store = svc.issueStore();
+      const all = vi.spyOn(store, 'loadAll');
+      const scoped = vi.spyOn(store, 'loadAllForSeries');
+      const pair = vi.spyOn(store, 'loadAllForSeriesIds');
+      const writes = vi.spyOn(store, 'saveOneNow');
+      const expectWrites = (...ids) => {
+        expect(writes.mock.calls.map(([id]) => id).sort()).toEqual(ids.sort());
+        writes.mockClear();
+      };
+
+      const mid = await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'Middle' });
+      expectWrites(mid.id, tail.id);
+      expect(await svc.getIssue(tail.id)).toMatchObject({
+        number: 3, stages: { prose: { runHistory: [{ runId: 'earlier', output: 'draft' }] } },
+      });
+      await svc.updateIssue(mid.id, () => ({ arcPosition: 3 }));
+      expectWrites(mid.id);
+      await svc.deleteIssue(mid.id);
+      expectWrites(mid.id, tail.id);
+      await svc.bulkReassignSeason(series.id, v2.id, v1.id);
+      expectWrites(tail.id, anchor.id);
+      await svc.recomputeIssueNumbersForSeries(series.id);
+      expectWrites();
+      await svc.reassignIssuesToSeries('ser-unrelated', series.id);
+      expect(pair).toHaveBeenCalledExactlyOnceWith(['ser-unrelated', series.id]);
+      expect(writes.mock.calls.map(([, issue]) => issue.title)).toEqual(['Other']);
+      expect(all).not.toHaveBeenCalled();
+      expect(scoped.mock.calls.every(([id, opts]) => id === series.id && opts?.withHistory !== false)).toBe(true);
+    });
+
+    it('keeps a planned id unique across concurrent inserts in different series', async () => {
+      const id = 'iss-planned';
+      const results = await Promise.allSettled([
+        svc.ensureIssueWithId(id, { seriesId: 'ser-a', title: 'First' }),
+        svc.insertIssueWithId({ id, seriesId: 'ser-b', title: 'Second' }),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.find((r) => r.status === 'rejected')?.reason.code).toBe(svc.ERR_DUPLICATE);
+    });
+
     it('issues number contiguously across volumes in season order', async () => {
       const { series, v1, v2 } = await setupTwoVolumeSeries();
       // V1 first (10 issues), then V2 (3 issues) — V2 should start at #11.

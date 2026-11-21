@@ -137,6 +137,33 @@ describe('pipeline issues service', () => {
     expect(coverRefresh.refreshSeriesCoverImage).toHaveBeenCalledWith('ser-1');
   });
 
+  it('reads each requested issue once and writes only the final changed versions with history', async () => {
+    const edited = await svc.createIssue({
+      seriesId: 'ser-batch', title: 'Edited',
+      stages: { prose: { runHistory: [{ runId: 'prior', output: 'draft' }] } },
+    });
+    const skipped = await svc.createIssue({ seriesId: 'ser-batch', title: 'Skipped' });
+    await svc.createIssue({ seriesId: 'ser-other', title: 'Other' });
+    const store = svc.issueStore();
+    const reads = vi.spyOn(store, 'loadOne');
+    const all = vi.spyOn(store, 'loadAll');
+    const series = vi.spyOn(store, 'loadAllForSeries');
+    const writes = vi.spyOn(store, 'saveOneNow');
+    const results = await svc.updateStagesWithLatest('ser-batch', [
+      { issueId: edited.id, stageId: 'prose', computeFn: () => ({ output: 'new' }) },
+      { issueId: skipped.id, stageId: 'idea', computeFn: () => ({}) },
+      { issueId: edited.id, stageId: 'prose', computeFn: (stage) => ({ output: stage.output + ' version' }) },
+    ]);
+    expect(reads.mock.calls).toEqual([[edited.id], [skipped.id]]);
+    expect(all).not.toHaveBeenCalled();
+    expect(series).not.toHaveBeenCalled();
+    expect(writes.mock.calls.map(([id]) => id)).toEqual([edited.id]);
+    expect(results.map(({ stage }) => stage.output)).toEqual(['new', '', 'new version']);
+    expect((await svc.getIssue(edited.id)).stages.prose).toMatchObject({
+      output: 'new version', runHistory: [{ runId: 'prior', output: 'draft' }],
+    });
+  });
+
   it('refreshes once when a batch replaces a rendered issue cover', async () => {
     const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
     await svc.updateStage(issue.id, 'comicPages', {
