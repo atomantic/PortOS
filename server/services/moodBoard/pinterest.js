@@ -27,6 +27,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
+import { fileExternalMedia } from '../externalMediaCollection.js';
 import { resolvePinterestBoardUrl } from './pinterestUrl.js';
 
 const FEED_TIMEOUT_MS = 20000;
@@ -62,6 +63,7 @@ export async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
   // Pin-keyed, so a re-download rewrites bytes a board may already name: hold
   // the backup lease (#9982) so the in-place write never overlaps a snapshot.
   await withBackupAssetPublication(() => writeFileGuarded(join(PATHS.images, filename), res.buffer));
+  await fileExternalMedia([{ kind: 'image', ref: filename }]);
   return `/data/images/${filename}`;
 }
 

@@ -36,6 +36,7 @@ import { downloadVideoToDir, cleanupProducedFiles } from './ytdlpVideoImport.js'
 import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
 import { deleteMediaAnywhere } from './mediaRemoteDelete.js';
 import { videoGenEvents } from './videoGen/events.js';
+import { fileExternalMedia } from './externalMediaCollection.js';
 
 // Host allowlist: YouTube (watch/shorts/youtu.be) + x.com/Twitter status URLs.
 // Same reasoning as #1945's YOUTUBE_URL_RE — constrains what a shelled-out
@@ -219,6 +220,7 @@ export async function downloadVideoIntoLibrary({
   });
   // Notify only after publication; a listener failure cannot remove committed bytes.
   videoGenEvents.emit('completed', { generationId: jobId, filename: entry.filename, path: `/data/videos/${entry.filename}`, thumbnail: entry.thumbnail });
+  await fileExternalMedia([{ kind: 'video', ref: entry.id }]);
   return { outcome: 'complete', entry };
 }
 

@@ -27,6 +27,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { MAX_ITEMS_PER_BOARD } from './logic.js';
 import * as store from './db.js';
+import { fileExternalMedia } from '../externalMediaCollection.js';
 
 const FETCH_TIMEOUT_MS = 20000;
 const VIDEO_TIMEOUT_MS = 60000;
@@ -135,7 +136,7 @@ export async function importXPost(boardId, { url }) {
         video.poster ? downloadImage(video.poster, canonicalUrl, 'poster') : Promise.resolve(null),
       ]);
       if (filename) {
-        imported.push({ type: 'video', mediaKey: `video:${filename}`, imageUrl: poster.path, source, caption: null });
+        imported.push({ type: 'video', mediaKey: `video:${filename}`, imageUrl: poster?.path ?? null, source, caption: null });
       } else if (poster?.created) {
         // The video failed but its poster downloaded first (they ran in
         // parallel) — nothing will ever reference a poster THIS import created,
@@ -155,6 +156,11 @@ export async function importXPost(boardId, { url }) {
   // The append first names the downloaded media, so it commits under the lease.
   const { board: nextBoard, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
   emitRecordUpdated('moodBoard', boardId);
+  // Filed after the append so a poster removed above never lands in the collection.
+  await fileExternalMedia(imported.flatMap((it) => [
+    ...(it.imageUrl ? [{ kind: 'image', ref: basename(it.imageUrl) }] : []),
+    ...(it.mediaKey ? [{ kind: 'video', ref: it.mediaKey.slice('video:'.length) }] : []),
+  ]));
   console.log(`🐦 X post import: board ${boardId} +${added} item(s) from ${canonicalUrl}`);
   return { board: nextBoard, added };
 }

@@ -699,6 +699,12 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
 
   // Restore any active loops from previous session
   restoreLoops().catch(err => logBootstrapFailure('❌ Loop restore failed', err));
+
+  // One-time disk scan (no provider calls): file downloads already on this
+  // machine into the shared "External" media collection.
+  import('./externalMediaCollection.js')
+    .then(m => m.backfillExternalMediaCollection())
+    .catch(err => logBootstrapFailure('❌ External collection backfill failed', err));
 };
 
 /** Wire startup observers once the media queue has restored its persisted jobs. */

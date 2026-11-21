@@ -24,6 +24,7 @@ import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { externalImageItems, isExternalImageUrl } from './logic.js';
 import * as store from './db.js';
+import { fileExternalMedia } from '../externalMediaCollection.js';
 
 const IMAGE_TIMEOUT_MS = 20000;
 const MAX_IMAGE_BYTES = MAX_IMAGE_DATA_URL_BYTES;
@@ -40,7 +41,7 @@ function publishBoardCopy(filename, buffer) {
   return withBackupAssetPublication(async () => {
     await writeFileGuarded(join(PATHS.images, filename), buffer);
     await writeLocalImageSidecarIfMissing(filename, { replace: true, preserveMetadata: true });
-  });
+  }).then(() => fileExternalMedia([{ kind: 'image', ref: filename }]));
 }
 
 /**
