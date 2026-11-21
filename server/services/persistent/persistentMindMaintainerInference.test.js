@@ -13,11 +13,15 @@ it('validates the installed local route and fails closed for missing catalog, mo
   await expect(inspect({ model: 'missing' })).resolves.toMatchObject({ ok: false });
   await expect(inspect({ probe: async () => ({ reachable: false, models: null }) })).resolves.toMatchObject({ ok: false });
   await expect(inspect({ provider: { ...provider, numCtx: undefined } })).resolves.toMatchObject({ ok: false });
-  await expect(inspect({ promptChars: role.inference.maxPromptChars + 1 })).resolves.toMatchObject({ ok: false });
+  // A local route is bounded by its window, not the paid-lane character cap.
+  const overCap = role.inference.maxPromptChars + 1;
+  await expect(inspect({ promptChars: overCap, promptBytes: overCap })).resolves.toMatchObject({ ok: true, lane: 'local-curation' });
+  await expect(inspect({ promptChars: 600000, promptBytes: 600000 })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('131072-token local window') });
   await expect(inspect({ promptBytes: undefined })).resolves.toMatchObject({ ok: false });
   await expect(inspect({ promptBytes: -1 })).resolves.toMatchObject({ ok: false });
-  await expect(inspect({ promptBytes: 131072 })).resolves.toMatchObject({ ok: false });
-  await expect(inspect({ probe: async () => ({ reachable: true, models: ['example-model'], contextWindows: { 'example-model': 8192 } }) })).resolves.toMatchObject({ ok: false });
+  const smallWindow = async () => ({ reachable: true, models: ['example-model'], contextWindows: { 'example-model': 8192 } });
+  await expect(inspect({ probe: smallWindow })).resolves.toMatchObject({ ok: true });
+  await expect(inspect({ probe: smallWindow, promptChars: 30000, promptBytes: 30000 })).resolves.toMatchObject({ ok: false });
 });
 
 it('permits remote escalation only for an explicitly allowed human preset and never self-thinking', async () => {
@@ -25,6 +29,9 @@ it('permits remote escalation only for an explicitly allowed human preset and ne
   await expect(inspect({ provider: remote })).resolves.toMatchObject({ ok: false });
   const authorized = { provider: remote, role: { ...role, inference: { paidPresetIds: ['deep'], maxPaidCallsPerDay: 1 } }, thinkingPresetId: 'deep', thinkingSelection: { id: 'deep' } };
   await expect(inspect(authorized)).resolves.toMatchObject({ ok: true, lane: 'authorized-escalation' });
+  const overCap = role.inference.maxPromptChars + 1;
+  await expect(inspect({ ...authorized, promptChars: overCap, promptBytes: overCap })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('character limit') });
+  await expect(inspect({ ...authorized, promptBytes: 131072 })).resolves.toMatchObject({ ok: false });
   await expect(inspect({ ...authorized, selfThinkingRequest: {} })).resolves.toMatchObject({ ok: false });
   await expect(inspect({ role: { enabled: false }, provider: remote })).resolves.toMatchObject({ ok: true, enforced: false });
   expect(mergePersistentMindMaintainer({ inference: { maxCallsPerDay: 3 } }, { inference: { maxCallsPerTurn: 2 } }).inference).toMatchObject({ maxCallsPerDay: 3, maxCallsPerTurn: 2 });
