@@ -21,9 +21,9 @@ vi.mock('../lib/db.js', () => ({
 // #3658: the subject scope + consent trail live in privacySubjects; stubbed so
 // these DB-mocked tests keep asserting on the privacy_vault_records SQL.
 const SELF = '00000000-0000-4000-8000-000000000001';
-const { recordConsentMock, scrubMock, clearEvidenceMock } = vi.hoisted(() => ({
+const { recordConsentMock, promptScrubMock, clearEvidenceMock } = vi.hoisted(() => ({
   recordConsentMock: vi.fn(async () => ({ id: 'consent-1' })),
-  scrubMock: vi.fn(async () => {}),
+  promptScrubMock: vi.fn(async () => {}),
   clearEvidenceMock: vi.fn(async () => ({ cleared: 1 })),
 }));
 vi.mock('./privacySubjects.js', () => ({
@@ -31,11 +31,12 @@ vi.mock('./privacySubjects.js', () => ({
   assertSubject: vi.fn(async (id) => ({ id: id || SELF })),
   recordConsent: recordConsentMock,
 }));
-vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: scrubMock }));
+vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: promptScrubMock }));
 vi.mock('./privacyBrokers.js', () => ({ clearSubjectIdentityEvidence: clearEvidenceMock }));
 
-const { eraseMock, scrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), scrubMock: vi.fn(async () => 0) }));
-vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: scrubMock }));
+// Separate binding from promptScrubMock: one module scope cannot declare the same name twice.
+const { eraseMock, draftScrubMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})), draftScrubMock: vi.fn(async () => 0) }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: draftScrubMock }));
 
 const {
   deleteVaultRecord, createVaultRecord, listVaultRecords, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
@@ -186,15 +187,15 @@ describe('updateVaultRecord', () => {
   });
 
   beforeEach(() => {
-    scrubMock.mockClear();
+    promptScrubMock.mockClear();
     clearEvidenceMock.mockClear();
   });
 
   it('scrubs the prior value and clears broker evidence when value is overwritten on an evidence-source type', async () => {
     mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { value: 'New Name' });
-    expect(scrubMock).toHaveBeenCalledTimes(1);
-    expect(scrubMock).toHaveBeenCalledWith(['v1:old']);
+    expect(promptScrubMock).toHaveBeenCalledTimes(1);
+    expect(promptScrubMock).toHaveBeenCalledWith(['v1:old']);
     expect(clearEvidenceMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock.mock.calls[0][0]).toBe(SELF);
     expect(clearEvidenceMock.mock.calls[0][1]).toHaveProperty('client');
@@ -203,34 +204,34 @@ describe('updateVaultRecord', () => {
   it('scrubs the prior value but does not clear broker evidence for non-evidence-source types', async () => {
     mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { value: '503-555-0142' });
-    expect(scrubMock).toHaveBeenCalledTimes(1);
+    expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
   it('clears broker evidence for an address record value overwrite', async () => {
     mockLockedRow({ id: 'r1', type: 'address', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { value: '9 Oak Ave' });
-    expect(scrubMock).toHaveBeenCalledTimes(1);
+    expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).toHaveBeenCalledTimes(1);
   });
 
   it('scrubs exactly once when value and shareWithTwin:false are both passed', async () => {
     mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { value: '503-555-0142', shareWithTwin: false });
-    expect(scrubMock).toHaveBeenCalledTimes(1);
+    expect(promptScrubMock).toHaveBeenCalledTimes(1);
   });
 
   it('scrubs on shareWithTwin:false alone without clearing broker evidence', async () => {
     mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { shareWithTwin: false });
-    expect(scrubMock).toHaveBeenCalledTimes(1);
+    expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
   it('does not scrub or clear broker evidence for a label-only update', async () => {
     mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
     await updateVaultRecord('r1', { label: 'New label' });
-    expect(scrubMock).not.toHaveBeenCalled();
+    expect(promptScrubMock).not.toHaveBeenCalled();
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
@@ -270,7 +271,7 @@ describe('getVaultStatus', () => {
 
 describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
   it('erases drafts that cite the record and scrubs its decrypted value from legacy drafts', async () => {
-    eraseMock.mockClear(); scrubMock.mockClear();
+    eraseMock.mockClear(); draftScrubMock.mockClear();
     const client = { query: vi.fn(async () => ({ rows: [{
       id: 'r1', type: 'phone', subject_id: 'subject-2', value_enc: encryptValue('555-0100'),
     }] })) };
@@ -280,16 +281,16 @@ describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
     expect(predicate({ privacyMeta: { vaultRecordIds: ['x', 'r1'] } })).toBe(true);
     expect(predicate({ privacyMeta: { vaultRecordIds: ['x'] } })).toBe(false);
     expect(predicate({})).toBe(false);
-    expect(scrubMock).toHaveBeenCalledWith(['555-0100']);
+    expect(draftScrubMock).toHaveBeenCalledWith(['555-0100']);
   });
 
   it('never decrypts a sensitive-type value for the legacy scrub', async () => {
-    scrubMock.mockClear();
+    draftScrubMock.mockClear();
     const client = { query: vi.fn(async () => ({ rows: [{
       id: 'r2', type: 'ssn', subject_id: 'subject-2', value_enc: encryptValue('000-00-0000'),
     }] })) };
     withTransactionMock.mockImplementation(async (fn) => fn(client));
     await deleteVaultRecord('r2');
-    expect(scrubMock).toHaveBeenCalledWith([]);
+    expect(draftScrubMock).toHaveBeenCalledWith([]);
   });
 });

@@ -42,7 +42,7 @@ const TRACKED_UNLISTENED_EVENTS = [
   'audio-gen:completed', 'audio-gen:failed', 'audio-gen:progress', 'audio-gen:started',
   'calendar:sync:failed', 'calendar:sync:started',
   'health:xml:complete',
-  'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:progress', 'messages:sync:started',
+  'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:started',
   'provider:error',
 ];
 const isAckOrTemplate = (event) => /:(?:un)?subscribed$/.test(event) || /[{}]/.test(event);
