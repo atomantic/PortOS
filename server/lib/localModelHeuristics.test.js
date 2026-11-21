@@ -32,6 +32,8 @@ describe('localModelHeuristics', () => {
         'ornith-1.5:35b',
         'flint:40b',
         'muse-glimmer:30b',
+        'inkling-2-mini:26b-a5b-nvfp4',
+        'lmstudio-community/Inkling-2-Mini-GGUF',
         'north-mini-code-1.0',
         'olmo-3.1:32b-instruct',
         'nemotron-3-nano:4b',

@@ -2,7 +2,7 @@
  * Local-model capability heuristics: Ollama / LM Studio don't tag models with a capability type, so PortOS infers
  * one from the model id / family. Pure and dependency-free (the browser re-exports these).
  *
- * `TOOL_USE_RE` is also inlined in server/lib/aiToolkit/providers.js because the vendored toolkit may not import
+ * `TOOL_USE_RE` is also inlined in server/lib/aiToolkit/internal/providerCatalogService.js because the vendored toolkit may not import
  * out of its directory; `localModelHeuristics.mirror.test.js` fails when the copies drift.
  */
 
@@ -99,7 +99,7 @@ export function isVisionModel(model) {
 
 // Tool-use (function-calling) families. The CoS agent harness depends on reliable tool calls, so Claude-on-Ollama providers surface only models that can drive tools.
 // Ollama's `tools` capability is authoritative when present; this regex is the fallback for bare ids. Llama 3.0 and Gemma 3 are deliberately NOT matched
-// (tools landed in 3.1 / Gemma 4), so the gemma rule anchors family and version. Keep in lockstep with the copy in aiToolkit/providers.js.
+// (tools landed in 3.1 / Gemma 4), so the gemma rule anchors family and version. Keep in lockstep with the copy in aiToolkit/internal/providerCatalogService.js.
 const TOOL_USE_RE = new RegExp([
   'qwen',
   'llama-?3\\.[1-9]', 'llama-?4',
@@ -112,7 +112,7 @@ const TOOL_USE_RE = new RegExp([
   'gpt-oss',
   'nemotron',
   'olmo-?3',
-  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2',
+  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2', 'inkling',
   'smollm2',
   'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',
