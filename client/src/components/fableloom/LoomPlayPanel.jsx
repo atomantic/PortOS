@@ -174,6 +174,9 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     // no longer matches what the host is actually showing, request the
     // CURRENT one again rather than leaving the mismatch unresolved (#8112).
     socket.on('hosted:session:sync', (data) => {
+      // A resync is the recovery when a phase frame was missed. An absent
+      // turnPhase must not clear a phase the room already published.
+      if (data?.turnPhase) setHostedTurnPhase(data.turnPhase);
       if (data?.episodeId && data.episodeId !== latestEpisodeIdRef.current) {
         hostedEpisodeIdRef.current = latestEpisodeIdRef.current;
         pendingHostedEpisodeSwitchRef.current = { id: latestEpisodeIdRef.current, label: pendingHostedEpisodeSwitchRef.current?.label };
@@ -182,6 +185,12 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     });
 
     socket.on('hosted:story:transition', (data) => {
+      // The move already committed on the server. Hold index, a rehearsed
+      // exit, and a failed render belong to the scene being left (#17269).
+      setActiveHoldIndex(0);
+      setPendingTransition(null);
+      setFailedVideoId(null);
+      setHostedTurnPhase('idle');
       if (data.node) {
         setScene(data.node);
         setPlaybackPhase(data.playbackPhase || 'hold');

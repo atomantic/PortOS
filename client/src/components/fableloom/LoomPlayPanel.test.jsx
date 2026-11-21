@@ -456,6 +456,75 @@ describe('LoomPlayPanel', () => {
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Episode 2'));
   });
 
+  it('resets host scene state and the answering banner when the story transitions', async () => {
+    const user = userEvent.setup();
+    const hostedEpisode = {
+      id: 'ep-hosted',
+      startNodeId: 'gate',
+      nodes: [{
+        id: 'gate',
+        title: 'The Gate',
+        prose: 'You stand before it.',
+        playbackAssets: {
+          holdLoopVideoHistoryIds: ['vid-hold-a', 'vid-hold-b'],
+        },
+        transitions: [{ id: 'leave', targetNodeId: 'hall', intent: 'step through' }],
+      }, {
+        id: 'hall',
+        title: 'The Hall',
+        prose: 'Torchlight.',
+        transitions: [],
+      }],
+    };
+    render(<LoomPlayPanel loom={{ ...loom, episodes: [hostedEpisode] }} episode={hostedEpisode} />);
+    await user.selectOptions(screen.getByLabelText('Preview stage'), 'video');
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    fireEvent.ended(screen.getByLabelText('The Gate'));
+    await waitFor(() => expect(screen.getByLabelText('The Gate')).toHaveAttribute('src', expect.stringContaining('vid-hold-b')));
+    fireEvent.error(screen.getByLabelText('The Gate'));
+    expect(await screen.findByText('The rendered video is unavailable; advance manually or retry after rendering.')).toBeInTheDocument();
+
+    const hostedSocket = io.mock.results.at(-1).value;
+    const phaseHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:turn:phase')?.[1];
+    const transitionHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:story:transition')?.[1];
+    const syncHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:session:sync')?.[1];
+    act(() => { phaseHandler({ phase: 'speaking', turnId: 'turn-1' }); });
+    expect(screen.getByText('Protagonist is answering…')).toBeInTheDocument();
+
+    hostedSocket.emit.mockClear();
+    act(() => {
+      transitionHandler({
+        transitionId: 'leave',
+        playbackPhase: 'hold',
+        node: {
+          id: 'hall',
+          title: 'The Hall',
+          prose: 'Torchlight.',
+          playbackAssets: { holdLoopVideoHistoryIds: ['vid-hold-b', 'vid-next'] },
+          choices: [],
+        },
+      });
+    });
+
+    expect(screen.getByLabelText('The Hall')).toHaveAttribute('src', expect.stringContaining('vid-hold-b'));
+    expect(screen.queryByText('The rendered video is unavailable; advance manually or retry after rendering.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Protagonist is answering…')).not.toBeInTheDocument();
+    expect(screen.getByText('Waiting for phone to scan QR link…')).toBeInTheDocument();
+    expect(screen.getByText('Torchlight.')).toBeInTheDocument();
+    expect(hostedSocket.emit).toHaveBeenCalledWith('hosted:playback:update', expect.objectContaining({
+      nodeId: 'hall',
+      phase: 'hold',
+      activeHoldIndex: 0,
+    }));
+
+    act(() => { syncHandler({ episodeId: 'ep-hosted', turnPhase: 'speaking' }); });
+    expect(screen.getByText('Protagonist is answering…')).toBeInTheDocument();
+    act(() => { syncHandler({ episodeId: 'ep-hosted', turnPhase: 'idle' }); });
+    expect(screen.queryByText('Protagonist is answering…')).not.toBeInTheDocument();
+  });
+
   it('toasts hosted:error frames so the operator sees refused host actions', async () => {
     const user = userEvent.setup();
     render(<LoomPlayPanel loom={loom} episode={episode} />);
