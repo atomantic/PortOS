@@ -97,9 +97,9 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-        <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
+        <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
           Daily Consumption
-        </h3>
+        </h2>
         <div className="flex items-center gap-3">
           <div className="flex gap-1">
             {['grams', 'drinks'].map(u => (

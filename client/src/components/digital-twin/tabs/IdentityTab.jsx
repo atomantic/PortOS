@@ -161,7 +161,7 @@ export default function IdentityTab({ onRefresh }) {
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-center gap-3 mb-3">
           <Fingerprint className="w-5 h-5 text-port-accent" />
-          <h3 className="font-medium text-white">Identity Completeness</h3>
+          <h2 className="font-medium text-white">Identity Completeness</h2>
           <span className="ml-auto text-sm text-gray-400">
             {activeCount}/{sectionKeys.length} sections active
           </span>
@@ -208,7 +208,7 @@ export default function IdentityTab({ onRefresh }) {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Dna className="w-5 h-5 text-blue-400" />
-              <h3 className="font-medium text-white">Genome</h3>
+              <h2 className="font-medium text-white">Genome</h2>
             </div>
             {sections.genome?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -256,7 +256,7 @@ export default function IdentityTab({ onRefresh }) {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Clock className="w-5 h-5 text-purple-400" />
-              <h3 className="font-medium text-white">Chronotype</h3>
+              <h2 className="font-medium text-white">Chronotype</h2>
             </div>
             {sections.chronotype?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -343,7 +343,7 @@ export default function IdentityTab({ onRefresh }) {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Activity className="w-5 h-5 text-green-400" />
-              <h3 className="font-medium text-white">Longevity</h3>
+              <h2 className="font-medium text-white">Longevity</h2>
             </div>
             {sections.longevity?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -421,7 +421,7 @@ export default function IdentityTab({ onRefresh }) {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Palette className="w-5 h-5 text-pink-400" />
-              <h3 className="font-medium text-white">Aesthetic Taste</h3>
+              <h2 className="font-medium text-white">Aesthetic Taste</h2>
             </div>
             {sections.aesthetics?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -485,7 +485,7 @@ export default function IdentityTab({ onRefresh }) {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Target className="w-5 h-5 text-amber-400" />
-              <h3 className="font-medium text-white">Life Goals</h3>
+              <h2 className="font-medium text-white">Life Goals</h2>
             </div>
             {sections.goals?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -555,7 +555,7 @@ export default function IdentityTab({ onRefresh }) {
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="flex items-center gap-2 mb-4">
             <Link2 className="w-5 h-5 text-port-accent" />
-            <h3 className="font-medium text-white">Cross-Domain Insights</h3>
+            <h2 className="font-medium text-white">Cross-Domain Insights</h2>
             <span className="text-xs text-gray-500 ml-auto">
               {crossInsights.insights.length} insight{crossInsights.insights.length !== 1 ? 's' : ''}
             </span>
