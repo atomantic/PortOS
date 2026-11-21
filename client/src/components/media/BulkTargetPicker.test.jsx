@@ -59,6 +59,7 @@ describe('BulkTargetPicker', () => {
           { id: 'col-1', name: 'Current', items: [] },
           { id: 'col-2', name: 'Landscapes', items: [{ kind: 'image', ref: 'a.jpg' }] },
           { id: 'col-3', name: 'Universe: architecture', source: 'auto', items: [] },
+          { id: 'col-4', name: 'Music video: City Lights', source: 'auto', items: [] },
         ]}
         onPick={onPick}
         onClose={vi.fn()}
@@ -66,9 +67,12 @@ describe('BulkTargetPicker', () => {
     );
 
     const rows = within(screen.getByRole('list')).getAllByRole('button');
-    expect(rows.map((row) => row.textContent)).toEqual(['Universearchitecture0', 'Landscapes1']);
-    fireEvent.click(rows[0]);
-    expect(onPick).toHaveBeenCalledWith('col-3', 'Universe: architecture');
+    expect(rows.map((row) => row.textContent)).toEqual(['Universearchitecture0', 'Music VideoCity Lights0', 'Landscapes1']);
+    expect(within(rows[1]).getByText('Music Video')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('City Lights')).toBeInTheDocument();
+    expect(within(rows[1]).getByTitle('Music video: City Lights')).toBeInTheDocument();
+    fireEvent.click(rows[1]);
+    expect(onPick).toHaveBeenCalledWith('col-4', 'Music video: City Lights');
     expect(screen.queryByText('No collections yet — create one below.')).not.toBeInTheDocument();
   });
 });

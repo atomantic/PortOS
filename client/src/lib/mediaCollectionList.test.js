@@ -26,6 +26,11 @@ describe('splitCollectionName', () => {
       .toEqual({ badge: 'Creative Director', title: 'Nightly Surreal — 2026-08-01' });
   });
 
+  it.each(['Music video: ', 'Music Video: '])('labels %s collections with a consistent badge', (prefix) => {
+    expect(splitCollectionName(`${prefix}Example Film`))
+      .toEqual({ badge: 'Music Video', title: 'Example Film' });
+  });
+
   it('covers every server-side auto-creator prefix', () => {
     expect(splitCollectionName('Writers Room: The Deep').badge).toBe('Writers Room');
     expect(splitCollectionName('Universe: Example Universe').badge).toBe('Universe');
@@ -71,6 +76,7 @@ describe('isAutoCollection', () => {
     expect(isAutoCollection({ id: 'x', name: 'Nightly Renders', source: 'auto' })).toBe(true);
     // source:'user' wins over a name that merely looks auto-generated.
     expect(isAutoCollection({ id: 'x', name: 'Universe: My Own Bucket', source: 'user' })).toBe(false);
+    expect(isAutoCollection({ id: 'x', name: 'Music Video: My Own Bucket', source: 'user' })).toBe(false);
     expect(isAutoCollection({ id: 'x', name: 'Foo', universeId: 'u1', source: 'user' })).toBe(false);
     // Synthetic still short-circuits ahead of any stamp.
     expect(isAutoCollection({ ...unsorted, source: 'auto' })).toBe(false);
@@ -79,6 +85,7 @@ describe('isAutoCollection', () => {
   it('falls back to the markers when a peer sends no source at all', () => {
     // An older peer strips the field; absent must NOT read as 'user'.
     expect(isAutoCollection({ id: 'uc-universe-1', name: 'Universe: Example' })).toBe(true);
+    expect(isAutoCollection({ id: 'mvc-example', name: 'Music video: Example Film' })).toBe(true);
     expect(isAutoCollection({ id: 'x', name: 'Concept Art', source: undefined })).toBe(false);
     // A garbage value is not a stamp either — fall through to the markers.
     expect(isAutoCollection({ id: 'x', name: 'Writers Room: The Deep', source: 'nonsense' })).toBe(true);
