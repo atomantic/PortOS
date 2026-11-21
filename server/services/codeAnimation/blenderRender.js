@@ -1,4 +1,5 @@
 /** Native sequence adapter; authority comes only from checked machine settings. */
+import { fileCompositionVideos } from '../mediaCollectionRules.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { readFile, mkdir, copyFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -140,12 +141,15 @@ export async function publishBlenderVideo(sequence, { revision, signal, reserve 
     signal?.throwIfAborted();
     // The history entry first names the copied MP4 and its poster, so it
     // commits under the backup lease (#9982).
-    const commit = () => withBackupAssetPublication(() => mutateVideoHistory(history => {
-      history.unshift({ id, filename, thumbnail, modelId: 'code-animation-blender', prompt: revision.manifest.title,
-        ...sequence.sequence.geometry, seed: revision.manifest.seed ?? 0, createdAt: new Date().toISOString(),
-        codeAnimation: { revisionId: revision.id, sourceHash: revision.sourceHash, renderer: sequence.renderer } });
-      return history;
-    }));
+    const commit = () => withBackupAssetPublication(async () => {
+      await mutateVideoHistory(history => {
+        history.unshift({ id, filename, thumbnail, modelId: 'code-animation-blender', prompt: revision.manifest.title,
+          ...sequence.sequence.geometry, seed: revision.manifest.seed ?? 0, createdAt: new Date().toISOString(),
+          codeAnimation: { revisionId: revision.id, sourceHash: revision.sourceHash, renderer: sequence.renderer } });
+        return history;
+      });
+      await fileCompositionVideos([id]);
+    });
     success = true;
     return { id, filename, thumbnail, path: `/data/videos/${filename}`, renderer: sequence.renderer, artifacts: sequence.artifacts,
       commit, cleanup: async () => { await rm(destination, { force: true }); await rm(join(PATHS.videoThumbnails, thumbnail), { force: true }); } };

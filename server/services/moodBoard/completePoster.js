@@ -14,7 +14,7 @@ export async function completePoster(boardId, style, render, onQueued) {
     width: 1536,
     height: 1024,
   });
-  const { jobId } = await enqueueJob({ kind: 'image', params, owner: `mood-board-poster:${boardId}` });
+  const { jobId } = await enqueueJob({ kind: 'image', params: { ...params, moodBoardPoster: { boardId } }, owner: `mood-board-poster:${boardId}` });
   if (!jobId) throw new Error('The board image was not queued');
   onQueued(jobId);
   const finished = await new Promise((resolve, reject) => {

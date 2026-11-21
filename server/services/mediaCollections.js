@@ -698,6 +698,41 @@ export async function findOrCreateMoodBoardCollection({ boardId, boardName }) {
   return collection.name === name ? collection : updateCollection(collection.id, { name });
 }
 
+// Project ids keep equally named decks separate and converge across peers.
+export async function findOrCreateDeckCollection({ deckId, deckName }) {
+  const name = `Deck: ${deckName}`.slice(0, NAME_MAX_LENGTH);
+  const collection = await findOrCreateFixedCollection(`deck-${deckId}`, {
+    name,
+    description: 'Images generated for this deck.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
+export const findOrCreateStoryboardCollection = ({ id, name }) => findOrCreateFixedCollection(`storyboard-${id}`, {
+  name: `Storyboard: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Images generated for this storyboard.',
+});
+
+export const findOrCreateFableLoomCollection = ({ id, name }) => findOrCreateFixedCollection(`fable-loom-${id}`, {
+  name: `Fable Loom: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Images and clips generated for this Fable Loom.',
+});
+
+export const findOrCreateTimelineCollection = ({ id, name }) => findOrCreateFixedCollection(`timeline-${id}`, {
+  name: `Timeline: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Videos exported from this timeline.',
+});
+
+export const findOrCreateSpriteCollection = ({ id, name }) => findOrCreateFixedCollection(`sprite-${id}`, {
+  name: `Sprite: ${name}`.slice(0, NAME_MAX_LENGTH),
+  description: 'Generated reference images for this sprite.',
+});
+
+export const findOrCreateCompositionsCollection = () => findOrCreateFixedCollection('compositions', {
+  name: 'Compositions',
+  description: 'Videos exported from HTML compositions and Code Animation.',
+});
+
 // Find a collection by its deterministic id, or create it. A tombstone at the
 // id is overwritten (re-creating a deleted auto bucket on next use).
 async function findOrCreateFixedCollection(id, { name, description }) {
@@ -998,7 +1033,7 @@ export async function addItem(id, item) {
  *
  * Returns the post-write collection plus counts: `{ collection, added, removed }`.
  */
-export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}) {
+export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}, { preserveRemovals = false } = {}) {
   if (!Array.isArray(add)) throw codedError('add must be an array', ERR_VALIDATION);
   if (!Array.isArray(remove)) throw codedError('remove must be an array', ERR_VALIDATION);
 
@@ -1037,12 +1072,14 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     const additions = [];
     for (const { kind, ref } of cleanAdd) {
       const key = `${kind}:${ref}`;
-      if (presentKeys.has(key)) continue;
+      if (presentKeys.has(key) || (preserveRemovals && removedItems[key])) continue;
       presentKeys.add(key);
       // A key removed earlier in this same batch keeps its removal record, so
       // the re-add must postdate it to survive.
       additions.push({ kind, ref, addedAt: removedItems[key] ? stampAfter(removedItems[key]) : now });
     }
+
+    if (!additions.length && !removed) return { collection: cur, added: 0, removed: 0 };
 
     const nextItems = [...remainingItems, ...additions];
     if (nextItems.length > ITEMS_MAX) {

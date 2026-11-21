@@ -62,6 +62,7 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;
+let listGallery;
 let generateImage;
 let buildSidecarMeta;
 let resolveOutputPlacement;
@@ -73,10 +74,25 @@ beforeAll(async () => {
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
+  ({ buildArgs, listGallery, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
   PATHS.images = join(tmpRegistryDir, 'images');
   mkdirSync(PATHS.images);
+});
+
+it('lists JPEG mood board outputs with their metadata sidecar', async () => {
+  const filename = 'board-collage-example.jpg';
+  const image = join(PATHS.images, filename);
+  const sidecar = join(PATHS.images, 'board-collage-example.metadata.json');
+  writeFileSync(image, 'fixture');
+  writeFileSync(sidecar, JSON.stringify({ prompt: 'Example collage' }));
+  try {
+    expect((await listGallery()).find(item => item.filename === filename))
+      .toMatchObject({ filename, prompt: 'Example collage' });
+  } finally {
+    rmSync(image);
+    rmSync(sidecar);
+  }
 });
 
 describe('imageGen local.parseImageExecutionMarker', () => {

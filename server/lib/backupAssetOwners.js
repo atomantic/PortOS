@@ -46,6 +46,11 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'music-video-collection-hook', status: 'admitted', modules: ['services/musicVideoCollectionHook.js'] },
   { id: 'requested-collection-hook', status: 'admitted', modules: ['services/requestedCollectionHook.js'] },
   {
+    id: 'automatic-media-collections',
+    status: 'admitted',
+    modules: ['services/mediaCollectionCompletionHook.js', 'services/mediaCollectionAutoOrganize.js'],
+  },
+  {
     id: 'pipeline-filename-hooks',
     status: 'admitted',
     modules: ['services/pipeline/filenameHookFactory.js', 'services/pipeline/seasonCoverFilenameHook.js'],

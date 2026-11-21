@@ -5,6 +5,7 @@
  * sidecar edits (e.g. the supplier a pull records) with prompt and visibility
  * edits, without loading the render graph in local.js.
  */
+import { sidecarPathForImage } from '../../lib/assetHash.js';
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
@@ -17,7 +18,7 @@ import { projectImageInputProvenance } from '../../lib/imageInputProvenance.js';
 // the preferred Portos location on miss — callers writing back land at the
 // canonical path automatically.
 export async function readImageSidecar(filename) {
-  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
+  const portosSidecar = sidecarPathForImage(filename);
   const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
   for (const path of [portosSidecar, altSidecar]) {
     const raw = await tryReadFile(path);
@@ -45,7 +46,6 @@ export const sidecarEditQueue = createKeyCachedQueue();
 
 // `mutate` edits the metadata in place; returning null leaves the file as it was.
 // `reindex: false` skips the index refresh for non-searchable fields (the hash cache).
-// Gallery (`.png`) filenames only: the `.png` → `.metadata.json` spelling above.
 export function editImageSidecar(filename, mutate, { reindex = true } = {}) {
   // Admit before joining the queue so a cut drains every already-requested
   // edit, including one waiting for an earlier edit's index refresh.
@@ -57,7 +57,7 @@ export function editImageSidecar(filename, mutate, { reindex = true } = {}) {
     // Sidecar-only records remain editable while peer media bytes are pending.
     const present = await Promise.all([
       join(PATHS.images, filename),
-      join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+      sidecarPathForImage(filename),
       join(PATHS.images, `${filename}.metadata.json`),
     ].map(path => stat(path).then(() => true, error => {
       if (error.code === 'ENOENT') return false;

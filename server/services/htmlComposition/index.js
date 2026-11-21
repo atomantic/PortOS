@@ -1,4 +1,5 @@
 import { channel } from 'node:diagnostics_channel';
+import { fileCompositionVideos } from '../mediaCollectionRules.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -372,6 +373,7 @@ async function renderCompositionAdmitted({ jobId, owner, audio, maxDurationSec, 
           report('history');
           await mutateVideoHistory(history => { history.unshift(...metas); return history; });
           success = true;
+          await fileCompositionVideos(metas.map(meta => meta.id));
           // `id`/`filename` name a real history entry (the first format); `generationId`
           // is the job. A single-format render keeps id === generationId as before.
           // A shutter-blur render reports how many output frames took each

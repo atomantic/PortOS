@@ -25,6 +25,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
+import { GALLERY_IMAGE_EXTENSIONS, isSafeFilename } from '../../lib/pathSafety.js';
 import { sidecarGenParamsHash, stripImageSidecarLocalFields, IMAGE_SIDECAR_LOCAL_FIELDS } from '../../lib/assetHash.js';
 import { isStr } from '../../lib/textUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
@@ -165,7 +166,7 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
  */
 export async function recordImageSupplier(imageFilename, peerInstanceId) {
   const safeName = sanitizeAssetFilename(imageFilename);
-  if (!safeName || !/\.png$/i.test(safeName) || !isStr(peerInstanceId)) return false;
+  if (!isSafeFilename(safeName, GALLERY_IMAGE_EXTENSIONS) || !isStr(peerInstanceId)) return false;
   const { editImageSidecar } = await import('../imageGen/sidecarStore.js');
   const changed = await editImageSidecar(safeName, (metadata) => {
     if (!isPlainObject(metadata) || isStr(metadata.suppliedByInstanceId) || sidecarGenParamsHash(metadata) !== null) return null;

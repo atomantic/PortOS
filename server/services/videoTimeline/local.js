@@ -1,4 +1,5 @@
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { fileOwnedMediaBestEffort, videoItem } from '../mediaCollectionRules.js';
 import { discardUnpublishedVideo } from '../videoGen/generateVideoHelpers.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
@@ -741,6 +742,7 @@ async function renderAdmittedProject(projectId, { posterSec } = {}, permit) {
             // Serialized append through the single shared history tail so a concurrent
             // download/render/timeline write can't clobber this entry.
             await mutateVideoHistory((history) => { history.unshift(meta); return history; });
+            await fileOwnedMediaBestEffort('timeline', project, [videoItem(jobId)]);
             return thumb;
           } catch (error) {
             await discardUnpublishedVideo({ jobId, outputPath });

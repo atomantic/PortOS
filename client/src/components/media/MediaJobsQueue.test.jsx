@@ -105,6 +105,7 @@ it('applies only matching progress frames to a running row without rereading the
   const { unmount } = render(<MediaJobsQueue kind="training" />);
   expect(await screen.findByText('50%')).toBeInTheDocument();
   expect(socketEmit).toHaveBeenCalledWith('media-jobs:subscribe');
+  await waitFor(() => expect(socketHandlers.get('media-jobs:progress')?.size).toBe(1));
 
   const progress = { id: trainingJob.id, startedAt: trainingJob.startedAt, progress: 0.7, statusMsg: 'Training step 350/500' };
   act(() => {
@@ -113,7 +114,7 @@ it('applies only matching progress frames to a running row without rereading the
   });
   expect(screen.getByText('50%')).toBeInTheDocument();
 
-  act(() => emitSocket('media-jobs:progress', progress));
+  await act(async () => { emitSocket('media-jobs:progress', progress); });
   expect(screen.getByText('70%')).toBeInTheDocument();
   expect(screen.getByText('Training step 350/500')).toBeInTheDocument();
   expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);

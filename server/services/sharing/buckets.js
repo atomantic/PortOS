@@ -109,7 +109,7 @@ export function bucketBlobSidecarPath(bucketPath, hash) {
 // Sidecar mapping `<sourcePath>:<mtimeMs>:<size> → <hash>` so the exporter can
 // skip `sha256File` + `copyFile` on re-export of unchanged assets.
 export function bucketBlobIndexPath(bucketPath) { return join(bucketBlobsDir(bucketPath), '.index.json'); }
-export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
+export function imageSidecarName(filename) { return filename.replace(/\.[^.]+$/, '') + '.metadata.json'; }
 
 // Per-bucket record store — series/issues/universes/media/reviews/outlines JSON
 // live under `records/<type>/<id>.json`. Unlike the blob helpers above, these do

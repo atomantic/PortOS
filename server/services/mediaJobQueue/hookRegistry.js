@@ -3,7 +3,10 @@ import { parseComicPagesOwner, parseSeasonCoverOwner, parseStoryboardsShotOwner 
 
 const tag = key => job => job.params?.[key];
 const musicProject = job => job.params?.musicVideo || job.params?.musicVideoProjectId;
+const collectionOwned = job => ['deckCard', 'moodBoardPoster', 'storyboardPanelRender', 'fableLoom', 'creativeDirector', 'spriteRef']
+  .some(key => job.params?.[key]);
 const hooks = [
+  [collectionOwned, () => import('../mediaCollectionCompletionHook.js').then(m => m.initMediaCollectionCompletionHook())],
   [tag('universeRun'), () => import('../universeBuilderCollectionHook.js').then(m => m.initUniverseBuilderCollectionHook())],
   [tag('catalogAttach'), () => import('../catalog/catalogImageAttachHook.js').then(m => m.initCatalogImageAttachHook())],
   [tag('writersRoom'), () => import('../writersRoomSceneImageHook.js').then(m => m.initWritersRoomSceneImageHook())],

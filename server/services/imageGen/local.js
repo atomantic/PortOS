@@ -53,7 +53,8 @@ import {
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
-import { registerGallerySha256Writer } from '../../lib/assetHash.js';
+import { GALLERY_IMAGE_EXTENSIONS } from '../../lib/pathSafety.js';
+import { registerGallerySha256Writer, sidecarPathForImage } from '../../lib/assetHash.js';
 import { beginMediaTombstone, commitLocalDeleteTombstone, clearMediaTombstone } from '../mediaTombstones.js';
 import { withLocalImageOrigin } from './imageRecords.js';
 import { readImageSidecar, refreshImageIndex, sidecarEditQueue, editImageSidecar } from './sidecarStore.js';
@@ -1441,9 +1442,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
 // `requiredMessage` preserves the original "Invalid filename" wording for
 // the missing-input case so existing client error-message expectations
 // (and the previously-shipped error-middleware contract) don't shift.
-export function assertGalleryFilename(filename) {
+export function assertGalleryFilename(filename, { pngOnly = false } = {}) {
   assertSafeFilename(filename, {
-    extensions: ['.png'],
+    extensions: pngOnly ? ['.png'] : GALLERY_IMAGE_EXTENSIONS,
     subject: 'filename',
     requiredMessage: 'Invalid filename',
   });
@@ -1462,7 +1463,7 @@ const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
  * the client-supplied name/extension is not trusted — and a non-image is
  * rejected with a 400, then re-encoded to **PNG** so the saved file is a
  * first-class gallery citizen: it lists in `/image-gen/gallery` and deletes via
- * `deleteImage`, both of which only manage `.png`. Returns the bare gallery
+ * `deleteImage`. Returns the bare gallery
  * filename and its `/data/images/` mount path for the caller to store.
  *
  * @param {string|null} base64Data - Legacy raw base64 image bytes
@@ -1531,7 +1532,7 @@ export async function listGallery() {
   // listMusicLibrary do filter directories; mirroring that here would be a
   // behavior change.
   const items = await listDirectoryByExtension(PATHS.images, {
-    extensions: ['.png'],
+    extensions: GALLERY_IMAGE_EXTENSIONS,
     requireRegularFile: false,
     mapEntry: async (f, _fullPath, s) => {
       const { metadata } = await readImageSidecar(f);
@@ -1563,9 +1564,9 @@ export async function deleteImage(filename, { fromRemoteTombstone = false } = {}
     try {
       await trashFiles([
         join(PATHS.images, filename),
-        join(PATHS.images, filename.replace(/\.png$/i, '.metadata.json')),
+        sidecarPathForImage(filename),
         join(PATHS.images, `${filename}.metadata.json`),
-        join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp')),
+        ...(/\.png$/i.test(filename) ? [join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))] : []),
       ]);
     } catch (err) {
       if (tombstone) await clearMediaTombstone('image', filename, { deletedAt: tombstone.deletedAt });

@@ -37,6 +37,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
     },
   ]),
   createMediaCollection: vi.fn(),
+  autoOrganizeMediaCollections: vi.fn(),
   deleteMediaCollection: vi.fn(),
   listVideoHistory: vi.fn().mockResolvedValue([]),
   listGalleryCollectionSummaries: vi.fn(async () => [{ id: 'unsorted', total: mockUnsortedItems.length,
@@ -112,6 +113,25 @@ describe('MediaCollections', () => {
     // clearAllMocks resets calls, not implementations — restore the shared
     // fixture so a test that emptied it can't leak into the next one.
     mockUnsortedItems = [{ kind: 'image', ref: 'loose.png', addedAt: '2024-01-02' }];
+  });
+
+  it('runs auto-organize once and refreshes the collection list after it settles', async () => {
+    const { autoOrganizeMediaCollections, listMediaCollections } = await import('../services/apiImageVideo.js');
+    let finish;
+    autoOrganizeMediaCollections.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    renderPage();
+    await screen.findByText('Alpha');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Auto-organize' }));
+    expect(screen.getByRole('button', { name: 'Organizing…' })).toBeDisabled();
+    expect(autoOrganizeMediaCollections).toHaveBeenCalledTimes(1);
+
+    listMediaCollections.mockResolvedValueOnce([
+      { id: 'deck-example', name: 'Deck: Example', items: [{ kind: 'image', ref: 'card.png' }] },
+    ]);
+    finish({ added: 1, updatedCollections: 1, missingAssets: 0, failedCollections: 0 });
+    expect(await screen.findByText('Example')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-organize' })).toBeEnabled();
   });
 
   it('renders non-empty collection names after loading', async () => {

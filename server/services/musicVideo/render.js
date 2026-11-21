@@ -1,4 +1,5 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { fileOwnedMediaBestEffort, videoItem } from '../mediaCollectionRules.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { assertProductionApproval, nameShots, productionReviewBasis } from './productionReview.js';
@@ -800,6 +801,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
         musicVideoProjectId: projectId,
       });
       settled = await writeSettled(completed);
+      await fileOwnedMediaBestEffort('musicVideo', project, [videoItem(jobId)]);
       return poster;
     });
     await retireOldFinals(projectId, jobId);
@@ -897,6 +899,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
         filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
       });
       settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
+      await fileOwnedMediaBestEffort('musicVideo', project, [videoItem(jobId)]);
       return poster;
     });
     await retireOldFinals(projectId, jobId);
@@ -1171,6 +1174,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
                 musicVideoProjectId: projectId,
               });
               settled = await writeSettled('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project, { clipFrames: false }) });
+              await fileOwnedMediaBestEffort('musicVideo', project, [videoItem(jobId)]);
               return poster;
             });
             await retireOldFinals(projectId, jobId);

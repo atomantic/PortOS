@@ -7,6 +7,7 @@ import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
   listMediaCollections,
+  autoOrganizeMediaCollections,
   createMediaCollection,
   deleteMediaCollection,
   listGalleryCollectionSummaries,
@@ -16,7 +17,7 @@ import {
   applyCollectionView, splitCollectionName, collectionItemCount,
   COLLECTION_SORTS, DEFAULT_COLLECTION_SORT, normalizeCollectionSort,
 } from '../lib/mediaCollectionList';
-import { middleTruncate } from '../utils/formatters';
+import { formatCount, middleTruncate } from '../utils/formatters';
 import MediaImage from '../components/MediaImage';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
@@ -44,6 +45,7 @@ export default function MediaCollections() {
   const [collectionsError, setCollectionsError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
   const [name, setName] = useState('');
   const [summaries, setSummaries] = useState([]);
 
@@ -108,6 +110,24 @@ export default function MediaCollections() {
       // to the list route (#8187).
       cancelQueryMirror();
       navigate(`/media/collections/${encodeURIComponent(created.id)}`);
+    }
+  };
+
+  const handleOrganize = async () => {
+    setOrganizing(true);
+    try {
+      const { added, updatedCollections, missingAssets, failedCollections } = await autoOrganizeMediaCollections({ silent: true });
+      const summary = added
+        ? `Added ${formatCount(added)} memberships across ${formatCount(updatedCollections)} collections.`
+        : 'No new collection memberships found.';
+      const missing = missingAssets ? ` ${formatCount(missingAssets)} unavailable assets skipped.` : '';
+      if (failedCollections) toast.error(`${summary}${missing} ${formatCount(failedCollections)} collections could not be updated.`);
+      else toast.success(summary + missing);
+      await refresh();
+    } catch (error) {
+      toast.error(error.message || 'Could not auto-organize media.');
+    } finally {
+      setOrganizing(false);
     }
   };
 
@@ -208,25 +228,36 @@ export default function MediaCollections() {
 
   return (
     <div className="space-y-4">
-      <form onSubmit={handleCreate} className="flex gap-2 items-center">
-        <input
-          ref={nameInputRef}
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={80}
-          aria-label="New collection name"
-          placeholder="New collection name"
-          className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-        />
+      <div className="flex flex-wrap gap-2 items-center">
+        <form onSubmit={handleCreate} className="flex flex-1 min-w-0 gap-2 items-center">
+          <input
+            ref={nameInputRef}
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={80}
+            aria-label="New collection name"
+            placeholder="New collection name"
+            className="min-w-0 flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+          />
+          <button
+            type="submit"
+            disabled={creating || !name.trim()}
+            className="px-3 py-2 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <Plus className="w-4 h-4" /> Create
+          </button>
+        </form>
         <button
-          type="submit"
-          disabled={creating || !name.trim()}
-          className="px-3 py-2 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-40"
+          type="button"
+          disabled={organizing}
+          onClick={handleOrganize}
+          title="File existing project media using saved project records and render history"
+          className="px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-border text-sm disabled:opacity-40"
         >
-          <Plus className="w-4 h-4" /> Create
+          {organizing ? 'Organizing…' : 'Auto-organize'}
         </button>
-      </form>
+      </div>
 
       {/* Filter row. Stacks under `sm` so the search box keeps a usable width
           on a phone instead of sharing one line with the sort + toggle. */}
