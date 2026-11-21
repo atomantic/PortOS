@@ -55,9 +55,7 @@ export async function createAccount(data) {
       email: data.email || '',
       enabled: true,
       syncConfig: {
-        maxAge: data.syncConfig?.maxAge || '30d',
         maxMessages: data.syncConfig?.maxMessages || 500,
-        syncInterval: data.syncConfig?.syncInterval || 300000,
         // Ingest sent mail into the human-activity timeline as `message.sent` events
         // so Tribe-outreach reply detection can see a thread as answered (#2796).
         // Only Gmail has a sent-fetch path today; default it on there, off elsewhere.

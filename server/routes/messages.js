@@ -31,9 +31,7 @@ const createAccountSchema = z.object({
   type: z.enum(MESSAGE_ACCOUNT_TYPES),
   email: z.union([z.string().email(), z.literal('')]).optional().default(''),
   syncConfig: z.object({
-    maxAge: z.string().optional(),
     maxMessages: z.number().int().positive().optional(),
-    syncInterval: z.number().int().positive().optional(),
     // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
     ingestSent: z.boolean().optional()
   }).optional()
@@ -47,9 +45,7 @@ const updateAccountSchema = z.object({
   // client; accepted here for schema parity so a round-tripped account payload validates.
   sendAsAliases: z.array(z.string()).optional(),
   syncConfig: z.object({
-    maxAge: z.string().optional(),
     maxMessages: z.number().int().positive().optional(),
-    syncInterval: z.number().int().positive().optional(),
     // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
     ingestSent: z.boolean().optional()
   }).optional()

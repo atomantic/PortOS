@@ -88,9 +88,9 @@ describe('messageAccounts', () => {
       expect(acc.lastSyncAt).toBeNull();
       expect(acc.lastSyncStatus).toBeNull();
       expect(acc.createdAt).toBeTruthy();
-      expect(acc.syncConfig.maxAge).toBe('30d');
       expect(acc.syncConfig.maxMessages).toBe(500);
-      expect(acc.syncConfig.syncInterval).toBe(300000);
+      expect(acc.syncConfig.syncInterval).toBeUndefined();
+      expect(acc.syncConfig.maxAge).toBeUndefined();
     });
 
     it('sets provider to playwright for non-gmail types', async () => {
