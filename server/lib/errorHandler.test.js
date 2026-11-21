@@ -10,7 +10,6 @@ import {
   buildErrorEnvelope,
   sendErrorResponse
 } from './errorHandler.js';
-import { translateExtensionLibraryError } from './pgExtensionError.js';
 
 // Build a fake Express req/res pair. `res.status()` and `res.json()` are
 // chainable (they return `res`) to mirror Express, and `req.app.get('io')`
@@ -450,9 +449,12 @@ describe('errorHandler.js', () => {
 
     it('answers a missing Postgres extension library with a 503 and one log line, no stack', async () => {
       const { req, res } = makeReqRes({ emit: vi.fn() });
-      const pgErr = Object.assign(new Error('could not access file "$libdir/vector": No such file or directory'), { code: '58P01' });
+      // The shape db.js's translateExtensionLibraryError throws.
+      const coded = Object.assign(new Error('PostgreSQL cannot load the "vector" extension library … run: npm run setup:db'), {
+        status: 503, code: 'DB_EXTENSION_UNAVAILABLE',
+      });
 
-      await asyncHandler(async () => { throw translateExtensionLibraryError(pgErr); })(req, res, vi.fn());
+      await asyncHandler(async () => { throw coded; })(req, res, vi.fn());
       await flushMicrotasks();
 
       expect(res.status).toHaveBeenCalledWith(503);

@@ -15,7 +15,6 @@ import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './dat
 import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 import { createDatabaseRestoreRecovery, databaseRestoreRecoveryError } from './databaseRestoreRecovery.js';
 import { normalizePgParams } from './pgJson.js';
-import { translateExtensionLibraryError } from './pgExtensionError.js';
 import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from './databaseMaintenanceSchema.js';
 
 const { Pool } = pg;
@@ -242,6 +241,27 @@ let maintenanceActive = false;
 // Exported so the restore service writes the SAME journal this gate reads.
 const restoreRecovery = createDatabaseRestoreRecovery();
 export const databaseRestoreRecovery = restoreRecovery;
+
+/**
+ * PostgreSQL reports a missing extension shared library (SQLSTATE 58P01,
+ * `could not access file "$libdir/vector"`) the same way for every query that
+ * touches the extension. The usual cause is a Homebrew upgrade that replaced
+ * the extension bottle with one built only for newer PostgreSQL majors, so
+ * the running server can no longer load it. That is an environment fault the
+ * user fixes with `npm run setup:db`, not a defect in the calling route.
+ */
+const LIBDIR_FILE = /\$libdir\/([\w.-]+)/;
+
+/** Map that error to a coded 503 naming the fix; return anything else unchanged. */
+export function translateExtensionLibraryError(err) {
+  if (err?.code !== '58P01') return err;
+  const library = LIBDIR_FILE.exec(err.message || '')?.[1];
+  if (!library) return err;
+  return Object.assign(
+    new Error(`PostgreSQL cannot load the "${library}" extension library, so database features that use it are unavailable. This usually follows a Homebrew upgrade; run: npm run setup:db`),
+    { status: 503, code: 'DB_EXTENSION_UNAVAILABLE', library, cause: err },
+  );
+}
 
 function maintenanceError() {
   return Object.assign(new Error('Database restore in progress; retry after it finishes.'), {
