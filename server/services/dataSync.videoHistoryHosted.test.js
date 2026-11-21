@@ -15,21 +15,49 @@ vi.mock('./instances.js', async () => ({
 }));
 
 const streamPeer = vi.hoisted(() => vi.fn());
-vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: streamPeer }));
+const fetchPeer = vi.hoisted(() => vi.fn());
+vi.mock('../lib/peerHttpClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  peerStreamRequest: streamPeer,
+  peerFetch: fetchPeer,
+}));
+vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  generateThumbnail: vi.fn().mockResolvedValue(null),
+}));
 
 const dataSync = await import('./dataSync.js');
-const { markHosted, resolveMediaLocations, hostedAssetFallback } = await import('./peerHostedMedia.js');
+const { markHosted, resolveMediaLocations, hostedAssetFallback, listHostedEntries } = await import('./peerHostedMedia.js');
 const { PATHS } = await import('../lib/fileUtils.js');
+const { buildCollectionAssetManifest, buildAssetManifestWithCollection, buildAssetManifestForSeries } = await import('./sharing/peerSyncAssets.js');
 const row = { id: 'v1', filename: 'v1.mp4', createdAt: '2026-05-22T00:00:00Z' };
 const location = async () => (await resolveMediaLocations([{ kind: 'video', ref: 'v1.mp4' }]))[0];
 const inventory = (peerId, filenames, portosMeta) => dataSync.applyRemote('videoHistory', { version: 1, filenames, checked: ['v1.mp4'] }, { peerId, inventory: true, portosMeta });
+const imported = { ...row, id: 'imported-id', filename: 'imported.webm' };
+const importedCollection = {
+  id: 'imported-clips', name: 'Imported clips',
+  createdAt: row.createdAt, updatedAt: row.createdAt,
+  items: [{ kind: 'video', ref: imported.id, addedAt: row.createdAt }],
+};
+const importedLocation = async () => (await resolveMediaLocations(importedCollection.items))[0];
+const syncImportedCollection = () => dataSync.applyRemote('mediaCollections', { collections: [importedCollection] }, { peerId: 'a' });
+const syncImportedHistory = () => dataSync.applyRemote('videoHistory', { videos: [imported] }, { peerId: 'a' });
+const importedInventory = (category) => {
+  const filenames = [imported.filename, 'unrelated.webm'];
+  return dataSync.applyRemote(category, { version: 1, filenames, checked: filenames }, { peerId: 'a', inventory: true });
+};
 
 describe('video history peer ownership', () => {
   beforeEach(() => {
     rmSync(join(PATHS.data, 'peer-hosted-media.json'), { force: true });
     rmSync(join(PATHS.data, 'video-history.json'), { force: true });
     rmSync(join(PATHS.videos, 'v1.mp4'), { force: true });
-    peers.list = ['a', 'b', 'c'].map(instanceId => ({ instanceId, mediaSyncMode: 'host' }));
+    rmSync(join(PATHS.videos, imported.filename), { force: true });
+    fetchPeer.mockReset();
+    peers.list = ['a', 'b', 'c'].map(instanceId => ({
+      instanceId, mediaSyncMode: 'host', host: `${instanceId}.example.com`, port: 5555,
+      syncCategories: { mediaCollections: true },
+    }));
   });
 
   it('does not treat relayed history as ownership and repairs it on unchanged history', async () => {
@@ -110,6 +138,58 @@ describe('video history peer ownership', () => {
     mkdirSync(PATHS.videos, { recursive: true });
     writeFileSync(join(PATHS.videos, 'v1.mp4'), 'local');
     expect((await dataSync.getHostedMediaInventory()).filenames).toEqual(['v1.mp4']);
+  });
+
+  it('publishes the history filename in standalone and bundled collection manifests and inventory', async () => {
+    await syncImportedCollection();
+    await syncImportedHistory();
+    expect((await dataSync.getHostedMediaInventory('mediaCollections')).filenames).not.toContain(imported.filename);
+    mkdirSync(PATHS.videos, { recursive: true });
+    writeFileSync(join(PATHS.videos, imported.filename), 'local');
+    for (const manifest of [
+      await buildCollectionAssetManifest(importedCollection),
+      await buildAssetManifestWithCollection({}, importedCollection),
+      await buildAssetManifestForSeries({}, [], importedCollection),
+    ]) {
+      expect(manifest).toEqual([{ kind: 'video', filename: imported.filename, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }]);
+    }
+    expect((await dataSync.getHostedMediaInventory('mediaCollections')).filenames).toContain(imported.filename);
+    expect(await importedLocation()).toEqual({ location: 'local' });
+  });
+
+  it.each(['history first', 'inventory first'])('hosts record-owned video with %s', async (order) => {
+    await syncImportedCollection();
+    if (order === 'history first') {
+      await syncImportedHistory();
+    } else {
+      await importedInventory('mediaCollections');
+      expect(await listHostedEntries()).not.toHaveProperty(`video:${imported.filename}`);
+      await syncImportedHistory();
+    }
+    expect(await importedLocation()).toEqual({ location: 'missing' });
+    await importedInventory('mediaCollections');
+    expect(await importedLocation()).toMatchObject({ location: 'remote', hostPeerId: 'a' });
+    expect(await listHostedEntries()).not.toHaveProperty('video:unrelated.webm');
+    expect(fetchPeer).not.toHaveBeenCalled();
+  });
+
+  it.each(['history first', 'inventory first'])('recovers a missing video copy with %s using the legacy history inventory', async (order) => {
+    peers.list[0].mediaSyncMode = 'copy';
+    fetchPeer.mockImplementation(async () => new Response('video bytes', { headers: { 'content-length': '11' } }));
+    await syncImportedCollection();
+    if (order === 'history first') {
+      await syncImportedHistory();
+    } else {
+      await importedInventory('videoHistory');
+      expect(fetchPeer).not.toHaveBeenCalled();
+      await syncImportedHistory();
+    }
+    expect(await importedLocation()).toEqual({ location: 'missing' });
+    const receipt = await importedInventory('videoHistory');
+    expect(receipt).toEqual({ applied: false, count: 0 });
+    await vi.waitFor(async () => expect(await importedLocation()).toEqual({ location: 'local' }));
+    expect(fetchPeer).toHaveBeenCalledTimes(1);
+    expect(fetchPeer.mock.calls[0][0]).toMatch(/\/data\/videos\/imported\.webm$/);
   });
 });
 afterAll(cleanup);

@@ -36,7 +36,7 @@ import { getUniverseMutationEpoch } from './universeBuilder/store.js';
 import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
 import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
-import { getPeers } from './instances.js';
+import { getPeers, resolveEffectiveCategories } from './instances.js';
 import { mutateVideoHistory, HISTORY_UNCHANGED, videoRowLiveStamp } from './videoGen/history.js';
 import { listHostedEntries, reconcileHostedMedia } from './peerHostedMedia.js';
 import { sanitizeAssetFilename } from './sharing/buckets.js';
@@ -45,7 +45,8 @@ import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
 import { listMediaTombstones, listExportableMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 import { omitHostedDeletedStamps } from '../lib/renderTiming.js';
-import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
+import { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
+import { collectionVideoRefToFilename, loadCollectionVideoFilenames, resolveCollectionVideoFilename } from './collectionVideoFiles.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
@@ -992,14 +993,26 @@ async function getVideoHistorySnapshot() {
   return { data, checksum: computeChecksum(data) };
 }
 
+async function getCollectionInventoryReferences(kind, { alternateNamesOnly = false } = {}) {
+  const { data } = await getMediaCollectionsSnapshot();
+  const items = data.collections.filter((collection) => !collection.deleted)
+    .flatMap((collection) => collection.items.filter((item) => item.kind === kind));
+  if (kind === 'image') return items.map((item) => item.ref);
+  const history = await loadCollectionVideoFilenames(items);
+  return items.flatMap((item) => {
+    const filename = resolveCollectionVideoFilename(item.ref, history);
+    if (!filename || (alternateNamesOnly && filename === collectionVideoRefToFilename(item.ref))) return [];
+    return [filename];
+  });
+}
+
 // This separate inventory describes only bytes on this machine, never the
 // unioned history or files streamed from another peer. It is refreshed even
 // when history is unchanged and is absent on older peers.
 export async function getHostedMediaInventory(category = 'videoHistory', kind = 'video') {
-  const { data } = category === 'mediaCollections' ? await getMediaCollectionsSnapshot() : await getVideoHistorySnapshot();
   const references = category === 'mediaCollections'
-    ? data.collections.filter((c) => !c.deleted).flatMap((c) => referenceCollectionAssetManifest(c).filter((asset) => asset.kind === kind).map((asset) => asset.filename))
-    : data.videos.map((row) => row.filename);
+    ? await getCollectionInventoryReferences(kind)
+    : (await getVideoHistorySnapshot()).data.videos.map((row) => row.filename);
   const names = await readdir(kind === 'image' ? PATHS.images : PATHS.videos, { withFileTypes: true }).catch((err) => {
     if (err.code === 'ENOENT') return [];
     throw err;
@@ -1017,6 +1030,36 @@ export async function getHostedMediaInventory(category = 'videoHistory', kind = 
     if (info) mtimes[name] = info.mtimeMs;
   }
   return { version: 1, filenames, checked, mtimes, portosMeta: await buildPortosMeta() };
+}
+
+// The regular inventory is refreshed even when record checksums are unchanged.
+// It also exists on peers whose collection manifests only contain legacy names.
+// A stored collection ref and a separately synced history row must both match
+// before an inventory can fill a missing alternate-named copy.
+async function recoverCollectionVideoCopies(peer, filenames, checked) {
+  if (!resolveEffectiveCategories(peer).mediaCollections || filenames.length === 0) return;
+  const examined = new Set(checked);
+  const names = new Set(await getCollectionInventoryReferences('video', { alternateNamesOnly: true }));
+  const references = [...new Set(filenames)].filter((name) => examined.has(name) && names.has(name))
+    .map((filename) => ({ kind: 'video', filename }));
+  const missing = await diffAssetManifestAgainstLocal(references, { includeMismatched: false });
+  if (missing.length > 0) {
+    pullMissingAssetsFromPeer(peer.instanceId, missing, { includeMismatched: false }).catch((error) => {
+      console.error(`❌ Collection video copy failed: ${error.message}`);
+    });
+  }
+}
+
+async function scopeMediaInventory(category, kind, filenames, checked) {
+  if ([...filenames, ...checked].some((name) => sanitizeAssetFilename(name) === null)) return null;
+  const examined = new Set(checked);
+  if (filenames.some((name) => !examined.has(name))) return null;
+  if (category !== 'mediaCollections' || kind !== 'video') return { filenames, checked };
+  const referenced = new Set(await getCollectionInventoryReferences(kind));
+  return {
+    filenames: filenames.filter((name) => referenced.has(name)),
+    checked: checked.filter((name) => referenced.has(name)),
+  };
 }
 
 // Unlike the collection inventory, this lists every gallery image on disk, so a name
@@ -1627,23 +1670,31 @@ export async function applyRemote(category, remoteData, options = {}) {
     const peer = (await getPeers()).find((p) => p.instanceId === source.peerId && p.enabled !== false);
     if (peer && remoteData?.version === 1 && Array.isArray(remoteData.filenames) && Array.isArray(remoteData.checked)) {
       const kind = options.inventoryKind === 'image' ? 'image' : 'video';
+      const inventory = await scopeMediaInventory(category, kind, remoteData.filenames, remoteData.checked);
+      if (!inventory) return { applied: false, count: 0 };
+      const { filenames, checked } = inventory;
       // Every report of held bytes feeds the holders list (services/mediaHolders.js).
       if (kind === 'video' || category === 'mediaCollections') {
         const { recordPeerInventory } = await import('./mediaHolders.js');
-        await recordPeerInventory(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        await recordPeerInventory(peer.instanceId, kind, filenames, checked);
       }
       if (options.inventoryScope === 'library') {
         // File times only: a whole-library listing must not drive host-mode reconciliation.
         if (kind === 'image' && category === 'mediaCollections' && isPlainObject(remoteData.mtimes)) {
           const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
-          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked: remoteData.checked, complete: remoteData.complete === true });
+          await recordPeerHoldings(peer.instanceId, 'image', 'imageLibrary', { mtimes: remoteData.mtimes, checked, complete: remoteData.complete === true });
           await reconcileMediaOrigins('image');
         }
       } else if (kind === 'video' || category === 'mediaCollections') {
-        if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, remoteData.filenames, remoteData.checked);
+        if (peer.mediaSyncMode === 'host') await reconcileHostedMedia(peer.instanceId, kind, filenames, checked);
+        else if (category === 'videoHistory') {
+          await recoverCollectionVideoCopies(peer, filenames, checked);
+        }
         if (isPlainObject(remoteData.mtimes)) {
           const { recordPeerHoldings, reconcileMediaOrigins } = await import('./mediaOriginReconcile.js');
-          await recordPeerHoldings(peer.instanceId, kind, category, { mtimes: remoteData.mtimes, checked: remoteData.checked });
+          const mtimes = Object.fromEntries(filenames.filter((name) => Object.hasOwn(remoteData.mtimes, name))
+            .map((name) => [name, remoteData.mtimes[name]]));
+          await recordPeerHoldings(peer.instanceId, kind, category, { mtimes, checked });
           await reconcileMediaOrigins(kind);
         }
       }

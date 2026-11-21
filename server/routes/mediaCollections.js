@@ -23,7 +23,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { mediaCollectionBulkItemsSchema, mediaCollectionPrimarySchema } from '../lib/mediaValidation.js';
 import * as svc from '../services/mediaCollections.js';
 import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
-import { pullMissingAssetsFromPeer, collectionVideoRefToFilename } from '../services/sharing/peerSyncAssets.js';
+import { pullMissingAssetsFromPeer } from '../services/sharing/peerSyncAssets.js';
 
 const router = Router();
 
@@ -96,11 +96,11 @@ router.post('/:id/localize', asyncHandler(async (req, res) => {
   const c = await svc.getCollection(req.params.id).catch((err) => { throw mapServiceError(err); });
   const wanted = keys ? new Set(keys) : null;
   const items = c.items.filter((item) => !wanted || wanted.has(svc.itemKey(item)));
-  const locations = await resolveMediaLocations(items);
+  const locations = await resolveMediaLocations(items, { includeFilename: true });
   const byPeer = new Map();
   items.forEach((item, i) => {
     if (locations[i].location !== 'remote') return;
-    const filename = item.kind === 'video' ? collectionVideoRefToFilename(item.ref) : item.ref;
+    const { filename } = locations[i];
     const list = byPeer.get(locations[i].hostPeerId) ?? [];
     list.push({ kind: item.kind, filename });
     byPeer.set(locations[i].hostPeerId, list);

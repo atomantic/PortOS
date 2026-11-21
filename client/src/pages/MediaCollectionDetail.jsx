@@ -153,8 +153,8 @@ function MediaCollectionDetailContent() {
     const result = await localizeMediaCollection(id, remoteKeys, { silent: true });
     toast.success(`Copying ${result?.started ?? remoteKeys.length} hosted item(s) to this machine…`);
   });
-  // A copied file lands as `peerSync:asset-arrived`; re-read the annotations
-  // (and gallery rows) instead of polling. Debounced — a batch fires many.
+  // Re-read location annotations and gallery rows when bytes or video
+  // history arrive. Debounce batches of socket events.
   useEffect(() => {
     if (isUnsorted) return undefined;
     let active = true;
@@ -167,15 +167,18 @@ function MediaCollectionDetailContent() {
       }, 500);
     };
     const onPrimaryChanged = (event) => { if (event.id === id) onArrived(); };
+    const onHistoryChanged = (event) => { if (event.kind === 'video') onArrived(); };
     socket.on('peerSync:asset-arrived', onArrived);
     socket.on('media:collection-primary:changed', onPrimaryChanged);
     socket.on('media:holders:changed', onArrived);
+    socket.on('media:history:changed', onHistoryChanged);
     return () => {
       active = false;
       clearTimeout(timer);
       socket.off('peerSync:asset-arrived', onArrived);
       socket.off('media:collection-primary:changed', onPrimaryChanged);
       socket.off('media:holders:changed', onArrived);
+      socket.off('media:history:changed', onHistoryChanged);
     };
   }, [id, isUnsorted, page.refresh]);
   const resolvePreview = useGalleryPreviewResolver({ collectionId: id });

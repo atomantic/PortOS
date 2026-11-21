@@ -124,6 +124,7 @@ vi.mock('../components/media/normalize', () => {
 });
 
 import toast from '../components/ui/Toast';
+import socket from '../services/socket';
 import MediaCollectionDetail from './MediaCollectionDetail';
 import { UNSORTED_ID } from '../lib/unsorted';
 
@@ -277,6 +278,19 @@ describe('MediaCollectionDetail — Unsorted view', () => {
 // ── Non-unsorted view: button must NOT appear ─────────────────────────────────
 
 describe('MediaCollectionDetail — regular collection view', () => {
+  it('refreshes the Copy locally action when a hosted video history row arrives', async () => {
+    const item = { kind: 'video', ref: VIDEO_C.id, location: 'missing' };
+    mockGetMediaCollection.mockResolvedValue({ ...REAL_COLLECTION, items: [item] });
+    renderReal();
+    await screen.findByText('My Collection');
+    expect(screen.queryByRole('button', { name: 'Copy 1 to this machine' })).toBeNull();
+
+    mockGetMediaCollection.mockResolvedValue({ ...REAL_COLLECTION, items: [{ ...item, location: 'remote' }] });
+    const [, onHistoryChanged] = socket.on.mock.calls.find(([event]) => event === 'media:history:changed');
+    act(() => onHistoryChanged({ kind: 'video', op: 'upsert', ids: [VIDEO_C.id] }));
+    expect(await screen.findByRole('button', { name: 'Copy 1 to this machine' })).toBeInTheDocument();
+  });
+
   it('assigns the chosen primary and reports copies left queued or kept', async () => {
     mockSetMediaCollectionPrimary.mockImplementationOnce(async () => {
       mockGetMediaCollectionPrimary.mockResolvedValueOnce({

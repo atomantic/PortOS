@@ -13,10 +13,17 @@ afterAll(cleanupTempDataRoots);
 // keeps the whole peer-sync import graph out of this suite's load time.
 vi.mock('../services/sharing/peerSyncAssets.js', () => ({
   pullMissingAssetsFromPeer: vi.fn(),
-  collectionVideoRefToFilename: (ref) => ref,
+}));
+vi.mock('../services/instances.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getPeers: vi.fn(async () => []),
 }));
 
 const { default: router } = await import('./mediaCollections.js');
+const { getPeers } = await import('../services/instances.js');
+const { markHosted } = await import('../services/peerHostedMedia.js');
+const { pullMissingAssetsFromPeer } = await import('../services/sharing/peerSyncAssets.js');
+const { saveHistory } = await import('../services/videoGen/history.js');
 
 const app = express();
 app.use(express.json());
@@ -27,6 +34,22 @@ const BASE = '/api/media/collections';
 const api = (method, path = '', body) => request(app)[method](`${BASE}${path}`).send(body);
 const create = async (name = 'Concept Art') => (await api('post', '', { name })).body;
 const keysOf = (collection) => collection.items.map((i) => `${i.kind}:${i.ref}`);
+
+it('copies the hosted filename attached to the collection video ID by history', async () => {
+  const { id } = await create('Imported video');
+  await api('post', `/${id}/items`, { kind: 'video', ref: 'imported-id' });
+  await markHosted('video-peer', [{ kind: 'video', filename: 'imported.webm' }]);
+  expect((await api('get', `/${id}`)).body.items[0]).toMatchObject({ location: 'missing' });
+
+  await saveHistory([{ id: 'imported-id', filename: 'imported.webm' }]);
+  const peers = [{ instanceId: 'video-peer', enabled: true }];
+  vi.mocked(getPeers).mockResolvedValueOnce(peers).mockResolvedValueOnce(peers).mockResolvedValueOnce(peers);
+  expect((await api('get', `/${id}`)).body.items[0]).toMatchObject({ location: 'remote', hostPeerId: 'video-peer' });
+  const response = await api('post', `/${id}/localize`, { keys: ['video:imported-id'] });
+  expect(response.body).toEqual({ requested: 1, started: 1 });
+  await vi.waitFor(() => expect(pullMissingAssetsFromPeer).toHaveBeenCalledWith('video-peer',
+    [{ kind: 'video', filename: 'imported.webm' }], { includeMismatched: false }));
+});
 
 describe('mediaCollections routes — create / read / patch / delete', () => {
   it('creates a collection that reads back by id and in the list, then patches and soft-deletes it', async () => {

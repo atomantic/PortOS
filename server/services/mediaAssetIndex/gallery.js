@@ -174,7 +174,7 @@ async function projectCovers(summaries, videoSnapshot) {
     if (videoFilename) return { kind: 'video', ref: videoFilename, url: cover };
     return null;
   });
-  const located = await resolveMediaLocations(probes.filter(Boolean));
+  const located = await resolveMediaLocations(probes.filter(Boolean), { knownFilenames: true });
   let next = 0;
   return summaries.map((summary, i) => {
     const probe = probes[i];

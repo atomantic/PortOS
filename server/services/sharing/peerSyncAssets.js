@@ -47,6 +47,7 @@ import { mediaTombstoneStamps } from '../mediaTombstones.js';
 import { assertFileNotMediaManifest } from '../../lib/uploads.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
 import { clearImageTombstoneSupersededByOwner } from '../imageGen/imageRecords.js';
+import { collectionVideoRefToFilename, loadCollectionVideoFilenames, resolveCollectionVideoFilename, VIDEO_FILE_EXTENSIONS } from '../collectionVideoFiles.js';
 
 // Bound file hashing to avoid starving unrelated filesystem work when a
 // large record (especially a deck) advertises hundreds of images.
@@ -112,71 +113,45 @@ function referenceAssetManifest(record) {
   return out;
 }
 
-/**
- * Map a collection's items array to the `{ directImageFilenames,
- * directImageRefFilenames, directVideoFilenames }` shape consumed by the
- * per-item manifest hashers. Collections store items as
- * `{ kind:'image'|'video', ref, addedAt }` and carry no image-ref kind.
- */
+export async function buildCollectionAssetManifest(collection) {
+  const history = await loadCollectionVideoFilenames(collection?.items);
+  return hashAssetReferences(referenceCollectionAssetManifest(collection, history));
+}
+
+/** Collection items have gallery image names and video refs, with no image-ref kind. */
 export function collectCollectionAssetReferences(collection) {
-  const items = Array.isArray(collection?.items) ? collection.items : [];
   const directImageFilenames = [];
   const directVideoFilenames = [];
-  for (const it of items) {
-    if (it?.kind === 'image' && typeof it.ref === 'string') directImageFilenames.push(it.ref);
-    else if (it?.kind === 'video' && typeof it.ref === 'string') directVideoFilenames.push(it.ref);
+  for (const item of Array.isArray(collection?.items) ? collection.items : []) {
+    if (typeof item?.ref !== 'string') continue;
+    if (item.kind === 'image') directImageFilenames.push(item.ref);
+    else if (item.kind === 'video') directVideoFilenames.push(item.ref);
   }
   return { directImageFilenames, directImageRefFilenames: [], directVideoFilenames };
 }
 
-// Video collection items store the BARE video id (e.g. a UUID), while the
-// on-disk file is `<id>.mp4` (today every PortOS-managed video is mp4 —
-// confirmed by inspecting video-history.json). The image side stores refs
-// WITH the extension already. Append `.mp4` unless the ref already carries an
-// extension (defensive — older state may have stamped a filename instead of an
-// id, and a future video format would land as `.webm` etc.). Shared by BOTH
-// collection manifest builders (`buildCollectionAssetManifest` for standalone
-// mediaCollection pushes, `buildAssetManifestForCollection` for the
-// linkedCollection bundle) so the two can't diverge on the extension rule.
-export function collectionVideoRefToFilename(ref) {
-  return /\.[a-z0-9]+$/i.test(ref) ? ref : `${ref}.mp4`;
-}
-
-export async function buildCollectionAssetManifest(collection) {
-  return hashAssetReferences(referenceCollectionAssetManifest(collection));
-}
-
-// The read-only sync diagnostic can use history to locate imported or
-// timeline videos whose filename is independent of their collection ref.
-// The legacy transfer manifest still follows the receiver's reference rules.
+// The diagnostic pairs files across peer versions by the legacy reference
+// name, even when one peer knows the history filename and the other doesn't.
 export async function buildCollectionIntegrityAssets(collection) {
-  const references = referenceCollectionAssetManifest(collection);
-  const videos = collectCollectionAssetReferences(collection).directVideoFilenames;
-  const history = videos.length > 0 ? await videoHistoryFilenamesById() : new Map();
-  const videoFilenames = Object.fromEntries(videos.flatMap((ref) => {
-    if (!sanitizeAssetFilename(ref)) return [];
-    const fallback = collectionVideoRefToFilename(ref);
-    const filename = sanitizeAssetFilename(history.get(ref));
-    return filename && filename !== fallback ? [[fallback, filename]] : [];
+  const items = Array.isArray(collection?.items) ? collection.items : [];
+  const history = await loadCollectionVideoFilenames(items);
+  const videoFilenames = Object.fromEntries(items.flatMap((item) => {
+    if (item?.kind !== 'video') return [];
+    const filename = resolveCollectionVideoFilename(item.ref, history);
+    if (!filename) return [];
+    const fallback = collectionVideoRefToFilename(item.ref);
+    return filename !== fallback ? [[fallback, filename]] : [];
   }));
-  const assets = references.map((asset) => asset.kind === 'video' && Object.hasOwn(videoFilenames, asset.filename)
-    ? { ...asset, filename: videoFilenames[asset.filename] }
-    : asset);
+  const assets = referenceCollectionAssetManifest(collection, history);
   return { assetManifest: await hashAssetReferences(assets), videoFilenames };
 }
 
-export function referenceCollectionAssetManifest(collection) {
-  const refs = collectCollectionAssetReferences(collection);
-  const out = [];
-  for (const filename of refs.directImageFilenames) {
-    const entry = imageAssetReference(filename);
-    if (entry) out.push(entry);
-  }
-  for (const ref of refs.directVideoFilenames) {
-    const entry = assetReference(collectionVideoRefToFilename(ref), 'video');
-    if (entry) out.push(entry);
-  }
-  return out;
+export function referenceCollectionAssetManifest(collection, videoFilenames) {
+  const { directImageFilenames, directVideoFilenames } = collectCollectionAssetReferences(collection);
+  return [
+    ...directImageFilenames.map(imageAssetReference),
+    ...directVideoFilenames.map((ref) => assetReference(resolveCollectionVideoFilename(ref, videoFilenames), 'video')),
+  ].filter(Boolean);
 }
 
 // assetIntegrityForRecord / assetShaListForRecord (per-kind integrity-hash
@@ -374,7 +349,7 @@ export async function diffAssetManifestAgainstLocal(manifest, { includeMismatche
 const ASSET_KIND_EXTENSIONS = {
   image: new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
   'image-ref': new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
-  video: new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']),
+  video: new Set(VIDEO_FILE_EXTENSIONS),
   music: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus']),
   model: new Set(['.glb']),
   audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
@@ -762,7 +737,7 @@ export function referenceFableLoomAssetManifest(loom) {
  * character/canon reference sheet (`/data/image-refs/...`, the form
  * PinToMoodBoardMenu pins synthetic `canon-sheet:`/`noun:` sources under).
  * External URLs (http(s)/data/blob) resolve on the receiver itself → skipped.
- * Mirrors `buildAssetManifestForCollection`: path-traversal-guarded,
+ * Like a collection manifest, this is path-traversal-guarded,
  * missing-local-file skipped silently (including a null-hash entry would make
  * every receiver re-request bytes the sender can't fulfill),
  * dedup-by-`<kind>:<filename>` so a media-key and imageUrl pointing at the same
@@ -883,10 +858,11 @@ export function referenceStoryboardAssetManifest(board) {
 }
 
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
-  return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection));
+  const history = await loadCollectionVideoFilenames(linkedCollection?.items);
+  return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection, history));
 }
 
-export function referenceAssetManifestForSeries(series, issues, linkedCollection = null) {
+export function referenceAssetManifestForSeries(series, issues, linkedCollection, videoFilenames) {
   const seriesAssets = referenceAssetManifest(series);
   const dedup = new Map(seriesAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   for (const issue of issues) {
@@ -896,7 +872,7 @@ export function referenceAssetManifestForSeries(series, issues, linkedCollection
     }
   }
   if (linkedCollection) {
-    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceCollectionAssetManifest(linkedCollection, videoFilenames);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
@@ -911,67 +887,20 @@ export function referenceAssetManifestForSeries(series, issues, linkedCollection
  * `items[]` only ships once.
  */
 export async function buildAssetManifestWithCollection(record, linkedCollection) {
-  return hashAssetReferences(referenceAssetManifestWithCollection(record, linkedCollection));
+  const history = await loadCollectionVideoFilenames(linkedCollection?.items);
+  return hashAssetReferences(referenceAssetManifestWithCollection(record, linkedCollection, history));
 }
 
-export function referenceAssetManifestWithCollection(record, linkedCollection) {
+export function referenceAssetManifestWithCollection(record, linkedCollection, videoFilenames) {
   const recordAssets = referenceAssetManifest(record);
   const dedup = new Map(recordAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   if (linkedCollection) {
-    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceCollectionAssetManifest(linkedCollection, videoFilenames);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
   }
   return [...dedup.values()];
-}
-
-/**
- * Hash each item in a media collection so the receiver can pull missing
- * bytes from `/data/images/` (or `/data/videos/`) via the existing asset-pull
- * worker. Collections are append-mostly and items refer to filenames the
- * sender has on disk; an item whose file is missing (e.g. half-imported
- * from another peer) is skipped silently — including a null-hash entry
- * would make every receiver re-request bytes the sender can't fulfill.
- *
- * Items with `kind: 'video'` route through the video PATHS dir; other kinds
- * (today only 'image') route through the image PATHS dir. This mirrors
- * `collectAssetReferences` and the `directoryForAssetKind` map.
- */
-export async function buildAssetManifestForCollection(collection) {
-  return hashAssetReferences(referenceAssetManifestForCollection(collection));
-}
-
-function referenceAssetManifestForCollection(collection) {
-  const out = [];
-  for (const it of Array.isArray(collection?.items) ? collection.items : []) {
-    if (!it || typeof it.ref !== 'string') continue;
-    // Path-traversal guard: collection items can arrive from a peer (via
-    // `linkedCollection` push or the snapshot-sync mediaCollections
-    // category), and a malicious `ref` like `../etc/passwd` would otherwise
-    // let `join(PATHS, ref)` read arbitrary local files when THIS instance
-    // is the sender — leaking the hash of the targeted file to peers. Same
-    // posture as the receiver-side `diffAssetManifestAgainstLocal`.
-    // `sanitizeItem` in mediaCollections.js also rejects path-traversal
-    // refs on the inbound merge boundary; this is defense in depth.
-    const safeName = sanitizeAssetFilename(it.ref);
-    if (!safeName) continue;
-    if (it.kind === 'video') {
-      // Bare videoId → `<id>.mp4` via the shared helper (see
-      // collectionVideoRefToFilename). `sanitizeAssetFilename` already ran on
-      // `it.ref` above; the extension append is purely the on-disk naming rule.
-      const entry = assetReference(collectionVideoRefToFilename(safeName), 'video');
-      if (entry) out.push(entry);
-    } else {
-      // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
-      // image — the receiver's diff path will only accept entries whose kind
-      // maps to a known directory in `directoryForAssetKind`, so a junk kind
-      // gets filtered there without polluting disk.
-      const entry = imageAssetReference(safeName);
-      if (entry) out.push(entry);
-    }
-  }
-  return out;
 }
 
 // --- Receiver-side asset pull worker ------------------------------------
