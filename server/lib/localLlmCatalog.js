@@ -659,7 +659,12 @@ export const LOCAL_LLM_CATALOG = [
     format: 'mlx',
     appleSiliconOnly: true,
     ollama: 'inkling-2-mini:26b-a5b-nvfp4',
-    ollamaAliases: ['inkling-2-mini', 'inkling-2-mini:latest', 'inkling-2-mini:26b-a5b']
+    ollamaAliases: ['inkling-2-mini', 'inkling-2-mini:latest', 'inkling-2-mini:26b-a5b'],
+    // Reviewed: every Ollama tag is this one NVFP4 manifest, so `26b-a5b` is no
+    // more full-precision than `-nvfp4`. The hosted row is full precision, so the
+    // composite's local-build relabel ("quantization not measured") is what keeps
+    // this reference honest; do not drop it to show a bare hosted score.
+    benchmarkModel: 'inkling-2-mini'
   },
   {
     key: 'qwen3.6-27b',
