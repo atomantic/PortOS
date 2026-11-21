@@ -349,7 +349,8 @@ describe('AudioStage generator readiness', () => {
     render(<AudioStage issue={makeIssue()} />);
 
     await openGenerator();
-    await userEvent.type(await screen.findByLabelText('Describe the music'), 'warm pads');
+    const prompt = '  warm pads\n';
+    await userEvent.type(await screen.findByLabelText('Describe the music'), prompt);
     const generate = screen.getByRole('button', { name: 'Generate' });
     expect(generate).toBeDisabled();
     expect(screen.getByText(/selected Fixed engine model weights are not installed/i)).toBeInTheDocument();
@@ -357,7 +358,7 @@ describe('AudioStage generator readiness', () => {
     expect(generate).toBeEnabled();
     await userEvent.click(generate);
     expect(generatePipelineMusic).toHaveBeenCalledWith('iss-1', {
-      prompt: 'warm pads', engine: engine.id, durationSec: 12, modelId: 'cached',
+      prompt, engine: engine.id, durationSec: 12, modelId: 'cached',
     }, { silent: true });
   });
 

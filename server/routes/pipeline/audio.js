@@ -427,7 +427,7 @@ const MAX_ENGINE_DURATION = Math.max(...Object.values(ENGINES).map((e) => e.maxD
 // the issue as a `source: 'gen'` track. The generated WAV lands in the shared
 // music library, so it's reusable across issues exactly like an upload.
 const musicGenerateSchema = z.object({
-  prompt: z.string().trim().min(1).max(800),
+  prompt: z.string().max(800).refine((value) => value.trim().length > 0, 'prompt is required'),
   engine: z.enum(Object.keys(ENGINES)).optional(),
   durationSec: z.number().min(1).max(MAX_ENGINE_DURATION).optional(),
   modelId: z.enum(ALL_MODEL_IDS).optional(),

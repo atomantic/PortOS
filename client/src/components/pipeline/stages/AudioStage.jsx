@@ -225,14 +225,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
   };
 
   const handleGenerateMusic = async () => {
-    const prompt = genPrompt.trim();
     if (activeEngineReason) return;
-    if (!prompt) { toast.error('Describe the music you want first'); return; }
+    if (!genPrompt.trim()) { toast.error('Describe the music you want first'); return; }
     setGenerating(true);
     // Owns its own error toast → silent so the helper doesn't double-toast.
     const result = await generatePipelineMusic(
       issue.id,
-      { prompt, engine: activeEngine.id, durationSec: genDuration, modelId: selectedModelId },
+      { prompt: genPrompt, engine: activeEngine.id, durationSec: genDuration, modelId: selectedModelId },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Music generation failed');

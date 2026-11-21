@@ -151,3 +151,22 @@ describe.each(['music', 'cue'])('direct pipeline %s rendering maintenance', kind
     }
   });
 });
+
+describe('direct pipeline music prompts', () => {
+  const send = (prompt) => request(app).post(endpoint('music')).send({ prompt });
+
+  it('passes an authored 800-character prompt through unchanged', async () => {
+    const prompt = `  ${'a'.repeat(797)}\n`;
+    expect((await send(prompt)).status).toBe(200);
+    expect(fixture.generate).toHaveBeenCalledWith(expect.objectContaining({ prompt }));
+  });
+
+  it.each([
+    ['whitespace-only', ' \t\n '],
+    ['over-limit', ` ${'a'.repeat(800)}`],
+  ])('rejects a %s prompt before generation or persistence', async (_name, prompt) => {
+    expect((await send(prompt)).status).toBe(400);
+    expect(fixture.generate).not.toHaveBeenCalled();
+    expect(fixture.save).not.toHaveBeenCalled();
+  });
+});
