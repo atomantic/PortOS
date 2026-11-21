@@ -261,51 +261,24 @@ export async function getActiveJob() {
 }
 
 export async function getActiveJobs() {
-  const jobs = [
+  return [
     local.getActiveJob(),
     external.getActiveJob(),
-    ...(codex.getActiveJobs ? codex.getActiveJobs() : [codex.getActiveJob()]),
-    ...(grok.getActiveJobs ? grok.getActiveJobs() : [grok.getActiveJob()]),
-    ...(agy.getActiveJobs ? agy.getActiveJobs() : [agy.getActiveJob()]),
-    ...(fal.getActiveJobs ? fal.getActiveJobs() : [fal.getActiveJob()]),
-    ...(runway.getActiveJobs ? runway.getActiveJobs() : [runway.getActiveJob()]),
-    ...higgsfield.getActiveJobs(),
-    ...google.getActiveJobs(),
+    ...Object.values(CLOUD_PROVIDERS).flatMap((provider) =>
+      'getActiveJobs' in provider && provider.getActiveJobs ? provider.getActiveJobs() : [provider.getActiveJob()]),
   ].filter(Boolean);
-  return jobs;
 }
 
 // Try-each-provider SSE attach + cancel — the route only knows the jobId,
 // not which backend produced it, so we ask each provider in turn and let
 // the first one that owns the job handle the attach.
-export const attachSseClient = (jobId, res) => {
-  if (local.attachSseClient(jobId, res)) return true;
-  if (codex.attachSseClient(jobId, res)) return true;
-  if (grok.attachSseClient(jobId, res)) return true;
-  if (agy.attachSseClient(jobId, res)) return true;
-  if (fal.attachSseClient(jobId, res)) return true;
-  if (runway.attachSseClient(jobId, res)) return true;
-  if (higgsfield.attachSseClient(jobId, res)) return true;
-  if (google.attachSseClient(jobId, res)) return true;
-  return false;
-};
+export const attachSseClient = (jobId, res) =>
+  [local, ...Object.values(CLOUD_PROVIDERS)].some((provider) => provider.attachSseClient(jobId, res));
 
 export const cancel = () => {
-  // The "stop everything" dispatcher — invoked by routes/imageGen.js's
-  // `/cancel` fallback when no specific jobId or queue entry is targeted.
-  // local has at most one in-flight, cloud CLIs can have N (parallel cloud
-  // lane), so their bulk variants are the right ones here. Return whether
-  // anything was actually cancelled — short-circuiting on the first hit
-  // would orphan a cloud job whenever local is also active.
-  const localCancelled = local.cancel();
-  const codexCancelled = codex.cancelAll();
-  const grokCancelled = grok.cancelAll();
-  const agyCancelled = agy.cancelAll();
-  const falCancelled = fal.cancelAll();
-  const runwayCancelled = runway.cancelAll();
-  const higgsfieldCancelled = higgsfield.cancelAll();
-  const googleCancelled = google.cancelAll();
-  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled || runwayCancelled || higgsfieldCancelled || googleCancelled);
+  // Bulk cancel every backend before checking if any job was signalled.
+  const results = [local.cancel(), ...Object.values(CLOUD_PROVIDERS).map((provider) => provider.cancelAll())];
+  return results.some(Boolean);
 };
 
 // Exact-ID cancel (#9932). The explicit-target counterpart to cancel(): stops
@@ -318,7 +291,7 @@ export const cancelJob = (jobId) => {
   if (!jobId) return false;
   const localJob = local.getActiveJob();
   if ((localJob?.id === jobId || localJob?.generationId === jobId) && local.cancel()) return true;
-  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId) || runway.cancel(jobId) || higgsfield.cancel(jobId) || google.cancel(jobId);
+  return Object.values(CLOUD_PROVIDERS).some((provider) => provider.cancel(jobId));
 };
 
 // Re-exports so routes can hit a specific backend directly when the request

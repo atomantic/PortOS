@@ -17,7 +17,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
+  CLOUD_IMAGE_GEN_MODES, GENERATION_MODE_LABELS, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
 } from '../../lib/generationModes.js';
 import {
   AGY_ASPECT_RATIOS,
@@ -86,26 +86,10 @@ export const enabledCloudImageModes = (settings) =>
   CLOUD_IMAGE_GEN_MODES.filter((mode) => settings?.imageGen?.[mode]?.enabled === true);
 
 /**
- * Human-facing backend names, the server half of the client's MODE_LABELS
- * (client/src/lib/imageGenModes.js). A map, since ids like 'lm-studio' don't capitalize.
- */
-const MODE_LABELS = Object.freeze({
-  [IMAGE_GEN_MODE.LOCAL]: 'Local',
-  [IMAGE_GEN_MODE.CODEX]: 'Codex',
-  [IMAGE_GEN_MODE.GROK]: 'Grok',
-  [IMAGE_GEN_MODE.AGY]: 'Agy',
-  [IMAGE_GEN_MODE.FAL]: 'fal.ai',
-  [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
-  [IMAGE_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
-  [IMAGE_GEN_MODE.GOOGLE]: 'Google',
-  [IMAGE_GEN_MODE.EXTERNAL]: 'External',
-});
-
-/**
  * Sentence-case backend name for user-facing messages ('Codex', 'Agy', …); falls back to
  * 'This' for an absent mode, which reads correctly in `editIncapableModeError`.
  */
-export const modeLabel = (mode) => MODE_LABELS[mode] || mode || 'This';
+export const modeLabel = (mode) => GENERATION_MODE_LABELS[mode] || mode || 'This';
 
 /**
  * The one 400 for "this backend was handed an input image and cannot take one" (#3331),
