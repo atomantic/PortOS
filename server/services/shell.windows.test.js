@@ -22,6 +22,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows shell and filesyst
   });
 
   it.each(['cmd', 'powershell'])('launches a CLI in %s and submits an exact prompt through ConPTY', async flavor => {
+    const promptTimeout = flavor === 'powershell' ? 25000 : 10000;
     const root = await mkdtemp(join(tmpdir(), 'portos-native-tui-'));
     let sessionId, terminal, exited;
     let output = '';
@@ -49,8 +50,8 @@ describe.skipIf(process.platform !== 'win32')('native Windows shell and filesyst
       expect(sessionId).toBeTruthy();
       terminal = getSessionProcess(sessionId);
       terminal.onExit(result => { exited = result; });
-      // Wait for the shell's actual prompt, then use the public Enter path.
-      await vi.waitFor(() => expect(output.includes('>')).toBe(true), { timeout: 10000, interval: 20 });
+      // PowerShell 5.1 cold starts can exceed ten seconds under parallel Windows CI load.
+      await vi.waitFor(() => expect(output.includes('>')).toBe(true), { timeout: promptTimeout, interval: 20 });
       const command = `${quoteForShell(process.execPath, flavor, 'command')} ${quoteForShell(helper, flavor)}`;
       expect(submitToSession(sessionId, command)).toBe(true);
       await vi.waitFor(() => expect(output.includes('PORTOS_NATIVE_READY')).toBe(true), { timeout: 10000, interval: 20 });
@@ -70,5 +71,5 @@ describe.skipIf(process.platform !== 'win32')('native Windows shell and filesyst
       if (terminal) await vi.waitFor(() => expect(exited).toBeDefined(), { timeout: 5000, interval: 20 });
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 55000);
 });
