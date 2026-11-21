@@ -108,6 +108,9 @@ export const providerSchema = z.object({
   // Per-request context window (Ollama num_ctx). Lifts the ~4K default so long
   // prompts (e.g. a whole manuscript) aren't silently truncated. Null = unset.
   numCtx: z.number().int().min(512).max(1048576).nullable().optional(),
+  // Per-model num_ctx overrides keyed by model id; each replaces numCtx for
+  // that model only (a 1M-token model next to 128K ones on one daemon).
+  modelNumCtx: z.record(z.string().min(1).max(300), z.number().int().min(512).max(1048576)).optional(),
   // Default generation controls for local OpenAI-compatible backends and their
   // OpenCode wrappers; a run may override per task. Nullable: null is "unset"
   // (the backend keeps its own), so the editor can remove a pin.

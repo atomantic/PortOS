@@ -17,6 +17,7 @@ import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedCon
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 import { ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
+import { withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
 
 const failure = (code, message) => ({ ok: false, safe: false, code, message });
 
@@ -357,7 +358,7 @@ export async function getContributionAssessmentFingerprint(source = 'github-pr')
  * shared ladder's answer.
  */
 function resolveUntrustedContentWindow(selected, effectiveModel) {
-  const runtimeProvider = withOllamaRuntimeContextWindow(selected);
+  const runtimeProvider = withOllamaRuntimeContextWindow(withModelNumCtx(selected, effectiveModel));
   const claimedWindow = knownContextWindow(runtimeProvider, effectiveModel) ?? 4096;
   const local = isUntrustedContentProvider(selected, 'messages');
   return local && !(Number(runtimeProvider.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
@@ -389,7 +390,9 @@ async function analyzeScreenedContent({ provider, model, content, prompt, source
   // This transport deliberately has no runner failure hooks, run archives,
   // model healing, agent escalation, fallback, redirect, or tool execution.
   // Otherwise attacker-controlled diagnostics could become an autofixer task.
-  const nativeUrl = ollamaNativeChatUrl(selected);
+  // The window the request asks for must be the one budgeted above.
+  const windowed = withModelNumCtx(selected, effectiveModel);
+  const nativeUrl = ollamaNativeChatUrl(windowed);
   const result = await withAbortTimeout(Math.min(Math.max(Number(selected.timeout) || 300_000, 1000), 300_000), async signal => {
     const response = await fetch(nativeUrl || `${selected.endpoint.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST', redirect: 'error', signal,
@@ -399,8 +402,8 @@ async function analyzeScreenedContent({ provider, model, content, prompt, source
         messages: [{ role: 'system', content: taskPrompt }, { role: 'user', content: evidence }],
         stream: false,
         ...(nativeUrl
-          ? { options: { num_ctx: Math.floor(Number(selected.numCtx)), num_predict: maxTokens } }
-          : { max_tokens: maxTokens, ...(Number(selected.numCtx) > 0 ? { num_ctx: Number(selected.numCtx) } : {}) }),
+          ? { options: { num_ctx: Math.floor(Number(windowed.numCtx)), num_predict: maxTokens } }
+          : { max_tokens: maxTokens, ...(Number(windowed.numCtx) > 0 ? { num_ctx: Number(windowed.numCtx) } : {}) }),
       }),
     });
     if (!response.ok || response.redirected) return null;

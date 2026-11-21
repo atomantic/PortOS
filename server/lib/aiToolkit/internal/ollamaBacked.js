@@ -65,3 +65,21 @@ function positiveTokens(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
+
+/**
+ * `provider` with its per-model window applied: when `modelNumCtx[model]` is
+ * set, that number replaces `numCtx` for this model only, so one large-window
+ * model (a 1M-token one, say) need not raise the window every model on the
+ * daemon loads with. Every reader of `numCtx` for a known model goes through
+ * this first: the request, the clamp, the budgeter and the meter. In-memory
+ * only; returns the SAME object when there is no override for `model`.
+ *
+ * @param {object|null|undefined} provider
+ * @param {string|null|undefined} model
+ * @returns {object|null|undefined}
+ */
+export function withModelNumCtx(provider, model) {
+  const override = model ? positiveTokens(provider?.modelNumCtx?.[model]) : null;
+  if (!provider || !override || positiveTokens(provider.numCtx) === override) return provider;
+  return { ...provider, numCtx: override };
+}

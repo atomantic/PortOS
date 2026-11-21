@@ -9,6 +9,7 @@ import { anyAbortSignal } from '../lib/requestAbort.js';
 // service can measure a bare loopback daemon that has no provider record.
 import { buildMessages, streamOllamaChat, streamOpenAiChat } from '../lib/openAiChatStream.js';
 import { assertSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
+import { withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -138,7 +139,8 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
     allowCustomEndpoint: provider.allowCustomEndpoint === true,
   });
 
-  const requestBody = { ...(Number(provider.numCtx) > 0 ? { num_ctx: Number(provider.numCtx) } : {}), ...extraBody };
+  const numCtx = Number(withModelNumCtx(provider, modelId)?.numCtx);
+  const requestBody = { ...(numCtx > 0 ? { num_ctx: numCtx } : {}), ...extraBody };
   const stream = backend === 'ollama' && (nativeOllamaUsage || Number(requestBody.num_ctx) > 0) ? streamOllamaChat : streamOpenAiChat;
   return stream({
     endpoint: provider.endpoint,

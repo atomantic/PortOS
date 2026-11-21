@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
-import { clampToRuntimeContextWindow } from './internal/ollamaBacked.js';
+import { clampToRuntimeContextWindow, withModelNumCtx } from './internal/ollamaBacked.js';
 
 /**
  * Gate a *configured* fallback-model pin against the fallback provider's own
@@ -99,7 +99,8 @@ function resolvedFallbackModel(provider, correctedModel) {
  * Exported because the host applies the same rule to the EXPLICITLY REQUESTED
  * provider, which never passes through `getFallbackProvider` below.
  */
-export function knownContextWindow(provider, model) {
+export function knownContextWindow(rawProvider, model) {
+  const provider = withModelNumCtx(rawProvider, model);
   const explicit = Number(provider?.contextWindow);
   const catalog = Number(model && provider?.modelContextWindows?.[model]);
   const planning = Number.isFinite(explicit) && explicit > 0

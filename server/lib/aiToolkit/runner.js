@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
+import { withModelNumCtx } from './internal/ollamaBacked.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound
@@ -819,10 +820,12 @@ export function createRunnerService(config = {}) {
       // `num_ctx` in any position), so the model would load at the daemon
       // default and silently drop the prompt's head. See
       // ./internal/ollamaNativeChat.js.
-      const nativeOllamaUrl = ollamaNativeChatUrl(provider);
       const requestModel = model || provider.defaultModel;
+      // A per-model window (`modelNumCtx`) replaces `numCtx` for this model only.
+      const windowProvider = withModelNumCtx(provider, requestModel);
+      const nativeOllamaUrl = ollamaNativeChatUrl(windowProvider);
       const requestBody = nativeOllamaUrl
-        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider, generation: apiGenerationOptions(provider), maxTokens })
+        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider: windowProvider, generation: apiGenerationOptions(provider), maxTokens })
         : {
             model: requestModel,
             messages: [{ role: 'user', content: messageContent }],
