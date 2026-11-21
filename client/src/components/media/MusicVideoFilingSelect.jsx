@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { listMusicVideoProjectSummaries } from '../../services/apiMusicVideo.js';
@@ -36,7 +37,7 @@ export default function MusicVideoFilingSelect({ id = 'media-gen-music-video', d
         className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[44px] pointer-fine:sm:min-h-0">
         <option value="">None</option>
         {value && !listed && <option value={value}>This music video</option>}
-        {projects.map((project) => <option key={project.id} value={project.id}>{project.name || 'Untitled'}</option>)}
+        {sortByLabel(projects, (project) => project.name || 'Untitled').map((project) => <option key={project.id} value={project.id}>{project.name || 'Untitled'}</option>)}
       </select>
     </div>
   );

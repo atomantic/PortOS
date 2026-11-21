@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, CheckCircle2, Download, Plus, RotateCcw, Save, Trash2, Upload, X } from 'lucide-react';
 import { getNotesVaults } from '../../services/apiNotes.js';
@@ -193,7 +194,7 @@ export default function IdeaLoomLists() {
           {settings.enabled && vaultsResource.state !== 'error' && <label className="block text-xs text-gray-300" htmlFor="idealoom-vault">Vault
             <select id="idealoom-vault" value={settings.obsidianVaultId || ''} onChange={(event) => patchSettings({ obsidianVaultId: event.target.value || null })} className="mt-1 block min-h-[44px] w-full rounded border border-port-border bg-port-bg px-3 text-sm text-white">
               <option value="">Choose a vault…</option>
-              {vaultsResource.items.map((vault) => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
+              {sortByLabel(vaultsResource.items).map((vault) => <option key={vault.id} value={vault.id}>{vault.name}</option>)}
             </select>
           </label>}
           {settings.enabled && settings.obsidianVaultId && <label className="flex items-start gap-2 text-xs text-gray-300" htmlFor="idealoom-autosync">

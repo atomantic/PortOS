@@ -19,6 +19,7 @@
  *                   the API surface changing later.
  */
 
+import { sortByLabel } from '../lib/sortByLabel.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Search, Plus, Loader2, X, Sparkles } from 'lucide-react';
@@ -167,7 +168,7 @@ export default function IngredientPicker({
           </div>
         ) : (
           <ul className="space-y-2">
-            {filtered.map((it) => {
+            {sortByLabel(filtered, (it) => it.name || '(untitled)').map((it) => {
               const badge = CATALOG_BADGE_BY_ID[it.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
               const checked = selectedIds.has(it.id);
               const rowBase = 'w-full text-left p-3 rounded border bg-port-bg/40 transition-colors';

@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import useLocalImageModels from '../../hooks/useLocalImageModels.js';
 import ToggleChip from '../ui/ToggleChip.jsx';
@@ -160,7 +161,7 @@ export default function ToolPicker({ idPrefix = 'mv-auto', tools, models, onChan
                   className={inputClass}
                 >
                   <option value="">{select.blankLabel}</option>
-                  {select.options.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+                  {sortByLabel(select.options).map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
                 {select.status && <p id={statusId} role="status" className="text-[11px] text-port-warning mt-1">{select.status}</p>}
               </div>
@@ -196,7 +197,7 @@ export function VideoModelField({ id, tool, value, onChange }) {
       <label htmlFor={id} className="block text-xs text-port-text-muted mb-1">{label}</label>
       <select id={id} value={value} disabled={select.disabled} aria-describedby={select.status ? statusId : undefined} onChange={(e) => onChange(e.target.value)} className={inputClass}>
         <option value="">{select.blankLabel}</option>
-        {select.options.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+        {sortByLabel(select.options).map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
       </select>
       {select.status && <p id={statusId} role="status" className="text-[11px] text-port-warning mt-1">{select.status}</p>}
     </div>

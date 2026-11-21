@@ -7,6 +7,7 @@
  * runner evaluates, so the card can't disagree with what actually happens.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle, Ban, ChevronDown, ChevronRight, Flame, RotateCcw } from 'lucide-react';
@@ -235,7 +236,7 @@ export default function FamilyCard({
             <label htmlFor={`maintenance-app-${familyId}`}>Maintenance sequence app</label>
             <select id={`maintenance-app-${familyId}`} value={sequenceAppId} onChange={event => setSequenceAppId(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2">
               <option value="">Select app</option>
-              {sequenceApps.map(app => <option key={app.id} value={app.id}>{app.name || app.id}</option>)}
+              {sortByLabel(sequenceApps, (app) => app.name || app.id).map(app => <option key={app.id} value={app.id}>{app.name || app.id}</option>)}
             </select>
             {sequenceAppId && !sequenceJobs && <p>Enable the listed tasks for this app in <Link to="/cos/schedule" className="text-port-accent underline">Scheduled Tasks</Link>, including perpetual mode on claim-issue.</p>}
             <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="text-port-accent disabled:opacity-40"

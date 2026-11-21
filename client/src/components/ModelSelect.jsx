@@ -1,3 +1,4 @@
+import { sortByLabel } from '../lib/sortByLabel.js';
 // Active + Legacy optgroup `<select>` shared by media-gen pages (VideoGen,
 // CreativeDirector, the Pipeline episode-video stage). Splits `models` into
 // active and `m.deprecated === true` groups; the Legacy optgroup only renders
@@ -45,15 +46,15 @@ export default function ModelSelect({
       {loading ? <option value="">Loading models…</option> : (
         <>
           {emptyOption != null && <option value="">{emptyOption}</option>}
-          {active.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+          {sortByLabel(active, getLabel).map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
           {legacy.length > 0 && (
             <optgroup label="Legacy">
-              {legacy.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+              {sortByLabel(legacy, getLabel).map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
             </optgroup>
           )}
           {optionGroups.filter((group) => group.models.length > 0).map((group) => (
             <optgroup key={group.label} label={group.label}>
-              {group.models.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+              {sortByLabel(group.models, getLabel).map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
             </optgroup>
           ))}
         </>

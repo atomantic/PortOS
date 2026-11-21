@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { HIGGSFIELD_VIDEO_MODELS, HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { GOOGLE_VIDEO_MODELS, GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../../../../server/lib/googleVideoModels.js';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
@@ -249,7 +250,7 @@ export default function SceneRenderTarget({
           <RenderOptionSelect id={`${id}-model`} label="Model" value={overrides.modelId || ''} disabled={disabled || localChoices.length === 0}
             onChange={(modelId) => set({ modelId, numFrames: null })}>
             {localChoices.length === 0 && <option value="">{performance ? 'No lip-sync model installed' : 'No local model installed'}</option>}
-            {localChoices.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+            {sortByLabel(localChoices, (model) => model.name || model.id).map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
           </RenderOptionSelect>
           {localModel && !performance && (
             <RenderOptionSelect id={`${id}-length`} label="Clip length" value={selectedFrames || ''} disabled={disabled}

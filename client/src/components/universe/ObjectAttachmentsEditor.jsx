@@ -11,6 +11,7 @@
  * and text fields buffer via useFieldDraft and commit on blur.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2, Heart } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
@@ -50,7 +51,7 @@ function AttachmentRow({ attachment, idx, characters, onUpdate, onRemove, disabl
           {targetMissing ? (
             <option value={attachment.characterId}>(missing: {attachment.characterId})</option>
           ) : null}
-          {characters.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+          {sortByLabel(characters, (c) => c.name || c.id).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
         </select>
         <select
           value={ATTACHMENT_ROLES.includes(attachment.role) ? attachment.role : 'custom'}

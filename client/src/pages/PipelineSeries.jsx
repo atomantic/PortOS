@@ -1,3 +1,4 @@
+import { sortByLabel } from '../lib/sortByLabel.js';
 import { compareIssuesInSeries } from '../../../server/lib/pipelineIssueOrder.js';
 /**
  * Pipeline — Series detail page.
@@ -557,7 +558,7 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
                 offer a sentinel option so the picker doesn't auto-snap them
                 to whatever the first universe in the list happens to be. */}
             {!series.universeId ? <option value="">— Pick a universe —</option> : null}
-            {universes.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {sortByLabel(universes).map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           <Link
             to={series.universeId ? `/universes/${encodeURIComponent(series.universeId)}` : '/universes'}

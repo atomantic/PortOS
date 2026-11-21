@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import { useEffect, useState } from 'react';
 import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
@@ -166,7 +167,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
           }}>
             <option value="">No universe</option>
             {universeId && !lists.universes.some((u) => u.id === universeId) && <option value={universeId}>Selected universe</option>}
-            {lists.universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {sortByLabel(lists.universes).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           {refusal && (
             <p className="text-xs text-port-error mt-1" role="alert">
@@ -187,7 +188,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
           <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS} onChange={(e) => {
             const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
             if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
-          }}><option value="">{query ? `${shown.length} of ${available.length} match…` : 'Add from universe…'}</option>{shown.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+          }}><option value="">{query ? `${shown.length} of ${available.length} match…` : 'Add from universe…'}</option>{sortByLabel(shown).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
         </div>;
       })}</div>}
       <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label="Add from catalog">

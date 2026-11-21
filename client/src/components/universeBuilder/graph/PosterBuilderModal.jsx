@@ -4,6 +4,7 @@
  * what they picked.
  */
 
+import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Image } from 'lucide-react';
 import Modal from '../../ui/Modal';
@@ -136,7 +137,7 @@ export default function PosterBuilderModal({
                 onChange={(e) => setSubjectId(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm"
               >
-                {characters.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
+                {sortByLabel(characters).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
               </select>
             </div>
           )}

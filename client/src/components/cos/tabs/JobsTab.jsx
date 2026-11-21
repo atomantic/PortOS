@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -308,7 +309,7 @@ export default function JobsTab() {
                   className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 >
                   <option value="">Global (PortOS)</option>
-                  {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  {sortByLabel(apps).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
             )}

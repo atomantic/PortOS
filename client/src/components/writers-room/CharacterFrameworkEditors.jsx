@@ -18,6 +18,7 @@
  * and lets the server sanitizer collapse an all-blank one to null (a real
  * clear), rather than re-implementing that rule with a `.length` test.
  */
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   CHARACTER_PSYCHOLOGY_DRIVE_HINTS,
@@ -223,7 +224,7 @@ export function RelationshipLinkRows({ value, onChange, siblings, idPrefix, inpu
                   {targetMissing && (
                     <option value={link.targetCharacterId}>(missing: {link.targetCharacterId})</option>
                   )}
-                  {others.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+                  {sortByLabel(others, (c) => c.name || c.id).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
               </div>
               <div className="w-28 shrink-0">

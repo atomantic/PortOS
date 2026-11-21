@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import AgentJobProviderFields from '../cos/AgentJobProviderFields';
 
 /**
@@ -45,7 +46,7 @@ export default function RepoStudyFields({
             onChange={e => setTargetAppId?.(e.target.value)}
             className="ml-2 px-2 py-1 bg-port-bg border border-port-border rounded text-gray-200 text-xs"
           >
-            {managedApps.map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
+            {sortByLabel(managedApps).map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
           </select>
         </label>
       )}

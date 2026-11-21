@@ -11,6 +11,7 @@
  * `settings.music.chiptune` so the next session starts where this one left off.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Wand2, Play, Square, Disc3, Gamepad2 } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
@@ -400,7 +401,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePromp
                         className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                       >
                         <option value="">— pick an app —</option>
-                        {apps.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        {sortByLabel(apps).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                       </select>
                     </label>
                     <label className="block">

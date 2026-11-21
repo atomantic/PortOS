@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useId, useMemo } from 'react';
 import { Palette, X } from 'lucide-react';
 import { listImageStylePresets } from '../../services/apiSystem';
@@ -68,7 +69,7 @@ export default function StylePresetPicker({
         <option value="">None — use prompt as-is</option>
         {grouped.map(([cat, items]) => (
           <optgroup key={cat} label={cat}>
-            {items.map((p) => (
+            {sortByLabel(items, (preset) => preset.label).map((p) => (
               <option key={p.id} value={p.id} title={p.description || ''}>
                 {p.label}
               </option>

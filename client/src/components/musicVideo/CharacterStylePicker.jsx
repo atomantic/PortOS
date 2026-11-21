@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listMusicVideoCharacterStyles, setMusicVideoCharacterStyleReference } from '../../services/apiMusicVideo.js';
@@ -42,7 +43,7 @@ export default function CharacterStylePicker({ project, value, onChange, idFor }
     <select id={idFor('character-style')} className={inputClass} value={value || ''} onChange={(e) => onChange(e.target.value)}>
       <option value="">No character style</option>
       {value && !style && <option value={value}>Selected style</option>}
-      {(styles || []).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+      {sortByLabel(styles || [], (s) => s.label).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
     </select>
     {style && <div className="border border-port-border rounded p-2 space-y-2 min-w-0">
       <p className="text-xs">{style.summary}</p>

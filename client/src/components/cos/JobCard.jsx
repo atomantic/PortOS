@@ -1,3 +1,4 @@
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState, useEffect } from 'react';
 import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -560,7 +561,7 @@ export default function JobCard({
                     className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                   >
                     <option value="">Global (PortOS)</option>
-                    {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    {sortByLabel(apps).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </div>
               )}

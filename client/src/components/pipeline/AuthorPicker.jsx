@@ -13,6 +13,7 @@
  * until the user picks a persona.
  */
 
+import { sortByLabel } from '../../lib/sortByLabel.js';
 import { Link } from 'react-router';
 import { listAuthors } from '../../services/apiAuthors.js';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
@@ -49,7 +50,7 @@ export default function AuthorPicker({ id = 'series-author', value, byline, onCh
         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
       >
         <option value="">— No author —</option>
-        {authorOptions.map((a) => (
+        {sortByLabel(authorOptions).map((a) => (
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
       </select>
