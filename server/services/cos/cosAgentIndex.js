@@ -535,7 +535,9 @@ export async function selectArchivedCompletions({ dates, taskIds, app, includeIn
     if (app && projection.app !== app && projection.taskApp !== app) continue;
     selected.push({ id: agentId, day, projection });
   }
-  return selected.sort((a, b) => (b.projection.completedAt || '').localeCompare(a.projection.completedAt || ''));
+  // A dateless record stays on its archive day rather than sinking below every dated run.
+  const sortKey = ({ day, projection }) => projection.completedAt || day;
+  return selected.sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
 }
 
 /**

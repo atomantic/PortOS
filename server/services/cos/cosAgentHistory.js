@@ -26,13 +26,14 @@ export async function getAgentsWithArchive({ endAt, lookbackDays, taskIds }) {
   ]);
   const archived = taskIds
     ? selectArchivedCompletions({ dates: days, taskIds, includeIncomplete: true })
-      .then(rows => Promise.all(rows.map(({ day, id }) => readArchivedAgentMetadata(day, id, { repairSummaries: false }))))
+      .then(rows => Promise.all(rows.map(({ day, id }) => readArchivedAgentMetadata(day, id, { repairSummaries: false }).catch(() => null))))
       .catch(() => [])
     : Promise.all(days.map(day => getAgentsByDate(day, { repairSummaries: false }).catch(() => [])));
   const lists = await Promise.all([getAgents().catch(() => []), archived]);
   // A record can be resident and archived at once; lists[0] is the resident one.
   const byId = new Map();
-  for (const agent of lists.flat()) {
+  // Depth 2: the full-day branch yields one array per day inside `archived`.
+  for (const agent of lists.flat(2)) {
     if (agent && !byId.has(agent.id)) byId.set(agent.id, agent);
   }
   return [...byId.values()];
