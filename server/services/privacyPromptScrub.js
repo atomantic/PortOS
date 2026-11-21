@@ -8,31 +8,12 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { atomicWrite, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { COS_AGENT_ID_RE, COS_ARCHIVE_DATE_RE } from '../lib/peerSyncValidation.js';
-import { hasStoredPrivacyFacts, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
+import { hasStoredPrivacyFacts, redactActivePrivateOutput, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 
 const scrubQueue = createFileWriteQueue();
-const activePrivateOutputs = new Map();
-
-// A provider can echo an authorized fact after the on-disk sweep. Keep each
-// pending recording reachable until its final write has taken the same turn.
-export function trackPrivateRunOutput(outputPath, prompt) {
-  if (!hasStoredPrivacyFacts(prompt)) return null;
-  const redactions = [];
-  activePrivateOutputs.set(outputPath, redactions);
-  return {
-    redact: text => redactions.reduce((result, scrub) => scrub(result), text),
-    async publish(work) {
-      try {
-        return await withRuntimeFileTurn(outputPath, work);
-      } finally {
-        activePrivateOutputs.delete(outputPath);
-      }
-    },
-  };
-}
 
 async function missingAsNull(work) {
   return work.catch(error => {
@@ -73,9 +54,8 @@ async function scrubDirectory(directory, scrubValue, privateAgentIds, isAgent) {
   const preview = typeof metadata?.prompt === 'string' ? metadata.prompt : null;
   const previewHasFacts = preview !== null && hasStoredPrivacyFacts(preview);
   const outputPath = join(directory, 'output.txt');
-  const activeRedactions = activePrivateOutputs.get(outputPath);
-  if (!activeRedactions && !promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
-  activeRedactions?.push(scrubValue);
+  const activePrivateOutput = redactActivePrivateOutput(outputPath, scrubValue);
+  if (!activePrivateOutput && !promptHasFacts && !previewHasFacts && !privateAgentIds.has(metadata?.agentId)) return;
 
   if (isAgent) privateAgentIds.add(basename(directory));
   const stored = promptHasFacts ? redactStoredPrivacyPrompt(prompt) : prompt;

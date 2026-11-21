@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fenceBlock } from '../lib/promptFencing.js';
-import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, redactStoredPrivacyPrompt, trackPrivateRunOutput } from '../lib/privacyPrompt.js';
 import { PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 import { encryptValue } from '../lib/vaultCrypto.js';
 import { deleteVaultRecord, updateVaultRecord } from './privacyVault.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
-import { trackPrivateRunOutput } from './privacyPromptScrub.js';
+import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
 
 const fixtures = vi.hoisted(() => ({ paths: {}, query: vi.fn() }));
@@ -110,9 +111,15 @@ describe('vault revocation and API run publication', () => {
     ['after the response', false, prompt],
     ['during an unrelated run', true, survivor],
   ])('preserves the correct stored output when revocation happens %s', async (_label, revokeFirst, request) => {
+    const publication = new AsyncLocalStorage();
+    const privateTurn = (path, work) => {
+      expect(publication.getStore()).toBe('admitted');
+      return withRuntimeFileTurn(path, work);
+    };
     const runner = createRunnerService({
       dataDir: root, providerService: {}, redactStoredPrompt: redactStoredPrivacyPrompt,
-      hooks: { trackRunOutput: trackPrivateRunOutput },
+      withAssetPublication: work => publication.run('admitted', work),
+      hooks: { trackRunOutput: (path, sent) => trackPrivateRunOutput(path, sent, privateTurn) },
     });
     const provider = { id: 'example', type: 'api', endpoint: 'https://api.example.com/v1', defaultModel: 'example-model' };
     const { runId, runDir } = await runner.createRun({ providerId: provider.id, provider, prompt: request });

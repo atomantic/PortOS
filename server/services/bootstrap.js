@@ -30,8 +30,8 @@ import { isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
-import { trackPrivateRunOutput } from './privacyPromptScrub.js';
-import { redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
+import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
+import { redactStoredPrivacyPrompt, trackPrivateRunOutput } from '../lib/privacyPrompt.js';
 import { PORTS } from '../lib/ports.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
 import { getBuildIdentity, getCachedBuildIdentity, formatBuildIdentity } from '../lib/buildIdentity.js';
@@ -197,7 +197,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
   bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = attachLlmActivityHooks({
-    trackRunOutput: trackPrivateRunOutput,
+    trackRunOutput: (path, prompt) => trackPrivateRunOutput(path, prompt, withRuntimeFileTurn),
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
     onRunCreated: (metadata) => {
       recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
