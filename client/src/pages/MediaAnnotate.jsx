@@ -78,6 +78,13 @@ export default function MediaAnnotate() {
   // frame can offer Save against the previous key's (or an unknown) saved state.
   const [loadResult, setLoadResult] = useState({ key: null, status: 'pending' });
   const [loadNonce, setLoadNonce] = useState(0);
+  // A→B→A navigation must not resurrect A's earlier 'loaded' result while its new
+  // read is in flight, so a key change drops the stored result during render.
+  const [seenKey, setSeenKey] = useState(mediaKey);
+  if (seenKey !== mediaKey) {
+    setSeenKey(mediaKey);
+    setLoadResult({ key: null, status: 'pending' });
+  }
   const loadStatus = loadResult.key === mediaKey ? loadResult.status : 'pending';
   const loaded = loadStatus === 'loaded';
   const [imageError, setImageError] = useState(false);

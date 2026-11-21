@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
@@ -242,5 +242,27 @@ describe('MediaAnnotate saved-state safety', () => {
       expect.objectContaining({ strokes: [] }),
       { silent: true },
     ));
+  });
+
+  it('does not reuse an earlier loaded result when navigating A to B and back to A mid-read', async () => {
+    const A = 'sketch:11111111-1111-1111-1111-111111111111';
+    const B = 'sketch:22222222-2222-2222-2222-222222222222';
+    getMediaSketch.mockResolvedValueOnce({ sketch: { strokes: SAVED } });
+    render(
+      <MemoryRouter initialEntries={['/media/annotate/' + A]}>
+        <Link to={'/media/annotate/' + B}>go-b</Link>
+        <Link to={'/media/annotate/' + A}>go-a</Link>
+        <Routes>
+          <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await awaitEnabled(() => screen.getByTitle('Save sketch'));
+
+    getMediaSketch.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByText('go-b'));
+    fireEvent.click(screen.getByText('go-a'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+    expect(screen.getByTitle('Save sketch')).toBeDisabled();
   });
 });
