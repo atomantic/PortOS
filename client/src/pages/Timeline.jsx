@@ -9,7 +9,6 @@ import LoadFailedState from '../components/ui/LoadFailedState';
 import PageHeader from '../components/PageHeader';
 import TimelineImportPanels, { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 import { getTimelineDay } from '../services/apiTimeline.js';
-import toast from '../components/ui/Toast';
 import { formatClockTime, formatCount, formatDurationSec, formatWeekdayDate, localDateKey, shiftISODate } from '../utils/formatters';
 
 const SOURCE_ICON = {
