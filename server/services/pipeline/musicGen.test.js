@@ -610,6 +610,22 @@ describe('generateMusic backend selection', () => {
     expect(res.filename).toMatch(/^music-gen-.*\.wav$/);
   });
 
+  it('keeps the exact authored prompt in the sidecar input and out of the start log', async () => {
+    const prompt = '  SYNTHETIC PRIVATE NOTE\nslow percussion  ';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await generateMusic({ prompt, durationSec: 12 });
+
+      const startLogs = log.mock.calls.filter(([line]) => line.startsWith('🎼 Generating music'));
+      expect(startLogs).toEqual([[`🎼 Generating music [musicgen/${DEFAULT_MUSICGEN_MODEL_ID}] 12s`]]);
+      expect(spawnCalls).toHaveLength(1);
+      const { args } = spawnCalls[0];
+      expect(args[args.indexOf('--text') + 1]).toBe(prompt);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('returns an optional effective execution profile reported by a sidecar', async () => {
     h.mockStdout = 'STAGE:done\nRESULT:{"durationSec":12.5,"executionProfile":"cuda-bf16-component-offload"}\n';
     const result = await generateMusic({ prompt: 'warm cinematic pop' });
