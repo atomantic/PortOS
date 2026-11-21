@@ -629,8 +629,8 @@ restart_stale_brew_pg17() {
   [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1 || return 0
   local running installed sys_user
   sys_user="$(whoami)"
-  running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]')"
-  installed="$("$(brew --prefix postgresql@17)/bin/pg_config" --version 2>/dev/null | sed -E 's/^[^0-9]*([0-9]+)\.([0-9]+).*/\1 \2/' | awk '{ printf "%d", $1 * 10000 + $2 }')"
+  running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]' || true)"
+  installed="$("$(brew --prefix postgresql@17)/bin/pg_config" --version 2>/dev/null | sed -E 's/^[^0-9]*([0-9]+)\.([0-9]+).*/\1 \2/' | awk '{ printf "%d", $1 * 10000 + $2 }' || true)"
   case "$running" in ''|*[!0-9]*) return 0 ;; esac
   case "$installed" in ''|*[!0-9]*) return 0 ;; esac
   # Another major on this port is not the keg we manage.
@@ -638,13 +638,13 @@ restart_stale_brew_pg17() {
   [ "$running" -ne "$installed" ] || return 0
   if brew services list 2>/dev/null | awk '$1 == "postgresql@17" { print $2 }' | grep -qx started; then
     warn "PostgreSQL server ($running) is older than the installed postgresql@17 ($installed) after a Homebrew upgrade; restarting it"
-    brew services restart postgresql@17 >/dev/null
+    brew services restart postgresql@17 >/dev/null || true
     local i
     for i in $(seq 1 30); do
       pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1 && break
       sleep 1
     done
-    running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]')"
+    running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]' || true)"
     if [ "$running" = "$installed" ]; then
       log "PostgreSQL restarted on the installed version"
       return 0
