@@ -16,6 +16,19 @@ describe('fetchProseExport', () => {
     expect(await blob.text()).toBe('# Book');
   });
 
+  it('keeps semicolons and parentheses inside a quoted filename', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('x', {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="(draft); final.pdf"' },
+    })));
+    expect((await fetchProseExport('s', 'pdf')).filename).toBe('(draft); final.pdf');
+  });
+
+  it('falls back to the default name without a Content-Disposition header', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('x', { status: 200 })));
+    expect((await fetchProseExport('s', 'epub')).filename).toBe('book.epub');
+  });
+
   it('rejects with the structured server error code and status', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ error: 'No drafted prose', code: 'PIPELINE_PROSE_EXPORT_NO_CONTENT' }),

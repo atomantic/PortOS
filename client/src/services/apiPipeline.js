@@ -342,10 +342,22 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
 // instead of a silently canceled browser download. The server reads the persisted
 // per-series export settings, so callers gate on the form being saved.
 export const PROSE_EXPORT_NO_CONTENT = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
+// Plain string scan (no regex literal): the route-parity scanner's comment
+// stripper mis-tracks a quote inside a regex literal. Keeps every character of a
+// quoted name, including ';' and parentheses.
 const filenameFromDisposition = (header, fallback) => {
-  // Quote-free pattern: the route-parity scanner's comment stripper mis-tracks a quote inside a regex literal.
-  const match = /filename=([^;]+)/i.exec(header || '');
-  const name = match ? match[1].trim().replace(/^\W+|\W+$/g, '') : '';
+  const text = header || '';
+  const at = text.toLowerCase().indexOf('filename=');
+  if (at < 0) return fallback;
+  const rest = text.slice(at + 'filename='.length).trimStart();
+  const quote = '"';
+  let name;
+  if (rest.startsWith(quote)) {
+    const end = rest.indexOf(quote, 1);
+    name = rest.slice(1, end < 0 ? undefined : end);
+  } else {
+    name = rest.split(';')[0].trim();
+  }
   return name || fallback;
 };
 
