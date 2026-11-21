@@ -27,7 +27,14 @@ checks the agent's task and source checkout binding, then verifies the pinned
 GitHub, a closed `NOT_PLANNED` issue with a verified repository operator closure
 is a stand-down, not code delivery. A `COMPLETED` issue needs an exact closing
 relationship to a merged PR in the same repository's current default branch,
-with its merge commit recorded. GitLab supports the corresponding delivered
+with its merge commit recorded. A `COMPLETED` "main is red" incident closed by
+the shared `github-actions` bot settles as `ci-recovered` only when the Actions
+API proves it: the recovery line names a successful push/scheduled `ci.yml` run
+on the default branch whose commit the live default head contains, and the
+closure falls inside the one successful Main health report job for that commit
+(`server/services/mainHealthClosure.js`). Like a park, it shipped no code, so the
+bound claim checkout must be clean and contained in the default head; the bot
+login, title, labels or body text alone grant nothing. GitLab supports the corresponding delivered
 case through the MR's `closes_issues` relationship. GitLab closure without that
 proof, Jira and file trackers, open or mismatched issues, unreadable responses,
 and arbitrary agent prose remain unverified. Bounded tracker reads may refuse

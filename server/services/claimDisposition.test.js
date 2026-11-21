@@ -16,6 +16,7 @@ import { execGlab } from './gitlab.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees } from './worktreeManager.js';
 import { verifyClaimDisposition, verifyCleanupClaimDisposition } from './claimDisposition.js';
+import { buildMainRedIssueBody, mainHealthRecoveryLine } from '../../scripts/ci-nightly-report.js';
 
 const target = { forge: 'github', fullName: 'example/project', webHost: 'github.example.test', apiHost: 'github.example.test', repoSpec: 'github.example.test/example/project' };
 const task = { id: 'task-example', taskType: 'internal', metadata: { app: 'example', claimFlow: true, claimTarget: '42' } };
@@ -408,5 +409,112 @@ describe('GitLab selected claim delivery', () => {
     member = { id: 9, access_level: 40 };
     requests = [{ ...mr, target_branch: 'release' }];
     expect(await verify()).toMatchObject({ status: 'unverified', reason: 'merged-delivery-unverified' });
+  });
+});
+
+describe('Main health incident closure', () => {
+  const ciSha = 'd'.repeat(40);
+  const ciRunUrl = 'https://github.example.test/example/project/actions/runs/500';
+  const bot = { login: 'github-actions[bot]', type: 'Bot' };
+  let forge;
+  const incidentBody = () => `${buildMainRedIssueBody({ failedJobs: [], base: null, head: 'e'.repeat(40),
+    runUrl: 'https://github.example.test/example/project/actions/runs/400', compareBase: 'https://github.example.test/example/project/compare' })}\n\n${mainHealthRecoveryLine(ciSha, ciRunUrl)}`;
+  const repoMeta = { full_name: 'example/project' };
+  const run = extra => ({ repository: repoMeta, head_repository: repoMeta, head_branch: 'main', head_sha: ciSha,
+    status: 'completed', conclusion: 'success', ...extra });
+
+  beforeEach(() => {
+    repository.issue.timelineItems.nodes = [{ __typename: 'ClosedEvent', actor: { login: 'github-actions' },
+      createdAt: '2026-10-01T11:00:05Z', closer: null }];
+    forge = {
+      issue: { number: 42, title: 'main is red', state: 'closed', state_reason: 'completed', user: bot, closed_by: bot,
+        closed_at: '2026-10-01T11:00:05Z', labels: [{ name: 'area:ci' }], body: incidentBody() },
+      ci: run({ id: 500, path: '.github/workflows/ci.yml', event: 'push', run_started_at: '2026-10-01T10:50:00Z' }),
+      compare: { status: 'ahead' },
+      monitors: { total_count: 1, workflow_runs: [run({ id: 600, path: '.github/workflows/main-health.yml',
+        event: 'workflow_run', created_at: '2026-10-01T11:00:00Z' })] },
+      jobs: { total_count: 1, jobs: [{ run_id: 600, name: 'Update the main-is-red issue', head_sha: ciSha,
+        status: 'completed', conclusion: 'success', started_at: '2026-10-01T11:00:02Z', completed_at: '2026-10-01T11:00:09Z' }] },
+    };
+    execGh.mockImplementation(async args => {
+      if (args[1] === 'graphql') return JSON.stringify({ data: { repository } });
+      const endpoint = args.at(-1);
+      const reply = endpoint === 'repos/example/project/issues/42' ? forge.issue
+        : endpoint === 'repos/example/project/actions/runs/500' ? forge.ci
+        : endpoint === `repos/example/project/compare/${ciSha}...${'c'.repeat(40)}` ? forge.compare
+        : endpoint === `repos/example/project/actions/workflows/main-health.yml/runs?head_sha=${ciSha}&event=workflow_run&per_page=100` ? forge.monitors
+        : endpoint === 'repos/example/project/actions/runs/600/jobs?filter=all&per_page=100' ? forge.jobs
+        : { message: 'Not Found' };
+      return JSON.stringify(reply);
+    });
+  });
+
+  it('settles a no-code claim when the verified Main health workflow closed the incident after green CI', async () => {
+    const result = await verify();
+    expect(result).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'ci-recovered',
+      closedBy: 'github-actions', ciRun: 500, ciCommit: ciSha, monitorRun: 600, defaultCommit: 'c'.repeat(40) }] });
+    expect(result.issues[0]).not.toHaveProperty('mergeCommit');
+    // No code shipped, so the bound claim checkout must be clean and contained.
+    expect(execGit.mock.calls).toEqual([
+      [['status', '--porcelain', '--untracked-files=all'], '/example/claim'],
+      [['merge-base', '--is-ancestor', 'HEAD', 'c'.repeat(40)], '/example/claim', { ignoreExitCode: true }],
+    ]);
+    // The bot is never asked for collaborator authority, and nothing is written.
+    expect(execGh.mock.calls.some(([args]) => args.at(-1).includes('/collaborators/'))).toBe(false);
+    expect(execGh.mock.calls.every(([args]) => args[0] === 'api' && !args.includes('POST') && !args.includes('PATCH'))).toBe(true);
+    // A retry sees the same closure and settles identically.
+    expect(await verify()).toEqual(result);
+  });
+
+  it('keeps undelivered claim work from settling behind a CI recovery', async () => {
+    execGit.mockResolvedValue({ exitCode: 0, stdout: ' M example.js' });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+    execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base' ? 1 : 0, stdout: '' }));
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+  });
+
+  it.each([
+    ['an issue a person opened', f => { f.issue.user = { login: 'outside-contributor', type: 'User' }; }],
+    ['another title', f => { f.issue.title = 'main is red again'; }],
+    ['a REST closer other than the bot', f => { f.issue.closed_by = { login: 'outside-contributor', type: 'User' }; }],
+    ['a different closure time', f => { f.issue.closed_at = '2026-10-01T12:00:00Z'; }],
+    ['a not-planned closure', f => { f.issue.state_reason = 'not_planned'; }],
+    ['a missing recovery line', f => { f.issue.body = f.issue.body.replace(/\n\nGreen again.*$/, ''); }],
+    ['a recovery line that is not the last line', f => { f.issue.body += '\n\nEdited afterwards.'; }],
+    ['a run in another repository', f => { f.issue.body = f.issue.body.replace(ciRunUrl, 'https://github.example.test/other/project/actions/runs/500'); }],
+    ['a run on another host', f => { f.issue.body = f.issue.body.replace(ciRunUrl, 'https://forge.example.test/example/project/actions/runs/500'); }],
+    ['a label and matching text alone', f => { f.ci = { message: 'Not Found' }; }],
+    ['a failed CI run', f => { f.ci.conclusion = 'failure'; }],
+    ['an unfinished CI run', f => { f.ci.status = 'in_progress'; }],
+    ['a CI run on another branch', f => { f.ci.head_branch = 'release'; }],
+    ['a pull-request CI run', f => { f.ci.event = 'pull_request'; }],
+    ['another workflow named as CI', f => { f.ci.path = '.github/workflows/other.yml'; }],
+    ['a CI run from a fork', f => { f.ci.head_repository = { full_name: 'fork/project' }; }],
+    ['a CI commit that does not match the recovery line', f => { f.ci.head_sha = 'f'.repeat(40); }],
+    ['a CI commit the default branch no longer contains', f => { f.compare = { status: 'diverged' }; }],
+    ['no Main health run', f => { f.monitors = { total_count: 0, workflow_runs: [] }; }],
+    ['an unreadable Main health listing', f => { f.monitors = { message: 'Server Error' }; }],
+    ['a truncated Main health listing', f => { f.monitors.total_count = 101; }],
+    ['another workflow as the monitor', f => { f.monitors.workflow_runs[0].path = '.github/workflows/triage.yml'; }],
+    ['a monitor run for another commit', f => { f.monitors.workflow_runs[0].head_sha = 'f'.repeat(40); }],
+    ['a monitor triggered another way', f => { f.monitors.workflow_runs[0].event = 'issues'; }],
+    ['a closure outside the report job', f => { f.jobs.jobs[0].completed_at = '2026-10-01T11:00:04Z'; }],
+    ['a failed report job', f => { f.jobs.jobs[0].conclusion = 'failure'; }],
+    ['another job in the monitor run', f => { f.jobs.jobs[0].name = 'Triage issues'; }],
+    ['two report jobs covering the closure', f => { f.jobs.total_count = 2; f.jobs.jobs.push({ ...f.jobs.jobs[0] }); }],
+  ])('fails closed on %s', async (_name, mutate) => {
+    mutate(forge);
+    const result = await verify();
+    expect(result).toMatchObject({ status: 'unverified' });
+    expect(result.reason).toMatch(/^main-health-/);
+  });
+
+  it('grants a bot closure no authority without Actions evidence, and keeps operator and PR closures unchanged', async () => {
+    execGh.mockImplementation(async args => args[1] === 'graphql' ? JSON.stringify({ data: { repository } }) : '{}');
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'main-health-incident-unverified' });
+    repository.issue.timelineItems.nodes = [{ ...closure(), actor: { login: 'outside-contributor' } }];
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'closure-authority-unverified' });
+    repository.issue.timelineItems.nodes = [{ source: merged() }, { ...closure(), actor: { login: 'github-actions' } }];
+    expect(await verify()).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'delivered', changeRequest: 7 }] });
   });
 });
