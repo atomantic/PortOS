@@ -137,7 +137,11 @@ async function fetchListing(account, env, { all, ifModifiedSince = null }) {
 const UPSERT_SQL = `INSERT INTO github_notifications (
     account_id, thread_id, repo_full_name, repo_owner, repo_private, reason, subject_type,
     subject_title, subject_api_url, html_url, unread, gh_updated_at, latest_comment_api_url
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+  ) SELECT $1, t.* FROM unnest(
+    $2::text[], $3::text[], $4::text[], $5::boolean[], $6::text[], $7::text[],
+    $8::text[], $9::text[], $10::text[], $11::boolean[], $12::timestamptz[], $13::text[]
+  ) AS t(thread_id, repo_full_name, repo_owner, repo_private, reason, subject_type,
+    subject_title, subject_api_url, html_url, unread, gh_updated_at, latest_comment_api_url)
   ON CONFLICT (account_id, thread_id) DO UPDATE SET
     repo_full_name = EXCLUDED.repo_full_name,
     repo_owner = EXCLUDED.repo_owner,
@@ -263,10 +267,16 @@ async function syncAccountNow(account, automate) {
   const truncated = inbox.truncated || unread.truncated;
 
   await withTransaction(async (client) => {
-    for (const r of records) {
+    // One round trip for the whole listing (up to 1,000 rows) instead of a
+    // query per thread while the transaction holds the row locks.
+    if (records.length > 0) {
+      const col = (pick) => records.map(pick);
       await client.query(UPSERT_SQL, [
-        account.id, r.threadId, r.repoFullName, r.repoOwner, r.repoPrivate, r.reason, r.subjectType,
-        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl, listedAt,
+        account.id,
+        col((r) => r.threadId), col((r) => r.repoFullName), col((r) => r.repoOwner), col((r) => r.repoPrivate),
+        col((r) => r.reason), col((r) => r.subjectType), col((r) => r.subjectTitle), col((r) => r.subjectApiUrl),
+        col((r) => r.htmlUrl), col((r) => r.unread), col((r) => r.ghUpdatedAt), col((r) => r.latestCommentApiUrl),
+        listedAt,
       ]);
     }
     await reconcileListings(client, account.id, { inbox, unread });
