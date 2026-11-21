@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router';
 import {
   Brain, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Cpu, Crown, ExternalLink,
@@ -192,6 +192,7 @@ export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onN
             : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
         title={item.label}
+        aria-label={collapsed ? item.label : undefined}
       >
         <div className="flex items-start gap-3 min-w-0 flex-1">
           <Icon size={20} className="shrink-0" />
@@ -233,10 +234,39 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
     cancelCloseFlyout();
     setFlyout(null);
   }, [cancelCloseFlyout]);
-  const openFlyout = (event, label) => {
+  const flyoutId = useId();
+  const flyoutTriggerRef = useRef(null);
+  // Restoring focus to the trigger fires its row's onFocus; without this latch
+  // that would immediately reopen the flyout the user just dismissed.
+  const suppressFlyoutOpenRef = useRef(false);
+  const openFlyout = (event, label, focusFirst = false) => {
     cancelCloseFlyout();
-    const rect = event.currentTarget.getBoundingClientRect();
-    setFlyout({ label, pathname: location.pathname, top: rect.top, left: rect.right + 4 });
+    const row = event.currentTarget;
+    const rect = row.getBoundingClientRect();
+    flyoutTriggerRef.current = row.querySelector('button');
+    setFlyout(prev => ({
+      label,
+      pathname: location.pathname,
+      top: rect.top,
+      left: rect.right + 4,
+      focusToken: (prev?.focusToken || 0) + (focusFirst ? 1 : 0),
+    }));
+  };
+  const dismissFlyout = useCallback(({ restoreFocus = true } = {}) => {
+    closeFlyout();
+    if (restoreFocus && flyoutTriggerRef.current) {
+      suppressFlyoutOpenRef.current = true;
+      flyoutTriggerRef.current.focus();
+      suppressFlyoutOpenRef.current = false;
+    }
+  }, [closeFlyout]);
+  const handleSectionKeyDown = (event, label) => {
+    if (event.key === 'Escape') {
+      closeFlyout();
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      openFlyout({ currentTarget: event.currentTarget.parentElement }, label, true);
+    }
   };
   const scheduleCloseFlyout = () => {
     cancelCloseFlyout();
@@ -558,7 +588,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
           className={`flex items-stretch min-w-0 ${sidebarCollapsed ? 'lg:justify-center' : ''}`}
           onMouseEnter={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
           onMouseLeave={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
-          onFocus={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
+          onFocus={hasChildrenForFlyout ? (e) => { if (!suppressFlyoutOpenRef.current) openFlyout(e, item.label); } : undefined}
           onBlur={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
         >
           <button
@@ -566,6 +596,9 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
             onClick={navigateToSection}
             className={`flex-1 min-w-0 ${sectionRowClasses} ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
             title={sidebarCollapsed ? item.label : undefined}
+            aria-label={sidebarCollapsed ? item.label : undefined}
+            aria-controls={hasChildrenForFlyout && flyoutSection === item.label ? flyoutId : undefined}
+            onKeyDown={hasChildrenForFlyout ? (e) => handleSectionKeyDown(e, item.label) : undefined}
             aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
             aria-current={sectionActive ? 'true' : undefined}
           >
@@ -833,6 +866,9 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
           item={flyoutItem}
           anchor={flyout}
           close={closeFlyout}
+          id={flyoutId}
+          focusToken={flyout.focusToken}
+          onDismiss={dismissFlyout}
           scheduleCloseFlyout={scheduleCloseFlyout}
           cancelCloseFlyout={cancelCloseFlyout}
           isActive={isActive}
