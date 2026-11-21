@@ -542,6 +542,25 @@ describe('loom CRUD', () => {
     });
   });
 
+  it.each([
+    [10, 'runway', 'runway', null],
+    [15, 'google', 'google', 'google'],
+  ])('preserves only render modes a v%i peer cannot represent', async (version, imageMode, videoMode, expectedVideo) => {
+    const loom = await makeLoom({ renderSettings: { imageMode, videoMode, effort: 'high' } });
+    const remote = {
+      ...loom, name: 'Renamed on peer', updatedAt: '2099-01-01T00:00:00.000Z',
+      renderSettings: { formatId: 'portrait-9-16', imageMode: null, imageModel: 'older-model', videoMode: null },
+    };
+    await mergeLoomsFromSync([remote], { senderSchemaVersions: { fableLoom: version } });
+    expect(await getLoom(loom.id)).toMatchObject({
+      name: remote.name,
+      renderSettings: { formatId: 'portrait-9-16', imageMode, imageModel: null, videoMode: expectedVideo, effort: null },
+    });
+
+    await mergeLoomsFromSync([{ ...remote, updatedAt: '2099-01-02T00:00:00.000Z' }], { senderSchemaVersions: { fableLoom: 16 } });
+    expect((await getLoom(loom.id)).renderSettings).toMatchObject({ imageMode: null, imageModel: 'older-model', videoMode: null });
+  });
+
   it('preserves v7 shot and character references from older peers while accepting current explicit clears', async () => {
     let loom = await makeLoom({ name: 'A timed episode' });
     loom = await addEpisode(loom.id, { title: 'Pilot' });
