@@ -13,13 +13,14 @@ const mentionsCanon = (value, entryId) => {
   ) || (typeof item === 'object' && mentionsCanon(item, entryId)));
 };
 
-async function findCanonDependencies(universeId, kind, entryId) {
-  const { rows: stories } = await query('SELECT id, name, data FROM fableloom_stories WHERE universe_id = $1 AND deleted = false', [universeId]);
+async function findCanonDependencies(universeId, kind, entryId, { client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const { rows: stories } = await exec('SELECT id, name, data FROM fableloom_stories WHERE universe_id = $1 AND deleted = false', [universeId]);
   const uses = stories.filter((story) => mentionsCanon(story.data, entryId)).map((story) => ({
     refKind: 'fableloom', refId: story.id, refName: story.name, role: 'canon', resolved: true, derived: true,
   }));
   if (kind === 'character') {
-    const { rows: voices } = await query(`SELECT id, data->>'name' AS name, approval_status FROM voice_profiles
+    const { rows: voices } = await exec(`SELECT id, data->>'name' AS name, approval_status FROM voice_profiles
       WHERE universe_id = $1 AND character_id = $2 AND approval_status <> 'retired'`, [universeId, entryId]);
     uses.push(...voices.map((voice) => ({ refKind: 'voice-profile', refId: voice.id, refName: voice.name || 'Voice profile',
       role: `${voice.approval_status} voice`, resolved: true, derived: true })));
@@ -27,8 +28,8 @@ async function findCanonDependencies(universeId, kind, entryId) {
   return uses;
 }
 
-export async function assertCanonRemovable(universeId, kind, entryId) {
-  const uses = await findCanonDependencies(universeId, kind, entryId);
+export async function assertCanonRemovable(universeId, kind, entryId, options) {
+  const uses = await findCanonDependencies(universeId, kind, entryId, options);
   if (uses.length) throw new ServerError('Remove or reassign this canon entry in its FableLoom stories and Voice Studio profiles before removing it from the universe.',
     { status: 409, code: 'UNIVERSE_CANON_IN_USE' });
 }

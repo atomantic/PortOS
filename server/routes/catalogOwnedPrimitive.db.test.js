@@ -15,7 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-owned-primitive-' });
-const refFault = vi.hoisted(() => ({ failCanonLink: false, failReferenceLink: false }));
+const refFault = vi.hoisted(() => ({ failCanonLink: false, failReferenceLink: false, failAfterWrite: null }));
 const dbFault = vi.hoisted(() => ({ forbidUniversePoolRead: false }));
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('../lib/db.js', async (importOriginal) => {
@@ -36,12 +36,19 @@ vi.mock('../services/instances.js', () => mockNoPeers());
 vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../services/catalogDB/refs.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, linkIngredientToRef: async (...args) => {
-    if ((refFault.failCanonLink && args[3] === 'canon-character') || (refFault.failReferenceLink && args[3] === 'reference')) {
-      throw new Error('Injected membership link failure');
-    }
-    return actual.linkIngredientToRef(...args);
-  } };
+  return { ...actual,
+    linkIngredientToRef: async (...args) => {
+      if ((refFault.failCanonLink && args[3] === 'canon-character') || (refFault.failReferenceLink && args[3] === 'reference')) {
+        throw new Error('Injected membership link failure');
+      }
+      await actual.linkIngredientToRef(...args);
+      if (refFault.failAfterWrite === 'post') throw new Error('Injected failure after link SQL');
+    },
+    unlinkIngredientFromRef: async (...args) => {
+      await actual.unlinkIngredientFromRef(...args);
+      if (refFault.failAfterWrite === 'delete') throw new Error('Injected failure after unlink SQL');
+    },
+  };
 });
 vi.mock('../services/embeddings.js', () => ({
   embedBatch: vi.fn(async (seeds) => (seeds || []).map(() => ({ embedding: null, model: null }))),
@@ -283,6 +290,27 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () =>
     expect(res.status).toBe(201);
     ingredientIds.add(res.body.id);
     expect(res.body.payload.locked).toBe(false);
+  });
+});
+
+describe.skipIf(!runDb)('catalog canon membership link and unlink', () => {
+  it.each(['post', 'delete'])('rolls back both writes if %s fails after writing the reference', async (method) => {
+    const universe = await makeUniverse();
+    const ingredient = await createInUniverse(universe.id, { type: 'character', name: 'Example character', payload: {} });
+    const body = { refKind: 'universe', refId: universe.id, role: 'canon-character' };
+    const path = `/api/catalog/ingredients/${ingredient.id}/link`;
+    if (method === 'post') expect((await request(app).delete(path).send(body)).status).toBe(204);
+    const before = (await getUniverse(universe.id)).characters;
+    const beforeRefs = await liveUniverseRefs(ingredient.id);
+    const beforeEpoch = getUniverseMutationEpoch();
+
+    refFault.failAfterWrite = method;
+    const response = await Promise.resolve(request(app)[method](path).send(body))
+      .finally(() => { refFault.failAfterWrite = null; });
+    expect(response.status).toBe(500);
+    expect((await getUniverse(universe.id)).characters).toEqual(before);
+    expect(await liveUniverseRefs(ingredient.id)).toEqual(beforeRefs);
+    expect(getUniverseMutationEpoch()).toBe(beforeEpoch);
   });
 });
 

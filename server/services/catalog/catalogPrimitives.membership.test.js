@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ world: null, refs: [], readonly: false, retained: false,
   missing: false, storeError: null, linkGate: null, linkStarted: null, queued: null,
-  writes: 0, tail: Promise.resolve() }));
+  ingredientName: '', writes: 0, tail: Promise.resolve() }));
 
 vi.mock('../../lib/db.js', () => ({
   query: async (sql, params) => {
@@ -13,7 +13,7 @@ vi.mock('../../lib/db.js', () => ({
   withTransaction: async () => { throw new Error('Membership must use the universe store queue'); },
 }));
 vi.mock('../catalogDB/ingredients.js', () => ({
-  getIngredient: async () => ({ id: 'primitive', type: 'character', name: 'Example character',
+  getIngredient: async () => ({ id: 'primitive', type: 'character', name: state.ingredientName,
     payload: { physicalDescription: 'A coat' }, updatedAt: '2026-10-01T00:00:00.000Z' }),
   getIngredientIdentityIds: async () => ['primitive', 'alias'],
   createIngredient: vi.fn(),
@@ -52,9 +52,10 @@ vi.mock('../universeBuilder.js', () => ({
     const task = state.tail.then(async () => {
       if (state.storeError) throw state.storeError;
       if (state.missing) throw Object.assign(new Error('Universe not found'), { code: 'NOT_FOUND' });
-      const patch = await mutate(structuredClone(state.world));
+      const client = options.transactional ? { query: (sql, params) => query(sql, params) } : null;
+      const patch = await mutate(structuredClone(state.world), { client });
       if (patch) { state.world = { ...state.world, ...patch }; state.writes += 1; }
-      await options.afterWrite?.(state.world);
+      await options.afterWrite?.(state.world, { client });
       return structuredClone(state.world);
     });
     state.tail = task.catch(() => {});
@@ -63,6 +64,7 @@ vi.mock('../universeBuilder.js', () => ({
 }));
 
 import { addPrimitiveToUniverse, removePrimitiveFromUniverse } from './catalogPrimitives.js';
+import { query } from '../../lib/db.js';
 import { updateUniverse } from '../universeBuilder.js';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits.js';
 
@@ -79,10 +81,29 @@ beforeEach(() => {
   Object.assign(state, { world: { id: 'world', characters: [] },
     refs: [{ ingredientId: 'primitive', refKind: 'universe', refId: 'world', role: 'owner' }],
     readonly: false, retained: false, missing: false, storeError: null,
-    linkGate: null, linkStarted: null, queued: null, writes: 0, tail: Promise.resolve() });
+    linkGate: null, linkStarted: null, queued: null, ingredientName: 'Example character', writes: 0, tail: Promise.resolve() });
 });
 
 describe('creative primitive universe membership', () => {
+  it('reads the current ingredient after entering the universe write queue and guards catalog projection', async () => {
+    state.world.places = [{ id: 'canon-place', ingredientId: 'existing-place' }];
+    const turn = deferred();
+    state.tail = turn.promise;
+    state.queued = deferred();
+    const add = addPrimitiveToUniverse('primitive', 'world', 'canon-character');
+    await state.queued.promise;
+    state.ingredientName = 'Edited while queued';
+    turn.resolve();
+
+    const result = await add;
+    expect(result.universe.characters).toMatchObject([{ ingredientId: 'primitive', name: 'Edited while queued' }]);
+    expect(updateUniverse).toHaveBeenCalledWith('world', expect.any(Function), expect.objectContaining({
+      transactional: true,
+      canonProjectionGuard: 'primitive',
+      canonProjectionIdentityIds: expect.arrayContaining(['primitive', 'alias', 'existing-place']),
+    }));
+  });
+
   it('serializes an overlapping removal after the add association finishes', async () => {
     state.linkGate = deferred();
     state.linkStarted = deferred();

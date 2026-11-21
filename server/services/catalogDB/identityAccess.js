@@ -58,7 +58,8 @@ export async function assertCatalogIdentityWritable(id, options) {
 
 // A retained association is visible evidence, not a mutable row on the survivor.
 // Refuse instead of reporting success for a zero-row removal that would reappear.
-export async function assertCatalogAssociationRemovable(id, kind, values) {
+export async function assertCatalogAssociationRemovable(id, kind, values, { client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
   const selectors = {
     media: ['catalog_ingredient_media', ['media_key', 'kind']],
     refs: ['catalog_ingredient_refs', ['ref_kind', 'ref_id', 'role']],
@@ -66,7 +67,7 @@ export async function assertCatalogAssociationRemovable(id, kind, values) {
   const [table, columns] = selectors[kind];
   const match = columns.map((column, i) => `retained.${column} = $${i + 2}`).join(' AND ');
   const ownMatch = columns.map(column => `live.${column} = retained.${column}`).join(' AND ');
-  const { rows } = await query(`SELECT 1 FROM catalog_identity_operations o
+  const { rows } = await exec(`SELECT 1 FROM catalog_identity_operations o
     JOIN catalog_identity_read_${kind} retained ON retained.identity_retained = true
       AND retained.ingredient_id IN (o.source_id, o.survivor_id)
     WHERE o.survivor_id = catalog_canonical_ingredient_id($1)
