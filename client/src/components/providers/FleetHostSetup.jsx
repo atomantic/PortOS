@@ -105,7 +105,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
             <HostCard
               ariaLabel="This machine's model host"
               headline="This machine is serving its own model host — add a provider for it?"
-              badge={`${status.serving ? 'Serving' : 'Enabled'} · ${status.model || 'Qwen3.8-27B'}`}
+              badge={`${status.serving ? 'Serving' : 'Enabled'}${status.model ? ` · ${status.model}` : ''}`}
               description="Host setup already created a Direct API provider. Add Pi or OpenCode TUI on this same machine to use it for coding agents too."
               href="/ai/fleet?fleetStep=client&selfHost=1"
               actionClass={actionClass}
@@ -116,7 +116,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
               key={host.peerId}
               ariaLabel={`Available model host ${host.peerName}`}
               headline={<>Available federated host: <span className="text-port-accent font-semibold">{host.peerName}</span></>}
-              badge={`${host.serving ? 'Serving' : 'Enabled'} · ${host.model || 'Qwen3.8-27B'}`}
+              badge={`${host.serving ? 'Serving' : 'Enabled'}${host.model ? ` · ${host.model}` : ''}`}
               description={<>Instance <strong className="text-gray-200">{host.peerName}</strong> is running a federated LLM host. Set it up as a provider on this machine?</>}
               href={`/ai/fleet?fleetStep=client&peerId=${encodeURIComponent(host.peerId)}`}
               actionClass={actionClass}

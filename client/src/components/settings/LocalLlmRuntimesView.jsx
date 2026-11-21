@@ -10,6 +10,7 @@ import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
 import {
   migrateLocalLlmBackend,
+  upgradeLocalLlmBackend,
   controlOllamaService,
   getLlamaServerStatus,
   getLlamaServerUpdateStatus,
@@ -360,6 +361,12 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         ? 'Dedicated Qwen host stopped and its container removed'
         : 'Dedicated Qwen host disabled'),
   ).then(loadFleetHostStatus);
+  // The roster's update action; same endpoint and toast as the Ollama detail card's button.
+  const runtimeUpgradeOllama = () => runAction(
+    'runtime-upgrade-ollama',
+    () => upgradeLocalLlmBackend('ollama'),
+    (r) => r?.note ? `Ollama updated — ${r.note}` : `Ollama updated to v${status?.ollama?.latestVersion}`,
+  );
   const controlLmStudio = (action) => runAction(
     `runtime-${action}-lmstudio`,
     () => controlLmStudioService(action),
@@ -785,6 +792,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         actionInProgress={actionInProgress}
         onRefresh={loadStatus}
         onControlOllama={controlOllama}
+        onUpgradeOllama={runtimeUpgradeOllama}
         onControlLmStudio={controlLmStudio}
         onInstallBackend={installRuntimeBackend}
         onInstallLlama={runtimeInstallLlama}

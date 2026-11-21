@@ -153,6 +153,30 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
     },
   },
   {
+    // Thinking Machines' looped MoE (GGUF arch `inkling2_loop`). No drafter until
+    // a drafter pairing for this target has been measured. bartowski's quants
+    // are made with llama.cpp b12600; a binary older than b12406 refuses the load
+    // with "unknown model architecture", which is what the label warns about.
+    id: 'inkling-2-mini',
+    label: 'Inkling 2 Mini — no drafter (needs llama.cpp b12406 or newer)',
+    specType: 'none',
+    model: {
+      path: 'models/Inkling-2-Mini-Q4_K_M.gguf',
+      repo: 'bartowski/thinkingmachines_Inkling-2-Mini-GGUF',
+      quant: 'Q4_K_M',
+    },
+    draftModel: { path: '' },
+    // A `file` PIN: an `f16` hint also matches the `bf16` projector beside it.
+    // f16 (639 MB) over bf16 (642 MB) because every Metal/CUDA backend runs it.
+    // Optional: the preset launches text-only until this is downloaded.
+    projector: {
+      path: 'models/Inkling-2-Mini-mmproj-f16.gguf',
+      repo: 'bartowski/thinkingmachines_Inkling-2-Mini-GGUF',
+      file: 'mmproj-thinkingmachines_Inkling-2-Mini-f16.gguf',
+      quant: 'f16',
+    },
+  },
+  {
     id: 'custom',
     label: 'Custom GGUF / Manual Paths',
     specType: 'draft-dspark',

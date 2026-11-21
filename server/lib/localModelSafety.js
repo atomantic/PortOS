@@ -10,7 +10,7 @@ export const ESTABLISHED_MODEL_PUBLISHERS = new Set([
   'ace-step', 'bartowski', 'cohereforai', 'cvssp', 'facebook', 'ggml-org',
   'fdtn-ai', 'google', 'ibm-granite', 'liquidai', 'lmstudio-community', 'meta-llama',
   'microsoft', 'mistralai', 'mlx-community', 'mradermacher', 'nomic-ai',
-  'nvidia', 'nousresearch', 'openai', 'openbmb', 'qwen', 'stabilityai', 'unsloth',
+  'nvidia', 'nousresearch', 'openai', 'openbmb', 'qwen', 'stabilityai', 'thinkingmachines', 'unsloth',
 ]);
 
 // OrcaRouter is reviewed for these exact builds, not blanket-approved for

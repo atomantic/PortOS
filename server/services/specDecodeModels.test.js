@@ -173,6 +173,26 @@ describe('pickGgufSibling', () => {
       .toThrow(/no Q8_0 build/i);
   });
 
+  // A projector `f16` hint would also match the `bf16` sidecar beside it, which
+  // is why the preset pins the file; and the language pick must skip the
+  // imatrix and the neighbouring Q4_K_L/Q4_K_S packs.
+  it('resolves both Inkling 2 Mini preset roles in a repo with look-alike siblings', () => {
+    const preset = specDecodePresets.findSpecDecodePreset('inkling-2-mini');
+    const model = siblings(
+      'thinkingmachines_Inkling-2-Mini-Q4_K_L.gguf',
+      'thinkingmachines_Inkling-2-Mini-Q4_K_M.gguf',
+      'thinkingmachines_Inkling-2-Mini-Q4_K_S.gguf',
+      'thinkingmachines_Inkling-2-Mini-bf16.gguf',
+      'thinkingmachines_Inkling-2-Mini-imatrix.gguf',
+      'mmproj-thinkingmachines_Inkling-2-Mini-bf16.gguf',
+      'mmproj-thinkingmachines_Inkling-2-Mini-f16.gguf',
+    );
+    expect(preset.specType).toBe('none');
+    expect(pickGgufSibling(model, preset.model)).toBe('thinkingmachines_Inkling-2-Mini-Q4_K_M.gguf');
+    expect(pickGgufSibling(model, { ...preset.projector, role: 'projector' }))
+      .toBe('mmproj-thinkingmachines_Inkling-2-Mini-f16.gguf');
+  });
+
   it('refuses a projector-role pick with no projector in the repo', () => {
     const model = siblings('model-Q4_K_M.gguf', 'model-Q8_0.gguf');
     expect(() => pickGgufSibling(model, { quant: 'Q8_0', repo: 'o/r', role: 'projector' }))
