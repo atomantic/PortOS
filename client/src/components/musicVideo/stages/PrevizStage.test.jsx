@@ -260,3 +260,23 @@ it('offers a selfie toggle only for a held cut and saves it on the cut', async (
   fireEvent.click(await screen.findByLabelText(/Selfie/));
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ holderSubjectId: 'c-bo', selfie: true });
 });
+
+// Catches keyboard users unable to place a previz observer camera spot on the world map.
+it('places a previz camera spot from the keyboard without a pointer', async () => {
+  const timeline = { startClock: 1200, lengthMin: 480, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480, setId: 'w-street', toSetId: null, pace: null }] };
+  const cut = { id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, storyMin: 0, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null };
+  const linked = { ...project, previz: { cuts: [cut], tracks: [], worldId: 'cat-world', timeline } };
+  const board = { project: linked, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+
+  fireEvent.click(await screen.findByRole('button', { name: /Pick camera spot/ }));
+  expect(screen.getByText('Focus the map and press Enter to place the observer at the center, or tap the map.')).toBeTruthy();
+  const maps = screen.getAllByRole('application', { name: 'World map, north is up' });
+  const pickerMap = maps.at(-1);
+  fireEvent.keyDown(pickerMap, { key: 'ArrowRight' });
+  fireEvent.keyDown(pickerMap, { key: 'Enter' });
+
+  const savedCut = board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0];
+  expect(savedCut.cameraSpot).toEqual([6, 0]);
+  await settleWorldLoads();
+});

@@ -79,8 +79,17 @@ export function isEditableTarget(el) {
 }
 
 /**
+ * True when an event originated inside an interactive `role="application"` widget (such as the world map), which handles its own arrow/Space/Enter keys.
+ * @param {EventTarget | null} el
+ * @returns {boolean}
+ */
+export function isApplicationTarget(el) {
+  return typeof el?.closest === 'function' && el.closest('[role="application"]') != null;
+}
+
+/**
  * The one predicate every app-global key handler (`useKeyboardShortcuts`, `useKeyCapture`) consults before acting on a window keystroke. Add new guards here, never at one caller (#4748).
- * Always ignored: editable targets, and native button activation (`isButtonActivation`).
+ * Always ignored: editable targets, native button activation (`isButtonActivation`), and `role="application"` widgets (`isApplicationTarget`).
  * Ignored by default, opt out per handler:
  * - ⌘/Ctrl/Alt chords (`allowChords`); a raw physical-key handler (keyer, game) passes `true` because dropping a chorded keydown strands it with no keyup.
  * - OS auto-repeat (`ignoreRepeat`); a handler tracking press/release itself passes `false`.
@@ -98,6 +107,7 @@ export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRe
   if (ignoreRepeat && event.repeat) return true;
   if (isEditableTarget(event.target)) return true;
   if (isButtonActivation(event)) return true;
+  if (isApplicationTarget(event.target)) return true;
   if (!enabledInDialog && document.querySelector('[aria-modal="true"]')) return true;
   return false;
 }

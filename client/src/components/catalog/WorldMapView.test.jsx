@@ -1,5 +1,6 @@
-import { expect, it } from 'vitest';
-import { fitWorldView, layoutWorldLabels, worldSetView } from './WorldMapView.jsx';
+import { expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import WorldMap, { fitWorldView, layoutWorldLabels, worldSetView } from './WorldMapView.jsx';
 
 const overlaps = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 
@@ -41,4 +42,55 @@ it('keeps fitted edge labels within the current map bounds', () => {
     expect(entry.y - 11 * 1.3 * 0.3 / 2).toBeGreaterThanOrEqual(bounds.y0);
     expect(entry.y + 11 * 1.3 * 0.3 / 2).toBeLessThanOrEqual(bounds.y1);
   }
+});
+
+// Catches keyboard users unable to reach the map, pan with Arrow keys, or place a point without a pointer.
+it('focuses the map, pans with Arrow keys without scrolling, and adds center points on Enter or Space while drawing', () => {
+  const emptyWorld = { sets: [], paths: [] };
+  const onView = vi.fn();
+  const onAddPoint = vi.fn();
+  const view = { cx: 10.24, cz: -20.66, size: 100 };
+  const { rerender } = render(
+    <WorldMap world={emptyWorld} places={{}} view={view} onView={onView} onAddPoint={onAddPoint} />,
+  );
+
+  const map = screen.getByRole('application', { name: 'World map, north is up' });
+  expect(map).toHaveAttribute('tabindex', '0');
+  const instructionsId = map.getAttribute('aria-describedby');
+  expect(instructionsId).toBeTruthy();
+  expect(document.getElementById(instructionsId)?.textContent).toBe(
+    'Arrow keys pan. Enter adds a point at the center while drawing or placing.',
+  );
+
+  const right = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+  map.dispatchEvent(right);
+  expect(right.defaultPrevented).toBe(true);
+  expect(onView).toHaveBeenLastCalledWith({ cx: expect.closeTo(20.24, 5), cz: -20.66, size: 100 });
+
+  fireEvent.keyDown(map, { key: 'ArrowLeft', shiftKey: true });
+  expect(onView).toHaveBeenLastCalledWith({ cx: expect.closeTo(-29.76, 5), cz: -20.66, size: 100 });
+  fireEvent.keyDown(map, { key: 'ArrowUp' });
+  expect(onView).toHaveBeenLastCalledWith({ cx: 10.24, cz: expect.closeTo(-30.66, 5), size: 100 });
+  fireEvent.keyDown(map, { key: 'ArrowDown', shiftKey: true });
+  expect(onView).toHaveBeenLastCalledWith({ cx: 10.24, cz: expect.closeTo(19.34, 5), size: 100 });
+
+  // Read-only / non-drawing map ignores Enter and Space without entering edit mode.
+  fireEvent.keyDown(map, { key: 'Enter' });
+  fireEvent.keyDown(map, { key: ' ' });
+  expect(onAddPoint).not.toHaveBeenCalled();
+
+  // Drawing/placing mode (including empty array from previz) still pans and accepts Enter/Space.
+  rerender(<WorldMap world={emptyWorld} places={{}} drawing={[]} view={view} onView={onView} onAddPoint={onAddPoint} />);
+  fireEvent.keyDown(map, { key: 'ArrowRight' });
+  expect(onView).toHaveBeenLastCalledWith({ cx: expect.closeTo(20.24, 5), cz: -20.66, size: 100 });
+
+  const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  map.dispatchEvent(enter);
+  expect(enter.defaultPrevented).toBe(true);
+  expect(onAddPoint).toHaveBeenLastCalledWith([10.2, -20.7]);
+
+  const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  map.dispatchEvent(space);
+  expect(space.defaultPrevented).toBe(true);
+  expect(onAddPoint).toHaveBeenCalledTimes(2);
 });

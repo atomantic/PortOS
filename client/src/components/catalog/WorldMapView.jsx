@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { worldSetFootprint as footprint } from '../../../../server/lib/worldMap.js';
 
 const PATH_COLORS = { road: '#5b606b', footpath: '#a39a8c', track: '#8a7155', corridor: '#7a8494' };
@@ -85,11 +85,13 @@ export function layoutWorldLabels(items, unitPerPx, fontPx = LABEL_PX, bounds = 
 
 /**
  * Top-down world map: drag a set or a path point to move it, drag the empty
- * ground to pan, tap the ground while drawing to add path points. North is up.
- * Without `onSelect` it is a read-only map that still pans. `actors` are
- * people drawn as dots (`{ subjectId, name, position: [x, y, z], color }`).
+ * ground or use Arrow keys to pan (Shift for larger steps), tap the ground or
+ * press Enter/Space while drawing to add path points. North is up. Without
+ * `onSelect` it is a read-only map that still pans. `actors` are people drawn
+ * as dots (`{ subjectId, name, position: [x, y, z], color }`).
  */
 export default function WorldMap({ world, places, selected = '', drawing = null, view, onView, onSelect = noop, onMoveSet = noop, onMovePoint = noop, onAddPoint = noop, actors = [] }) {
+  const instructionsId = useId();
   const svgRef = useRef(null);
   const drag = useRef(null);
   // The map fills its box (wider than tall on a desktop), so the view spans `size` along its shorter side.
@@ -147,6 +149,27 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
       else onSelect('');
     }
   };
+  const onKeyDown = (event) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const step = view.size * (event.shiftKey ? 0.4 : 0.1);
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      onView({ ...view, cx: view.cx - step });
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      onView({ ...view, cx: view.cx + step });
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      onView({ ...view, cz: view.cz - step });
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      onView({ ...view, cz: view.cz + step });
+    } else if (Array.isArray(drawing) && (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar')) {
+      event.preventDefault();
+      onAddPoint([round(view.cx), round(view.cz)]);
+    }
+  };
   // Strokes and text are sized in screen pixels, so they stay readable at any zoom.
   const stroke = unitPerPx;
   const nameOf = (set) => places[set.ingredientId]?.ingredient?.name || (places[set.ingredientId] === null ? 'Missing' : '…');
@@ -158,18 +181,23 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
     y0: view.cz - viewH / 2 + stroke * 2, y1: view.cz + viewH / 2 - stroke * 2,
   });
   return (
-    <svg
-      ref={svgRef}
-      viewBox={`${view.cx - viewW / 2} ${view.cz - viewH / 2} ${viewW} ${viewH}`}
-      className="block w-full touch-none select-none rounded-lg border border-port-border bg-[#20241f]"
-      style={{ aspectRatio: '1 / 1', maxHeight: '70vh' }}
-      role="application"
-      aria-label="World map, north is up"
-      onPointerDown={(event) => start(event, { kind: 'ground' })}
-      onPointerMove={move}
-      onPointerUp={end}
-      onPointerCancel={() => { drag.current = null; }}
-    >
+    <>
+      <p id={instructionsId} className="sr-only">Arrow keys pan. Enter adds a point at the center while drawing or placing.</p>
+      <svg
+        ref={svgRef}
+        tabIndex={0}
+        viewBox={`${view.cx - viewW / 2} ${view.cz - viewH / 2} ${viewW} ${viewH}`}
+        className="block w-full touch-none select-none rounded-lg border border-port-border bg-[#20241f] focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
+        style={{ aspectRatio: '1 / 1', maxHeight: '70vh' }}
+        role="application"
+        aria-label="World map, north is up"
+        aria-describedby={instructionsId}
+        onKeyDown={onKeyDown}
+        onPointerDown={(event) => start(event, { kind: 'ground' })}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={() => { drag.current = null; }}
+      >
       {world.paths.map((path) => (
         <g key={path.id}>
           <polyline points={path.points.map((p) => p.join(',')).join(' ')} fill="none" stroke={PATH_COLORS[path.kind]}
@@ -224,6 +252,13 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
       {drawing && drawing.length > 0 && (
         <polyline points={drawing.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffdd55" strokeWidth={stroke * 2} strokeDasharray={`${stroke * 6} ${stroke * 4}`} pointerEvents="none" />
       )}
-    </svg>
+      {Array.isArray(drawing) && (
+        <g pointerEvents="none">
+          <line x1={view.cx - stroke * 8} y1={view.cz} x2={view.cx + stroke * 8} y2={view.cz} stroke="#ffdd55" strokeOpacity={0.75} strokeWidth={stroke * 1.5} />
+          <line x1={view.cx} y1={view.cz - stroke * 8} x2={view.cx} y2={view.cz + stroke * 8} stroke="#ffdd55" strokeOpacity={0.75} strokeWidth={stroke * 1.5} />
+        </g>
+      )}
+      </svg>
+    </>
   );
 }
