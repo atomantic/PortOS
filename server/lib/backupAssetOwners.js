@@ -44,6 +44,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'media-job-attach-hooks', status: 'admitted', modules: ['services/mediaJobImageHook.js'] },
   { id: 'music-video-dcp', status: 'admitted', modules: ['services/musicVideo/dcp.js'] },
   { id: 'music-video-collection-hook', status: 'admitted', modules: ['services/musicVideoCollectionHook.js'] },
+  { id: 'requested-collection-hook', status: 'admitted', modules: ['services/requestedCollectionHook.js'] },
   {
     id: 'pipeline-filename-hooks',
     status: 'admitted',
