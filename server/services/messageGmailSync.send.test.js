@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
-import { auth as googleAuth } from '@googleapis/calendar';
+import { OAuth2Client } from 'google-auth-library';
 
 // Gmail send workflow through the REAL sender, draft store, Gmail adapter and
 // Google API client. Only the network is stubbed (the auth client's fetch), so
@@ -30,7 +30,7 @@ const timeout = () => Object.assign(new Error('Example acknowledgement lost'), {
 let network;
 let submissions;
 function authClient({ expired = false } = {}) {
-  const client = new googleAuth.OAuth2({
+  const client = new OAuth2Client({
     clientId: 'example-client', clientSecret: 'example-secret',
     transporterOptions: { fetchImplementation: async (url, init) => network(String(url), init) }
   });

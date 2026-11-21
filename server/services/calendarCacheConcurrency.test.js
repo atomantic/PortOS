@@ -27,13 +27,13 @@ vi.mock('../lib/cliProviderRun.js', () => ({
   pickCliProvider: vi.fn(), runCliProviderPrompt: vi.fn(),
 }));
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_TIMEOUT_MS: 30_000 }));
-vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
+vi.mock('./calendarApi.js', () => ({ createCalendarApi: vi.fn() }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { request } from '../lib/testHelper.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { readdir, unlink } from 'fs/promises';
-import { calendar } from '@googleapis/calendar';
+import { createCalendarApi } from './calendarApi.js';
 import calendarRoutes from '../routes/calendar.js';
 import { deleteAccount, getAccount, listAccounts, updateSyncStatus } from './calendarAccounts.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
@@ -245,10 +245,10 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
 
     accounts.get(ACCOUNT).subcalendars = [{ calendarId: 'a', enabled: true }];
     getAuthenticatedClient.mockResolvedValueOnce({});
-    calendar.mockReturnValueOnce({ events: { list: async () => {
+    createCalendarApi.mockReturnValueOnce({ listEvents: async () => {
       await beforeResponse();
       return { data: { items: [{ id: 'finished', summary: title, start: { dateTime: startTime }, end: { dateTime: endTime }, organizer }] } };
-    } } });
+    } });
     return apiSyncAccount(ACCOUNT, null);
   }
 
@@ -342,7 +342,7 @@ describe('Google provider event identity', () => {
     for (const [index, items] of pages.entries()) {
       list.mockResolvedValueOnce({ data: { items, nextPageToken: index + 1 < pages.length ? `page-${index + 2}` : undefined } });
     }
-    calendar.mockReturnValueOnce({ events: { list } });
+    createCalendarApi.mockReturnValueOnce({ listEvents: list });
     return apiSyncAccount(ACCOUNT, io);
   }
 

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // well the normalizer downstream handles it. These tests pin the conference
 // metadata's survival across it, and the explicit-null contract that makes an
 // API response authoritative enough to clear a stale join link (#6289).
-vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
+vi.mock('./calendarApi.js', () => ({ createCalendarApi: vi.fn() }));
 
 vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 
@@ -23,11 +23,10 @@ vi.mock('./calendarGoogleSync.js', async importOriginal => ({
   getSyncDateRange: vi.fn(() => ({ pastDate: new Date('2026-03-01T00:00:00Z'), futureDate: new Date('2026-04-01T00:00:00Z') })),
 }));
 
-import { apiSyncAccount } from './calendarGoogleApiSync.js';
-import { calendar } from '@googleapis/calendar';
+import { apiDiscoverCalendars, apiSyncAccount } from './calendarGoogleApiSync.js';
+import { createCalendarApi } from './calendarApi.js';
 import { getAuthenticatedClient } from './googleAuth.js';
-import { getAccount } from './calendarAccounts.js';
-import { updateSyncStatus } from './calendarAccounts.js';
+import { getAccount, updateSubcalendars, updateSyncStatus } from './calendarAccounts.js';
 import { pushSyncEvents } from './calendarGoogleSync.js';
 
 const ACCOUNT_ID = '33333333-3333-3333-3333-333333333333';
@@ -60,7 +59,7 @@ const apiItem = (overrides = {}) => ({
 /** Stub one `events.list` page holding the given raw API items. */
 const mockListPage = (items) => {
   const list = vi.fn(async () => ({ data: { items, nextPageToken: undefined } }));
-  calendar.mockReturnValue({ events: { list } });
+  createCalendarApi.mockReturnValue({ listEvents: list });
   return list;
 };
 
@@ -132,7 +131,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     const list = vi.fn()
       .mockResolvedValueOnce({ data: { items: [apiItem({ id: 'page-1' })], nextPageToken: 'more' } })
       .mockResolvedValueOnce({ data: { items: [apiItem({ id: 'page-2' })], nextPageToken: undefined } });
-    calendar.mockReturnValue({ events: { list } });
+    createCalendarApi.mockReturnValue({ listEvents: list });
 
     const result = await apiSyncAccount(ACCOUNT_ID, null);
 
@@ -147,7 +146,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     const list = vi.fn(({ calendarId }) => calendarId === 'work@example.com'
       ? Promise.resolve({ data: { items: [apiItem({ start: { dateTime: '2026-03-02T10:00:00-05:00' } })] } })
       : Promise.reject(new Error('calendar permission revoked')));
-    calendar.mockReturnValue({ events: { list } });
+    createCalendarApi.mockReturnValue({ listEvents: list });
     const io = { emit: vi.fn() };
 
     const result = await apiSyncAccount(ACCOUNT_ID, io);
@@ -176,7 +175,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
   it('records an error and emits failure when every calendar fetch fails, then allows retry', async () => {
     getAccount.mockResolvedValue(accountWithCalendars());
     const list = vi.fn().mockRejectedValue(new Error('temporary Google outage'));
-    calendar.mockReturnValue({ events: { list } });
+    createCalendarApi.mockReturnValue({ listEvents: list });
     const io = { emit: vi.fn() };
 
     await expect(apiSyncAccount(ACCOUNT_ID, io)).rejects.toThrow('Google API sync failed for all calendars');
@@ -186,7 +185,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       method: 'api', calendars: expect.arrayContaining([expect.objectContaining({ error: 'temporary Google outage' })]),
     }));
 
-    calendar.mockReturnValue({ events: { list: vi.fn().mockResolvedValue({ data: { items: [] } }) } });
+    createCalendarApi.mockReturnValue({ listEvents: vi.fn().mockResolvedValue({ data: { items: [] } }) });
     await expect(apiSyncAccount(ACCOUNT_ID, null)).resolves.toMatchObject({ status: 'success' });
     expect(pushSyncEvents).toHaveBeenCalledTimes(2);
     expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'success');
@@ -216,7 +215,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       if (pageToken) return Promise.reject(Object.assign(new Error('second page unavailable'), { code: 'ETIMEDOUT' }));
       return Promise.resolve({ data: { items: [apiItem({ id: 'partial-event' })], nextPageToken: 'page-2' } });
     });
-    calendar.mockReturnValue({ events: { list } });
+    createCalendarApi.mockReturnValue({ listEvents: list });
 
     const result = await apiSyncAccount(ACCOUNT_ID, null);
 
@@ -240,11 +239,12 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     expect(pushSyncEvents).not.toHaveBeenCalled();
   });
 
-  it('aborts stalled SDK requests at the default deadline and releases the account lock', async () => {
-    const sdk = await vi.importActual('@googleapis/calendar');
+  it('aborts stalled Calendar requests at the default deadline and releases the account lock', async () => {
+    const { OAuth2Client } = await import('google-auth-library');
+    const realAdapter = await vi.importActual('./calendarApi.js');
     vi.useFakeTimers();
     // Node's native AbortSignal timer bypasses fake timers. Inject only its
-    // clock; the real SDK and transport still create and consume the deadline.
+    // clock; the real OAuth client and transport still create and consume the deadline.
     const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
       const controller = new AbortController();
       setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), ms);
@@ -254,7 +254,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     const started = Promise.withResolvers();
     const attempts = [];
     let healthy = false;
-    const auth = new sdk.auth.OAuth2({ transporterOptions: {
+    const auth = new OAuth2Client({ transporterOptions: {
       signal: cleanup.signal,
       fetchImplementation: async (_url, { signal }) => {
         if (healthy) return Response.json({ items: [] });
@@ -270,9 +270,9 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     } });
     auth.setCredentials({ access_token: 'synthetic-token', expiry_date: Date.now() + 3_600_000 });
     getAuthenticatedClient.mockResolvedValue(auth);
-    calendar.mockImplementation(sdk.calendar);
+    createCalendarApi.mockImplementation(realAdapter.createCalendarApi);
     // Observe rejection immediately so advancing the clock cannot create an
-    // unhandled rejection before the assertions inspect the final SDK error.
+    // unhandled rejection before the assertions inspect the final transport error.
     const result = apiSyncAccount(ACCOUNT_ID, null).then(value => ({ value }), error => ({ error }));
     try {
       await started.promise;
@@ -281,7 +281,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       expect(attempts[0].signal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(attempts[0].signal.aborted).toBe(true);
-      // Keep the SDK's normal retry policy: each attempted request owns a
+      // Keep the normal retry policy: each attempted request owns a
       // fresh deadline, rather than treating 30s as a whole-sync timeout.
       await vi.runAllTimersAsync();
       expect(await result).toMatchObject({ error: { cause: { code: 'TimeoutError' } } });
@@ -296,9 +296,29 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       await result;
       timeout.mockRestore();
       vi.useRealTimers();
-      calendar.mockReset();
+      createCalendarApi.mockReset();
     }
   });
+});
+
+it('discovers every CalendarList page and saves normalized calendar metadata', async () => {
+  getAccount.mockResolvedValue(account());
+  getAuthenticatedClient.mockResolvedValue({});
+  const listCalendarList = vi.fn()
+    .mockResolvedValueOnce({ data: {
+      items: [{ id: CAL_ID, summary: 'Work', summaryOverride: 'Office', backgroundColor: '#123456' }],
+      nextPageToken: 'next',
+    } })
+    .mockResolvedValueOnce({ data: { items: [{ id: 'personal@example.com', summary: 'Personal' }] } });
+  createCalendarApi.mockReturnValue({ listCalendarList });
+
+  const calendars = [
+    { id: CAL_ID, name: 'Office', color: '#123456' },
+    { id: 'personal@example.com', name: 'Personal', color: '' },
+  ];
+  await expect(apiDiscoverCalendars(ACCOUNT_ID)).resolves.toEqual({ status: 'success', calendars });
+  expect(listCalendarList.mock.calls).toEqual([[{ pageToken: undefined }], [{ pageToken: 'next' }]]);
+  expect(updateSubcalendars).toHaveBeenCalledWith(ACCOUNT_ID, calendars);
 });
 
 // #14157: account and calendar display names (often mailbox addresses) and raw
@@ -338,7 +358,7 @@ describe('apiSyncAccount log privacy (#14157)', () => {
 
   it('logs the failure without the provider message or calendar names', async () => {
     const list = vi.fn().mockRejectedValue(new Error('no access to zz-marker-cal-a@example.com'));
-    calendar.mockReturnValue({ events: { list } });
+    createCalendarApi.mockReturnValue({ listEvents: list });
     await expect(apiSyncAccount(ACCOUNT_ID, null)).rejects.toThrow();
     expect(expectNoMarkers()).toContain('sync failed');
   });

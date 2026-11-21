@@ -68,15 +68,15 @@ export async function clearAuth() {
   console.log('📅 Google OAuth tokens cleared');
 }
 
-// The Google SDK is loaded on first use, not at boot (#16558).
+// Load the OAuth client on first use (#16558).
 async function createOAuth2Client(credentials) {
-  const { auth } = await import('@googleapis/calendar');
-  return new auth.OAuth2({
+  const { OAuth2Client } = await import('google-auth-library');
+  return new OAuth2Client({
     clientId: credentials.clientId,
     clientSecret: credentials.clientSecret,
     redirectUri: credentials.redirectUri || OAUTH_REDIRECT_URI,
     // Token exchange/refresh uses its own transport, before an API request's
-    // deadline applies. Keep the SDK's retries and per-request overrides.
+    // deadline applies. Keep the transport's retries and per-request overrides.
     transporterOptions: { timeout: GOOGLE_API_TIMEOUT_MS }
   });
 }

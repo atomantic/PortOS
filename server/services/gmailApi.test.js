@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { auth as googleAuth } from '@googleapis/calendar';
+import { OAuth2Client } from 'google-auth-library';
 import { createGmailApi } from './gmailApi.js';
 import { GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { messageLogError } from '../lib/messageLogError.js';
@@ -12,7 +12,7 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 let calls;
 let answer;
 function client({ expired = false } = {}) {
-  const oauth = new googleAuth.OAuth2({
+  const oauth = new OAuth2Client({
     clientId: 'example-client', clientSecret: 'example-secret',
     transporterOptions: {
       fetchImplementation: async (url, init) => {
