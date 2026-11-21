@@ -1249,7 +1249,10 @@ async function getModelDetails(name, requestOptions = {}) {
   }
   const details = {
     contextLength,
-    capabilities: Array.isArray(data.capabilities) ? data.capabilities : []
+    capabilities: Array.isArray(data.capabilities) ? data.capabilities : [],
+    // Layout keys for context-memory planning (lib/contextMemoryPlan.js).
+    modelInfo: data.model_info && typeof data.model_info === 'object' ? data.model_info : null,
+    runner: typeof data.details?.runner === 'string' ? data.details.runner : null
   }
   modelDetailsCache.set(name, details)
   return details
@@ -1266,6 +1269,16 @@ async function getModelDetails(name, requestOptions = {}) {
  */
 async function getModelCapabilities(name, requestOptions = {}) {
   return (await getModelDetails(name, requestOptions)).capabilities
+}
+
+/**
+ * A model's `model_info` layout keys and runner (`mlx` or null) from /api/show, cached with the other details.
+ * @param {string} name
+ * @returns {Promise<{ modelInfo: object|null, runner: string|null }>}
+ */
+async function getModelLayout(name, requestOptions = {}) {
+  const { modelInfo = null, runner = null } = await getModelDetails(name, requestOptions)
+  return { modelInfo, runner }
 }
 
 /** Add `contextLength` + `capabilities` to each model (parallel, cached). */
@@ -2230,6 +2243,7 @@ async function getStatus(forceRefresh = false) {
 export {
   getInstalledModels,
   getModelCapabilities,
+  getModelLayout,
   getLoadedModels,
   getLoadedModelsAt,
   getLastInstalledModelsError,

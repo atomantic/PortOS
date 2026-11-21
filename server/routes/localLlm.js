@@ -77,7 +77,7 @@ import {
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
 import {
-  getStatus, listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
+  getStatus, listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall, runModelAbuseScan } from '../services/modelAbuseGuard.js'
@@ -179,6 +179,12 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
 // lists its rows verbatim), so returning tool-only rows there would need a
 // discriminator plus a filter in every existing consumer, and its CLI-provider
 // expansion has no tool-use analogue.
+// GET /api/local-llm/context-plans — per installed Ollama model: KV-cache size at each
+// window step under the daemon's cache type, what fits this host, and the recommended window.
+router.get('/context-plans', asyncHandler(async (_req, res) => {
+  res.json(await listContextPlans())
+}))
+
 router.get('/tool-use-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listToolUseModels() })
 }))
