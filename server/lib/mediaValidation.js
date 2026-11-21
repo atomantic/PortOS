@@ -428,8 +428,13 @@ export const localLlmCompareSchema = z.object({
 });
 
 // =============================================================================
-// MEDIA COLLECTIONS — bulk add/remove items
+// MEDIA COLLECTIONS — join collections and bulk add/remove items
 // =============================================================================
+
+export const mediaCollectionJoinSchema = (nameMaxLength) => z.object({
+  name: z.string().trim().min(1).max(nameMaxLength),
+  collectionIds: z.array(z.string().min(1).max(128)).min(2),
+}).strict();
 
 // `ref` rules mirror server/services/mediaCollections.js#sanitizeItem: ":"
 // is the API key separator (`<kind>:<ref>` split on first ":"), so a ref

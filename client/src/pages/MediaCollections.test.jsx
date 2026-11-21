@@ -37,6 +37,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
     },
   ]),
   createMediaCollection: vi.fn(),
+  joinMediaCollections: vi.fn(),
   autoOrganizeMediaCollections: vi.fn(),
   deleteMediaCollection: vi.fn(),
   listVideoHistory: vi.fn().mockResolvedValue([]),
@@ -393,7 +394,9 @@ describe('MediaCollections', () => {
     // indexing a match list would silently target whichever row sorted first.
     const alphaCard = screen.getByTitle('Alpha').closest('.bg-port-card');
     await user.click(within(alphaCard).getByRole('button', { name: 'Delete collection' }));
+    await user.click(within(alphaCard).getByRole('button', { name: 'Delete', exact: true }));
     expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
   });
 
@@ -423,10 +426,39 @@ describe('MediaCollections', () => {
     await screen.findByText('Alpha');
     expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Delete collection' }));
+    expect(deleteMediaCollection).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(deleteMediaCollection).not.toHaveBeenCalled();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete collection' }));
+    await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(deleteMediaCollection).toHaveBeenCalledWith('col-1', { silent: true });
     const unsorted = await screen.findByTitle('Unsorted');
     expect(unsorted).toHaveAttribute('href', '/media/collections/unsorted');
-    expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument());
     expect(within(unsorted.closest('.bg-port-card')).getByText('1')).toBeInTheDocument();
     expect(listMediaCollections).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins selected collections under the entered name and opens the result', async () => {
+    const { joinMediaCollections } = await import('../services/apiImageVideo.js');
+    joinMediaCollections.mockResolvedValueOnce({ id: 'joined', name: 'Handpicked media', items: [] });
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await user.click(await screen.findByRole('button', { name: 'Select collections' }));
+    expect(screen.queryByRole('checkbox', { name: 'Select Unsorted' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Alpha' }));
+    await typeSettled(user, screen.getByLabelText('Joined collection name'), 'Handpicked media');
+    const join = screen.getByRole('button', { name: 'Join collections' });
+    expect(join).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Select Beta' }));
+    await typeSettled(user, screen.getByLabelText('Search collections'), 'alpha');
+    expect(screen.queryByRole('checkbox', { name: 'Select Beta' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('2 selected');
+    await user.click(join);
+    expect(joinMediaCollections).toHaveBeenCalledWith({
+      name: 'Handpicked media', collectionIds: ['col-1', 'col-2'],
+    }, { silent: true });
+    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/joined'));
   });
 });
