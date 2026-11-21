@@ -31,6 +31,7 @@ import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
   buildAssetManifestForSeries,
+  buildCollectionIntegrityAssets,
   stampImageManifestEntries,
   peerAcceptsAssetStamps,
 } from './peerSyncAssets.js';
@@ -848,7 +849,7 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
  * manifest -> envelope path, with two post-hooks (musicVideoProject,
  * writersRoomWork) that bundle one extra field onto the generic envelope.
  */
-export async function buildPushPayload(sub, sourceInstanceId) {
+export async function buildPushPayload(sub, sourceInstanceId, { collectionIntegrity = false } = {}) {
   const portosMeta = await buildPortosMeta();
   const desc = RECORD_KINDS[sub.recordKind];
   if (!desc) return null;
@@ -858,6 +859,9 @@ export async function buildPushPayload(sub, sourceInstanceId) {
   if (!record) return null;
   const sanitized = sanitizeRecordForWire(sub.recordKind, record);
   if (!sanitized) return null;
+  if (collectionIntegrity && sub.recordKind === 'mediaCollection' && record.deleted !== true) {
+    return { kind: sub.recordKind, record: sanitized, sourceInstanceId, ...await buildCollectionIntegrityAssets(sanitized) };
+  }
   // Tombstone push ships no assets — the receiver is about to delete the
   // record, so pulling its bytes would be wasteful + privacy-sensitive (same
   // reasoning as the universe/series hooks above).

@@ -34,6 +34,7 @@ import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
 import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
 import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
+import { sanitizeAssetFilename } from './buckets.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
@@ -111,16 +112,22 @@ export async function buildLocalManifest(kind) {
 
 const assetKey = ({ kind, filename }) => `${kind}:${filename}`;
 
-function collectionInventory(payload) {
-  const { record, assetManifest } = payload;
-  const refs = new Map(referenceCollectionAssetManifest(record).map((asset) => [assetKey(asset), asset]));
-  const copies = new Map(assetManifest.filter((asset) => asset.sha256 && refs.has(assetKey(asset)))
-    .map((asset) => [assetKey(asset), asset]));
-  const assets = [...copies.values()];
+function collectionInventory({ record, assetManifest, videoFilenames }) {
+  const filenames = new Map(Object.entries(videoFilenames ?? {}));
+  const manifest = new Map(assetManifest.filter((asset) => asset.sha256).map((asset) => [assetKey(asset), asset]));
+  const files = new Map();
+  const matched = new Set();
+  for (const ref of referenceCollectionAssetManifest(record)) {
+    const alias = ref.kind === 'video' ? sanitizeAssetFilename(filenames.get(ref.filename)) : null;
+    const file = alias ? { ...ref, filename: alias } : ref;
+    const copy = manifest.get(assetKey(file));
+    files.set(assetKey(ref), { ...file, sha256: copy?.sha256, alias });
+    if (copy) matched.add(copy);
+  }
+  const assets = [...matched];
   return {
     ...record,
-    refs,
-    copies,
+    files,
     assetHashes: assets.map((asset) => asset.sha256),
     metadataMissing: assets.some((asset) => asset.kind === 'image' && !asset.sidecarSha256),
   };
@@ -132,21 +139,25 @@ function compareCollections(localPayload, peerPayload) {
   const records = computeRecordIntegrity(local ? [local] : [], [peer]);
   if (!local || local.deleted === true || peer.deleted === true) return records;
 
-  const differences = [];
-  for (const [key, asset] of new Map([...local.refs, ...peer.refs])) {
-    const localSha = local.copies.get(key)?.sha256;
-    const peerSha = peer.copies.get(key)?.sha256;
+  const differences = new Map();
+  for (const [key, ref] of new Map([...local.files, ...peer.files])) {
+    const here = local.files.get(key);
+    const there = peer.files.get(key);
+    const localSha = here?.sha256;
+    const peerSha = there?.sha256;
     if (localSha && localSha === peerSha) continue;
     const availability = localSha ? (peerSha ? 'different' : 'local') : (peerSha ? 'peer' : 'neither');
-    differences.push({ ...asset, availability });
+    const filename = (localSha ? here.filename : peerSha ? there.filename : here?.alias ?? there?.alias) ?? ref.filename;
+    const asset = { kind: ref.kind, filename, availability };
+    differences.set(`${availability}:${assetKey(asset)}`, asset);
   }
   const comparison = records[0];
   // Equal hash lists can hide missing files on both sides or the same bytes
   // stored under different filenames. Keep timestamp divergence actionable.
-  if (differences.length && comparison.status !== INTEGRITY_STATUS.DIVERGED) {
+  if (differences.size && comparison.status !== INTEGRITY_STATUS.DIVERGED) {
     comparison.status = INTEGRITY_STATUS.ASSETS_MISSING;
   }
-  return [{ ...comparison, assetDifferences: differences }];
+  return [{ ...comparison, assetDifferences: [...differences.values()] }];
 }
 
 /**
@@ -164,7 +175,10 @@ export async function getPeerIntegrity({ peerId, kind, recordId }) {
 
   const collectionDetail = kind === 'mediaCollection' && !!recordId;
   const query = new URLSearchParams({ kind });
-  if (collectionDetail) query.set('id', recordId);
+  if (collectionDetail) {
+    query.set('id', recordId);
+    query.set('collectionIntegrity', '1');
+  }
   const path = collectionDetail ? '/api/peer-sync/record' : '/api/peer-sync/manifest';
   const res = await peerFetch(
     `${peerBaseUrl(peer)}${path}?${query}`,
@@ -197,7 +211,7 @@ export async function getPeerIntegrity({ peerId, kind, recordId }) {
         (parsed.data.record.deleted !== true && !Array.isArray(parsed.data.record.items))) {
       return { available: false, reason: 'fetch-failed', records: [] };
     }
-    const localPayload = await getRecordPayloadForPeer(kind, recordId);
+    const localPayload = await getRecordPayloadForPeer(kind, recordId, { collectionIntegrity: true });
     return { available: true, records: compareCollections(localPayload, parsed.data) };
   }
   if (!Array.isArray(body.records)) return { available: false, reason: 'fetch-failed', records: [] };

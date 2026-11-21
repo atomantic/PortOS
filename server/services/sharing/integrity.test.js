@@ -262,8 +262,30 @@ describe('getPeerIntegrity', () => {
         ],
       }],
     });
-    expect(peerFetch).toHaveBeenCalledWith('http://peer-x.test:5555/api/peer-sync/record?kind=mediaCollection&id=col-1', expect.any(Object), makePeer());
+    expect(peerFetch).toHaveBeenCalledWith('http://peer-x.test:5555/api/peer-sync/record?kind=mediaCollection&id=col-1&collectionIntegrity=1', expect.any(Object), makePeer());
     expect(listCollections).not.toHaveBeenCalled();
+  });
+
+  it('matches history filenames to collection video refs when peers use different storage names', async () => {
+    const record = makeCollection({ items: [{ kind: 'video', ref: 'video-id' }] });
+    const video = (filename) => ({ kind: 'video', filename, sha256: 'a'.repeat(64) });
+    vi.mocked(referenceCollectionAssetManifest).mockReturnValue([{ kind: 'video', filename: 'video-id.mp4' }]);
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    vi.mocked(getRecordPayloadForPeer).mockResolvedValue({
+      record, assetManifest: [video('imported.mp4')], videoFilenames: { 'video-id.mp4': 'imported.mp4' },
+    });
+    const remote = { kind: 'mediaCollection', sourceInstanceId: 'peer-x', record };
+    vi.mocked(peerFetch)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ...remote, assetManifest: [video('video-id.mp4')] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ...remote, assetManifest: [] }) });
+    const options = { peerId: 'peer-x', kind: 'mediaCollection', recordId: record.id };
+    expect((await getPeerIntegrity(options)).records[0]).toMatchObject({
+      status: INTEGRITY_STATUS.IN_PARITY, assetDifferences: [],
+    });
+    expect((await getPeerIntegrity(options)).records[0]).toMatchObject({
+      status: INTEGRITY_STATUS.ASSETS_MISSING,
+      assetDifferences: [{ kind: 'video', filename: 'imported.mp4', availability: 'local' }],
+    });
   });
 
   it('uses the category manifest when the peer record endpoint returns 404', async () => {

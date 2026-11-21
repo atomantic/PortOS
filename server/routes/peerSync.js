@@ -289,6 +289,7 @@ router.get('/record', asyncHandler(async (req, res) => {
   const recordQuery = validateRequest(peerRecordQuerySchema, req.query);
   const kind = (recordQuery.kind ?? '').trim();
   const id = (recordQuery.id ?? '').trim();
+  const collectionIntegrity = kind === 'mediaCollection' && recordQuery.collectionIntegrity === '1';
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -305,7 +306,9 @@ router.get('/record', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, {
     recordKind: kind, route: `record ${kind}`, alwaysEnforce: newlySupported, allowOperator: newlySupported,
   });
-  const payload = await getRecordPayloadForPeer(kind, id);
+  const payload = collectionIntegrity
+    ? await getRecordPayloadForPeer(kind, id, { collectionIntegrity })
+    : await getRecordPayloadForPeer(kind, id);
   if (!payload) {
     throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });
   }
