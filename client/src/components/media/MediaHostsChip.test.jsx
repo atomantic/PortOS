@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({ makeMediaPrimary: vi.fn(), getMediaHolders: vi.fn() }));
 vi.mock('../../services/apiMediaHolders.js', () => ({
@@ -40,14 +40,29 @@ describe('MediaHostsChip', () => {
     expect(list.textContent).toContain('Studio Mac');
     expect(list.textContent).toContain('delete pending');
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Make primary' })[1]);
-    expect(screen.getByText('Keep the copy on Studio Mac? Deletes the copy on This machine.')).toBeTruthy();
+    const trigger = screen.getAllByRole('button', { name: 'Make primary' })[1];
+    fireEvent.click(trigger);
+    const confirmation = screen.getByRole('group', { name: 'Confirm Studio Mac as primary' });
+    expect(document.activeElement).toBe(confirmation);
+    expect(within(confirmation).getByText('Keep the copy on Studio Mac')).toBeTruthy();
+    expect(within(confirmation).getByText('Move copies to Trash on This machine.')).toBeTruthy();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
     expect(api.makeMediaPrimary).not.toHaveBeenCalled();
 
-    // The inline confirmation's button is the last one named Make primary.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Make primary' }).at(-1));
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('group')).getByRole('button', { name: 'Make primary' }));
     await waitFor(() => expect(api.makeMediaPrimary).toHaveBeenCalledWith({ kind: 'video', filename: 'v1.mp4', instanceId: 'inst-a' }, { silent: true }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Primary set; copy removed from This machine'));
+  });
+
+  it('identifies an unnamed host in the list and confirmation', () => {
+    render(<MediaHostsChip entry={entry([holder('inst-self', 'This machine', { self: true }), holder('inst-a', 'null')])} />);
+    fireEvent.click(screen.getByRole('button', { name: /2 hosts/ }));
+    expect(screen.getByText('Unnamed host (inst-a)')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make primary' })[1]);
+    expect(screen.getByRole('group', { name: 'Confirm Unnamed host (inst-a) as primary' })).toBeTruthy();
   });
 
   it('reports a copy its holder kept as a failure', async () => {
