@@ -94,7 +94,7 @@ export default function ImageGenControls({
   const isFlux3 = isLocal && currentModel?.runner === 'flux3';
   // Only a verdict for THIS model counts: the page re-probes on every model
   // change, and a stale answer for the previous pick must not relabel this one.
-  const runtimeIssue = runtimeStatus?.modelId === modelId
+  const runtimeIssue = runtimeStatus && runtimeStatus.modelId === modelId
     && imageGenReadiness(runtimeStatus) === IMAGE_RUNTIME_READINESS.UNAVAILABLE
     ? runtimeStatus.reason || 'The local runtime failed its check.' : null;
   const runtimeRepair = runtimeIssue && onRuntimeRemedy && isSelfServeRuntimeRemedy(runtimeStatus.remedy?.kind)
