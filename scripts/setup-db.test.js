@@ -113,7 +113,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         if (command === 'psql' && args.includes('SHOW server_version_num')) return `${provisioned ? '170012' : runningVersionNum}\n`;
         if (command === 'psql') return nativeReady || provisioned ? '1\n' : '';
         if (invocation === 'brew --prefix postgresql@17') return '/opt/homebrew/opt/postgresql@17\n';
-        if (invocation === 'brew/opt/postgresql@17/bin/pg_config --version'.replace('brew', '/opt/homebrew')) return 'PostgreSQL 17.12 (Homebrew)\n';
+        if (invocation === '/opt/homebrew/opt/postgresql@17/bin/pg_config --version') return 'PostgreSQL 17.12 (Homebrew)\n';
         if (command === 'bash' && args[1] === 'setup-native') {
           provisioned = true;
           return '';
