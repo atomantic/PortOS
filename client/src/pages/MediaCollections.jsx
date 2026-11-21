@@ -133,10 +133,13 @@ export default function MediaCollections() {
     cancelDelete();
     setOrganizing(true);
     try {
-      const { added, updatedCollections, missingAssets, failedCollections } = await autoOrganizeMediaCollections({ silent: true });
-      const summary = added
+      const { added, updatedCollections, missingAssets, failedCollections, mergedCollections } = await autoOrganizeMediaCollections({ silent: true });
+      const filed = added
         ? `Added ${formatCount(added)} memberships across ${formatCount(updatedCollections)} collections.`
         : 'No new collection memberships found.';
+      const summary = mergedCollections
+        ? `Merged ${formatCount(mergedCollections)} Creative Director run collections into their jobs. ${filed}`
+        : filed;
       const missing = missingAssets ? ` ${formatCount(missingAssets)} unavailable assets skipped.` : '';
       if (failedCollections) toast.error(`${summary}${missing} ${formatCount(failedCollections)} collections could not be updated.`);
       else toast.success(summary + missing);

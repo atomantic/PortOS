@@ -112,6 +112,10 @@ const recordItems = {
 const ownerKey = (source, id) => `${source}:${id}`;
 
 async function organize() {
+  // Fold each Creative Commission job's per-run collections into one first, so
+  // the filing pass below routes every run's renders into the job collection.
+  const { consolidateCommissionCollections } = await import('./creativeCommissions/collections.js');
+  const consolidated = await consolidateCommissionCollections();
   const { sources, downloads, videos } = await inventory();
   const buckets = new Map();
   for (const [source, owners] of Object.entries(sources)) {
@@ -147,7 +151,10 @@ async function organize() {
   const { resolveMediaLocations } = await import('./peerHostedMedia.js');
   const locations = await resolveMediaLocations([...refs.values()]);
   const available = new Set([...refs.keys()].filter((_, index) => locations[index].location !== 'missing' && !locations[index].pendingDelete));
-  const result = { added: 0, updatedCollections: 0, missingAssets: refs.size - available.size, failedCollections: 0 };
+  const result = {
+    added: 0, updatedCollections: 0, missingAssets: refs.size - available.size, failedCollections: 0,
+    mergedCollections: consolidated.mergedCollections,
+  };
 
   for (const { source, owner, items } of buckets.values()) {
     try {
