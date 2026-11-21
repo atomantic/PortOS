@@ -1,8 +1,8 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { visualizer } from 'rollup-plugin-visualizer';
 import { readFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
+import { createRequire } from 'node:module';
 import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
@@ -16,6 +16,8 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
+// The Vite config runner closes before invoking the exported config function.
+const requireFromConfig = createRequire(import.meta.url);
 // client/dist is the bundle the running server serves; only publish-client-build.js
 // (which sets PORTOS_CLIENT_BUILD_OUT_DIR to its stage dir) may replace it. A bare
 // `vite build` lands in a git-ignored scratch dir instead of emptying live chunks.
@@ -221,12 +223,7 @@ export default defineConfig(({ command, mode }) => {
     },
     plugins: [
       react(),
-      ANALYZE_BUNDLE && visualizer({
-        filename: resolve(BUILD_OUT_DIR, 'bundle-report.html'),
-        gzipSize: true,
-        brotliSize: true,
-        template: 'treemap',
-      }),
+      command === 'build' && ANALYZE_BUNDLE && requireFromConfig('./vite.bundleReport.js').bundleReport(),
     ].filter(Boolean),
     resolve: {
       // Share Three.js without bypassing its package exports with a directory alias.
