@@ -73,17 +73,17 @@ export function normalizedAttributeValue(value) {
 // unnamed. That is #4318's defect exactly: the machine has to be told where it
 // is, and the caller is the only one that knows.
 export function maskComments(src, { startMode = 'code' } = {}) {
-  // Split by UTF-16 unit, not by code point: the scanner reports STRING indexes,
-  // and a spread (`[...src]`) collapses each astral character to one slot, so
-  // every index after the first emoji in a file would land a slot early.
-  const chars = src.split('');
-  for (const token of jsxScanner(src, { mode: startMode })) {
-    if (token.kind !== 'comment') continue;
-    // Newlines survive so line numbers — and a line comment's own terminator —
-    // stay where they were.
-    for (let i = token.index; i <= token.end; i++) if (chars[i] !== '\n') chars[i] = ' ';
+  if (!src.includes('//') && !src.includes('/*')) return src;
+  const chunks = [];
+  let cursor = 0;
+  for (const { index, end } of jsxScanner(src, { mode: startMode, commentsOnly: true })) {
+    // Slice at the lexer's UTF-16 offsets and preserve newlines for diagnostics.
+    chunks.push(src.slice(cursor, index), src.slice(index, end + 1).replace(/[^\n]/g, ' '));
+    cursor = end + 1;
   }
-  return chars.join('');
+  if (chunks.length === 0) return src;
+  chunks.push(src.slice(cursor));
+  return chunks.join('');
 }
 
 // Keep the source's offsets and line breaks intact while making spans inert.
