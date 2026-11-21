@@ -17,6 +17,7 @@ import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
 import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
+import { MEDIA_COLLECTION_BULK_MAX } from './mediaItemKey.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
@@ -457,8 +458,8 @@ const mediaCollectionRemoveKeySchema = z.string().min(3).max(520);
 // Bulk endpoint: { add?, remove? } — at least one of the two arrays must be
 // non-empty so a no-op call surfaces as a 400 instead of an opaque success.
 export const mediaCollectionBulkItemsSchema = z.object({
-  add: z.array(mediaCollectionItemSchema).max(1000).optional(),
-  remove: z.array(mediaCollectionRemoveKeySchema).max(1000).optional(),
+  add: z.array(mediaCollectionItemSchema).max(MEDIA_COLLECTION_BULK_MAX).optional(),
+  remove: z.array(mediaCollectionRemoveKeySchema).max(MEDIA_COLLECTION_BULK_MAX).optional(),
 }).strict().refine(
   (d) => (Array.isArray(d.add) && d.add.length > 0) || (Array.isArray(d.remove) && d.remove.length > 0),
   { message: 'bulk update requires at least one item in add or remove' },

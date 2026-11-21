@@ -37,6 +37,8 @@ import { hostedByForCollectionItems, hostedCountsByPeer, listHostedEntries } fro
 import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
 import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
 import { sanitizeAssetFilename } from './buckets.js';
+import { collectionVideoRefToFilename } from '../collectionVideoFiles.js';
+import { itemKey } from '../../lib/mediaItemKey.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
@@ -121,6 +123,18 @@ export async function buildLocalManifest(kind) {
 
 const assetKey = ({ kind, filename }) => `${kind}:${filename}`;
 
+// Reference key → local collection item key, so a file neither machine holds
+// can be offered for removal from the collection (nothing can sync it back).
+function localItemKeysByReference(items) {
+  const out = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (typeof item?.ref !== 'string' || (item.kind !== 'image' && item.kind !== 'video')) continue;
+    const filename = sanitizeAssetFilename(item.kind === 'video' ? collectionVideoRefToFilename(item.ref) : item.ref);
+    if (filename) out.set(assetKey({ kind: item.kind, filename }), itemKey(item));
+  }
+  return out;
+}
+
 function collectionInventory({ record, assetManifest, videoFilenames, hostedBy, sourceInstanceId }) {
   const filenames = new Map(Object.entries(videoFilenames ?? {}));
   const manifest = new Map(assetManifest.filter((asset) => asset.sha256).map((asset) => [assetKey(asset), asset]));
@@ -152,6 +166,7 @@ function compareCollections(localPayload, peerPayload) {
   if (!local || local.deleted === true || peer.deleted === true) return records;
 
   const differences = new Map();
+  let localItemKeys;
   for (const [key, ref] of new Map([...local.files, ...peer.files])) {
     const here = local.files.get(key);
     const there = peer.files.get(key);
@@ -166,6 +181,11 @@ function compareCollections(localPayload, peerPayload) {
     const availability = localSha ? (peerSha ? 'different' : 'local') : (peerSha ? 'peer' : 'neither');
     const filename = (localSha ? here.filename : peerSha ? there.filename : here?.alias ?? there?.alias) ?? ref.filename;
     const asset = { kind: ref.kind, filename, availability };
+    // Built on first need: most collections have no file missing everywhere.
+    const removableKey = availability === 'neither'
+      ? (localItemKeys ??= localItemKeysByReference(localPayload.record?.items)).get(key)
+      : null;
+    if (removableKey) asset.itemKey = removableKey;
     differences.set(`${availability}:${assetKey(asset)}`, asset);
   }
   const comparison = records[0];

@@ -15,9 +15,11 @@ const mockGetPipelineSeries = vi.fn();
 const mockSyncRecordToPeer = vi.fn();
 const mockPullRecordFromPeer = vi.fn();
 const mockPullMissingMetadata = vi.fn();
+const mockRemoveMediaCollectionItems = vi.fn();
 
 vi.mock('../../services/apiImageVideo.js', () => ({
   getMediaCollection: (...args) => mockGetMediaCollection(...args),
+  removeMediaCollectionItems: (...args) => mockRemoveMediaCollectionItems(...args),
 }));
 vi.mock('../../services/apiUniverseBuilder.js', () => ({
   getUniverse: (...args) => mockGetUniverse(...args),
@@ -151,6 +153,27 @@ describe('SyncDetailDrawer', () => {
     expect(screen.getByText('Stored only here (1)').parentElement).not.toHaveAttribute('open');
     expect(screen.getByText('Stored only on Example peer (1)')).toBeInTheDocument();
     expect(screen.getByText('Different file contents (1)')).toBeInTheDocument();
+  });
+
+  it('removes collection items whose files exist on no machine', async () => {
+    mockRemoveMediaCollectionItems.mockResolvedValue({ removed: 2 });
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{
+        peerId: 'peer-a', peerName: 'Example peer', status: 'assets-missing',
+        assetDifferences: [
+          { kind: 'video', filename: 'gone.mp4', availability: 'neither', itemKey: 'video:gone-id' },
+          { kind: 'image', filename: 'gone.png', availability: 'neither', itemKey: 'image:gone.png' },
+          { kind: 'image', filename: 'local.png', availability: 'local' },
+        ],
+      }]),
+    }));
+    render(<SyncDetailDrawer kind="mediaCollection" recordId={RECORD_ID} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /remove 2 from collection/i }));
+    await waitFor(() => expect(mockRemoveMediaCollectionItems).toHaveBeenCalledWith(
+      RECORD_ID, ['video:gone-id', 'image:gone.png'], { silent: true },
+    ));
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
+    expect(mockToast.success).toHaveBeenCalledWith('Removed 2 missing items from the collection');
   });
 
   it('explains a timestamp tie and preserves manual sync actions', () => {

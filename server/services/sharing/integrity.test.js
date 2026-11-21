@@ -263,7 +263,7 @@ describe('getPeerIntegrity', () => {
           { kind: 'image', filename: 'local.png', availability: 'local' },
           { kind: 'image', filename: 'peer.png', availability: 'peer' },
           { kind: 'image', filename: 'different.png', availability: 'different' },
-          { kind: 'video', filename: 'missing-video.mp4', availability: 'neither' },
+          { kind: 'video', filename: 'missing-video.mp4', availability: 'neither', itemKey: 'video:missing-video' },
         ],
       }],
     });
