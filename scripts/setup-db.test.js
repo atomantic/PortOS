@@ -66,7 +66,7 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false } = {}) {
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false, platform = 'linux', runningVersionNum = '170012' } = {}) {
   const clients = [];
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
@@ -101,7 +101,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
       resolveBashBinary: () => 'bash',
       process: {
-        env: { ...(exportedMode === undefined ? {} : { PGMODE: exportedMode }), ...exportedEnv }, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
+        env: { ...(exportedMode === undefined ? {} : { PGMODE: exportedMode }), ...exportedEnv }, platform, stdin: { isTTY: tty }, stdout: { isTTY: tty },
         exit: (code) => { exitCode = code; throw exitSignal; }
       },
       console: { log: (message) => logs.push(message), error: (message) => errors.push(message) },
@@ -110,7 +110,10 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         childEnvs.push(options?.env);
         const invocation = [command, ...args].join(' ');
         if (invocation === unavailable) throw new Error('Synthetic unavailable dependency');
+        if (command === 'psql' && args.includes('SHOW server_version_num')) return `${provisioned ? '170012' : runningVersionNum}\n`;
         if (command === 'psql') return nativeReady || provisioned ? '1\n' : '';
+        if (invocation === 'brew --prefix postgresql@17') return '/opt/homebrew/opt/postgresql@17\n';
+        if (invocation === 'brew/opt/postgresql@17/bin/pg_config --version'.replace('brew', '/opt/homebrew')) return 'PostgreSQL 17.12 (Homebrew)\n';
         if (command === 'bash' && args[1] === 'setup-native') {
           provisioned = true;
           return '';
@@ -298,6 +301,16 @@ describe('setup preserves the selected database', () => {
     }
     const setupIndex = result.calls.findIndex((call) => call.includes('setup-native'));
     expect(result.childEnvs[setupIndex]).toMatchObject({ PGHOST: 'db.example.invalid', PGPORT: '5433' });
+  });
+  // A `brew upgrade` leaves the old server running against the new keg's
+  // libraries; the fast path must hand that to setup-native (which restarts it).
+  it.each([
+    ['170011', true],
+    ['170012', false],
+  ])('on macOS, a running server at %s against an installed 17.12 runs setup-native: %s', async (runningVersionNum, expectSetup) => {
+    const result = await runSetup({ mode: 'native', nativeReady: true, platform: 'darwin', runningVersionNum });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.some((call) => call.includes('setup-native'))).toBe(expectSetup);
   });
   // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
   it.each([
