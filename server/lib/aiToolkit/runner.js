@@ -102,6 +102,7 @@ export function createRunnerService(config = {}) {
     hooks = {},
     // Host-owned file-plus-record boundary; standalone toolkit has no coordinator.
     withAssetPublication = work => work(),
+    redactStoredPrompt = prompt => prompt,
     maxConcurrentRuns: _maxConcurrentRuns = 5
   } = config;
 
@@ -443,6 +444,7 @@ export function createRunnerService(config = {}) {
         ? (fallbackModelHint || provider.defaultModel || null)
         : (model || provider.defaultModel || null);
 
+      const storedPrompt = redactStoredPrompt(prompt);
       const metadata = {
         id: runId,
         type: 'ai',
@@ -456,7 +458,7 @@ export function createRunnerService(config = {}) {
         workspacePath,
         workspaceName,
         source,
-        prompt: prompt.substring(0, 500),
+        prompt: storedPrompt.substring(0, 500),
         // Full prompt size (chars) — `prompt` above is truncated for display.
         // Hosts use this to estimate input-token usage on completion.
         promptLength: prompt.length,
@@ -475,7 +477,7 @@ export function createRunnerService(config = {}) {
       try {
         await withAssetPublication(async () => {
           // The record must never name missing prompt/output bytes after a failure.
-          await atomicWrite(join(runDir, 'prompt.txt'), prompt);
+          await atomicWrite(join(runDir, 'prompt.txt'), storedPrompt);
           await atomicWrite(join(runDir, 'output.txt'), '');
           await atomicWrite(join(runDir, 'metadata.json'), metadata);
         });

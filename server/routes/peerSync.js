@@ -1,6 +1,3 @@
-import { tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { isMachineLocalCosTask } from '../lib/cos/cosFederationPolicy.js';
-import { isPlainObject } from '../lib/objects.js';
 /**
  * Federated peer-sync HTTP routes.
  *
@@ -25,6 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
  * functions (`applyIncomingPush`, `subscribePeer`, etc.) that these wrap.
  */
 
+import { isFederatableCosArchive } from '../lib/cos/cosFederationPolicy.js';
 import { Router } from 'express';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -272,9 +270,9 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
   // otherwise a peer denied the manifest could still fetch archives by guessing
   // (or remembering) a path.
   await authorizePeerPull(req, { route: 'cos-agent-archive' });
-  const abs = join(PATHS.cos, 'agents', date, agentId, file);
-  const metadata = safeJSONParse(await tryReadFile(join(PATHS.cos, 'agents', date, agentId, 'metadata.json')), null);
-  if (!isPlainObject(metadata) || isMachineLocalCosTask(metadata) || !existsSync(abs)) {
+  const directory = join(PATHS.cos, 'agents', date, agentId);
+  const abs = join(directory, file);
+  if (!existsSync(abs) || !await isFederatableCosArchive(directory)) {
     throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.sendFile(abs);

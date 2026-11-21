@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE } from '../../lib/privacyPrompt.js';
+import { fenceBlock } from '../../lib/promptFencing.js';
 
 const state = vi.hoisted(() => ({ beforeDownload: null, beforeWrite: null, staged: null, failIndex: false, manifestHash: '' }));
 const root = await mkdtemp(join(tmpdir(), 'peer-cos-publication-'));
@@ -45,7 +47,7 @@ vi.mock('../cos/cosAgentIndex.js', async original => {
   } };
 });
 
-const { syncCosHistoryFromPeer } = await import('./peerCosSync.js');
+const { buildCosHistoryManifest, syncCosHistoryFromPeer } = await import('./peerCosSync.js');
 const { loadAgentIndex } = await import('../cos/cosAgentIndex.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -71,6 +73,21 @@ beforeEach(async () => {
   (await loadAgentIndex()).clear();
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
+
+it('omits all archive bytes for current and legacy vault-injected agents', async () => {
+  await seedArchive();
+  const agentDir = join(agentsDir, date, agentId);
+  expect((await buildCosHistoryManifest()).entries.map(entry => entry.file)).toEqual(['metadata.json', 'output.txt', 'prompt.txt']);
+
+  const prompt = fenceBlock('Digital twin reference data',
+    `${PRIVACY_FACTS_HEADING}\n${PRIVACY_FACTS_NOTICE}\n- Name — legal_name: Skylar Example`, 4000);
+  await writeFile(join(agentDir, 'prompt.txt'), prompt);
+  expect((await buildCosHistoryManifest()).entries).toEqual([]);
+
+  await writeFile(join(agentDir, 'prompt.txt'), files['prompt.txt']);
+  await writeFile(join(agentDir, 'metadata.json'), JSON.stringify({ id: agentId, metadata: { machineLocal: true } }));
+  expect((await buildCosHistoryManifest()).entries).toEqual([]);
+});
 
 describe('peer CoS archive bytes and primary index under a backup cut', () => {
   it('downloads outside admission and keeps staged bytes out of a held snapshot', async () => {

@@ -5,6 +5,7 @@ import { existsSync } from 'fs';
 import { getConfig } from '../cos/cosState.js';
 import { updateTask } from '../cos/cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../../lib/autonomousJobTask.js';
+import { redactStoredPrivacyPrompt } from '../../lib/privacyPrompt.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../../lib/taskBlockCategories.js';
 import { ensureDir, PATHS, writeFileGuarded } from '../../lib/fileUtils.js';
@@ -202,6 +203,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     const prompt = publicReview && !privateSecurity
       ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
       : basePrompt;
+    const storedPrompt = redactStoredPrivacyPrompt(prompt);
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
     const executionOptions = modelSelection.orchestrationExecutionOptions ?? task.metadata?.executionOptions;
     let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
@@ -282,7 +284,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       if (!existsSync(agentDir)) {
         await ensureDir(agentDir);
       }
-      await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
+      await writeFileGuarded(join(agentDir, 'prompt.txt'), storedPrompt);
       if (systemPrompt) {
         systemPromptFile = join(agentDir, 'system-prompt.md');
         await writeFileGuarded(systemPromptFile, systemPrompt);
@@ -316,6 +318,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         // Same decision that put merge admission in the prompt (#11435).
         mergesOwnPr: promptTrace.mergesOwnPr === true,
         claimFlowTask,
+        privacyFactsIncluded: storedPrompt !== prompt,
         selectedModel,
         effort: taskEffort,
         modelSelection,

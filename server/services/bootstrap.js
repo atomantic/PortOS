@@ -30,6 +30,7 @@ import { isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
+import { redactStoredPrivacyPrompt } from '../lib/privacyPrompt.js';
 import { PORTS } from '../lib/ports.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
 import { getBuildIdentity, getCachedBuildIdentity, formatBuildIdentity } from '../lib/buildIdentity.js';
@@ -296,6 +297,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       io,
       asyncHandler,
       withAssetPublication: withBackupAssetPublication,
+      redactStoredPrompt: redactStoredPrivacyPrompt,
       withRunAdmission: handler => (req, res) => maintenance.run('manual-run', 'Runs', () => handler(req, res)),
       // Inject PortOS's ServerError so toolkit route errors normalize into the
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
