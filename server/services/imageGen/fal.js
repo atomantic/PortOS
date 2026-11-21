@@ -30,6 +30,7 @@
 import { createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { stripImageMetadata } from '../../lib/imageClean.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -285,8 +286,9 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
     && input.length <= INPUT_MAX_BYTES
     && ['png', 'jpeg', 'webp'].includes(metadata.format);
   if (passThrough) {
-    const mime = detectImageFormat(input)?.mime || `image/${metadata.format}`;
-    return { dataUri: `data:${mime};base64,${input.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
+    const clean = stripImageMetadata(input).data;
+    const mime = detectImageFormat(clean)?.mime || `image/${metadata.format}`;
+    return { dataUri: `data:${mime};base64,${clean.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
   }
   const resized = sharp(input)
     .rotate()

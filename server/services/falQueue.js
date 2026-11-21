@@ -21,6 +21,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { stripImageMetadata } from '../lib/imageClean.js';
 import { detectImageFormat } from '../lib/mimeTypes.js';
 
 export const FAL_QUEUE_BASE = 'https://queue.fal.run';
@@ -52,7 +53,8 @@ export function resolveFalApiKey(settings) {
 
 /** Read a local file into a `data:` URI — how fal.ai accepts inline inputs. */
 export async function fileToDataUri(filePath) {
-  const buf = await readFile(filePath);
+  const raw = await readFile(filePath);
+  const buf = stripImageMetadata(raw).data;
   const detected = detectImageFormat(buf);
   const mime = detected?.mime || 'image/png';
   return `data:${mime};base64,${buf.toString('base64')}`;

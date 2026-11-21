@@ -37,7 +37,7 @@ import {
   AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, describeFidelity,
   nearestAgyAspectRatio, visualReferenceRole,
 } from './modes.js';
-import { resolveInputImages } from './inputImages.js';
+import { resolveInputImages, stageSanitizedInputImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
@@ -270,14 +270,25 @@ async function generateImagePrepared({
   const scratchDir = join(tmpdir(), `portos-agy-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
 
-  const { fullPrompt, record: sentRecord } = agySentPrompt({
-    prompt, negativePrompt, width, height, stagingPath, inputImages, initImageStrength, promptAdditions,
-  });
   // `driverModel` is what agy actually runs on — a retired shipped default is
   // re-pointed here, so every record below reports the model that rendered
   // rather than the one the caller asked for. See resolveAgyDriverModel.
   const { model: driverModel, models } = await resolveAgyDriverModel(model, modelIsShippedDefault);
   const baseArgs = ensureAntigravityPrintArgs([], { model: driverModel, models });
+  // The scratch dir is the last fallible step before the job exists, so a
+  // refusal above leaves nothing behind; from here on the runner owns it.
+  await mkdir(scratchDir, { recursive: true });
+  let cliInputImages;
+  try {
+    const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+    cliInputImages = await stageSanitizedInputImages({ inputImages, scratchDir, reviewedReferenceBytes });
+  } catch (error) {
+    await runner.removeScratchDirectory(scratchDir);
+    throw error;
+  }
+  const { fullPrompt, record: sentRecord } = agySentPrompt({
+    prompt, negativePrompt, width, height, stagingPath, inputImages: cliInputImages, initImageStrength, promptAdditions,
+  });
   const { args } = prepareAntigravityPrompt(baseArgs, fullPrompt);
   const meta = {
     id: jobId,
@@ -299,15 +310,6 @@ async function generateImagePrepared({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
-  // The scratch dir is the last fallible step before the job exists, so a
-  // refusal above leaves nothing behind; from here on the runner owns it.
-  await mkdir(scratchDir, { recursive: true });
-  try {
-    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  } catch (error) {
-    await runner.removeScratchDirectory(scratchDir);
-    throw error;
-  }
   const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir });
   runner.run(job, {
     bin: agyPath || undefined, args, scratchDir, meta, cleanC2PA, denoise,
