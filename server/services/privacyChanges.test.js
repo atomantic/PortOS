@@ -26,7 +26,7 @@ vi.mock('./privacyVault.js', () => ({
   revealValue: vi.fn(async (id) => ({ id, type: 'address', value: '742 New Ave' })),
 }));
 vi.mock('./privacyOrgs.js', () => ({
-  getOrg: vi.fn(async (id) => ({ id, name: 'Acme Bank', contact: { email: 'ops@acme.example' } })),
+  getOrg: vi.fn(async (id) => ({ id, subjectId: 'sub-1', name: 'Acme Bank', contact: { email: 'ops@acme.example' } })),
 }));
 vi.mock('./messageAccounts.js', () => ({
   listAccounts: vi.fn(async () => [{ id: 'acct-1', type: 'gmail', canSend: true, name: 'Primary' }]),
@@ -52,6 +52,7 @@ beforeEach(() => {
   privacyVault.revealValue.mockClear();
   privacyOrgs.getOrg.mockClear();
   messageAccounts.listAccounts.mockClear();
+  messageDrafts.createDraft.mockClear();
 });
 
 function mockTransaction(handler) {
@@ -282,6 +283,7 @@ describe('draftUpdateEmail', () => {
   it('drafts over the chosen account\'s real transport and never from a Teams chat', async () => {
     queryMock.mockImplementation(async (sql) => {
       if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [{ '?column?': 1 }] };
       throw new Error(`unexpected query: ${sql}`);
     });
     messageAccounts.listAccounts.mockResolvedValueOnce([
@@ -297,6 +299,7 @@ describe('draftUpdateEmail', () => {
   it('creates an UNAPPROVED draft (status draft) to the org contact email', async () => {
     queryMock.mockImplementation(async (sql) => {
       if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [{ '?column?': 1 }] };
       throw new Error(`unexpected query: ${sql}`);
     });
     const result = await draftUpdateEmail('ev1', 'o1');
@@ -307,6 +310,36 @@ describe('draftUpdateEmail', () => {
     expect(privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: ['old1', 'new1'], changeEventId: 'ev1' });
   });
 
+  it('404s an org outside the change inventory or under another subject before revealing', async () => {
+    queryMock.mockImplementation(async (sql) => {
+      if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ status: 404, code: 'HOLDING_NOT_FOUND' });
+    queryMock.mockImplementation(async (sql) => {
+      if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [{ '?column?': 1 }] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    privacyOrgs.getOrg.mockResolvedValueOnce({ id: 'o1', subjectId: 'other-sub', name: 'X', contact: { email: 'x@example.com' } });
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ status: 404, code: 'HOLDING_NOT_FOUND' });
+    expect(privacyVault.revealValue).not.toHaveBeenCalled();
+    expect(messageDrafts.createDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(['ssn', 'passport', 'drivers_license', 'financial_account'])('400s a %s replacement without revealing or drafting', async (type) => {
+    queryMock.mockImplementation(async (sql) => {
+      if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [{ '?column?': 1 }] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    privacyVault.getVaultRecord.mockResolvedValueOnce({ id: 'new1', type });
+    await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ status: 400, code: 'SENSITIVE_TYPE_EMAIL_FORBIDDEN' });
+    expect(privacyVault.revealValue).not.toHaveBeenCalled();
+    expect(messageDrafts.createDraft).not.toHaveBeenCalled();
+  });
+
   it('400s a removal-only change with no replacement to update to', async () => {
     queryMock.mockResolvedValue({ rows: [eventRow({ replacement_record_id: null })] });
     await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ status: 400, code: 'REPLACEMENT_REQUIRED' });
@@ -315,9 +348,10 @@ describe('draftUpdateEmail', () => {
   it('400s when the org has no contact email', async () => {
     queryMock.mockImplementation(async (sql) => {
       if (/FROM privacy_change_events WHERE id/.test(sql)) return { rows: [eventRow()] };
+      if (/FROM privacy_org_holdings/.test(sql)) return { rows: [{ '?column?': 1 }] };
       throw new Error(`unexpected query: ${sql}`);
     });
-    privacyOrgs.getOrg.mockResolvedValueOnce({ id: 'o1', name: 'NoEmail', contact: {} });
+    privacyOrgs.getOrg.mockResolvedValueOnce({ id: 'o1', subjectId: 'sub-1', name: 'NoEmail', contact: {} });
     await expect(draftUpdateEmail('ev1', 'o1')).rejects.toMatchObject({ status: 400, code: 'ORG_EMAIL_MISSING' });
   });
 });
