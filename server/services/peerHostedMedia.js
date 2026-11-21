@@ -61,6 +61,9 @@ const KIND_PREFIX = { image: '/data/images', video: '/data/videos', 'image-ref':
 const MOUNT_KIND = Object.fromEntries(Object.entries(KIND_PREFIX).map(([kind, mount]) => [mount, kind]));
 
 export const hostedKey = (kind, filename) => `${kind}:${filename}`;
+// Fresh evidence from the same host keeps a Make-primary release's `primary`
+// mark; dropping it would let the asset sweep copy the released file back.
+const keepPrimary = (host) => (host?.primary === true ? { primary: true } : {});
 const hostsOf = (entry) => Array.isArray(entry?.hosts) ? entry.hosts : (entry?.peerId ? [{ peerId: entry.peerId, at: entry.at, revision: entry.revision }] : []);
 const hostEntry = (hosts) => ({ peerId: hosts[0].peerId, at: hosts[0].at, revision: hosts[0].revision, hosts });
 
@@ -98,7 +101,7 @@ export function markHosted(peerInstanceId, assets) {
       const key = hostedKey(asset.kind, filename);
       const hosts = hostsOf(entries[key]);
       const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
-      if (index >= 0) hosts[index] = { peerId: peerInstanceId, at, revision: randomUUID() };
+      if (index >= 0) hosts[index] = { peerId: peerInstanceId, at, revision: randomUUID(), ...keepPrimary(hosts[index]) };
       else hosts.push({ peerId: peerInstanceId, at, revision: randomUUID() });
       entries[key] = hostEntry(hosts);
       changed++;
@@ -192,7 +195,7 @@ export function reconcileHostedMedia(peerInstanceId, kind, filenames, checked) {
       const legacy = !Array.isArray(entries[key]?.hosts) ? hostsOf(entries[key]) : [];
       const hosts = legacy.length ? [] : hostsOf(entries[key]);
       const index = hosts.findIndex((host) => host.peerId === peerInstanceId);
-      const evidence = { peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID() };
+      const evidence = { peerId: peerInstanceId, at: new Date().toISOString(), revision: randomUUID(), ...keepPrimary(hosts[index]) };
       if (index >= 0) hosts[index] = evidence;
       else hosts.push(evidence);
       for (const host of legacy) if (host.peerId !== peerInstanceId) hosts.push(host);

@@ -27,7 +27,7 @@ const peerFetch = vi.fn();
 vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args), peerFetch: (...args) => peerFetch(...args) }));
 const { peerStreamRequest: realPeerStreamRequest } = await vi.importActual('../lib/peerHttpClient.js');
 
-const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations, hostedByForCollectionItems, hostedCountsByPeer, hostedKeysOf, peerServesFile, __resetPeerCooldown } = await import('./peerHostedMedia.js');
+const { markHosted, unmarkHosted, hostFileOn, reconcileHostedMedia, releasedHostedKeys, takeHostedAssets, resolveMediaLocations, hostedByForCollectionItems, hostedCountsByPeer, hostedKeysOf, peerServesFile, __resetPeerCooldown } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
 const { saveHistory } = await import('./videoGen/history.js');
 
@@ -53,6 +53,16 @@ const upstream = (body, status = 200, headers = {}) => ({
   status,
   headers: { 'content-type': 'image/png', 'content-length': String(body.length), ...headers },
   stream: Readable.from([Buffer.from(body)]),
+});
+
+describe('Make-primary release marks', () => {
+  it('survive fresh host evidence from the same peer (inventory reconcile and markHosted)', async () => {
+    await hostFileOn('image', 'released.png', PEER.instanceId);
+    await hostFileOn('video', 'released.mp4', PEER.instanceId);
+    await reconcileHostedMedia(PEER.instanceId, 'image', ['released.png'], ['released.png']);
+    await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'released.mp4' }]);
+    expect(await releasedHostedKeys()).toEqual(new Set(['image:released.png', 'video:released.mp4']));
+  });
 });
 
 describe('hostedByForCollectionItems', () => {

@@ -66,6 +66,16 @@ describe('pullMissingCatalogMediaBytes', () => {
     expect(remaining).toBe(1);
   });
 
+  it('reads release marks after the disk check, so a release during the sweep is honored', async () => {
+    listLiveMediaFileKeys.mockImplementation(async () => {
+      // The release lands between the catalog read and the release-mark read.
+      releasedHostedKeys.mockResolvedValue(new Set(['image:upload-1.png']));
+      return rows;
+    });
+    await pullMissingCatalogMediaBytes(peer, { applied: 1 });
+    expect(pullMissingAssetsFromPeer.mock.calls.flatMap((call) => call[1]).map((e) => `${e.kind}:${e.filename}`)).toEqual(['audio:memo.webm']);
+  });
+
   it('stops asking once the files landed', async () => {
     pullMissingAssetsFromPeer.mockImplementation(async (_id, entries) => {
       for (const e of entries) writeFileSync(join(e.kind === 'audio' ? dirs.audio : dirs.images, e.filename), 'x');

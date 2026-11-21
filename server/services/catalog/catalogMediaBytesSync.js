@@ -110,8 +110,12 @@ export async function pullMissingCatalogMediaBytes(peer, { applied = 0, now = Da
   inFlight.add(peerId);
   lastSweepAt.set(peerId, now);
   try {
-    const released = await releasedHostedKeys().catch(() => new Set());
-    const missing = (await listLiveMediaFileKeys()).filter((m) => !isPresent(m) && !released.has(releasedKey(m)));
+    const absent = (await listLiveMediaFileKeys()).filter((m) => !isPresent(m));
+    // Read the release marks only after the disk check: a Make-primary release
+    // records its host before it trashes the file, so a file seen absent here
+    // is already marked, even when the release ran mid-sweep.
+    const released = absent.length > 0 ? await releasedHostedKeys().catch(() => new Set()) : new Set();
+    const missing = absent.filter((m) => !released.has(releasedKey(m)));
     if (missing.length === 0) return 0;
     if (peer.mediaSyncMode === 'host') {
       const remaining = (await hostFromPeer(peer, missing, now)).length;
