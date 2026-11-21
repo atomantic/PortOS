@@ -9,6 +9,10 @@
  * a reference remixed or generated from the record page lands beside the
  * universe's other renders and not only in whichever music video it came from.
  *
+ * Independently of universes, every image also goes into its record type's
+ * library-wide collection (Cast, Environments, Objects) via
+ * `fileCatalogImagesIntoTypeCollections`.
+ *
  * `fileCatalogImagesIntoUniverses` is idempotent: it adds only what each
  * collection lacks, never removes, and skips an image the user already took
  * out of that collection (its `removedItems` stamp). The same function answers
@@ -23,7 +27,8 @@ import { PATHS } from '../../lib/paths.js';
 import { CANONICAL_REFS_CTE, STORYBOARD_PANEL_MEMBERS_SQL } from '../catalogDB/shared.js';
 import { catalogEvents } from './catalogEvents.js';
 import {
-  REF_MAX_LENGTH, bulkUpdateCollectionItems, findCollectionByUniverseId, findOrCreateUniverseCollection,
+  CATALOG_TYPE_COLLECTIONS, REF_MAX_LENGTH, bulkUpdateCollectionItems, findCollectionByUniverseId,
+  findOrCreateCatalogTypeCollection, findOrCreateUniverseCollection,
 } from '../mediaCollections.js';
 
 // (record, universe, image) for every live portrait/reference on a record that
@@ -58,12 +63,29 @@ const loadPlacements = async (ingredientIds) => {
   }));
 };
 
+// (type, image) for every live portrait/reference on a canonical record of a
+// type with a library collection. `$1` narrows like PLACEMENTS_SQL.
+const TYPE_PLACEMENTS_SQL = `SELECT DISTINCT i.type, m.media_key
+    FROM catalog_ingredients i
+    JOIN catalog_identity_read_media m ON m.ingredient_id = ANY(catalog_identity_member_ids(i.id))
+     AND m.deleted = false AND m.kind IN ('portrait', 'reference')
+     AND (m.role IS NULL OR m.role NOT LIKE 'archive:%')
+   WHERE i.deleted = false AND i.type = ANY($2::text[]) AND i.id = catalog_canonical_ingredient_id(i.id)
+     AND ($1::text[] IS NULL OR i.id IN (SELECT catalog_canonical_ingredient_id(x) FROM unnest($1::text[]) x))
+   ORDER BY i.type, m.media_key`;
+
+const loadTypePlacements = async (ingredientIds) => {
+  const { rows } = await query(TYPE_PLACEMENTS_SQL, [ingredientIds, Object.keys(CATALOG_TYPE_COLLECTIONS)]);
+  return rows.map((row) => ({ type: row.type, mediaKey: row.media_key }));
+};
+
 // Only a gallery image (a data/images basename) can be a collection item.
 const isGalleryImage = (key) => typeof key === 'string' && key.length > 0 && key.length <= REF_MAX_LENGTH
   && !/[:/\\]/.test(key) && key !== '.' && key !== '..' && existsSync(join(PATHS.images, key));
 
 const deps = {
-  loadPlacements, isGalleryImage, findCollectionByUniverseId, findOrCreateUniverseCollection, bulkUpdateCollectionItems,
+  loadPlacements, loadTypePlacements, isGalleryImage, findCollectionByUniverseId, findOrCreateUniverseCollection,
+  findOrCreateCatalogTypeCollection, bulkUpdateCollectionItems,
 };
 export const __setUniverseFilingDepsForTests = (overrides) => Object.assign(deps, overrides);
 
@@ -127,6 +149,31 @@ export async function fileCatalogImagesIntoUniverses({ ingredientIds = null, dry
   };
 }
 
+/**
+ * File every image of the given records (all when `ingredientIds` is null)
+ * into its type's collection (Cast, Environments, Objects). Adds only what is
+ * missing and keeps images the user removed from that collection out
+ * (`preserveRemovals`). Returns the number of images added.
+ */
+export async function fileCatalogImagesIntoTypeCollections({ ingredientIds = null } = {}) {
+  const placements = await deps.loadTypePlacements(ingredientIds?.length ? ingredientIds : null);
+  const byType = new Map();
+  for (const { type, mediaKey } of placements) {
+    if (!deps.isGalleryImage(mediaKey)) continue;
+    if (!byType.has(type)) byType.set(type, new Set());
+    byType.get(type).add(mediaKey);
+  }
+  let added = 0;
+  for (const [type, mediaKeys] of byType) {
+    const collection = await deps.findOrCreateCatalogTypeCollection(type);
+    const result = await deps.bulkUpdateCollectionItems(collection.id, {
+      add: [...mediaKeys].map((ref) => ({ kind: 'image', ref })),
+    }, { preserveRemovals: true });
+    added += result.added;
+  }
+  return { added, types: byType.size };
+}
+
 // Live filing: catalog media/ref writes announce `assets-changed`, record-level
 // changes (completion hook, universe membership) `primitive-changed`. Bursts
 // for one record coalesce, and one pass runs at a time, so a batch of renders
@@ -144,6 +191,8 @@ const flush = () => {
   running = running.then(async () => {
     const { totals } = await fileCatalogImagesIntoUniverses({ ingredientIds });
     if (totals.added > 0) console.log(`🌍 Filed ${totals.added} catalog image(s) into ${totals.universes} universe collection(s)`);
+    const typed = await fileCatalogImagesIntoTypeCollections({ ingredientIds });
+    if (typed.added > 0) console.log(`🗂️ Filed ${typed.added} catalog image(s) into ${typed.types} catalog type collection(s)`);
   }).catch((err) => console.error(`❌ catalog universe filing failed: ${err?.message || err}`));
 };
 

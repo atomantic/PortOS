@@ -52,6 +52,12 @@ const rules = {
     collection: async work => (await import('./writersRoom/local.js')).ensureWorkMediaCollection(work.id),
   },
   external: { collection: () => collections.findOrCreateExternalCollection() },
+  universe: {
+    collection: universe => collections.findOrCreateUniverseCollection({ universeId: universe.id, universeName: universe.name || universe.id }),
+  },
+  series: {
+    collection: series => collections.findOrCreateSeriesCollection({ seriesId: series.id, seriesName: series.name || series.id }),
+  },
 };
 
 export function jobCollectionSources(job) {

@@ -794,6 +794,20 @@ export async function findOrCreateCommissionCollection({ commissionId, commissio
   return collection.name === name ? collection : updateCollection(collection.id, { name });
 }
 
+// Catalog record types get one library-wide collection each, so every cast
+// portrait, environment plate and object reference is findable by kind.
+export const CATALOG_TYPE_COLLECTIONS = Object.freeze({
+  character: { id: 'catalog-cast', name: 'Cast', description: 'Portraits and references of every catalog cast member.' },
+  place: { id: 'catalog-environments', name: 'Environments', description: 'References of every catalog environment.' },
+  object: { id: 'catalog-objects', name: 'Objects', description: 'References of every catalog object.' },
+});
+
+export function findOrCreateCatalogTypeCollection(type) {
+  const spec = CATALOG_TYPE_COLLECTIONS[type];
+  if (!spec) throw codedError(`No collection for catalog type: ${type}`, ERR_VALIDATION);
+  return findOrCreateFixedCollection(spec.id, spec);
+}
+
 export const findOrCreateStoryboardCollection = ({ id, name }) => findOrCreateFixedCollection(`storyboard-${id}`, {
   name: `Storyboard: ${name}`.slice(0, NAME_MAX_LENGTH),
   description: 'Images generated for this storyboard.',

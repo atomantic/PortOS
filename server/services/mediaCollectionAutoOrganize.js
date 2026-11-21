@@ -1,6 +1,6 @@
 /**
- * Rebuild collection membership from durable project references and the
- * retained completed-job archive. Only file media still known to this install
+ * Rebuild collection membership from durable project references, catalog
+ * records and the retained completed-job archive. Only file media still known to this install
  * (including peer-hosted assets), and honor explicitly removed memberships.
  */
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -11,18 +11,21 @@ import { listCollections } from './mediaCollections.js';
 import { collectionItems, fileOwnedMedia, imageItem, jobCollectionItems, jobCollectionSources, videoItem } from './mediaCollectionRules.js';
 
 async function inventory() {
-  const [decks, moodBoards, music, storyboards, fable, director, timeline, writers, external, history, sprites] = await Promise.all([
+  const [decks, moodBoards, music, storyboards, fable, director, timeline, writers, external, history, sprites, universeCrud, seriesStore, issueCrud] = await Promise.all([
     import('./decks.js'), import('./moodBoard/db.js'), import('./musicVideo/projects.js'),
     import('./storyboards/index.js'), import('./fableLoom/records.js'), import('./creativeDirector/local.js'),
     import('./videoTimeline/local.js'), import('./writersRoom/local.js'), import('./externalMediaCollection.js'),
-    import('./videoGen/history.js'), import('./sprites/records.js'),
+    import('./videoGen/history.js'), import('./sprites/records.js'), import('./universeBuilder/crud.js'),
+    import('./pipeline/series.js'), import('./pipeline/issueCrud.js'),
   ]);
-  const [deckRows, boards, musicProjects, storyboardSummaries, looms, directorProjects, timelines, works, downloads, videos, collections, spriteRecords] =
+  const [deckRows, boards, musicProjects, storyboardSummaries, looms, directorProjects, timelines, works, downloads, videos, collections, spriteRecords, universes, seriesList, issues] =
     await Promise.all([
       decks.listDecksForIntegrity(), moodBoards.listBoards(), music.listProjects(), storyboards.listStoryboards(),
       fable.listLooms(), director.listProjects(), timeline.listProjects(), writers.listWorks(),
       external.collectExistingExternalMedia(), history.loadHistory(), listCollections(), sprites.listRecords(),
+      universeCrud.listUniverses(), seriesStore.listSeries(), issueCrud.listAllIssues({ withHistory: false }),
     ]);
+  const issuesBySeries = Map.groupBy(issues.filter(issue => issue?.seriesId), issue => issue.seriesId);
   const storyboardRows = await mapWithConcurrency(storyboardSummaries, 4, async ({ id }) =>
     storyboards.getStoryboard(id).catch(error => {
       if (error.code === 'NOT_FOUND') return null;
@@ -43,16 +46,13 @@ async function inventory() {
       writersRoom: works,
       external: [{ id: 'external' }],
       universeRun: collections,
+      universe: universes,
+      // A series files its issues' renders (comic page proofs and finals).
+      series: seriesList.map(series => ({ ...series, issues: issuesBySeries.get(series.id) || [] })),
     },
     downloads,
     videos: videos.filter(video => typeof video?.id === 'string' && video.id),
   };
-}
-
-function deckImages(deck) {
-  return deck.cards.flatMap(card => [
-    ...(Array.isArray(card.imageRefs) ? card.imageRefs : []), card.primaryImageRef,
-  ]).map(imageItem);
 }
 
 async function boardImages(board) {
@@ -78,25 +78,38 @@ async function musicVideoItems(project) {
   ];
 }
 
-function storyboardImages(board) {
-  return board.beats.flatMap(beat => beat.panels.flatMap(panel =>
-    panel.takes.filter(take => take.source === 'generated').map(take => imageItem(take.image))));
+// Every media file an owner record references, wherever in the record it
+// sits: gallery images by basename (bare names and /data/images/… paths) and
+// videos by history id. Owner records hold their renders, takes, plates,
+// references and history in many shapes; walking them keeps filing complete as
+// those shapes grow. Unavailable names are dropped by the availability check.
+const IMAGE_FILE = /\.(png|jpe?g|webp|gif)$/i;
+function referencedMedia(value, videoIds, out = []) {
+  if (typeof value === 'string') {
+    // `image:<file>` / `video:<id>` media keys and served paths both resolve.
+    const bare = value.replace(/^(image|video):/, '');
+    const name = bare.split('?')[0].split(/[/\\]/).pop();
+    if (IMAGE_FILE.test(name) && !name.includes(':')) out.push(imageItem(name));
+    else if (videoIds.has(bare)) out.push(videoItem(bare));
+  } else if (Array.isArray(value)) {
+    for (const entry of value) referencedMedia(entry, videoIds, out);
+  } else if (value && typeof value === 'object') {
+    for (const entry of Object.values(value)) referencedMedia(entry, videoIds, out);
+  }
+  return out;
+}
+// A sprite's reference candidates record their gallery source render in a
+// `<name>.generation.json` beside the copied candidate.
+async function spriteItems(record) {
+  const [{ readdir, readFile }, { join }, { resolveSpriteAssetPath }] = await Promise.all([import('fs/promises'), import('path'), import('./sprites/paths.js')]);
+  const dir = resolveSpriteAssetPath(record.id, 'reference/candidates');
+  const names = await readdir(dir).catch(() => []);
+  const generations = await Promise.all(names.filter(name => name.endsWith('.generation.json'))
+    .map(name => readFile(join(dir, name), 'utf8').then(JSON.parse).catch(() => null)));
+  return generations.filter(Boolean).map(generation => imageItem(generation.sourceFilename));
 }
 
-function loomItems(loom) {
-  return loom.episodes.flatMap(episode => episode.nodes.flatMap(node => [
-    imageItem(node.image), videoItem(node.videoHistoryId), videoItem(node.playbackAssets?.entryVideoHistoryId),
-    ...(node.playbackAssets?.holdLoopVideoHistoryIds || []).map(videoItem),
-    ...Object.values(node.playbackAssets?.exitByTransition || {}).map(videoItem),
-  ]));
-}
-
-function directorItems(project) {
-  return [
-    videoItem(project.finalVideoId),
-    ...(project.scenes || []).flatMap(scene => [imageItem(scene.sourceImageFile), videoItem(scene.renderedJobId)]),
-  ];
-}
+const WALKED_SOURCES = new Set(['deck', 'moodBoard', 'musicVideo', 'storyboard', 'fableLoom', 'creativeDirector', 'sprite', 'universe', 'series']);
 
 async function writerImages(work) {
   const { listAnalysisIds, loadAnalysis } = await import('./writersRoom/analysisSnapshots.js');
@@ -104,10 +117,7 @@ async function writerImages(work) {
   return analyses.flatMap(analysis => Object.values(analysis?.sceneImages || {}).map(image => imageItem(image.filename)));
 }
 
-const recordItems = {
-  deck: deckImages, moodBoard: boardImages, musicVideo: musicVideoItems, storyboard: storyboardImages,
-  fableLoom: loomItems, creativeDirector: directorItems, writersRoom: writerImages,
-};
+const recordItems = { moodBoard: boardImages, musicVideo: musicVideoItems, writersRoom: writerImages, sprite: spriteItems };
 
 const ownerKey = (source, id) => `${source}:${id}`;
 
@@ -122,9 +132,11 @@ async function organize() {
     for (const owner of owners) buckets.set(ownerKey(source, owner.id), { source, owner, items: [] });
   }
 
+  const videoIds = new Set(videos.map(video => video.id));
   await mapWithConcurrency([...buckets.values()], 4, async bucket => {
     const extractor = recordItems[bucket.source];
     if (extractor) bucket.items.push(...await extractor(bucket.owner));
+    if (WALKED_SOURCES.has(bucket.source)) bucket.items.push(...referencedMedia(bucket.owner, videoIds));
   });
   for (const job of listJobs({ status: 'completed' })) {
     if (job.durabilityPending) continue;
@@ -167,6 +179,18 @@ async function organize() {
       console.error(`❌ Auto-organize collection for ${source} ${owner.id} failed: ${error.message}`);
     }
   }
+  // Catalog references: each record's images go to its universes' collections
+  // and to its type's library collection (Cast, Environments, Objects).
+  const { fileCatalogImagesIntoUniverses, fileCatalogImagesIntoTypeCollections } = await import('./catalog/catalogUniverseFiling.js');
+  const { universes } = await fileCatalogImagesIntoUniverses();
+  for (const { added } of universes) {
+    if (!added) continue;
+    result.added += added;
+    result.updatedCollections += 1;
+  }
+  const typed = await fileCatalogImagesIntoTypeCollections();
+  result.added += typed.added;
+  if (typed.added) result.updatedCollections += typed.types;
   return result;
 }
 
