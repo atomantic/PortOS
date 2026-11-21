@@ -19,6 +19,7 @@ vi.mock('../lib/db.js', () => ({
 }));
 vi.mock('../lib/fileUtils.js', async actual => ({ ...await actual(), PATHS: fixtures.paths }));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: vi.fn(async () => ({})), scrubLegacyPrivacyDraftValues: vi.fn(async () => 0) }));
 vi.mock('./privacyBrokers.js', () => ({ clearSubjectIdentityEvidence: vi.fn() }));
 
 const fact = 'Skylar Example';

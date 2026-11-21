@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
 const MISSING_STORE = Symbol('missing drafts');
@@ -119,6 +120,8 @@ export async function createDraft(data) {
       sendAttemptId: null,
       sendAttempts: [],
       generatedBy: data.generatedBy || 'manual',
+      // Non-PII provenance ids so Privacy Center erasure can find this draft later.
+      ...(data.privacyMeta ? { privacyMeta: data.privacyMeta } : {}),
       sendVia: data.sendVia || 'api',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -256,5 +259,74 @@ export async function deleteDraft(id) {
     await saveDrafts(drafts);
     console.log(`🗑️ Message draft deleted: ${id}`);
     return true;
+  });
+}
+
+// Privacy Center drafts hold decrypted vault PII in plaintext (#17233).
+const PRIVACY_GENERATORS = ['privacy-optout', 'privacy-change'];
+const UNSENT_STATUSES = ['draft', 'approved', 'failed'];
+export const PRIVACY_DRAFT_REDACTION_NOTICE = '[Privacy draft body redacted after erasure]';
+
+const isPrivacyDraft = d => PRIVACY_GENERATORS.includes(d.generatedBy);
+// sending/delivery_unknown drafts are owned by the send lifecycle: never touch them.
+const isSendLocked = d => ['sending', 'delivery_unknown'].includes(d.status);
+
+/**
+ * Erase privacy-originated drafts selected by `predicate`: unsent ones are
+ * deleted (so they cannot be sent after erasure/consent withdrawal), sent ones
+ * keep their audit trail with the body replaced by a fixed notice. `onlyUnsent`
+ * (consent revocation) leaves sent drafts alone. Send-locked drafts are skipped.
+ */
+export async function erasePrivacyDrafts(predicate, { onlyUnsent = false, generatedBy = PRIVACY_GENERATORS } = {}) {
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const result = { deleted: 0, redacted: 0, skipped: 0 };
+    const remaining = [];
+    for (const d of drafts) {
+      if (!isPrivacyDraft(d) || !generatedBy.includes(d.generatedBy) || !predicate(d)) { remaining.push(d); continue; }
+      if (isSendLocked(d)) { result.skipped += 1; remaining.push(d); continue; }
+      if (UNSENT_STATUSES.includes(d.status)) { result.deleted += 1; continue; }
+      if (!onlyUnsent && d.status === 'sent' && d.body !== PRIVACY_DRAFT_REDACTION_NOTICE) {
+        d.body = PRIVACY_DRAFT_REDACTION_NOTICE;
+        d.updatedAt = new Date().toISOString();
+        result.redacted += 1;
+      }
+      remaining.push(d);
+    }
+    if (result.deleted || result.redacted) {
+      await saveDrafts(remaining);
+      console.log(`🗑️ Privacy draft erasure: deleted=${result.deleted} redacted=${result.redacted} skipped=${result.skipped}`);
+    }
+    return result;
+  });
+}
+
+/**
+ * Scrub decrypted `values` out of every privacy draft, including legacy ones
+ * that predate `privacyMeta` and tagged ones whose meta names no vault record
+ * (opt-out drafts disclose several fields). Mirrors
+ * privacyPromptScrub: whole-token match, `[redacted]` replacement.
+ */
+export async function scrubLegacyPrivacyDraftValues(values) {
+  const needles = [...new Set((values || []).filter(v => typeof v === 'string' && v.trim()))];
+  if (needles.length === 0) return 0;
+  const alternatives = needles.sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`, 'gu');
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    let changed = 0;
+    for (const d of drafts) {
+      if (!isPrivacyDraft(d) || isSendLocked(d)) continue;
+      const body = typeof d.body === 'string' ? d.body.replace(pattern, '[redacted]') : d.body;
+      const subject = typeof d.subject === 'string' ? d.subject.replace(pattern, '[redacted]') : d.subject;
+      if (body === d.body && subject === d.subject) continue;
+      d.body = body;
+      d.subject = subject;
+      d.updatedAt = new Date().toISOString();
+      if (d.status === 'approved') d.status = 'draft';
+      changed += 1;
+    }
+    if (changed) await saveDrafts(drafts);
+    return changed;
   });
 }

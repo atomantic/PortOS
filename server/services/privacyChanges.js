@@ -365,6 +365,11 @@ export async function draftUpdateEmail(eventId, orgId) {
     subject,
     body,
     generatedBy: 'privacy-change',
+    privacyMeta: {
+      subjectId: event.subjectId,
+      vaultRecordIds: [event.vaultRecordId, event.replacementRecordId],
+      changeEventId: event.id,
+    },
     sendVia: sendViaForAccountType(account.type),
   });
   console.log(`📧 Drafted privacy update email for org ${orgId} (change ${eventId}, draft ${draft.id})`);

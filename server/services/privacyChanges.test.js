@@ -61,7 +61,7 @@ function mockTransaction(handler) {
 }
 
 const eventRow = (overrides = {}) => ({
-  id: 'ev1', vault_record_id: 'old1', replacement_record_id: 'new1',
+  id: 'ev1', subject_id: 'sub-1', vault_record_id: 'old1', replacement_record_id: 'new1',
   kind: 'address_change', declared_at: 'now', note: '', ...overrides,
 });
 
@@ -302,6 +302,9 @@ describe('draftUpdateEmail', () => {
     const result = await draftUpdateEmail('ev1', 'o1');
     expect(result).toEqual({ draftId: 'draft-1', status: 'draft' });
     expect(privacyVault.revealValue).toHaveBeenCalledWith('new1');
+    // Provenance ids only (#17233): erasure finds the draft without PII in metadata.
+    const { privacyMeta } = messageDrafts.createDraft.mock.calls.at(-1)[0];
+    expect(privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: ['old1', 'new1'], changeEventId: 'ev1' });
   });
 
   it('400s a removal-only change with no replacement to update to', async () => {

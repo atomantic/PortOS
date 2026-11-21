@@ -211,6 +211,8 @@ export async function deleteVaultRecord(id) {
     // An earlier unshare may predate artifact scrubbing. Do not gate deletion
     // cleanup on the record's current share flag.
     await scrubVaultRecord(deleted);
+    const { eraseVaultRecordDrafts, decryptForScrub } = await import('./privacyDraftErasure.js');
+    await eraseVaultRecordDrafts(id, PRIVACY_SENSITIVE_TYPES.includes(deleted.type) ? [] : decryptForScrub([deleted.value_enc]));
     console.log(`🗑️ Deleted vault record ${id} (type=${deleted.type})`);
     return { ok: true };
   });

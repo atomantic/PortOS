@@ -211,6 +211,8 @@ export async function deleteSubject(id) {
       const { scrubRevokedPrivacyFacts } = await import('./privacyPromptScrub.js');
       await scrubRevokedPrivacyFacts(rows.map(row => row.value_enc));
     }
+    const { eraseSubjectDrafts, decryptForScrub } = await import('./privacyDraftErasure.js');
+    await eraseSubjectDrafts(id, decryptForScrub(rows.map(row => row.value_enc)));
     await client.query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]);
     console.log(`🗑️ Deleted privacy subject ${id} (vault/orgs/holdings/changes/cases cascaded)`);
     return { ok: true };
@@ -291,6 +293,11 @@ export async function revokeConsent({ subjectId, scope }) {
     [resolved, scope],
   );
   const revokedAt = rows[0]?.revoked_at ?? null;
+  // Withdrawn consent must not leave queued/approved opt-out emails sendable.
+  if (scope === 'broker_optout') {
+    const { revokeOptOutDrafts } = await import('./privacyDraftErasure.js');
+    await revokeOptOutDrafts(resolved);
+  }
   console.log(`🚫 Revoked privacy consent (subject=${resolved}, scope=${scope}, rows=${rows.length})`);
   return { subjectId: resolved, scope, revoked: rows.length, revokedAt };
 }
