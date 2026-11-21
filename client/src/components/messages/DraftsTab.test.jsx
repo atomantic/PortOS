@@ -11,6 +11,21 @@ vi.mock('../../services/apiMessages.js', () => ({
   updateMessageDraft: vi.fn(),
 }));
 
+const socketMock = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    handlers,
+    socket: {
+      on: (event, fn) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event).add(fn);
+      },
+      off: (event, fn) => { handlers.get(event)?.delete(fn); },
+    },
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socketMock.socket }));
+
 import {
   getMessageDrafts,
   sendMessageDraft,
@@ -301,5 +316,32 @@ describe('DraftsTab — failed read', () => {
 
     expect(await screen.findByText('Recovered draft')).toBeTruthy();
     expect(screen.queryByText(/Could not load drafts/)).toBeNull();
+  });
+});
+
+describe('DraftsTab live refresh', () => {
+  it.each(['messages:draft:created', 'messages:draft:sent', 'messages:changed'])(
+    'refetches drafts on %s and removes listeners on unmount', async (event) => {
+      getMessageDrafts.mockResolvedValueOnce([{ id: 'd1', status: 'draft', subject: 'First' }]);
+      const { unmount } = render(<DraftsTab accounts={[]} />);
+      await screen.findByText('First');
+      getMessageDrafts.mockResolvedValueOnce([
+        { id: 'd1', status: 'draft', subject: 'First' },
+        { id: 'd2', status: 'draft', subject: 'Second' },
+      ]);
+      await act(async () => { socketMock.handlers.get(event).forEach((fn) => fn()); });
+      await screen.findByText('Second');
+      unmount();
+      expect(socketMock.handlers.get(event).size).toBe(0);
+    });
+
+  it('keeps loaded drafts when a live refresh fails', async () => {
+    getMessageDrafts.mockResolvedValueOnce([{ id: 'd1', status: 'draft', subject: 'First' }]);
+    render(<DraftsTab accounts={[]} />);
+    await screen.findByText('First');
+    getMessageDrafts.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => { socketMock.handlers.get('messages:changed').forEach((fn) => fn()); });
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('First')).toBeInTheDocument();
   });
 });
