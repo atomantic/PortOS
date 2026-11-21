@@ -170,6 +170,12 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
 }))
 
+// GET /api/local-llm/context-plans — per installed Ollama model: KV-cache size at each
+// window step under the daemon's cache type, what fits this host, and the recommended window.
+router.get('/context-plans', asyncHandler(async (_req, res) => {
+  res.json(await listContextPlans())
+}))
+
 // GET /api/local-llm/tool-use-models — tool-use (function-calling) capable
 // installed models across both backends, tagged with the provider id that serves
 // them. Powers the agent model pickers' tool-use annotation.
@@ -179,12 +185,6 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
 // lists its rows verbatim), so returning tool-only rows there would need a
 // discriminator plus a filter in every existing consumer, and its CLI-provider
 // expansion has no tool-use analogue.
-// GET /api/local-llm/context-plans — per installed Ollama model: KV-cache size at each
-// window step under the daemon's cache type, what fits this host, and the recommended window.
-router.get('/context-plans', asyncHandler(async (_req, res) => {
-  res.json(await listContextPlans())
-}))
-
 router.get('/tool-use-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listToolUseModels() })
 }))

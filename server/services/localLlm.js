@@ -1435,8 +1435,11 @@ async function applyRecommendedContextWindow(modelId) {
   if (!provider || provider.modelNumCtx?.[modelId]) return null
   const { planModelContext, resolveContextPlanHost } = await import('./contextMemoryPlanner.js')
   const model = (await listModels('ollama', true).catch(() => [])).find((m) => m.id === modelId) || { id: modelId }
-  const plan = await planModelContext(model, await resolveContextPlanHost())
-  if (!plan.recommended) return null
+  const host = await resolveContextPlanHost()
+  const plan = await planModelContext(model, host)
+  // An unknown budget marks every row `fits: null`, so the step it picks is a guess; only
+  // a lazily grown (MLX) cache is safe to pin at its native maximum without one.
+  if (!plan.recommended || (!host.budgetBytes && !plan.lazyCache)) return null
   await updateProvider('ollama', { modelNumCtx: { ...(provider.modelNumCtx || {}), [modelId]: plan.recommended } })
   console.log(`📏 ${modelId}: per-model num_ctx set to ${plan.recommended} (largest window that fits this host)`)
   return plan.recommended
