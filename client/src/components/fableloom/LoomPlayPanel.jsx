@@ -431,8 +431,11 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
           activeSession={hostedSession}
           hasAudienceConnected={hostedAudienceConnected}
           onSessionCreated={(sess, full) => {
-            setHostedSession(full || sess);
+            // The create response nests the id under `session`; store it flat so the host socket and modal actions see `id`.
+            const { session: nested, ...rest } = full || {};
+            setHostedSession({ ...(nested || {}), ...(sess || {}), ...rest });
           }}
+          onAudioTargetChange={(audioTarget) => setHostedSession((prev) => (prev ? { ...prev, audioTarget } : prev))}
           onSessionEnded={() => {
             setHostedSession(null);
             setHostedAudienceConnected(false);
