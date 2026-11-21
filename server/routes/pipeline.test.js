@@ -370,8 +370,22 @@ const generateMusicMock = vi.fn(async ({ engine }) => ({
 }));
 vi.mock('../services/pipeline/musicGen.js', async () => {
   const actual = await vi.importActual('../services/pipeline/musicGen.js');
-  return { ...actual, generateMusic: (...a) => generateMusicMock(...a) };
+  return {
+    ...actual,
+    generateMusic: (...a) => generateMusicMock(...a),
+    isEngineHealthy: vi.fn(async () => true),
+    isEnginePlatformSupported: vi.fn(() => true),
+  };
 });
+
+vi.mock('../lib/cudaCapability.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getCudaCapability: vi.fn(async () => ({ status: 'unavailable' })),
+}));
+vi.mock('../lib/hfCache.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  inspectModelCache: vi.fn(async () => ({ cached: true })),
+}));
 
 // Audio cue derivation (audioCues.js) — stub the LLM-backed derivation but keep
 // the real preserveRenderedCues helper so the carry-forward path is exercised.
@@ -3139,6 +3153,47 @@ describe('pipeline routes', () => {
         .post(`/api/pipeline/issues/${iss.id}/stages/audio/cues/nope/render`)
         .send({});
       expect(r.status).toBe(400);
+    });
+  });
+
+  describe('music generator availability', () => {
+    const readGenerators = () => request(makeApp()).get('/api/pipeline/audio/music/generators');
+
+    it.each([[12, 'vram-insufficient'], [null, 'vram-unknown-size']])(
+      'reports %s GB of CUDA VRAM as %s while the portable default stays ready',
+      async (maxVramGb, unavailableReason) => {
+        const { getCudaCapability } = await import('../lib/cudaCapability.js');
+        getCudaCapability.mockResolvedValueOnce({ status: 'available', maxVramGb });
+        const response = await readGenerators();
+        expect(response.status).toBe(200);
+        const { engines, defaultEngine, ...legacy } = response.body;
+        expect(engines.find((engine) => engine.id === 'minimax-music3')).toMatchObject({
+          ready: false, unavailableReason, runtimeReady: true, cudaState: 'available', maxVramGb,
+        });
+        const portable = engines.find((engine) => engine.id === defaultEngine);
+        expect(portable).toMatchObject({ id: 'musicgen', ready: true, unavailableReason: null, cudaRequired: false });
+        expect(portable).toMatchObject(legacy);
+      },
+    );
+
+    it('distinguishes a cached default checkpoint from its unavailable sibling', async () => {
+      const { ENGINES } = await import('../services/pipeline/musicGen.js');
+      const { inspectModelCache } = await import('../lib/hfCache.js');
+      const [cachedModel, unavailableModel] = ENGINES['minimax-music3-mlx'].models;
+      inspectModelCache.mockImplementation(async (repo, { revision }) => ({
+        cached: repo !== unavailableModel.repo || revision !== unavailableModel.revision,
+      }));
+      try {
+        const response = await readGenerators();
+        expect(response.status).toBe(200);
+        expect(response.body.engines.find((engine) => engine.id === 'minimax-music3-mlx')).toMatchObject({
+          ready: true, unavailableReason: null, unavailableReasonByModelId: {
+            [cachedModel.id]: null, [unavailableModel.id]: 'model-unavailable',
+          },
+        });
+      } finally {
+        inspectModelCache.mockResolvedValue({ cached: true });
+      }
     });
   });
 
