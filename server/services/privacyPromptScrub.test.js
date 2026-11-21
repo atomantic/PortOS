@@ -8,6 +8,7 @@ import { PRIVACY_FACTS_HEADING, PRIVACY_FACTS_NOTICE, redactStoredPrivacyPrompt,
 import { PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
 import { encryptValue } from '../lib/vaultCrypto.js';
 import { deleteVaultRecord, updateVaultRecord } from './privacyVault.js';
+import { clearSubjectIdentityEvidence } from './privacyBrokers.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { deleteSubject } from './privacySubjects.js';
@@ -42,6 +43,7 @@ async function writeFixture(path, content) {
 
 beforeEach(async () => {
   vi.stubEnv('PRIVACY_VAULT_KEY', 'a'.repeat(64));
+  clearSubjectIdentityEvidence.mockClear();
   log = vi.spyOn(console, 'log').mockImplementation(() => {});
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   error = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -81,6 +83,7 @@ afterEach(async () => {
 describe('privacy vault mutations and existing local run artifacts', () => {
   it.each([
     ['unsharing a vault record', () => updateVaultRecord('record-example', { shareWithTwin: false })],
+    ['overwriting a vault record value', () => updateVaultRecord('record-example', { value: 'a replacement name' })],
     ['deleting a vault record', () => deleteVaultRecord('record-example')],
     ['deleting a subject', () => deleteSubject('subject-example')],
   ])('scrubs legacy prompts and echoed values when %s', async (_label, mutate) => {
@@ -102,6 +105,16 @@ describe('privacy vault mutations and existing local run artifacts', () => {
     expect(await readFile(join(paths.unrelated, 'output.txt'), 'utf8')).toBe(output);
     expect(await readFile(join(paths.backup, 'prompt.txt'), 'utf8')).toBe(prompt);
     expect([log, warn, error].flatMap(spy => spy.mock.calls.flat()).join('\n')).not.toContain(fact);
+  });
+
+  it('clears broker identity evidence when a legal_name value is overwritten', async () => {
+    await updateVaultRecord('record-example', { value: 'a replacement name' });
+    expect(clearSubjectIdentityEvidence).toHaveBeenCalledWith(PRIVACY_SELF_SUBJECT_ID, expect.objectContaining({ client: expect.anything() }));
+  });
+
+  it('does not clear broker identity evidence when only shareWithTwin is revoked', async () => {
+    await updateVaultRecord('record-example', { shareWithTwin: false });
+    expect(clearSubjectIdentityEvidence).not.toHaveBeenCalled();
   });
 });
 
