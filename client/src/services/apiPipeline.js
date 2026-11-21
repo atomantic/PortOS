@@ -342,24 +342,17 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
 // instead of a silently canceled browser download. The server reads the persisted
 // per-series export settings, so callers gate on the form being saved.
 export const PROSE_EXPORT_NO_CONTENT = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
-const proseExportPath = {
-  md: (id) => `${API_BASE}/pipeline/series/${id}/export/manuscript.md`,
-  epub: (id) => `${API_BASE}/pipeline/series/${id}/export/book.epub`,
-  pdf: (id) => `${API_BASE}/pipeline/series/${id}/export/interior.pdf`,
-};
-
 const filenameFromDisposition = (header, fallback) => {
-  const match = /filename="?([^";]+)"?/i.exec(header || '');
-  return match ? match[1] : fallback;
+  // Quote-free pattern: the route-parity scanner's comment stripper mis-tracks a quote inside a regex literal.
+  const match = /filename=([^;]+)/i.exec(header || '');
+  const name = match ? match[1].trim().replace(/^\W+|\W+$/g, '') : '';
+  return name || fallback;
 };
 
-/** Resolves to `{ blob, filename }`; rejects with the shared API error shape (`.code`, `.status`). */
-export async function fetchProseExport(seriesId, kind) {
-  const pathFor = proseExportPath[kind];
-  if (!pathFor) throw new Error(`Unknown export kind: ${kind}`);
-  const file = pathFor('').split('/').pop();
-  const response = await fetch(pathFor(encodeURIComponent(seriesId)))
-    .catch(() => null);
+// Settles a prose-export fetch into `{ blob, filename }`, or rejects with the
+// shared API error shape (`.code`, `.status`).
+async function readProseExport(pending, fallbackName) {
+  const response = await pending.catch(() => null);
   if (!response) {
     const err = new Error('Server unreachable — check your connection and try again');
     err.code = 'SERVER_UNREACHABLE';
@@ -367,8 +360,20 @@ export async function fetchProseExport(seriesId, kind) {
   }
   if (!response.ok) await throwApiError(response);
   const blob = await response.blob();
-  return { blob, filename: filenameFromDisposition(response.headers.get('Content-Disposition'), file) };
+  return { blob, filename: filenameFromDisposition(response.headers.get('Content-Disposition'), fallbackName) };
 }
+
+const proseExportFetchers = {
+  md: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/manuscript.md`), 'manuscript.md'),
+  epub: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/book.epub`), 'book.epub'),
+  pdf: (id) => readProseExport(fetch(`${API_BASE}/pipeline/series/${encodeURIComponent(id)}/export/interior.pdf`), 'interior.pdf'),
+};
+
+export const fetchProseExport = (seriesId, kind) => {
+  const fetcher = proseExportFetchers[kind];
+  if (!fetcher) throw new Error(`Unknown export kind: ${kind}`);
+  return fetcher(seriesId);
+};
 
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
