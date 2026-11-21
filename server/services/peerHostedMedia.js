@@ -280,21 +280,23 @@ export async function resolveMediaLocations(items, { includeFilename = false, kn
  * Which peers host each of a collection's items that has no local copy:
  * `{ '<kind>:<filename>': [peerInstanceId, …] }`. Sync integrity uses it so a
  * file one side streams from the other (host mode) counts as in parity rather
- * than as a missing asset neither push nor pull will ever copy.
+ * than as a missing asset neither push nor pull will ever copy. A caller
+ * checking many collections passes the index once as `entries`.
  */
-export async function hostedByForCollectionItems(items) {
+export async function hostedByForCollectionItems(items, { entries } = {}) {
   const collectionItems = Array.isArray(items) ? items : [];
   if (collectionItems.length === 0) return {};
-  const entries = await readEntriesOrEmpty();
-  if (Object.keys(entries).length === 0) return {};
+  const index = entries ?? await readEntriesOrEmpty();
+  if (Object.keys(index).length === 0) return {};
   const videoFilenames = await loadCollectionVideoFilenames(collectionItems);
   const out = {};
   for (const item of collectionItems) {
     const kind = item?.kind === 'video' ? 'video' : 'image';
     const safe = kind === 'video' ? resolveCollectionVideoFilename(item.ref, videoFilenames) : sanitizeAssetFilename(item?.ref);
-    if (!safe || existsSync(join(KIND_DIRS[kind](), safe))) continue;
-    const peerIds = hostsOf(entries[hostedKey(kind, safe)]).map((host) => host?.peerId).filter(isStr);
-    if (peerIds.length) out[hostedKey(kind, safe)] = peerIds;
+    const key = safe && hostedKey(kind, safe);
+    const peerIds = key ? hostsOf(index[key]).map((host) => host?.peerId).filter(isStr) : [];
+    // A local copy wins over any recorded host.
+    if (peerIds.length && !existsSync(join(KIND_DIRS[kind](), safe))) out[key] = peerIds;
   }
   return out;
 }

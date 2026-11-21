@@ -42,8 +42,7 @@ vi.mock('../services/creativeCommissions/collections.js', () => ({
   consolidateCommissionCollections: async () => ({ jobs: 0, mergedCollections: 0, repointedProjects: 0 }),
 }));
 vi.mock('../services/catalog/catalogUniverseFiling.js', () => ({
-  fileCatalogImagesIntoUniverses: async () => ({ universes: [] }),
-  fileCatalogImagesIntoTypeCollections: async () => ({ added: 0, types: 0 }),
+  fileCatalogImages: async () => ({ added: 0, updatedCollections: 0 }),
 }));
 vi.mock('../services/externalMediaCollection.js', () => ({ collectExistingExternalMedia: async () => [] }));
 vi.mock('../services/videoGen/history.js', () => ({ loadHistory: async () => [

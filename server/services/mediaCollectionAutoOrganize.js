@@ -5,7 +5,7 @@
  */
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { itemKey } from '../lib/mediaItemKey.js';
+import { itemKey, parseKey } from '../lib/mediaItemKey.js';
 import { listJobs } from './mediaJobQueue/queueState.js';
 import { listCollections } from './mediaCollections.js';
 import { collectionItems, fileOwnedMedia, imageItem, jobCollectionItems, jobCollectionSources, videoItem } from './mediaCollectionRules.js';
@@ -79,22 +79,17 @@ async function musicVideoItems(project) {
 }
 
 // Every media file an owner record references, wherever in the record it
-// sits: gallery images by basename (bare names and /data/images/… paths) and
-// videos by history id. Owner records hold their renders, takes, plates,
-// references and history in many shapes; walking them keeps filing complete as
-// those shapes grow. Unavailable names are dropped by the availability check.
-const IMAGE_FILE = /\.(png|jpe?g|webp|gif)$/i;
-function referencedMedia(value, videoIds, out = []) {
+// sits, parsed by the same rule the media-usage index uses. Unlike that index
+// this keeps take pools and histories: every render a project holds belongs in
+// its collection. Unavailable names are dropped by the availability check.
+function referencedMedia(value, mediaKeyOf, videos, out = []) {
   if (typeof value === 'string') {
-    // `image:<file>` / `video:<id>` media keys and served paths both resolve.
-    const bare = value.replace(/^(image|video):/, '');
-    const name = bare.split('?')[0].split(/[/\\]/).pop();
-    if (IMAGE_FILE.test(name) && !name.includes(':')) out.push(imageItem(name));
-    else if (videoIds.has(bare)) out.push(videoItem(bare));
+    const item = parseKey(mediaKeyOf(value, videos));
+    if (item) out.push(item);
   } else if (Array.isArray(value)) {
-    for (const entry of value) referencedMedia(entry, videoIds, out);
+    for (const entry of value) referencedMedia(entry, mediaKeyOf, videos, out);
   } else if (value && typeof value === 'object') {
-    for (const entry of Object.values(value)) referencedMedia(entry, videoIds, out);
+    for (const entry of Object.values(value)) referencedMedia(entry, mediaKeyOf, videos, out);
   }
   return out;
 }
@@ -132,11 +127,12 @@ async function organize() {
     for (const owner of owners) buckets.set(ownerKey(source, owner.id), { source, owner, items: [] });
   }
 
-  const videoIds = new Set(videos.map(video => video.id));
+  const { mediaKeyOf, videoLookup } = await import('./mediaUsage.js');
+  const videoIndex = await videoLookup();
   await mapWithConcurrency([...buckets.values()], 4, async bucket => {
     const extractor = recordItems[bucket.source];
     if (extractor) bucket.items.push(...await extractor(bucket.owner));
-    if (WALKED_SOURCES.has(bucket.source)) bucket.items.push(...referencedMedia(bucket.owner, videoIds));
+    if (WALKED_SOURCES.has(bucket.source)) bucket.items.push(...referencedMedia(bucket.owner, mediaKeyOf, videoIndex));
   });
   for (const job of listJobs({ status: 'completed' })) {
     if (job.durabilityPending) continue;
@@ -181,16 +177,10 @@ async function organize() {
   }
   // Catalog references: each record's images go to its universes' collections
   // and to its type's library collection (Cast, Environments, Objects).
-  const { fileCatalogImagesIntoUniverses, fileCatalogImagesIntoTypeCollections } = await import('./catalog/catalogUniverseFiling.js');
-  const { universes } = await fileCatalogImagesIntoUniverses();
-  for (const { added } of universes) {
-    if (!added) continue;
-    result.added += added;
-    result.updatedCollections += 1;
-  }
-  const typed = await fileCatalogImagesIntoTypeCollections();
-  result.added += typed.added;
-  if (typed.added) result.updatedCollections += typed.types;
+  const { fileCatalogImages } = await import('./catalog/catalogUniverseFiling.js');
+  const catalog = await fileCatalogImages();
+  result.added += catalog.added;
+  result.updatedCollections += catalog.updatedCollections;
   return result;
 }
 

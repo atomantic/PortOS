@@ -174,6 +174,19 @@ export async function fileCatalogImagesIntoTypeCollections({ ingredientIds = nul
   return { added, types: byType.size };
 }
 
+/** Both filings for the given records (all when null): `{ added, updatedCollections }`. */
+export async function fileCatalogImages({ ingredientIds = null } = {}) {
+  const [{ universes }, typed] = await Promise.all([
+    fileCatalogImagesIntoUniverses({ ingredientIds }),
+    fileCatalogImagesIntoTypeCollections({ ingredientIds }),
+  ]);
+  const filedUniverses = universes.filter((u) => u.added > 0);
+  return {
+    added: filedUniverses.reduce((sum, u) => sum + u.added, 0) + typed.added,
+    updatedCollections: filedUniverses.length + (typed.added ? typed.types : 0),
+  };
+}
+
 // Live filing: catalog media/ref writes announce `assets-changed`, record-level
 // changes (completion hook, universe membership) `primitive-changed`. Bursts
 // for one record coalesce, and one pass runs at a time, so a batch of renders
@@ -189,10 +202,8 @@ const flush = () => {
   const ingredientIds = [...pending];
   pending.clear();
   running = running.then(async () => {
-    const { totals } = await fileCatalogImagesIntoUniverses({ ingredientIds });
-    if (totals.added > 0) console.log(`🌍 Filed ${totals.added} catalog image(s) into ${totals.universes} universe collection(s)`);
-    const typed = await fileCatalogImagesIntoTypeCollections({ ingredientIds });
-    if (typed.added > 0) console.log(`🗂️ Filed ${typed.added} catalog image(s) into ${typed.types} catalog type collection(s)`);
+    const { added, updatedCollections } = await fileCatalogImages({ ingredientIds });
+    if (added > 0) console.log(`🌍 Filed ${added} catalog image(s) into ${updatedCollections} collection(s)`);
   }).catch((err) => console.error(`❌ catalog universe filing failed: ${err?.message || err}`));
 };
 

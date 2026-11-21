@@ -33,7 +33,7 @@ import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
 import { getInstanceId } from '../instanceIdentity.js';
-import { hostedByForCollectionItems, hostedCountsByPeer } from '../peerHostedMedia.js';
+import { hostedByForCollectionItems, hostedCountsByPeer, listHostedEntries } from '../peerHostedMedia.js';
 import { assetIntegrityForRecord, getRecordPayloadForPeer } from './peerSync.js';
 import { referenceCollectionAssetManifest } from './peerSyncAssets.js';
 import { sanitizeAssetFilename } from './buckets.js';
@@ -79,6 +79,7 @@ async function recordsForKind(kind) {
  */
 export async function buildLocalManifest(kind) {
   const records = await recordsForKind(kind);
+  const hostedEntries = kind === 'mediaCollection' ? await listHostedEntries() : null;
   // Hash records SEQUENTIALLY (for...of, not Promise.all(map)) so a large
   // library can't fan out an unbounded number of concurrent file-hash reads and
   // spike CPU/disk. Each assetShaListForRecord already reads many files; doing
@@ -98,9 +99,9 @@ export async function buildLocalManifest(kind) {
     }
     // Per-peer count of this collection's files streamed from that peer, so
     // the requester can accept hash gaps that host mode explains.
-    const hostedBy = kind === 'mediaCollection' && !deleted
-      ? hostedCountsByPeer(await hostedByForCollectionItems(r.items))
-      : null;
+    const hostedBy = hostedEntries && !deleted
+      ? hostedCountsByPeer(await hostedByForCollectionItems(r.items, { entries: hostedEntries }))
+      : {};
     out.push({
       id: r.id,
       name: r.name ?? r.title,
@@ -112,7 +113,7 @@ export async function buildLocalManifest(kind) {
       // still-on-disk assets is pure wasted file I/O.
       assetHashes: [...assetIntegrity.assetHashes, ...workAssets.map((asset) => asset.sha256)].sort(),
       metadataMissing: assetIntegrity.metadataMissing,
-      ...(hostedBy && Object.keys(hostedBy).length ? { hostedBy } : {}),
+      ...(Object.keys(hostedBy).length ? { hostedBy } : {}),
     });
   }
   return out;

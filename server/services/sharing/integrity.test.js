@@ -35,6 +35,7 @@ vi.mock('./peerSyncAssets.js', () => ({ referenceCollectionAssetManifest: vi.fn(
 vi.mock('../peerHostedMedia.js', async (importOriginal) => ({
   hostedCountsByPeer: (await importOriginal()).hostedCountsByPeer,
   hostedByForCollectionItems: vi.fn().mockResolvedValue({}),
+  listHostedEntries: vi.fn().mockResolvedValue({}),
 }));
 
 // Mock mediaCollections, universeBuilder, series so tests control the record set.

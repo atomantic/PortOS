@@ -3,7 +3,7 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
-import { createCollection } from '../mediaCollections.js';
+import { projectCollectionFor } from './projectCollection.js';
 import { createProjectFileStore } from '../projectFileStore.js';
 import * as logic from './projectsLogic.js';
 
@@ -34,16 +34,7 @@ export async function createProject(input) {
     const { ensureInstanceId } = await import('../instanceIdentity.js');
     seeded.videoOwnerInstanceId = await ensureInstanceId();
   }
-  return store.createProject(seeded, async ({ id }) => {
-    // A Creative Commission run files into its job's shared collection.
-    if (typeof input.collectionId === 'string' && input.collectionId) return { collectionId: input.collectionId };
-    const collection = await createCollection({
-      name: `Creative Director: ${input.name}`,
-      description: `Auto-created for project ${id}`,
-      source: 'auto',
-    });
-    return { collectionId: collection.id };
-  });
+  return store.createProject(seeded, ({ id }) => projectCollectionFor(input, id));
 }
 
 export async function setTreatment(id, treatmentInput) {

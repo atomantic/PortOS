@@ -143,8 +143,11 @@ export async function buildCollectionIntegrityAssets(collection) {
     return filename !== fallback ? [[fallback, filename]] : [];
   }));
   const assets = referenceCollectionAssetManifest(collection, history);
-  const hostedBy = await import('../peerHostedMedia.js').then((m) => m.hostedByForCollectionItems(items));
-  return { assetManifest: await hashAssetReferences(assets), videoFilenames, hostedBy };
+  const [assetManifest, hostedBy] = await Promise.all([
+    hashAssetReferences(assets),
+    import('../peerHostedMedia.js').then((m) => m.hostedByForCollectionItems(items)),
+  ]);
+  return { assetManifest, videoFilenames, hostedBy };
 }
 
 export function referenceCollectionAssetManifest(collection, videoFilenames) {

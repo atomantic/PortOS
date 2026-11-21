@@ -40,6 +40,7 @@ import {
   withBaseHashFlushBatch,
 } from '../lib/conflictJournal.js';
 import { codedError } from '../lib/codedError.js';
+import { UUID_RE } from '../lib/fileCore.js';
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
@@ -359,19 +360,19 @@ async function persistNewCollection({ name, description = '', source = 'user' },
 // An owner-managed collection has a deterministic id (mood board, music video,
 // deck, commission, …) or a universe/series link: its owner finds it by that id,
 // so a join copies its items but never retires it.
-const RANDOM_COLLECTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isOwnerManaged = (collection) => !RANDOM_COLLECTION_ID.test(collection.id)
+export const isOwnerManaged = (collection) => !UUID_RE.test(collection.id)
   || Boolean(collection.universeId) || Boolean(collection.seriesId);
 
-// Point every record that files renders into `fromId` at `toId`, so retiring
-// `fromId` does not make its owner mint a fresh bucket on the next render.
-async function retargetCollectionOwners(fromId, toId) {
+// Point every record that files renders into one of `fromIds` at `toId`, so
+// retiring them does not make an owner mint a fresh bucket on its next render.
+// Random-id collections are minted only by Creative Director projects and
+// Writers Room works.
+async function retargetCollectionOwners(fromIds, toId) {
   const [{ repointProjectCollections }, { repointWorkMediaCollections }] = await Promise.all([
     import('./creativeDirector/local.js'),
     import('./writersRoom/local.js'),
   ]);
-  await repointProjectCollections([fromId], toId);
-  await repointWorkMediaCollections([fromId], toId);
+  await Promise.all([repointProjectCollections(fromIds, toId), repointWorkMediaCollections(fromIds, toId)]);
 }
 
 /**
@@ -409,16 +410,12 @@ export async function joinCollections({ name, collectionIds, keepOriginals = fal
     ? (await bulkUpdateCollectionItems(target.id, { add: union.map(({ kind, ref }) => ({ kind, ref })) })).collection
     : await persistNewCollection({ name }, union);
 
-  const removedCollectionIds = [];
-  const keptCollectionIds = [];
-  for (const source of sources) {
-    if (source.id === joined.id) continue;
-    if (keepOriginals || isOwnerManaged(source)) { keptCollectionIds.push(source.id); continue; }
-    await retargetCollectionOwners(source.id, joined.id);
-    await deleteCollection(source.id);
-    removedCollectionIds.push(source.id);
-  }
-  return { ...joined, removedCollectionIds, keptCollectionIds };
+  const others = sources.filter((source) => source.id !== joined.id);
+  const retire = keepOriginals ? [] : others.filter((source) => !isOwnerManaged(source)).map((source) => source.id);
+  const keptCollectionIds = others.map((source) => source.id).filter((id) => !retire.includes(id));
+  if (retire.length) await retargetCollectionOwners(retire, joined.id);
+  for (const id of retire) await deleteCollection(id);
+  return { ...joined, removedCollectionIds: retire, keptCollectionIds };
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
