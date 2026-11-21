@@ -187,17 +187,28 @@ describe('localLlmCatalog', () => {
       expect(LOCAL_LLM_CATALOG.every((e) => !/(?:^|:)cloud$/.test(e.ollama || ''))).toBe(true);
     });
 
-    it('offers Inkling 2 Mini on both GGUF runtimes without featuring it', () => {
+    it('offers Inkling 2 Mini from the Ollama library and LM Studio without featuring it', () => {
       const ollama = getCatalog('ollama').find((m) => m.key === 'inkling-2-mini');
       expect(ollama).toMatchObject({
-        id: 'hf.co/bartowski/thinkingmachines_Inkling-2-Mini-GGUF:Q4_K_M',
+        id: 'inkling-2-mini:26b-a5b',
         category: 'general',
         contextLength: 1048576,
         capabilities: expect.arrayContaining(['tools', 'vision', 'reasoning']),
         publisherReview: 'established-publisher',
       });
       expect(ollama.featured).toBeFalsy();
+      // A pull of the earlier third-party GGUF still reads as this entry.
+      expect(getCatalog('ollama', ['hf.co/bartowski/thinkingmachines_Inkling-2-Mini-GGUF:Q4_K_M'])
+        .find((m) => m.key === 'inkling-2-mini')?.installed).toBe(true);
       expect(getCatalog('lmstudio').find((m) => m.key === 'inkling-2-mini')?.id).toBe('lmstudio-community/Inkling-2-Mini-GGUF');
+    });
+
+    it('offers the Inkling 2 Mini MLX build through Ollama on Apple Silicon only', () => {
+      const key = 'inkling-2-mini-mlx';
+      expect(getCatalog('ollama', [], { appleSilicon: true }).find((m) => m.key === key))
+        .toMatchObject({ format: 'mlx', id: 'inkling-2-mini:26b-a5b-nvfp4' });
+      expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.key === key)).toBe(false);
+      expect(getCatalog('lmstudio', [], { appleSilicon: true }).some((m) => m.key === key)).toBe(false);
     });
 
     it('ships the refreshed local models for reasoning, coding, and multilingual categories', () => {

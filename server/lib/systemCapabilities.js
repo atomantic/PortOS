@@ -72,6 +72,11 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
   'granite4.2-30b': Object.freeze({ minMemoryGb: 32 }),
   'qwen3.6-27b': Object.freeze({ minMemoryGb: 32 }),
   'inkling-2-mini': Object.freeze({ minMemoryGb: 32 }),
+  'inkling-2-mini-mlx': Object.freeze({
+    platforms: ['darwin'],
+    requiresAppleSilicon: true,
+    minMemoryGb: 32,
+  }),
   'qwen3-32b': Object.freeze({ minMemoryGb: 32 }),
   'gpt-oss-120b': Object.freeze({ minMemoryGb: 96 }),
   'nemotron-3-super-120b': Object.freeze({ minMemoryGb: 96 }),
