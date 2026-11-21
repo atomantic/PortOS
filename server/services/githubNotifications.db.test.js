@@ -537,7 +537,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   it('folds repeat default-branch CI notices into the newest one', async () => {
     const login = account.login;
     const ci = (id, updatedAt) => thread(id, { owner: login, reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt, title: 'CI workflow run failed for main branch' });
-    const actions = mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
+    const actions = mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: { defaultBranch: 'main', canPush: true } });
     await syncAccountNotifications(account.id);
     const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
@@ -978,7 +978,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       thread('1505', { owner: login, repo: 'tool', reason: 'author', title: 'Example own change' }),
       thread('1506', { owner: login, repo: 'tool', reason: 'comment', commentUrl: `https://api.github.com/repos/${login}/tool/issues/comments/88` }),
     ]), {
-      [`repos/${login}/tool`]: 'main',
+      [`repos/${login}/tool`]: { defaultBranch: 'main', canPush: true },
       [`repos/${login}/tool/pulls/1502`]: { author: login, association: 'OWNER', state: 'open', merged: false },
       [`repos/${login}/tool/issues/comments/77`]: { author: 'visitor', association: 'NONE', mentions: 0 },
       [`repos/${login}/tool/collaborators/visitor/permission`]: { user: { login: 'visitor' }, permission: 'read' },
@@ -1058,7 +1058,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const pr = { author: login, authorType: 'User', association: 'CONTRIBUTOR', state: 'open', merged: false, draft: false, mergeableState: 'clean' };
     const forge = {
       // The account cannot push to the upstream repo, so it cannot merge there.
-      'repos/example-org/project': 'false',
+      'repos/example-org/project': { defaultBranch: 'main', canPush: false },
       'repos/example-org/project/pulls/1701': pr,
       'repos/example-org/project/issues/comments/91': { author: 'maint', authorType: 'User', association: 'MEMBER', mentions: 0 },
       // A public member of the org that owns the repo.
@@ -1583,8 +1583,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     });
     await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'rule-ci', kind: 'ci-activity', repo: `${login}/tool`, action: 'agent', effort: 'high' }] });
     mockGh(() => listing([ciThread('1801', 'tool'), ciThread('1802', 'side')]), {
-      [`repos/${login}/tool`]: { default_branch: 'main' },
-      [`repos/${login}/side`]: { default_branch: 'main' },
+      [`repos/${login}/tool`]: { defaultBranch: 'main', canPush: true },
+      [`repos/${login}/side`]: { defaultBranch: 'main', canPush: true },
     });
     expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1, agentRuns: 1 });
     expect(vi.mocked(addTask).mock.calls[0][0]).toMatchObject({ effort: 'high', metadata: { githubNotificationResolve: { threadId: '1801', repo: `${login}/tool` } } });

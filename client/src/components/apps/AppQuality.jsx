@@ -204,6 +204,9 @@ function CategoryRow({ category, below, runLink }) {
     ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: instancePeerLink(category.sourcePeerId) }] : []),
   ];
   const inapplicable = category.applicable === false;
+  // A consolidated domain names each folded-in series that has a run, so a legacy
+  // profile (e.g. one now inside a broader domain) stays visible by name.
+  const measuredMembers = (category.members || []).filter(member => member.assessedAt);
   const evidence = inapplicable ? <>Not applicable · {category.inapplicableReason}</> : <>
     {category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence}`}
     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}
@@ -231,6 +234,13 @@ function CategoryRow({ category, below, runLink }) {
       </td>
       <td className="text-xs text-gray-400 col-span-1 min-w-0 sm:table-cell sm:py-1.5 sm:px-2">
         {evidence}
+        {measuredMembers.length > 0 && (
+          <span className="block mt-0.5 text-gray-500 break-words">
+            Includes {measuredMembers.map((member, index) => (
+              <span key={member.id}>{index > 0 && ' · '}{member.label} {member.score ?? '—'}{member.stale && ' (stale)'}</span>
+            ))}
+          </span>
+        )}
       </td>
       <td className="col-span-1 sm:table-cell sm:py-1.5 sm:px-2">
         <div className="flex items-center justify-end gap-1">
