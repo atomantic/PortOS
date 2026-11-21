@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams, Link, useNavigate } from 'react-router';
-import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Images, Wand2, Loader2 } from 'lucide-react';
+import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Images, Wand2, Loader2, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
@@ -73,7 +73,13 @@ export default function MediaAnnotate() {
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [size, setSize] = useState(DEFAULT_SIZE);
   const [mode, setMode] = useState('draw'); // 'draw' | 'erase'
-  const [loading, setLoading] = useState(true);
+  // Saved-state read result, tagged with the key it belongs to. Deriving status
+  // from the tag makes a key change read as 'pending' in the same render, so no
+  // frame can offer Save against the previous key's (or an unknown) saved state.
+  const [loadResult, setLoadResult] = useState({ key: null, status: 'pending' });
+  const [loadNonce, setLoadNonce] = useState(0);
+  const loadStatus = loadResult.key === mediaKey ? loadResult.status : 'pending';
+  const loaded = loadStatus === 'loaded';
   const [imageError, setImageError] = useState(false);
 
   // Re-render (issue #2036 phase 2). `regenInfo` is the same local-FLUX
@@ -106,7 +112,7 @@ export default function MediaAnnotate() {
   // transient view state synchronously before fetching — otherwise the previous
   // key's strokes / imageError / dims leak onto the new image.
   useEffect(() => {
-    if (!isSupported) { setLoading(false); return; }
+    if (!isSupported) return;
     let active = true;
     setStrokes([]);
     // In image mode dims come from the <img> onLoad, which re-fires when the src
@@ -116,26 +122,33 @@ export default function MediaAnnotate() {
     // would strand Save disabled (`!dims`). Leave blank dims in place.
     if (!isBlank) setDims(null);
     setImageError(false);
-    setLoading(true);
     getMediaSketch(mediaKey, { silent: true })
       .then((res) => {
         if (!active) return;
-        const loaded = Array.isArray(res?.sketch?.strokes) ? res.sketch.strokes : [];
-        setStrokes(loaded);
-        if (loaded.length > 0) toast.success(`Restored ${loaded.length} stroke${loaded.length === 1 ? '' : 's'}`);
+        const restored = Array.isArray(res?.sketch?.strokes) ? res.sketch.strokes : [];
+        setStrokes(restored);
+        setLoadResult({ key: mediaKey, status: 'loaded' });
+        if (restored.length > 0) toast.success(`Restored ${restored.length} stroke${restored.length === 1 ? '' : 's'}`);
       })
-      .catch(() => { if (active) toast.error('Failed to load saved annotation'); })
-      .finally(() => { if (active) setLoading(false); });
+      .catch(() => { if (active) setLoadResult({ key: mediaKey, status: 'failed' }); });
     return () => { active = false; };
-  }, [mediaKey, isSupported]);
+  }, [mediaKey, isSupported, loadNonce]);
 
   const tool = useMemo(() => ({ color, size, mode }), [color, size, mode]);
 
   const handleUndo = useCallback(() => setStrokes((prev) => undoStrokes(prev)), []);
   const handleClear = useCallback(() => setStrokes([]), []);
+  // The canvas stays mounted (it reports dims) but accepts no edits until the saved
+  // strokes are known; otherwise a save would replace them unseen.
+  const handleStrokesChange = useCallback((next) => { if (loaded) setStrokes(next); }, [loaded]);
+  const retryLoad = useCallback(() => {
+    setLoadResult({ key: mediaKey, status: 'pending' });
+    setLoadNonce((n) => n + 1);
+  }, [mediaKey]);
 
   const [save, saving] = useAsyncAction(async () => {
     if (!dims) throw new Error('Canvas not ready');
+    if (!loaded) throw new Error('Saved annotation has not loaded');
     const png = canvasApiRef.current?.exportPng?.() || undefined;
     const res = await saveMediaSketch(mediaKey, {
       width: dims.w,
@@ -182,6 +195,7 @@ export default function MediaAnnotate() {
   // silent so useAsyncAction owns the single error toast.
   const [rerender, rerendering] = useAsyncAction(async () => {
     if (!dims) throw new Error('Canvas not ready');
+    if (!loaded) throw new Error('Saved annotation has not loaded');
     if (strokes.length === 0) throw new Error('Draw over the image before re-rendering');
     const png = canvasApiRef.current?.exportPng?.() || undefined;
     await saveMediaSketch(mediaKey, { width: dims.w, height: dims.h, strokes, png }, { silent: true });
@@ -305,7 +319,7 @@ export default function MediaAnnotate() {
           <button
             type="button"
             onClick={handleUndo}
-            disabled={strokes.length === 0}
+            disabled={!loaded || strokes.length === 0}
             className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Undo last stroke"
           >
@@ -314,7 +328,7 @@ export default function MediaAnnotate() {
           <button
             type="button"
             onClick={handleClear}
-            disabled={strokes.length === 0}
+            disabled={!loaded || strokes.length === 0}
             className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Clear all strokes"
           >
@@ -332,7 +346,7 @@ export default function MediaAnnotate() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !dims}
+            disabled={saving || !dims || !loaded}
             className="px-3 py-1.5 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title={`Save ${noun.toLowerCase()}`}
           >
@@ -344,7 +358,7 @@ export default function MediaAnnotate() {
             <button
               type="button"
               onClick={openRerender}
-              disabled={!dims || strokes.length === 0}
+              disabled={!dims || !loaded || strokes.length === 0}
               className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
               title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
             >
@@ -365,7 +379,19 @@ export default function MediaAnnotate() {
           </div>
         ) : (
           <div className="w-full max-w-4xl">
-            {loading && <div className="text-gray-500 text-sm mb-2">Loading saved {noun.toLowerCase()}…</div>}
+            {loadStatus === 'pending' && <div className="text-gray-500 text-sm mb-2">Loading saved {noun.toLowerCase()}…</div>}
+            {loadStatus === 'failed' && (
+              <div role="alert" className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-2 text-sm text-port-error">
+                <span>Couldn’t load the saved {noun.toLowerCase()}. Editing and saving are paused so it isn’t overwritten.</span>
+                <button
+                  type="button"
+                  onClick={retryLoad}
+                  className="px-2.5 py-1 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border inline-flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry
+                </button>
+              </div>
+            )}
             <AnnotationCanvas
               ref={canvasApiRef}
               imageSrc={imageSrc}
@@ -373,7 +399,7 @@ export default function MediaAnnotate() {
               blankHeight={blankHeight}
               strokes={strokes}
               tool={tool}
-              onStrokesChange={setStrokes}
+              onStrokesChange={handleStrokesChange}
               onImageLoad={setDims}
               onImageError={() => setImageError(true)}
             />
