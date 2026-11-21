@@ -84,8 +84,7 @@ describe('privacy vault mutations and existing local run artifacts', () => {
 
     for (const directory of [paths.agent, paths.flatAgent, paths.twinRun]) {
       const stored = await readFile(join(directory, 'prompt.txt'), 'utf8');
-      expect(stored).not.toContain(fact + ' —');
-      expect(stored).not.toContain(`legal_name: ${fact}`);
+      expect(stored).not.toContain(fact);
       expect(stored).toContain('Identity facts were included in the provider request and are not stored.');
       expect(stored).toContain(survivor);
     }

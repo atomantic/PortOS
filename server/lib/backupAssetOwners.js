@@ -479,7 +479,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
       'services/agent/agentCliOutputStream.js', 'services/agent/agentSpawnDispatch.js',
       'services/subAgentSpawner.js', 'services/featureAgents.js',
-      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
+      'services/runner.js', 'services/loops.js', 'cos-runner/completion.js', 'services/privacyPromptScrub.js'],
   },
   {
     id: 'agent-run-recording-publication',
