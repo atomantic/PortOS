@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
 import SettingsLoadError from '../ui/SettingsLoadError';
 import QueueInvestigationButton from '../ui/QueueInvestigationButton';
-import { formatDateTime } from '../../utils/formatters';
+import { formatCount, formatDateTime } from '../../utils/formatters';
 import { buildSelectorTestFailureTask } from '../../lib/selectorTestFailureTask';
 import {
   getMessageSelectors,
@@ -13,6 +13,7 @@ import {
   updateMessageSelectors,
   testMessageSelectors,
 } from '../../services/apiMessages.js';
+import socket from '../../services/socket';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import { accountSupportsSyncMode } from '../../lib/messageSyncModes';
 
@@ -41,6 +42,8 @@ export default function SyncTab({ accounts, onRefresh }) {
   const [editingSelector, setEditingSelector] = useState(null);
   const [selectorForm, setSelectorForm] = useState({});
   const [testResults, setTestResults] = useState({});
+  // accountId -> { current, total } from `messages:sync:progress`; cleared when a cycle starts or settles.
+  const [progress, setProgress] = useState({});
 
   // Merge fetched selectors with defaults so every supported provider always appears
   const selectors = Object.fromEntries(
@@ -70,14 +73,28 @@ export default function SyncTab({ accounts, onRefresh }) {
     setSelectorsState('ready');
   }, []);
 
+  const clearProgress = useCallback((accountId) => {
+    setProgress(prev => { const next = { ...prev }; delete next[accountId]; return next; });
+  }, []);
+
   const { syncing, sync } = useAccountSyncStatus({
     eventPrefix: 'messages',
     label: 'Sync',
     successText: ({ newMessages }) => `Sync complete: ${newMessages ?? 0} new messages`,
     onRefresh,
+    onStart: clearProgress,
+    onTerminal: clearProgress,
   });
 
   useEffect(() => { fetchSelectors(); }, [fetchSelectors]);
+
+  useEffect(() => {
+    const onSyncProgress = ({ accountId, current, total }) => {
+      setProgress(prev => ({ ...prev, [accountId]: { current, total } }));
+    };
+    socket.on('messages:sync:progress', onSyncProgress);
+    return () => socket.off('messages:sync:progress', onSyncProgress);
+  }, []);
 
   const handleLaunch = async (accountId) => {
     const result = await launchMessageBrowser(accountId).catch(() => null);
@@ -153,7 +170,16 @@ export default function SyncTab({ accounts, onRefresh }) {
                   </button>
                 )}
                 {syncing[account.id] === 'syncing' ? (
-                  <RefreshCw size={16} className="text-port-accent animate-spin" />
+                  <div className="flex items-center gap-2">
+                    <RefreshCw size={16} className="text-port-accent animate-spin" />
+                    {progress[account.id] && (
+                      <span className="text-xs text-gray-500">
+                        {progress[account.id].total > 0
+                          ? `Syncing ${formatCount(progress[account.id].current)}/${formatCount(progress[account.id].total)}…`
+                          : 'Syncing…'}
+                      </span>
+                    )}
+                  </div>
                 ) : (
                   <>
                     {accountSupportsSyncMode(account, 'unread') && (

@@ -204,3 +204,41 @@ describe('SyncTab selector save followed by a failed refresh', () => {
     for (const edit of screen.getAllByRole('button', { name: 'Edit selectors' })) expect(edit).not.toBeDisabled();
   });
 });
+
+describe('Messages sync live progress', () => {
+  const account = { id: 'gmail-progress', name: 'Gmail', enabled: true, provider: 'api', syncModes: ['unread', 'full'] };
+  const handlerFor = (event) => socket.on.mock.calls.find(([name]) => name === event)?.[1];
+  const emit = (event, payload = {}) => act(() => {
+    handlerFor(`messages:sync:${event}`)?.({ accountId: account.id, ...payload });
+  });
+  const emitProgress = (payload) => act(() => handlerFor('messages:sync:progress')?.({ accountId: account.id, ...payload }));
+
+  it('shows per-account progress beside the spinner and clears it on start and settle', async () => {
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    await waitFor(() => expect(api.getMessageSelectors).toHaveBeenCalled());
+    await act(async () => {});
+    emit('started');
+    expect(screen.queryByText(/^Syncing/)).toBeNull();
+
+    emitProgress({ current: 3, total: 200 });
+    expect(screen.getByText('Syncing 3/200…')).toBeTruthy();
+    emitProgress({ current: 0, total: 0 });
+    expect(screen.getByText('Syncing…')).toBeTruthy();
+
+    emitProgress({ current: 12, total: 200 });
+    emit('completed', { status: 'success', newMessages: 12 });
+    expect(screen.queryByText(/^Syncing/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sync Unread' })).toBeEnabled();
+
+    emit('started');
+    expect(screen.queryByText(/^Syncing/)).toBeNull();
+  });
+
+  it('removes the progress listener on unmount', () => {
+    const { unmount } = render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    const onProgress = handlerFor('messages:sync:progress');
+    expect(onProgress).toBeTypeOf('function');
+    unmount();
+    expect(socket.off).toHaveBeenCalledWith('messages:sync:progress', onProgress);
+  });
+});
