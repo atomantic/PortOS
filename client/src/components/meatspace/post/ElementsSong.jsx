@@ -8,7 +8,7 @@ import {
   attestMemoryMastery,
 } from '../../../services/apiMeatspace.js';
 import { RapidReaderModal } from '../../RapidReader';
-import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
+import { clickableProps, onActivateKeyDown, shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard';
 import PostCompletionActions from './PostCompletionActions';
 import { ELEMENTS_PRACTICE_MODES as PRACTICE_MODES } from './trainerModes';
 
@@ -889,6 +889,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   const [results, setResults] = useState([]);
   const [startTime] = useState(Date.now());
   const inputRef = useRef(null);
+  const verdictRef = useRef(null);
 
   function save(continueDaily) {
     return submitMemoryPractice(item.id, {
@@ -899,6 +900,8 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   }
 
   useEffect(() => { inputRef.current?.focus(); }, [idx]);
+  // The answer input unmounts on submit: hand focus to the verdict region (a non-button, so the still-down Enter cannot activate Next).
+  useEffect(() => { if (showResult) verdictRef.current?.focus(); }, [showResult]);
 
   const next = useCallback(() => {
     setIdx(prev => prev + 1);
@@ -1007,11 +1010,14 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
         <div className="text-3xl font-bold text-white mb-2">{q.prompt}</div>
         <div className="text-gray-500 text-sm">{q.label}</div>
 
-        {showResult ? (
-          <div className={`mt-6 text-lg font-medium ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
-            {showResult === 'correct' ? 'Correct!' : `Answer: ${q.expected}. Study this pairing before continuing.`}
-          </div>
-        ) : (
+        <div ref={verdictRef} role="status" aria-live="polite" tabIndex={-1} className="outline-none">
+          {showResult && (
+            <div className={`mt-6 text-lg font-medium ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
+              {showResult === 'correct' ? 'Correct!' : `Answer: ${q.expected}. Study this pairing before continuing.`}
+            </div>
+          )}
+        </div>
+        {!showResult && (
           <input
             ref={inputRef}
             type="text"
@@ -1066,6 +1072,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
   const [results, setResults] = useState([]);
   const [startTime] = useState(Date.now());
   const inputRef = useRef(null);
+  const verdictRef = useRef(null);
 
   function save(continueDaily) {
     return submitMemoryPractice(item.id, {
@@ -1076,6 +1083,20 @@ function FillBlankMode({ item, onBack, onComplete }) {
   }
 
   useEffect(() => { inputRef.current?.focus(); }, [idx]);
+  // The answer input unmounts on submit: hand focus to the verdict region (a non-button, so the still-down Enter cannot activate Next).
+  useEffect(() => { if (showResult) verdictRef.current?.focus(); }, [showResult]);
+
+  // Enter advances from the verdict, matching the first mode and the Next button.
+  useEffect(() => {
+    if (!showResult) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Enter' || shouldIgnoreGlobalKey(e)) return;
+      e.preventDefault();
+      next();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   if (idx >= lines.length) {
     const correct = results.filter(r => r.correct).length;
@@ -1154,14 +1175,17 @@ function FillBlankMode({ item, onBack, onComplete }) {
           Element symbols in this line: {line.elements?.join(', ')}
         </div>
 
-        {showResult ? (
-          <div className="space-y-2 mt-4">
-            <div className={`text-sm ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
-              {showResult === 'correct' ? 'Correct!' : `Expected: ${blankedWords.join(', ')}`}
+        <div ref={verdictRef} role="status" aria-live="polite" tabIndex={-1} className="outline-none">
+          {showResult && (
+            <div className="space-y-2 mt-4">
+              <div className={`text-sm ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
+                {showResult === 'correct' ? 'Correct!' : `Expected: ${blankedWords.join(', ')}`}
+              </div>
+              <div className="text-sm text-gray-400">{line.text}</div>
             </div>
-            <div className="text-sm text-gray-400">{line.text}</div>
-          </div>
-        ) : (
+          )}
+        </div>
+        {!showResult && (
           <div className="mt-4">
             <div className="text-gray-400 text-xs mb-1">Name the blanked elements (comma-separated):</div>
             <input
