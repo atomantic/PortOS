@@ -157,6 +157,7 @@ describe('shouldIgnoreGlobalKey', () => {
   // exactly what isButtonActivation consults; the dialog is a real element,
   // because the predicate queries the document rather than any component.
   const buttonTarget = { tagName: 'BUTTON', closest: (sel) => (sel.includes('button') ? {} : null) };
+  const appTarget = { tagName: 'svg', closest: (sel) => (sel.includes('application') ? {} : null) };
   const plainTarget = { tagName: 'DIV', closest: () => null };
   const openDialog = () => {
     const dialog = document.createElement('div');
@@ -181,6 +182,13 @@ describe('shouldIgnoreGlobalKey', () => {
   it('always ignores native button activation, whatever the options say', () => {
     expect(shouldIgnoreGlobalKey({ key: ' ', target: buttonTarget })).toBe(true);
     expect(shouldIgnoreGlobalKey({ key: ' ', target: buttonTarget }, {
+      allowChords: true, ignoreRepeat: false, enabledInDialog: true,
+    })).toBe(true);
+  });
+
+  it('always ignores keys inside a role="application" widget so it owns arrows and Space', () => {
+    expect(shouldIgnoreGlobalKey({ key: ' ', target: appTarget })).toBe(true);
+    expect(shouldIgnoreGlobalKey({ key: 'ArrowRight', target: appTarget }, {
       allowChords: true, ignoreRepeat: false, enabledInDialog: true,
     })).toBe(true);
   });
@@ -229,10 +237,12 @@ describe('isPushToTalkKey', () => {
     expect(isPushToTalkKey({ code: 'Space', ctrlKey: true, target: plainTarget }, 'Space')).toBe(true);
   });
 
-  it('stands down for typing, auto-repeat and Space on a focused button', () => {
+  it('stands down for typing, auto-repeat, Space on a focused button, and role="application" widgets', () => {
+    const appTarget = { tagName: 'svg', closest: (sel) => (sel.includes('application') ? {} : null) };
     expect(isPushToTalkKey({ code: 'Space', target: { tagName: 'SELECT' } }, 'Space')).toBe(false);
     expect(isPushToTalkKey({ code: 'Space', repeat: true, target: plainTarget }, 'Space')).toBe(false);
     expect(isPushToTalkKey({ code: 'Space', target: buttonTarget }, 'Space')).toBe(false);
+    expect(isPushToTalkKey({ code: 'Space', target: appTarget }, 'Space')).toBe(false);
   });
 });
 

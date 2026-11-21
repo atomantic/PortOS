@@ -26,6 +26,11 @@ const INFRA_LABELS = { overhead: 'Overhead poles and wires', buried: 'Buried lin
 const SIDE_LABELS = { buildings: 'Buildings', fence: 'Fence or rail', open: 'Open ground', none: 'Nothing' };
 const SETTING_LABELS = { outdoor: 'Outdoors (sky by time of day)', indoor: 'Indoors', space: 'Space' };
 const round = (n) => Math.round(n * 10) / 10 + 0;
+const clampCoord = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(WORLD_LIMITS.COORD, Math.max(-WORLD_LIMITS.COORD, round(n)));
+};
 const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 
 /** Search the catalog's environments to add one to the world as a set. */
@@ -88,6 +93,10 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
   const edit = (change) => setDraft((current) => change(current || saved || blankWorld(Math.floor(Math.random() * 1e6))));
   const patchSet = (id, patch) => edit((t) => ({ ...t, sets: t.sets.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)) }));
   const patchPath = (id, patch) => edit((t) => ({ ...t, paths: t.paths.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)) }));
+  const movePathPoint = (id, index, point) => edit((t) => ({
+    ...t,
+    paths: t.paths.map((entry) => (entry.id === id ? { ...entry, points: entry.points.map((p, i) => (i === index ? point : p)) } : entry)),
+  }));
 
   const persist = async (next) => {
     setBusy(true);
@@ -136,7 +145,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {drawing
             ? <>
-                <span className="text-sm text-port-text">Tap the map to add points ({formatCount(drawing.length)})</span>
+                <span className="text-sm text-port-text">Focus the map and press Enter to add a point at the center, or tap the map. ({formatCount(drawing.length)})</span>
                 <button type="button" className={buttonCls} onClick={finishPath}><Check size={14} aria-hidden="true" /> {drawing.length >= 2 ? 'Finish path' : 'Cancel'}</button>
               </>
             : <button type="button" className={buttonCls} disabled={world.paths.length >= WORLD_LIMITS.PATHS} onClick={() => { select(''); setDrawing([]); }}><Route size={14} aria-hidden="true" /> Draw a path</button>}
@@ -149,7 +158,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
       </fieldset>
       <WorldMap world={world} places={places} selected={selected} drawing={drawing} view={view} onView={setView} onSelect={readOnly ? () => {} : select}
         onMoveSet={(id, position) => !readOnly && patchSet(id, { position })}
-        onMovePoint={(id, index, point) => !readOnly && edit((t) => ({ ...t, paths: t.paths.map((entry) => (entry.id === id ? { ...entry, points: entry.points.map((p, i) => (i === index ? point : p)) } : entry)) }))}
+        onMovePoint={(id, index, point) => !readOnly && movePathPoint(id, index, point)}
         onAddPoint={onAddPoint} />
       {world.sets.length > 0 && (
         <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Sets on the map">
@@ -174,6 +183,12 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
             <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
               <span className="font-medium text-port-text">{places[set.ingredientId]?.ingredient?.name || 'Set'}</span>
               {places[set.ingredientId]?.ingredient && <Link className="text-xs underline" to={`${ingredientPath(places[set.ingredientId].ingredient)}/greybox`}>Open its greybox</Link>}
+              <label htmlFor="world-set-x" className="text-port-text-muted">Position X (m)</label>
+              <input id="world-set-x" type="number" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={set.position[0]} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
+                onChange={(event) => patchSet(set.id, { position: [clampCoord(event.target.value), set.position[1]] })} />
+              <label htmlFor="world-set-z" className="text-port-text-muted">Position Z (m)</label>
+              <input id="world-set-z" type="number" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={set.position[1]} className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
+                onChange={(event) => patchSet(set.id, { position: [set.position[0], clampCoord(event.target.value)] })} />
               <button type="button" className={`${iconCls} ml-auto`} aria-label="Turn left 15°" onClick={() => patchSet(set.id, { rotationDegrees: ((set.rotationDegrees + 15 + 360) % 360) })}><RotateCcw size={16} aria-hidden="true" /></button>
               <label htmlFor="world-set-turn" className="sr-only">Turn (degrees)</label>
               <input id="world-set-turn" type="number" min={0} max={359} value={Math.round(set.rotationDegrees)} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2 text-sm"
@@ -184,39 +199,56 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
           </div>
         )}
         {path && (
-          <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-port-border p-2 text-sm">
-            <label htmlFor="world-street-kind" className="text-port-text-muted">Path</label>
-            <select id="world-street-kind" className={selectCls} value={path.kind}
-              onChange={(event) => patchPath(path.id, { kind: event.target.value, width: WORLD_PATH_DEFAULT_WIDTH[event.target.value] })}>
-              {WORLD_PATH_KINDS.map((kind) => <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>)}
-            </select>
-            <label htmlFor="world-street-sides" className="text-port-text-muted">Lined with</label>
-            <select id="world-street-sides" className={selectCls} value={path.sides} onChange={(event) => patchPath(path.id, { sides: event.target.value })}>
-              {WORLD_PATH_SIDES.map((sides) => <option key={sides} value={sides}>{SIDE_LABELS[sides]}</option>)}
-            </select>
-            {path.kind === 'road' && (
-              <>
-                <label htmlFor="world-street-infra" className="text-port-text-muted">Infrastructure</label>
-                <select id="world-street-infra" className={selectCls} value={path.infrastructure || 'overhead'} onChange={(event) => patchPath(path.id, { infrastructure: event.target.value })}>
-                  {WORLD_ROAD_INFRASTRUCTURE.map((value) => <option key={value} value={value}>{INFRA_LABELS[value]}</option>)}
-                </select>
-                {['overhead', 'buried', 'rural'].includes(path.infrastructure || 'overhead') && (
-                  <>
-                    <label htmlFor="world-street-pole-side" className="text-port-text-muted">Pole side</label>
-                    <select id="world-street-pole-side" className={selectCls} value={path.poleSide || 'right'} onChange={(event) => patchPath(path.id, { poleSide: event.target.value })}>
-                      {WORLD_POLE_SIDES.map((value) => <option key={value} value={value}>{value === 'right' ? 'Right' : 'Left'}</option>)}
-                    </select>
-                    <label htmlFor="world-street-pole-spacing" className="text-port-text-muted">Spacing (m)</label>
-                    <input id="world-street-pole-spacing" type="number" min={WORLD_POLE_SPACING.min} max={WORLD_POLE_SPACING.max} step={1} placeholder="auto" value={path.poleSpacing ?? ''} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
-                      onChange={(event) => patchPath(path.id, { poleSpacing: event.target.value === '' ? undefined : Math.min(WORLD_POLE_SPACING.max, Math.max(WORLD_POLE_SPACING.min, Number(event.target.value) || WORLD_POLE_SPACING.min)) })} />
-                  </>
-                )}
-              </>
-            )}
-            <label htmlFor="world-street-width" className="text-port-text-muted">Width (m)</label>
-            <input id="world-street-width" type="number" min={1} max={WORLD_LIMITS.WIDTH_MAX} step={0.5} value={path.width} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
-              onChange={(event) => patchPath(path.id, { width: Math.min(WORLD_LIMITS.WIDTH_MAX, Math.max(1, Number(event.target.value) || 1)) })} />
-            <button type="button" className={`${iconCls} ml-auto`} aria-label="Remove this path" onClick={() => { edit((t) => ({ ...t, paths: t.paths.filter((entry) => entry.id !== path.id) })); select(''); }}><Trash2 size={16} aria-hidden="true" /></button>
+          <div className="min-w-0 space-y-2 rounded-lg border border-port-border p-2 text-sm">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <label htmlFor="world-street-kind" className="text-port-text-muted">Path</label>
+              <select id="world-street-kind" className={selectCls} value={path.kind}
+                onChange={(event) => patchPath(path.id, { kind: event.target.value, width: WORLD_PATH_DEFAULT_WIDTH[event.target.value] })}>
+                {WORLD_PATH_KINDS.map((kind) => <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>)}
+              </select>
+              <label htmlFor="world-street-sides" className="text-port-text-muted">Lined with</label>
+              <select id="world-street-sides" className={selectCls} value={path.sides} onChange={(event) => patchPath(path.id, { sides: event.target.value })}>
+                {WORLD_PATH_SIDES.map((sides) => <option key={sides} value={sides}>{SIDE_LABELS[sides]}</option>)}
+              </select>
+              {path.kind === 'road' && (
+                <>
+                  <label htmlFor="world-street-infra" className="text-port-text-muted">Infrastructure</label>
+                  <select id="world-street-infra" className={selectCls} value={path.infrastructure || 'overhead'} onChange={(event) => patchPath(path.id, { infrastructure: event.target.value })}>
+                    {WORLD_ROAD_INFRASTRUCTURE.map((value) => <option key={value} value={value}>{INFRA_LABELS[value]}</option>)}
+                  </select>
+                  {['overhead', 'buried', 'rural'].includes(path.infrastructure || 'overhead') && (
+                    <>
+                      <label htmlFor="world-street-pole-side" className="text-port-text-muted">Pole side</label>
+                      <select id="world-street-pole-side" className={selectCls} value={path.poleSide || 'right'} onChange={(event) => patchPath(path.id, { poleSide: event.target.value })}>
+                        {WORLD_POLE_SIDES.map((value) => <option key={value} value={value}>{value === 'right' ? 'Right' : 'Left'}</option>)}
+                      </select>
+                      <label htmlFor="world-street-pole-spacing" className="text-port-text-muted">Spacing (m)</label>
+                      <input id="world-street-pole-spacing" type="number" min={WORLD_POLE_SPACING.min} max={WORLD_POLE_SPACING.max} step={1} placeholder="auto" value={path.poleSpacing ?? ''} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
+                        onChange={(event) => patchPath(path.id, { poleSpacing: event.target.value === '' ? undefined : Math.min(WORLD_POLE_SPACING.max, Math.max(WORLD_POLE_SPACING.min, Number(event.target.value) || WORLD_POLE_SPACING.min)) })} />
+                    </>
+                  )}
+                </>
+              )}
+              <label htmlFor="world-street-width" className="text-port-text-muted">Width (m)</label>
+              <input id="world-street-width" type="number" min={1} max={WORLD_LIMITS.WIDTH_MAX} step={0.5} value={path.width} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
+                onChange={(event) => patchPath(path.id, { width: Math.min(WORLD_LIMITS.WIDTH_MAX, Math.max(1, Number(event.target.value) || 1)) })} />
+              <button type="button" className={`${iconCls} ml-auto`} aria-label="Remove this path" onClick={() => { edit((t) => ({ ...t, paths: t.paths.filter((entry) => entry.id !== path.id) })); select(''); }}><Trash2 size={16} aria-hidden="true" /></button>
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
+              {path.points.map((point, index) => (
+                <span key={index} className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-port-text-muted">Point {index + 1}</span>
+                  <label htmlFor={`world-path-point-${index}-x`} className="text-xs text-port-text-muted">X (m)</label>
+                  <input id={`world-path-point-${index}-x`} aria-label={`Point ${index + 1} X (m)`} type="number" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={point[0]}
+                    className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
+                    onChange={(event) => movePathPoint(path.id, index, [clampCoord(event.target.value), point[1]])} />
+                  <label htmlFor={`world-path-point-${index}-z`} className="text-xs text-port-text-muted">Z (m)</label>
+                  <input id={`world-path-point-${index}-z`} aria-label={`Point ${index + 1} Z (m)`} type="number" min={-WORLD_LIMITS.COORD} max={WORLD_LIMITS.COORD} step={1} value={point[1]}
+                    className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 text-sm"
+                    onChange={(event) => movePathPoint(path.id, index, [point[0], clampCoord(event.target.value)])} />
+                </span>
+              ))}
+            </div>
           </div>
         )}
         <span className="inline-flex min-w-0 items-center gap-2 text-sm">
