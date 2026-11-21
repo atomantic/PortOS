@@ -681,6 +681,23 @@ export const findOrCreateExternalCollection = () => findOrCreateFixedCollection(
   description: 'Images and videos downloaded from outside sources (Video Downloader, Mood Board imports).',
 });
 
+// A mood board's own collection: every image generated for the board, named
+// exactly like the board. Deterministic id so peers converge on one bucket.
+export const moodBoardCollectionId = (boardId) => `mbc-${String(boardId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+const moodBoardCollectionName = (boardName) =>
+  (typeof boardName === 'string' && boardName.trim() ? boardName.trim() : 'Untitled mood board').slice(0, NAME_MAX_LENGTH);
+
+/** Find or create the board's collection, re-syncing its name to the board's current name. */
+export async function findOrCreateMoodBoardCollection({ boardId, boardName }) {
+  if (!boardId || typeof boardId !== 'string') throw codedError('boardId is required', ERR_VALIDATION);
+  const name = moodBoardCollectionName(boardName);
+  const collection = await findOrCreateFixedCollection(moodBoardCollectionId(boardId), {
+    name,
+    description: 'Every image generated for this mood board.',
+  });
+  return collection.name === name ? collection : updateCollection(collection.id, { name });
+}
+
 // Find a collection by its deterministic id, or create it. A tombstone at the
 // id is overwritten (re-creating a deleted auto bucket on next use).
 async function findOrCreateFixedCollection(id, { name, description }) {

@@ -63,3 +63,13 @@ describe('External media collection', () => {
     await expect(fileExternalMedia([{ kind: 'bogus', ref: 'a' }])).resolves.toBeNull();
   });
 });
+
+describe('mood board collection', () => {
+  it('is named like the board and follows a rename', async () => {
+    const { findOrCreateMoodBoardCollection } = await import('./mediaCollections.js');
+    const first = await findOrCreateMoodBoardCollection({ boardId: 'mb-1', boardName: 'Neon Study' });
+    expect(first).toMatchObject({ id: 'mbc-mb-1', name: 'Neon Study' });
+    const renamed = await findOrCreateMoodBoardCollection({ boardId: 'mb-1', boardName: 'Neon Study II' });
+    expect(renamed).toMatchObject({ id: 'mbc-mb-1', name: 'Neon Study II' });
+  });
+});

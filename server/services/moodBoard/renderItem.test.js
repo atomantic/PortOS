@@ -8,6 +8,11 @@ const store = {
 };
 vi.mock('./db.js', () => store);
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
+const collections = {
+  findOrCreateMoodBoardCollection: vi.fn(async ({ boardId }) => ({ id: `mbc-${boardId}` })),
+  bulkUpdateCollectionItems: vi.fn(async () => ({ added: 1 })),
+};
+vi.mock('../mediaCollections.js', () => collections);
 
 const { renderBoardItem, __setDepsForTests } = await import('./renderItem.js');
 const { mediaJobEvents } = await import('../mediaJobQueue/index.js');
@@ -16,6 +21,7 @@ const hook = await import('../moodBoardItemRenderHook.js');
 const note = { id: 'n1', type: 'text', text: 'Palette: violet and cyan' };
 const board = {
   id: 'mb-1',
+  name: 'Neon Study',
   items: [note],
   style: { prompt: 'neon chiaroscuro', negativePrompt: 'text, logos' },
 };
@@ -106,6 +112,9 @@ describe('moodBoardItemRenderHook', () => {
     await waitFor(() => store.applyBoardItemRender.mock.calls.length > 0);
     expect(store.applyBoardItemRender).toHaveBeenCalledTimes(1);
     expect(store.applyBoardItemRender).toHaveBeenCalledWith('mb-1', 'n1', { jobId: 'job-1', filename: 'job-1.png', prompt: 'the prompt' });
+    await waitFor(() => collections.bulkUpdateCollectionItems.mock.calls.length > 0);
+    expect(collections.findOrCreateMoodBoardCollection).toHaveBeenCalledWith({ boardId: 'mb-1', boardName: board.name });
+    expect(collections.bulkUpdateCollectionItems).toHaveBeenCalledWith('mbc-mb-1', { add: [{ kind: 'image', ref: 'job-1.png' }] });
   });
 
   it('returns the note to text with the reason when the job fails or is canceled', async () => {
