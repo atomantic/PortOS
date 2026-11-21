@@ -776,7 +776,7 @@ async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAUL
   const outputPath = join(PATHS.music, filename);
   const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, revision: model.revision, prompt: text, lyrics, durationSec: resolvedDuration, outputPath });
 
-  console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s: "${text.slice(0, 60)}"`);
+  console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s`);
   // The default backends use ungated HF weights (facebook/* and cvssp/*), so a
   // token isn't required — but pass it through when the user has one set so the
   // first download doesn't hit anonymous HF rate limits.
