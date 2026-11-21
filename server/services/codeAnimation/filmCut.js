@@ -57,8 +57,8 @@ async function publishFilm(owner, output, plan, song, signal) {
         committed = true;
         return { acceptedOutput: accepted };
       });
+      await fileCompositionVideos([videoId]);
     });
-    await fileCompositionVideos([videoId]);
     emitCodeAnimationChanged(owner.id);
   } finally {
     if (!committed) {
