@@ -10,7 +10,7 @@ import { CATALOG_REDESIGN_FIELDS } from '../../lib/catalog/catalogRedesign.js';
 import { normalizeLibrary } from '../../lib/catalog/catalogMediaLibrary.js';
 import { createIngredient, getIngredient, getIngredientIdentityIds } from '../catalogDB/ingredients.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, getCatalogIdentityAccess } from '../catalogDB/identityAccess.js';
-import { linkIngredientToRef, unlinkIngredientFromRef } from '../catalogDB/refs.js';
+import { linkIngredientRelation, linkIngredientToRef, unlinkIngredientFromRef } from '../catalogDB/refs.js';
 import { describeCatalogRefs } from './catalogRefResolver.js';
 import { catalogEvents } from './catalogEvents.js';
 
@@ -114,15 +114,14 @@ export function canonEntryFor(ingredient) {
     ingredientId: ingredient.id, name: ingredient.name, updatedAt: ingredient.updatedAt };
 }
 
-// Creation, ownership and canon membership share one DB transaction inside the
-// universe write queue. A full bucket or failed link therefore cannot leave a
-// record behind after the caller receives an error.
-export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
+// Creation, ownership, initial relations and canon membership share one DB
+// transaction. For canon types it runs inside the universe write queue.
+export async function createOwnedPrimitive(rawInput, universeId, operationKey, relations = []) {
   const input = withUserCreatedLock(rawInput);
   const field = CANON_FIELD[input.type];
   if (!field) {
     const result = await withTransaction(async (client) => {
-      const created = await createOwnedRecord(input, rawInput, universeId, operationKey, client);
+      const created = await createOwnedRecord(input, rawInput, universeId, operationKey, relations, client);
       if (!created.replayed) await linkIngredientToRef(created.ingredient.id, 'universe', universeId, 'reference', { client });
       return created;
     });
@@ -133,7 +132,7 @@ export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
   let saved;
   let skipLink = false;
   await updateUniverse(universeId, async (current, { client }) => {
-    const { ingredient: receiptIngredient, replayed } = await createOwnedRecord(input, rawInput, universeId, operationKey, client);
+    const { ingredient: receiptIngredient, replayed } = await createOwnedRecord(input, rawInput, universeId, operationKey, relations, client);
     const ingredient = await getIngredient(receiptIngredient.id, { client });
     if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
     saved = ingredient;
@@ -169,12 +168,13 @@ export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
   return refreshed || saved;
 }
 
-async function createOwnedRecord(input, rawInput, universeId, operationKey, client) {
+async function createOwnedRecord(input, rawInput, universeId, operationKey, relations, client) {
   // The fingerprint describes the caller's request, before applying defaults.
   // Existing receipts were recorded from that same input before the explicit
-  // unlocked default was introduced.
+  // unlocked default was introduced. Omit empty relations to preserve old keys.
   const fingerprint = createHash('sha256').update(canonicalStringify({ action: 'create-primitive', universeId,
-    type: rawInput.type, name: rawInput.name, payload: rawInput.payload, tags: rawInput.tags })).digest('hex');
+    type: rawInput.type, name: rawInput.name, payload: rawInput.payload, tags: rawInput.tags,
+    ...(relations.length ? { relations } : {}) })).digest('hex');
   if (operationKey) {
     const claim = await client.query(`INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
       VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`, [operationKey, fingerprint]);
@@ -187,6 +187,7 @@ async function createOwnedRecord(input, rawInput, universeId, operationKey, clie
   await requireUniverse(client, universeId);
   const ingredient = await createIngredient(input, { client });
   await linkIngredientToRef(ingredient.id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
+  for (const { toId, kind } of relations) await linkIngredientRelation(ingredient.id, toId, kind, { client });
   if (operationKey) await client.query('UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1', [operationKey, toPgJson([ingredient])]);
   return { ingredient, replayed: false };
 }

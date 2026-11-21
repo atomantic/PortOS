@@ -12,6 +12,7 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { createHash, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-owned-primitive-' });
@@ -114,6 +115,69 @@ const liveUniverseRefs = async (id) => (await catalogDB.listRefsForIngredient(id
   .filter((ref) => ref.refKind === 'universe' && !ref.deleted)
   .map((ref) => ref.role)
   .sort();
+
+describe.skipIf(!runDb)('POST /api/catalog/ingredients with initial relations', () => {
+  it.each([
+    { scope: 'standalone', type: 'character' },
+    { scope: 'universe canon', type: 'character' },
+    { scope: 'universe reference', type: 'idea' },
+  ])('rolls back a $scope create when the second relation insert fails', async ({ scope, type }) => {
+    const universe = scope === 'standalone' ? null : await makeUniverse();
+    const operationKey = universe ? randomUUID() : undefined;
+    if (operationKey) receiptKeys.add(operationKey);
+    const targets = await Promise.all(['First', 'Second'].map(name =>
+      catalogDB.createIngredient({ type, name: `${name} relation target` })));
+    for (const target of targets) ingredientIds.add(target.id);
+    const relations = targets.map(({ id }) => ({ toId: id, kind: 'references' }));
+    const body = { type, name: `Relation rollback ${randomUUID()}`, universeId: universe?.id, operationKey, relations };
+    const send = (input) => request(app).post('/api/catalog/ingredients').send(input);
+
+    const original = pg.Client.prototype.query;
+    const attemptedTargets = [];
+    let createdId;
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (sql, ...args) {
+      if (typeof sql === 'string' && /^INSERT INTO catalog_ingredient_relations/i.test(sql.trim())) {
+        const [fromId, toId] = args[0];
+        if (targets.some(target => target.id === toId)) {
+          createdId = fromId;
+          ingredientIds.add(fromId);
+          attemptedTargets.push(toId);
+          if (toId === targets[1].id) return original.call(this, 'SELECT 1 / 0', ...args.slice(1));
+        }
+      }
+      return original.call(this, sql, ...args);
+    });
+    const failed = await Promise.resolve(send(body)).finally(() => spy.mockRestore());
+
+    expect(failed.status).toBe(500);
+    expect(attemptedTargets).toEqual(targets.map(({ id }) => id));
+    expect((await query(`SELECT
+      EXISTS (SELECT 1 FROM catalog_ingredients WHERE id = $1) AS ingredient,
+      EXISTS (SELECT 1 FROM catalog_ingredient_refs WHERE ingredient_id = $1) AS ref,
+      EXISTS (SELECT 1 FROM catalog_ingredient_relations WHERE from_id = $1) AS relation,
+      EXISTS (SELECT 1 FROM catalog_commit_receipts WHERE operation_key = $2) AS receipt`,
+    [createdId, operationKey ?? null])).rows).toEqual([{ ingredient: false, ref: false, relation: false, receipt: false }]);
+    if (universe && type === 'character') expect((await getUniverse(universe.id)).characters).toEqual([]);
+
+    const corrected = { ...body, relations: relations.slice(0, 1) };
+    const retry = await send(corrected);
+    expect(retry.status).toBe(201);
+    ingredientIds.add(retry.body.id);
+    expect((await catalogDB.listRelationsForIngredient(retry.body.id)).outbound)
+      .toEqual([expect.objectContaining(relations[0])]);
+
+    if (operationKey) {
+      const conflict = await send(body);
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.code).toBe('CATALOG_CREATE_REPLAY_CONFLICT');
+      await catalogDB.unlinkIngredientRelation(retry.body.id, relations[0].toId, relations[0].kind);
+      const replay = await send(corrected);
+      expect(replay.status).toBe(201);
+      expect(replay.body.id).toBe(retry.body.id);
+      expect((await catalogDB.listRelationsForIngredient(retry.body.id)).outbound).toEqual([]);
+    }
+  });
+});
 
 describe.skipIf(!runDb)('POST /api/catalog/ingredients inside a universe', () => {
   it('creates an unlocked character that joins the universe cast and previews its sheet', async () => {

@@ -386,7 +386,7 @@ router.post('/ingredient-merges/:id/recover', asyncHandler(async (req, res) => {
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
   const { relations = [], ...body } = validateRequest(catalogIngredientCreateRouteSchema, req.body);
-  // Check every relative first so a bad pick never leaves a half-linked record.
+  // Preserve the missing-relative response before embedding or writing.
   const relatives = await Promise.all(relations.map((r) => catalogDB.getIngredient(r.toId)));
   if (relatives.some((r) => !r || r.deleted)) throw new ServerError('A related record no longer exists', { status: 404, code: 'NOT_FOUND' });
   const input = {
@@ -396,8 +396,18 @@ router.post('/ingredients', asyncHandler(async (req, res) => {
     tags: body.tags || [],
     ...(await embedIngredient(body)),
   };
-  const ing = body.universeId ? await createOwnedPrimitive(input, body.universeId, body.operationKey) : await catalogDB.createIngredient(withUserCreatedLock(input));
-  for (const relation of relations) await catalogDB.linkIngredientRelation(ing.id, relation.toId, relation.kind);
+  let ing;
+  if (body.universeId) {
+    ing = await createOwnedPrimitive(input, body.universeId, body.operationKey, relations);
+  } else if (relations.length) {
+    ing = await withTransaction(async (client) => {
+      const ingredient = await catalogDB.createIngredient(withUserCreatedLock(input), { client });
+      for (const { toId, kind } of relations) await catalogDB.linkIngredientRelation(ingredient.id, toId, kind, { client });
+      return ingredient;
+    });
+  } else {
+    ing = await catalogDB.createIngredient(withUserCreatedLock(input));
+  }
   res.status(201).json(ing);
   catalogEvents.emit('primitive-changed', { ingredientId: ing.id });
 }));
