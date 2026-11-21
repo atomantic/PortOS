@@ -231,3 +231,17 @@ describe('Authors headshot generation', () => {
     expect(toastError).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Authors failed list read', () => {
+  it('shows a Retry instead of the empty copy, and recovers on Retry', async () => {
+    listAuthors.mockReset()
+      .mockRejectedValueOnce(new Error('503 down'))
+      .mockResolvedValue([{ id: 'a1', name: 'Example Author' }]);
+    renderAuthors();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load authors');
+    expect(screen.queryByText(/No authors yet/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Author')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

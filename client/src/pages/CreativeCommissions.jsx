@@ -19,6 +19,8 @@ import { useNavigate, useLocation } from 'react-router';
 import { CalendarClock, Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, Zap } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
@@ -39,11 +41,13 @@ import {
   runCommissionNow,
 } from '../services/apiCreativeCommission.js';
 
+const fetchCommissions = () => listCommissions({ silent: true });
+
 export default function CreativeCommissions() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [commissions, setCommissions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: commissions, setItems: setCommissions, state, error, retry } = useListResource(fetchCommissions);
+  const loading = state === 'loading';
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
   const [runningIds, setRunningIds] = useState(() => new Set()); // per-card "Run Now" in flight
@@ -52,15 +56,6 @@ export default function CreativeCommissions() {
   // The create drawer is driven by the /creative-commission/new route (a static
   // segment, not an :id param — the :id route now renders the detail page).
   const creating = location.pathname.replace(/\/+$/, '').endsWith('/creative-commission/new');
-
-  useEffect(() => {
-    let cancelled = false;
-    listCommissions({ silent: true })
-      .then((data) => { if (!cancelled) setCommissions(Array.isArray(data) ? data : []); })
-      .catch(() => { if (!cancelled) toast.error('Failed to load commissions'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
 
   // Reset the form to blank each time the create drawer opens.
   useEffect(() => { if (creating) setForm(blankForm()); }, [creating]);
@@ -150,6 +145,8 @@ export default function CreativeCommissions() {
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {loading ? (
           <PageSkeleton header="none" label="Loading commissions" cards={3} sidebar={false} />
+        ) : state === 'error' ? (
+          <ListLoadError what="commissions" error={error} onRetry={retry} />
         ) : sorted.length === 0 ? (
           <EmptyState
             icon={Sparkles}

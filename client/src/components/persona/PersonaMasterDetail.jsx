@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { ImageIcon, Loader2, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import Field from '../ui/FormField';
+import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
+import useListResource from '../../hooks/useListResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { countWords } from '../../lib/textUtils';
@@ -24,8 +26,8 @@ export default function PersonaMasterDetail({
     [fields, sections, portrait.imageKey],
   );
   const emptyForm = useMemo(() => Object.fromEntries(formKeys.map((key) => [key, ''])), [formKeys]);
-  const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const fetchRecords = useCallback(() => listRecords({ silent: true }), [listRecords]);
+  const { items: records, setItems: setRecords, state: listState, error: listError, retry: retryList } = useListResource(fetchRecords);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -41,11 +43,12 @@ export default function PersonaMasterDetail({
   const generation = useMediaJobProgress(generationJobId);
   const isGenerating = startingGeneration || !!generationJobId;
   const isCreate = selectedId === 'new';
+  const loading = listState === 'loading';
   const selected = useMemo(
     () => (isCreate || !selectedId ? null : records.find((record) => record.id === selectedId) || null),
     [records, selectedId, isCreate],
   );
-  const notFound = !isCreate && !!selectedId && !loading && !selected;
+  const notFound = !isCreate && !!selectedId && listState === 'ready' && !selected;
   const canGenerate = !!(form[portrait.descriptionKey]?.trim() || form[portrait.styleKey]?.trim());
 
   const setImage = (url) => setForm((current) => ({ ...current, [portrait.imageKey]: url }));
@@ -54,15 +57,6 @@ export default function PersonaMasterDetail({
     setGenerationJobId(null);
     setStartingGeneration(false);
   };
-
-  useEffect(() => {
-    let active = true;
-    listRecords({ silent: true })
-      .then((list) => { if (active) setRecords(Array.isArray(list) ? list : []); })
-      .catch((err) => { if (active) toast.error(err.message || `Failed to load ${plural.toLowerCase()}`); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [listRecords, plural]);
 
   useEffect(() => {
     if (!generationJobId) return;
@@ -80,7 +74,8 @@ export default function PersonaMasterDetail({
   }, [generationJobId, generation.status, generation.filename, generation.path, generation.error, portrait]);
 
   useEffect(() => {
-    if (loading || hydratedRef.current === selectedId) return;
+    // A failed read must not latch the selection as hydrated, or a Retry's records never fill the form.
+    if (listState !== 'ready' || hydratedRef.current === selectedId) return;
     hydratedRef.current = selectedId;
     cancelDelete();
     clearGeneration();
@@ -90,7 +85,7 @@ export default function PersonaMasterDetail({
     else if (selected && !preserveCreatedForm) {
       setForm(Object.fromEntries(formKeys.map((key) => [key, selected[key] || ''])));
     }
-  }, [selectedId, isCreate, selected, loading, emptyForm, formKeys]);
+  }, [selectedId, isCreate, selected, listState, emptyForm, formKeys]);
 
   const dirty = isCreate || (!!selected && formKeys.some((key) => (selected[key] || '') !== form[key]));
   const setField = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -209,6 +204,8 @@ export default function PersonaMasterDetail({
         <div className="bg-port-card border border-port-border rounded-lg p-2">
           {loading ? (
             <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
+          ) : listState === 'error' ? (
+            <ListLoadError what={plural.toLowerCase()} error={listError} onRetry={retryList} />
           ) : records.length === 0 ? (
             <div className="text-gray-500 text-sm p-2">
               No {plural.toLowerCase()} yet.{' '}

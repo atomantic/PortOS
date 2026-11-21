@@ -15,6 +15,7 @@ import EmptyState from '../components/EmptyState';
 import PageHeader from '../components/PageHeader';
 import { localDateStr } from '../components/meatspace/constants';
 import toast from '../components/ui/Toast';
+import ListLoadError from '../components/ui/ListLoadError';
 import TabPills from '../components/ui/TabPills';
 import CareQueue from '../components/tribe/CareQueue';
 import CirclePanel from '../components/tribe/CirclePanel';
@@ -88,6 +89,10 @@ export default function Tribe() {
   };
 
   const [loading, setLoading] = useState(true);
+  // A failed first read renders a Retry, never the empty roster; once a roster has loaded, a failed
+  // `tribe:changed` refresh leaves it untouched.
+  const [loadError, setLoadError] = useState(null);
+  const rosterLoadedRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [duplicates, setDuplicates] = useState(null);
@@ -121,11 +126,17 @@ export default function Tribe() {
   };
 
   const loadContacts = async (isCancelled = () => false) => {
+    let failure = null;
     const result = await getTribePeople({ silent: true }).catch((err) => {
-      if (!isCancelled()) toast.error(err.message || 'Failed to load Tribe');
+      failure = err instanceof Error ? err : new Error('Failed to load Tribe');
       return null;
     });
     if (isCancelled()) return;
+    if (failure) {
+      if (rosterLoadedRef.current) toast.error(failure.message || 'Failed to refresh Tribe');
+      else { setLoadError(failure); setLoading(false); }
+      return;
+    }
     let people = result?.people || [];
     const legacy = parseStoredContacts(safeReadStorage(STORAGE_KEY));
     if (result !== null && people.length === 0 && legacy.length > 0) {
@@ -146,9 +157,13 @@ export default function Tribe() {
       }
     }
     if (isCancelled()) return;
+    rosterLoadedRef.current = true;
+    setLoadError(null);
     setContacts(people);
     setLoading(false);
   };
+
+  const retryLoad = () => { setLoading(true); loadContacts(); };
 
   useEffect(() => {
     let cancelled = false;
@@ -287,6 +302,8 @@ export default function Tribe() {
         <div className="mx-auto grid max-w-7xl gap-4">
           {loading ? (
             <div className="flex min-h-[220px] items-center justify-center"><BrailleSpinner text="Loading Tribe" /></div>
+          ) : loadError ? (
+            <ListLoadError what="Tribe" error={loadError} onRetry={retryLoad} />
           ) : (
             <>
               <TribeStatsBar

@@ -5,6 +5,7 @@ import {
   CalendarDays, Music, Play, MessageSquare, Activity, MapPin, Globe, Download,
 } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import PageHeader from '../components/PageHeader';
 import TimelineImportPanels, { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 import { getTimelineDay } from '../services/apiTimeline.js';
@@ -115,6 +116,8 @@ export default function Timeline() {
 
   const [day, setDay] = useState(null);
   const [loading, setLoading] = useState(true);
+  // A failed day read is not an empty day: it renders a Retry, never the empty-day copy.
+  const [loadError, setLoadError] = useState(null);
   // Bumped after a bulk import lands so the current day view re-fetches.
   const [reloadKey, setReloadKey] = useState(0);
   // The bulk-backfill importers are one-time setup affordances, so they stay
@@ -146,9 +149,10 @@ export default function Timeline() {
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setLoadError(null);
     getTimelineDay(urlDate ? { date: urlDate, silent: true } : { silent: true })
       .then((result) => { if (active) setDay(result); })
-      .catch((err) => { if (active) { setDay(null); toast.error(`Failed to load timeline: ${err.message}`); } })
+      .catch((err) => { if (active) { setDay(null); setLoadError(err instanceof Error ? err : new Error('Request failed')); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [urlDate, reloadKey]);
@@ -253,6 +257,12 @@ export default function Timeline() {
 
       {loading && !day ? (
         <PageSkeleton header="none" label="Loading timeline" cards={4} sidebar={false} />
+      ) : loadError ? (
+        <LoadFailedState
+          title="Could not load the timeline"
+          hint={loadError.message}
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : events.length === 0 ? (
         <div className="rounded border border-dashed border-port-border py-12 text-center text-gray-500">
           No recorded activity on this day.
