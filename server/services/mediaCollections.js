@@ -318,7 +318,11 @@ const announceNewCollection = (id) => {
 // that doesn't pass it — a person clicking "New collection". Machine flows
 // (Creative Director, Writers Room) pass `source: 'auto'` explicitly. The route
 // schema doesn't accept `source`, so a client can't claim either stamp.
-export async function createCollection({ name, description = '', source = 'user' }) {
+export function createCollection(input) {
+  return persistNewCollection(input, []);
+}
+
+async function persistNewCollection({ name, description = '', source = 'user' }, items) {
   // Service-layer guards mirror sanitizeCollection so a direct caller
   // (tests, future internal usage) can't persist a record that the next
   // listCollections() read would silently drop.
@@ -341,7 +345,7 @@ export async function createCollection({ name, description = '', source = 'user'
       description: trimmedDescription,
       coverKey: null,
       source,
-      items: [],
+      items,
       createdAt: now,
       updatedAt: now,
     };
@@ -350,6 +354,27 @@ export async function createCollection({ name, description = '', source = 'user'
   });
   announceNewCollection(created.id);
   return created;
+}
+
+export async function joinCollections({ name, collectionIds }) {
+  const ids = new Set(collectionIds);
+  if (ids.size < 2) throw codedError('Select at least two collections to join', ERR_VALIDATION);
+
+  // Read each source before writing the destination so a stale selection or
+  // oversized union leaves no empty or partially populated collection behind.
+  const itemsByKey = new Map();
+  for (const id of ids) {
+    const collection = await getCollection(id);
+    for (const item of collection.items) {
+      const key = itemKey(item);
+      const existing = itemsByKey.get(key);
+      if (!existing || compareEarlierWins(item.addedAt, existing.addedAt) < 0) itemsByKey.set(key, item);
+    }
+    if (itemsByKey.size > ITEMS_MAX) {
+      throw codedError(`Joined collection exceeds the limit of ${ITEMS_MAX} items`, ERR_VALIDATION);
+    }
+  }
+  return persistNewCollection({ name }, [...itemsByKey.values()]);
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create

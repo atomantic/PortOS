@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film, Search, AlertTriangle } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
+import CollapsibleListItem from '../components/ui/CollapsibleListItem';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
   listMediaCollections,
   autoOrganizeMediaCollections,
   createMediaCollection,
+  joinMediaCollections,
   deleteMediaCollection,
   listGalleryCollectionSummaries,
 } from '../services/apiImageVideo.js';
@@ -23,6 +26,7 @@ import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import useUrlParams from '../hooks/useUrlParams';
 import useCancelableDebounce from '../hooks/useCancelableDebounce';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 
 // Cap for the card title AFTER the auto-creator prefix moves to its badge.
 // Middle-truncating at this length keeps the trailing date/qualifier — the only
@@ -47,7 +51,18 @@ export default function MediaCollections() {
   const [creating, setCreating] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [name, setName] = useState('');
+  const [selectedIds, setSelectedIds] = useState(null);
+  const [joinedName, setJoinedName] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [removedId, setRemovedId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
   const [summaries, setSummaries] = useState([]);
+  // null is the ordinary browsing mode. Selection survives changes to the
+  // search and sort, but only collections still present in the list can join.
+  const selecting = selectedIds !== null;
+  const selected = selecting ? collections?.filter((c) => selectedIds.has(c.id)) ?? [] : [];
+  const deleting = deletingId !== null || removedId !== null;
 
   // Sync integrity — no peers prop (the page doesn't fetch peers itself),
   // so the hook fetches instances internally.
@@ -114,6 +129,7 @@ export default function MediaCollections() {
   };
 
   const handleOrganize = async () => {
+    cancelDelete();
     setOrganizing(true);
     try {
       const { added, updatedCollections, missingAssets, failedCollections } = await autoOrganizeMediaCollections({ silent: true });
@@ -132,18 +148,60 @@ export default function MediaCollections() {
   };
 
   const handleDelete = async (collection) => {
-    setCollections((prev) => (prev ? prev.filter((c) => c.id !== collection.id) : prev));
+    setDeletingId(collection.id);
     const deleted = await deleteMediaCollection(collection.id, { silent: true }).then(() => true).catch((err) => {
       toast.error(err.message || 'Delete failed');
-      refresh();
       return false;
     });
-    if (!deleted) return;
+    if (!deleted) {
+      setDeletingId(null);
+      refresh();
+      return;
+    }
+    setRemovedId(collection.id);
+    cancelDelete();
     // Removing the last membership makes its media Unsorted. Counts and covers
     // are server-owned now, so update that projection after the delete commits.
     const nextSummaries = await listGalleryCollectionSummaries({ silent: true }).catch(() => null);
     if (nextSummaries) setSummaries(nextSummaries);
-    else setCollectionsError('Could not load collection covers and counts.');
+    else toast.error('Collection deleted. Could not refresh covers and counts.');
+    setDeletingId(null);
+  };
+
+  const finishDelete = useCallback((id) => {
+    setCollections((prev) => prev?.filter((c) => c.id !== id) ?? prev);
+    setRemovedId(null);
+  }, []);
+
+  const toggleSelection = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleJoin = async (e) => {
+    e.preventDefault();
+    if (joining || selected.length < 2 || !joinedName.trim()) return;
+    setJoining(true);
+    try {
+      const joined = await joinMediaCollections({
+        name: joinedName.trim(),
+        collectionIds: selected.map((c) => c.id),
+      }, { silent: true });
+      setCollections((prev) => prev ? [...prev, joined] : prev);
+      setSelectedIds(null);
+      setJoinedName('');
+      toast.success(`Created "${joined.name}"`);
+      cancelQueryMirror();
+      navigate(`/media/collections/${encodeURIComponent(joined.id)}`);
+    } catch (err) {
+      toast.error(err.message || 'Could not join collections.');
+    } finally {
+      setJoining(false);
+    }
   };
 
   const unsorted = useMemo(() => ({ ...buildUnsortedCollection([], [], []),
@@ -225,6 +283,11 @@ export default function MediaCollections() {
     [matching, hideEmpty],
   );
   const hiddenEmptyCount = matching.length - visible.length;
+  const removingCardVisible = !loading && visible.some((c) => c.id === removedId);
+  useEffect(() => {
+    // A filter change can unmount the card before its exit callback.
+    if (removedId && !removingCardVisible) finishDelete(removedId);
+  }, [removedId, removingCardVisible, finishDelete]);
 
   return (
     <div className="space-y-4">
@@ -242,7 +305,7 @@ export default function MediaCollections() {
           />
           <button
             type="submit"
-            disabled={creating || !name.trim()}
+            disabled={creating || joining || !name.trim()}
             className="px-3 py-2 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded-lg text-sm flex items-center gap-1.5 disabled:opacity-40"
           >
             <Plus className="w-4 h-4" /> Create
@@ -250,14 +313,66 @@ export default function MediaCollections() {
         </form>
         <button
           type="button"
-          disabled={organizing}
+          disabled={organizing || joining || deleting}
           onClick={handleOrganize}
           title="File existing project media using saved project records and render history"
           className="px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-border text-sm disabled:opacity-40"
         >
           {organizing ? 'Organizing…' : 'Auto-organize'}
         </button>
+        {collections?.length >= 2 && !selecting && (
+          <button
+            type="button"
+            onClick={() => {
+              cancelDelete();
+              setSelectedIds(new Set());
+            }}
+            disabled={deleting}
+            className="px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-border text-sm disabled:opacity-40"
+          >
+            Select collections
+          </button>
+        )}
       </div>
+
+      {selecting && (
+        <form onSubmit={handleJoin} className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
+          <p className="text-sm text-gray-400">
+            <span role="status">{formatCount(selected.length)} selected.</span>{' '}
+            Join at least two collections into a new one. The original collections are kept.
+          </p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <label htmlFor="joined-collection-name" className="sr-only">Joined collection name</label>
+            <input
+              id="joined-collection-name"
+              value={joinedName}
+              onChange={(e) => setJoinedName(e.target.value)}
+              maxLength={80}
+              disabled={joining}
+              placeholder="Joined collection name"
+              className="min-w-0 flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm focus:border-port-accent"
+            />
+            <button
+              type="submit"
+              disabled={joining || creating || organizing || loading || selected.length < 2 || !joinedName.trim()}
+              className="px-3 py-2 rounded-lg bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-sm disabled:opacity-40"
+            >
+              {joining ? 'Joining…' : 'Join collections'}
+            </button>
+            <button
+              type="button"
+              disabled={joining}
+              onClick={() => {
+                setSelectedIds(null);
+                setJoinedName('');
+              }}
+              className="px-3 py-2 rounded-lg border border-port-border hover:bg-port-border text-sm disabled:opacity-40"
+            >
+              Cancel selection
+            </button>
+          </div>
+        </form>
+      )}
 
       {/* Filter row. Stacks under `sm` so the search box keeps a usable width
           on a phone instead of sharing one line with the sort + toggle. */}
@@ -307,7 +422,7 @@ export default function MediaCollections() {
             <button
               type="button"
               onClick={refresh}
-              disabled={loading}
+              disabled={loading || joining || deleting}
               className="px-2.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error rounded text-xs disabled:opacity-40"
             >
               Retry
@@ -367,60 +482,84 @@ export default function MediaCollections() {
           {visible.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {visible.map((c) => (
-                <div
-                  key={c.id}
-                  className={`bg-port-card border rounded-xl overflow-hidden flex flex-col ${c.synthetic ? 'border-port-accent/40' : 'border-port-border'}`}
-                >
-                  <Link
-                    to={`/media/collections/${encodeURIComponent(c.id)}`}
-                    className="block aspect-square bg-port-bg relative"
-                  >
-                    {c.cover ? (
-                      // A cover can point at a pruned video thumbnail or an unpulled
-                      // peer asset; MediaImage degrades to the syncing tile instead
-                      // of the browser's broken-image icon.
-                      <MediaImage src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-gray-600">
-                        {c.synthetic ? <Inbox className="w-12 h-12" /> : <FolderOpen className="w-12 h-12" />}
-                      </div>
-                    )}
-                  </Link>
-                  <div className="p-2 space-y-1.5 flex-1 flex flex-col">
-                    {c.badge && (
-                      <span className="inline-block self-start text-[9px] uppercase tracking-wide text-gray-400 bg-port-bg border border-port-border rounded px-1.5 py-0.5">
-                        {c.badge}
-                      </span>
-                    )}
-                    <Link to={`/media/collections/${encodeURIComponent(c.id)}`} className="text-sm text-white hover:text-port-accent break-words" title={c.name}>
-                      {c.displayTitle}
+                <CollapsibleListItem key={c.id} removing={removedId === c.id} onExited={() => finishDelete(c.id)} spacing="0">
+                  <div className={`bg-port-card border rounded-xl overflow-hidden flex flex-col ${c.synthetic ? 'border-port-accent/40' : 'border-port-border'}`}>
+                    <Link
+                      to={`/media/collections/${encodeURIComponent(c.id)}`}
+                      className="block aspect-square bg-port-bg relative"
+                    >
+                      {c.cover ? (
+                        // A cover can point at a pruned video thumbnail or an unpulled
+                        // peer asset; MediaImage degrades to the syncing tile instead
+                        // of the browser's broken-image icon.
+                        <MediaImage src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-600">
+                          {c.synthetic ? <Inbox className="w-12 h-12" /> : <FolderOpen className="w-12 h-12" />}
+                        </div>
+                      )}
                     </Link>
-                    <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                      {c.counts.image > 0 && <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3" />{c.counts.image}</span>}
-                      {c.counts.video > 0 && <span className="flex items-center gap-1"><Film className="w-3 h-3" />{c.counts.video}</span>}
-                      {c.counts.image === 0 && c.counts.video === 0 && <span>Empty</span>}
-                    </div>
-                    <div className="flex-1" />
-                    <div className="flex items-center justify-between gap-1">
-                      {!c.synthetic && (
-                        <SyncBadge
-                          status={syncBadgeStatus(sync, c.id)}
-                          onClick={() => navigate(`/media/collections/${encodeURIComponent(c.id)}/sync`)}
-                        />
+                    <div className="p-2 space-y-1.5 flex-1 flex flex-col">
+                      {c.badge && (
+                        <span className="inline-block self-start text-[9px] uppercase tracking-wide text-gray-400 bg-port-bg border border-port-border rounded px-1.5 py-0.5">
+                          {c.badge}
+                        </span>
                       )}
-                      {!c.synthetic && (
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(c)}
-                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
-                          title="Delete collection" aria-label="Delete collection"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
+                      <Link to={`/media/collections/${encodeURIComponent(c.id)}`} className="text-sm text-white hover:text-port-accent break-words" title={c.name}>
+                        {c.displayTitle}
+                      </Link>
+                      <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                        {c.counts.image > 0 && <span className="flex items-center gap-1"><ImageIcon className="w-3 h-3" />{c.counts.image}</span>}
+                        {c.counts.video > 0 && <span className="flex items-center gap-1"><Film className="w-3 h-3" />{c.counts.video}</span>}
+                        {c.counts.image === 0 && c.counts.video === 0 && <span>Empty</span>}
+                      </div>
+                      <div className="flex-1" />
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        {!c.synthetic && (
+                          <SyncBadge
+                            status={syncBadgeStatus(sync, c.id)}
+                            onClick={() => navigate(`/media/collections/${encodeURIComponent(c.id)}/sync`)}
+                          />
+                        )}
+                        {!c.synthetic && selecting && (
+                          <label className="flex items-center gap-2 px-2 min-h-9 pointer-coarse:min-h-11 rounded border border-port-border cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${c.name}`}
+                              checked={selectedIds.has(c.id)}
+                              disabled={joining}
+                              onChange={() => toggleSelection(c.id)}
+                              className="accent-port-accent"
+                            />
+                            Select
+                          </label>
+                        )}
+                        {!c.synthetic && !selecting && isConfirming(c.id) && (
+                          <ConfirmButtonPair
+                            prompt="Delete?"
+                            ariaLabel={`Delete ${c.name}`}
+                            busy={deletingId === c.id}
+                            busyText="Deleting…"
+                            onConfirm={() => handleDelete(c)}
+                            onCancel={cancelDelete}
+                            className="flex-wrap"
+                          />
+                        )}
+                        {!c.synthetic && !selecting && !isConfirming(c.id) && (
+                          <button
+                            type="button"
+                            onClick={() => requestDelete(c.id)}
+                            disabled={deleting || organizing}
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
+                            title="Delete collection" aria-label="Delete collection"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
+                </CollapsibleListItem>
               ))}
             </div>
           )}

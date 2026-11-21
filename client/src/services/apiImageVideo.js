@@ -481,6 +481,11 @@ export const createMediaCollection = ({ name, description = '' }, options = {}) 
   body: JSON.stringify({ name, description }),
   ...options,
 });
+export const joinMediaCollections = ({ name, collectionIds }, options = {}) => request('/media/collections/join', {
+  method: 'POST',
+  body: JSON.stringify({ name, collectionIds }),
+  ...options,
+});
 export const updateMediaCollection = (id, patch, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),

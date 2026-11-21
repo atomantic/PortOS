@@ -2,6 +2,7 @@
  *   GET    /api/media/collections                  → Collection[]       (`?limit`/`?offset` switch it to
  *                                                                       `{ items, total, limit, offset }`)
  *   POST   /api/media/collections                  → Collection         (body: { name, description? })
+ *   POST   /api/media/collections/join             → Collection         (body: { name, collectionIds })
  *   GET    /api/media/collections/:id              → Collection
  *                                                  Each item carries `location` ('local' | 'remote' | 'missing')
  *                                                  and, when remote, `hostPeerId`/`hostPeerName` (peer-hosted media)
@@ -20,7 +21,7 @@ import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { mediaCollectionBulkItemsSchema, mediaCollectionPrimarySchema } from '../lib/mediaValidation.js';
+import { mediaCollectionBulkItemsSchema, mediaCollectionJoinSchema, mediaCollectionPrimarySchema } from '../lib/mediaValidation.js';
 import * as svc from '../services/mediaCollections.js';
 import { resolveMediaLocations, unmarkHosted, findHostPeer } from '../services/peerHostedMedia.js';
 import { pullMissingAssetsFromPeer } from '../services/sharing/peerSyncAssets.js';
@@ -36,6 +37,7 @@ const SERVICE_ERROR_STATUS = {
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 const nameSchema = z.string().trim().min(1).max(svc.NAME_MAX_LENGTH);
+const joinSchema = mediaCollectionJoinSchema(svc.NAME_MAX_LENGTH);
 const descriptionSchema = z.string().trim().max(svc.DESCRIPTION_MAX_LENGTH);
 // `:` is the API key separator (`<kind>:<ref>` is split on first `:`), so a
 // ref containing one would be unaddressable for DELETE/coverKey lookups.
@@ -78,6 +80,12 @@ router.get('/', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(createSchema, req.body ?? {});
   res.status(201).json(await svc.createCollection(body));
+}));
+
+router.post('/join', asyncHandler(async (req, res) => {
+  const body = validateRequest(joinSchema, req.body ?? {});
+  const collection = await svc.joinCollections(body).catch((err) => { throw mapServiceError(err); });
+  res.status(201).json(collection);
 }));
 
 router.post('/auto-organize', asyncHandler(async (_req, res) => {

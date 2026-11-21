@@ -93,6 +93,37 @@ describe('mediaCollections routes — provenance (#3311)', () => {
   });
 });
 
+describe('mediaCollections routes — join', () => {
+  it('creates a named collection with the union of items and preserves the sources', async () => {
+    const first = await create('First source');
+    const second = await create('Second source');
+    await api('post', `/${first.id}/items`, { kind: 'image', ref: 'shared' });
+    await api('post', `/${second.id}/items`, { kind: 'image', ref: 'shared' });
+    await api('post', `/${second.id}/items`, { kind: 'video', ref: 'shared' });
+
+    const joined = await api('post', '/join', {
+      name: '  Selected media — 2026  ', collectionIds: [first.id, second.id, first.id],
+    });
+    expect(joined.status).toBe(201);
+    expect(joined.body).toMatchObject({ name: 'Selected media — 2026', source: 'user' });
+    expect([first.id, second.id]).not.toContain(joined.body.id);
+    expect(keysOf((await api('get', `/${joined.body.id}`)).body)).toEqual(['image:shared', 'video:shared']);
+    expect(keysOf((await api('get', `/${first.id}`)).body)).toEqual(['image:shared']);
+    expect(keysOf((await api('get', `/${second.id}`)).body)).toEqual(['image:shared', 'video:shared']);
+  });
+
+  it('rejects invalid selections without creating a destination', async () => {
+    const first = await create('Available source');
+    const second = await create('Deleted source');
+    await api('delete', `/${second.id}`);
+
+    const name = 'Incomplete join';
+    expect((await api('post', '/join', { name, collectionIds: [first.id, first.id] })).status).toBe(400);
+    expect((await api('post', '/join', { name, collectionIds: [first.id, second.id] })).status).toBe(404);
+    expect((await api('get')).body.map((c) => c.name)).not.toContain(name);
+  });
+});
+
 describe('mediaCollections routes — items', () => {
   it('adds and removes single items, 409s on a duplicate and 404s on a missing one', async () => {
     const { id } = await create('Items');
