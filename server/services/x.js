@@ -296,13 +296,15 @@ export async function listPendingReviewActions({ limit = 50 } = {}) {
   return result.rows.map((row) => ({ ...draftView(row), kind: 'draft_post', payload: { body: row.body } }));
 }
 
+// An approval past MAX_DRAFT_AGE_MS can no longer open compose, so it may return to review; a fresh one stays locked.
 export async function reviewDraft(id, state, reviewNote = '') {
   if (!DRAFT_STATES.has(state) || !['pending_review', 'approved', 'rejected'].includes(state)) throw new Error('Unsupported X draft review state');
   const expectedState = state === 'pending_review' ? 'draft' : 'pending_review';
   const result = await query(
-    `UPDATE x_drafts SET state=$2,review_note=$3,approved_at=CASE WHEN $2='approved' THEN NOW() ELSE approved_at END,updated_at=NOW()
-     WHERE id=$1 AND state=$4 RETURNING *`,
-    [id, state, boundedText(reviewNote, 2_000), expectedState],
+    `UPDATE x_drafts SET state=$2,review_note=$3,approved_at=CASE WHEN $2='approved' THEN NOW() WHEN $2='pending_review' THEN NULL ELSE approved_at END,updated_at=NOW()
+     WHERE id=$1 AND (state=$4 OR ($2='pending_review' AND state='approved' AND (approved_at IS NULL OR approved_at < NOW() - ($5 * interval '1 millisecond'))))
+     RETURNING *`,
+    [id, state, boundedText(reviewNote, 2_000), expectedState, MAX_DRAFT_AGE_MS],
   );
   const row = result.rows[0];
   if (!row) return null;

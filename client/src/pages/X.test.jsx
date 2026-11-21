@@ -162,6 +162,24 @@ describe('X page', () => {
     expect(screen.getByRole('button', { name: 'Return to accounts.' })).toBeInTheDocument();
   });
 
+  it('offers re-submit instead of compose for an approval older than 24h, and compose for a fresh one', async () => {
+    const hoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
+    const base = { accountId: account.id, updatedAt: hoursAgo(1), state: 'approved' };
+    api.getXDrafts.mockResolvedValue({ drafts: [
+      { ...base, id: 'stale', body: 'stale body', approvedAt: hoursAgo(25) },
+      { ...base, id: 'fresh', body: 'fresh body', approvedAt: hoursAgo(1) },
+    ] });
+    api.reviewXDraft.mockResolvedValue({ draft: { ...base, id: 'stale', body: 'stale body', state: 'pending_review', approvedAt: null } });
+
+    renderPage(`/x/${account.id}/drafts`);
+    await screen.findByText('stale body');
+
+    expect(screen.getAllByRole('button', { name: /Open compose in X/ })).toHaveLength(1);
+    expect(screen.getByText('Approval expired')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Re-submit for review' }));
+    expect(api.reviewXDraft).toHaveBeenCalledWith('stale', { state: 'pending_review' }, { silent: true });
+  });
+
   it('displays a loading spinner in the draft queue while drafts are loading', async () => {
     let resolveDrafts;
     const draftsPromise = new Promise((resolve) => {
