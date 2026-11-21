@@ -59490,6 +59490,162 @@
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
     },
     {
+      "id": "aa-web-v5.0.1-gpt-6-astra-low",
+      "provider": "OpenAI",
+      "model": "gpt-6-astra",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 43,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-astra-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6-astra",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 52,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-astra-high",
+      "provider": "OpenAI",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 55,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-astra-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6-astra",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 55,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Xhigh variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
       "id": "aa-web-v5.0.1-claude-opus-5-5",
       "provider": "Anthropic",
       "model": "claude-opus-5.5",
@@ -59674,6 +59830,84 @@
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
     },
     {
+      "id": "aa-web-v5.0.1-grok-4-7-low",
+      "provider": "SpaceXAI",
+      "model": "grok-4.7",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 31,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-grok-4-7-high",
+      "provider": "SpaceXAI",
+      "model": "grok-4.7",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 35,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
       "id": "aa-web-v5.0.1-kimi-k3-1-pro",
       "provider": "Kimi",
       "model": "kimi-k3.1-pro",
@@ -59812,6 +60046,201 @@
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
     },
     {
+      "id": "aa-web-v5.0.1-gpt-6-luna-non-reasoning",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "non-reasoning",
+      "configuration": "Non-reasoning",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Non-reasoning variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-luna-low",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-luna-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 18,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-luna-high",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 21,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-luna-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 23,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Xhigh variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
       "id": "aa-web-v5.0.1-claude-haiku-5-5",
       "provider": "Anthropic",
       "model": "claude-haiku-5.5",
@@ -59856,6 +60285,162 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-haiku-5-5-low",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 19,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-haiku-5-5-medium",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 25,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-haiku-5-5-high",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 30,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-haiku-5-5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 35,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Xhigh variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
     },
     {
       "id": "aa-web-v5.0.1-gemini-3-8-flash",
@@ -60010,6 +60595,123 @@
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
     },
     {
+      "id": "aa-web-v5.0.1-qwen3-8-27b-non-reasoning",
+      "provider": "Alibaba",
+      "model": "qwen3.8-27b",
+      "effort": "non-reasoning",
+      "configuration": "Non-reasoning",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Non-reasoning variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-qwen3-8-27b-low",
+      "provider": "Alibaba",
+      "model": "qwen3.8-27b",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 16,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-qwen3-8-27b-medium",
+      "provider": "Alibaba",
+      "model": "qwen3.8-27b",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 17,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
       "id": "aa-web-v5.0.1-gpt-6-1-terra",
       "provider": "OpenAI",
       "model": "gpt-6.1-terra",
@@ -60054,6 +60756,201 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra-non-reasoning",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "non-reasoning",
+      "configuration": "Non-reasoning",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 31,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Non-reasoning variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-non-reasoning",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra-low",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 29,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Low variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-low",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 38,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra-high",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 42,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 45,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Xhigh variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra-xhigh",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
     },
     {
       "id": "aa-web-v5.0.1-qwen3-8-max",
@@ -60192,6 +61089,84 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-sol-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 46,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the Medium variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-sol-high",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; score for the High variant as displayed in the public model page's details table (rounded to an integer)."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M uncached input tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high",
+          "retrievedAt": "2026-11-21T00:00:00.000Z",
+          "methodology": "Published USD per 1M output tokens on the public model page (same for every variant of this model)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher page data retrieved online. The page does not publish a cost per Intelligence Index task for this variant. API reference prices; not subscription or local operating costs."
     },
     {
       "id": "aa-web-v5.0.1-k2-horizon-375b-a23b",
