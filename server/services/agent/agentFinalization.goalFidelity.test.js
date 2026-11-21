@@ -51,7 +51,17 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 }));
 
 const getAgentsByDateMock = vi.fn(async () => []);
-vi.mock('../cos/cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAgentsByDateMock(...args) }));
+vi.mock('../cos/cosAgentIndex.js', async () => {
+  const { projectArchivedAgent } = await import('../../lib/cos/cosAgentCompletionOrder.js');
+  const archived = async () => await getAgentsByDateMock() || [];
+  return {
+    getAgentsByDate: (...args) => getAgentsByDateMock(...args),
+    selectArchivedCompletions: async ({ taskIds }) => (await archived())
+      .map(a => ({ id: a.id, day: '2026-01-01', projection: projectArchivedAgent(a) }))
+      .filter(row => !taskIds || taskIds.includes(row.projection.taskId)),
+    readArchivedAgentMetadata: async (_day, id) => (await archived()).find(a => a.id === id) || null,
+  };
+});
 
 const updateTaskMock = vi.fn(async () => ({}));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));

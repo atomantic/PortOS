@@ -41,7 +41,7 @@ const boundedText = (text, maxChars) => text.length > maxChars
   ? `${text.slice(0, maxChars - TRUNCATED_MARKER.length)}${TRUNCATED_MARKER}` : text;
 
 async function earlierAttempts(taskId, startedAt) {
-  const agents = await getAgentsWithArchive({ endAt: startedAt, lookbackDays: ARCHIVE_LOOKBACK_DAYS });
+  const agents = await getAgentsWithArchive({ endAt: startedAt, lookbackDays: ARCHIVE_LOOKBACK_DAYS, taskIds: [taskId] });
   const attempts = new Map(agents
     .filter(agent => agent?.taskId === taskId && toEpochMs(agent.startedAt) < startedAt)
     .map(agent => [agent.id, agent]));

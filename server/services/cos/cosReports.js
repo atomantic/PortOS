@@ -9,7 +9,8 @@ import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
-import { getAgentIdsForDates, getAgentsByDate } from './cosAgentIndex.js';
+import { readArchivedAgentMetadata, selectArchivedCompletions } from './cosAgentIndex.js';
+import { projectArchivedAgent } from '../../lib/cos/cosAgentCompletionOrder.js';
 import { formatDuration } from '../../lib/fileUtils.js';
 import { isAgentHandoff } from '../../lib/agent/agentOutcome.js';
 
@@ -33,38 +34,46 @@ import { isAgentHandoff } from '../../lib/agent/agentOutcome.js';
 // task per provider swap in the daily report and the "While You Were Away"
 // briefing, which is the failure a user sees for pressing Relaunch.
 async function collectCompletedAgents(dates, state, accept) {
-  // One predicate, both sources. The live and archived arms are the same
-  // question asked of two stores, and writing it twice (once negated) is how
-  // they drift — the handoff exclusion below had to be added to each.
-  const keep = (agent) => !!agent.completedAt && !isAgentHandoff(agent) && accept(agent);
+  // One predicate over the projection, both sources: the live and archived arms are the same
+  // question asked of two stores, and writing it twice is how they drift.
+  const keep = (projection) => !!projection.completedAt && !projection.handoff && accept(projection);
   const liveIds = new Set(Object.keys(state.agents));
-  const collected = Object.values(state.agents).filter(keep);
-  const idsByDate = await getAgentIdsForDates(dates);
-
-  // Iterating the Map (not `dates`) keeps a repeated date from reading its bucket twice.
-  for (const [date, ids] of idsByDate) {
-    const missing = new Set(ids.filter(id => !liveIds.has(id)));
-    if (missing.size === 0) continue;
-    for (const agent of await getAgentsByDate(date)) {
-      if (!missing.has(agent.id)) continue; // live copy wins, and non-indexed strays stay out
-      if (!keep(agent)) continue;
-      collected.push(agent);
-    }
+  const collected = [];
+  for (const agent of Object.values(state.agents)) {
+    const projection = projectArchivedAgent(agent);
+    if (keep(projection)) collected.push({ id: agent.id, projection, agent });
   }
 
+  // The archive answers from the completion-order projection (#17309): no metadata.json is parsed
+  // here. `selectArchivedCompletions` only returns ids the date-bucket index owns, so non-indexed
+  // strays stay out, and an id still in state is skipped because its live copy wins.
+  const archived = await selectArchivedCompletions({ dates, includeIncomplete: true });
+  for (const { id, day, projection } of archived) {
+    if (liveIds.has(id) || !keep(projection)) continue;
+    collected.push({ id, day, projection });
+  }
   return collected;
 }
 
-// A completed agent's work duration in ms: prefer the recorded `result.duration`,
-// else derive from completedAt − startedAt. Clamped to >=0 so a clock-skewed
-// record (completedAt < startedAt) can't surface a negative duration.
-function agentDurationMs(a) {
-  const d = a.result?.duration
-    || (a.completedAt && a.startedAt
-      ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime()
-      : 0);
+// Work duration from a projection: `result.duration` when recorded, else completedAt − startedAt.
+// Clamped to >=0 so a clock-skewed record can't surface a negative duration.
+function projectionDurationMs(p) {
+  const d = p.resultDuration
+    || (p.completedAt && p.startedAt ? new Date(p.completedAt).getTime() - new Date(p.startedAt).getTime() : 0);
   return d > 0 ? d : 0;
 }
+
+// Full records for the few entries a response actually renders. A live entry already holds its
+// record; an archived one is read once, without summary repair. A record that vanished or went
+// unparseable since projection is dropped rather than rendered blank.
+async function hydrateEntries(entries) {
+  const records = await Promise.all(entries.map(entry => entry.agent
+    ? entry.agent
+    : readArchivedAgentMetadata(entry.day, entry.id, { repairSummaries: false })));
+  return records.filter(Boolean);
+}
+
+const byCompletionDesc = (a, b) => new Date(b.projection.completedAt) - new Date(a.projection.completedAt);
 
 export async function listBriefings() {
   await ensureDirectories();
@@ -104,14 +113,14 @@ export async function getTodayActivity() {
   const todayAgents = await collectCompletedAgents(
     [today],
     state,
-    a => a.completedAt.startsWith(today)
+    p => p.completedAt.startsWith(today)
   );
 
-  const succeeded = todayAgents.filter(a => a.result?.success);
-  const failed = todayAgents.filter(a => !a.result?.success);
+  const succeeded = todayAgents.filter(e => e.projection.success);
+  const failed = todayAgents.filter(e => !e.projection.success);
 
   // Calculate total time worked (sum of agent durations)
-  const totalDurationMs = todayAgents.reduce((sum, a) => sum + agentDurationMs(a), 0);
+  const totalDurationMs = todayAgents.reduce((sum, e) => sum + projectionDurationMs(e.projection), 0);
 
   // Get currently running agents
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running');
@@ -121,17 +130,15 @@ export async function getTodayActivity() {
   }, 0);
 
   // Get top accomplishments (successful tasks with description snippets)
-  const accomplishments = succeeded
+  const accomplishments = (await hydrateEntries(succeeded.sort(byCompletionDesc).slice(0, 5)))
     .map(a => ({
       id: a.id,
       taskId: a.taskId,
       description: a.metadata?.taskDescription?.substring(0, 100) || a.taskId,
       taskType: a.metadata?.analysisType || a.metadata?.taskType || 'task',
-      duration: agentDurationMs(a),
+      duration: projectionDurationMs(projectArchivedAgent(a)),
       completedAt: a.completedAt
-    }))
-    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
-    .slice(0, 5);
+    }));
 
   // Calculate success rate
   const successRate = todayAgents.length > 0
@@ -164,12 +171,12 @@ export async function getTodayActivity() {
 
 // Build a compact accomplishment/incident card for the "While You Were Away"
 // briefing. Pure shaping helper — no I/O — so it's trivially unit-testable.
-function summarizeAwayActivity(agents, sinceIso) {
-  const succeeded = agents.filter(a => a.result?.success);
-  const failed = agents.filter(a => !a.result?.success);
+async function summarizeAwayActivity(entries, sinceIso) {
+  const succeeded = entries.filter(e => e.projection.success);
+  const failed = entries.filter(e => !e.projection.success);
 
   const toCard = (a) => {
-    const durationMs = agentDurationMs(a);
+    const durationMs = projectionDurationMs(projectArchivedAgent(a));
     return {
       id: a.id,
       taskId: a.taskId,
@@ -184,26 +191,29 @@ function summarizeAwayActivity(agents, sinceIso) {
     };
   };
 
-  // Most-recent first so the freshest work tops each list.
-  const byRecency = (a, b) => new Date(b.completedAt) - new Date(a.completedAt);
-  const totalDurationMs = agents.reduce((sum, a) => sum + agentDurationMs(a), 0);
+  // Aggregates come from the projection; full records are read only for the cards returned.
+  const totalDurationMs = entries.reduce((sum, e) => sum + projectionDurationMs(e.projection), 0);
+  const [accomplishments, incidents] = await Promise.all([
+    hydrateEntries(succeeded.sort(byCompletionDesc).slice(0, 8)),
+    hydrateEntries(failed.sort(byCompletionDesc).slice(0, 8)),
+  ]);
 
   return {
     sinceIso,
     stats: {
-      completed: agents.length,
+      completed: entries.length,
       succeeded: succeeded.length,
       failed: failed.length,
-      successRate: agents.length > 0
-        ? Math.round((succeeded.length / agents.length) * 100)
+      successRate: entries.length > 0
+        ? Math.round((succeeded.length / entries.length) * 100)
         : 0
     },
     time: {
       totalDurationMs,
       totalDuration: formatDuration(totalDurationMs)
     },
-    accomplishments: succeeded.sort(byRecency).slice(0, 8).map(toCard),
-    incidents: failed.sort(byRecency).slice(0, 8).map(toCard)
+    accomplishments: accomplishments.map(toCard),
+    incidents: incidents.map(toCard)
   };
 }
 
@@ -227,9 +237,9 @@ export async function getWhileAwayActivity(sinceIso) {
   if (sinceMs < now - AWAY_MAX_LOOKBACK_MS) sinceMs = now - AWAY_MAX_LOOKBACK_MS;
   const effectiveSinceIso = new Date(sinceMs).toISOString();
 
-  const inWindow = (a) => {
-    if (!a.completedAt) return false;
-    const t = new Date(a.completedAt).getTime();
+  const inWindow = (p) => {
+    if (!p.completedAt) return false;
+    const t = new Date(p.completedAt).getTime();
     return Number.isFinite(t) && t >= sinceMs && t <= now;
   };
 
@@ -247,10 +257,10 @@ export async function getWhileAwayActivity(sinceIso) {
   const agents = await collectCompletedAgents(
     dates,
     state,
-    a => a.status === 'completed' && inWindow(a)
+    p => p.completed && inWindow(p)
   );
 
-  const summary = summarizeAwayActivity(agents, effectiveSinceIso);
+  const summary = await summarizeAwayActivity(agents, effectiveSinceIso);
   return { ...summary, isRunning: isDaemonRunning(), isPaused: state.paused };
 }
 

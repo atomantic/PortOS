@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { getAgentDates, getAgentsByDate } from '../../services/cos/cosAgentIndex.js';
+import { getAgentDates, readArchivedAgentMetadata, selectArchivedCompletions } from '../../services/cos/cosAgentIndex.js';
 import { getAgents } from '../../services/cos/cosAgentLifecycle.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
@@ -25,27 +25,32 @@ router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
     a.metadata?.app === app.id || a.metadata?.taskApp === app.id
   );
 
-  // Scan last 14 days of agent history for this app
+  // Last 14 archive days for this app: the matching ids come from the completion-order projection,
+  // newest first, and metadata is read only until `limit` rows are filled (#17309).
   const dates = await getAgentDates().catch(() => []);
-  const recentDates = dates.slice(0, 14);
-  const historyAgents = [];
-
-  for (const { date } of recentDates) {
-    if (historyAgents.length >= limit) break;
-    const dayAgents = await getAgentsByDate(date).catch(() => []);
-    const appAgents = dayAgents.filter(a =>
-      a.metadata?.app === app.id || a.metadata?.taskApp === app.id
-    );
-    historyAgents.push(...appAgents);
-  }
+  const matches = await selectArchivedCompletions({
+    dates: dates.slice(0, 14).map(({ date }) => date),
+    app: app.id,
+    includeIncomplete: true,
+  }).catch(() => []);
 
   const seenIds = new Set();
   const combined = [];
-  for (const agent of [...appRunning, ...historyAgents]) {
-    if (seenIds.has(agent.id)) continue;
+  for (const agent of appRunning) {
+    if (seenIds.has(agent.id) || combined.length >= limit) continue;
     seenIds.add(agent.id);
     combined.push(agent);
-    if (combined.length >= limit) break;
+  }
+  const pending = matches.filter(({ id }) => !seenIds.has(id));
+  while (combined.length < limit && pending.length > 0) {
+    const batch = pending.splice(0, limit - combined.length);
+    const records = await Promise.all(batch.map(({ day, id }) =>
+      readArchivedAgentMetadata(day, id, { repairSummaries: false }).catch(() => null)));
+    for (const agent of records) {
+      if (!agent || seenIds.has(agent.id)) continue;
+      seenIds.add(agent.id);
+      combined.push(agent);
+    }
   }
 
   const running = combined.filter(a => a.status === 'running' || a.status === 'spawning').length;

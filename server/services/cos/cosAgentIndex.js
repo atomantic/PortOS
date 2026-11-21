@@ -463,7 +463,7 @@ export async function getAgentIdsForDates(dates) {
 // archive reader expects: the transcript is dropped (it is hydrated on demand by
 // GET /agents/:id), a missing id falls back to the directory name, and a record
 // written before `status` was persisted reads as completed.
-async function readArchivedAgentMetadata(date, agentDirName, { repairSummaries = true } = {}) {
+export async function readArchivedAgentMetadata(date, agentDirName, { repairSummaries = true } = {}) {
   const agentDir = join(AGENTS_DIR, date, agentDirName);
   const { ok, value: content } = await tryReadFileStrict(join(agentDir, 'metadata.json'));
   if (!ok || !content) return null;
@@ -497,6 +497,45 @@ export async function getAgentsByDate(date, { repairSummaries = true } = {}) {
   }
 
   return agents.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
+}
+
+/**
+ * Archived runs in `dates` matching an optional task-id set and/or app, newest completion first,
+ * answered from the completion-order projection without reading any metadata.json (#17309).
+ *
+ * A day owning an id the projection does not know (a fresh federation import, a version-1 sidecar)
+ * is read ONCE with repair off and backfilled, then selected again — the same repair
+ * `getCompletedAgentPage` uses. The legacy id→date index stays authoritative for which runs exist.
+ *
+ * @returns {Promise<Array<{id: string, day: string, projection: object}>>} completed runs, or every
+ * archived status with `includeIncomplete` (the daily report counted any archived record).
+ */
+export async function selectArchivedCompletions({ dates, taskIds, app, includeIncomplete = false } = {}) {
+  const wanted = new Set(dates);
+  const taskIdSet = taskIds ? new Set(taskIds) : null;
+  const idx = await loadAgentIndex();
+  const order = await loadCompletionOrderIndex();
+
+  const unprojectedDays = new Set();
+  for (const [agentId, day] of idx) {
+    if (wanted.has(day) && !order.has(agentId)) unprojectedDays.add(day);
+  }
+  for (const day of unprojectedDays) {
+    const learned = (await getAgentsByDate(day, { repairSummaries: false }))
+      .map(agent => [agent.id, projectArchivedAgent(agent)]);
+    await recordArchivedCompletions(learned);
+  }
+
+  const selected = [];
+  for (const [agentId, day] of idx) {
+    if (!wanted.has(day)) continue;
+    const projection = order.get(agentId);
+    if (!projection || (!includeIncomplete && !projection.completed)) continue;
+    if (taskIdSet && !taskIdSet.has(projection.taskId)) continue;
+    if (app && projection.app !== app && projection.taskApp !== app) continue;
+    selected.push({ id: agentId, day, projection });
+  }
+  return selected.sort((a, b) => (b.projection.completedAt || '').localeCompare(a.projection.completedAt || ''));
 }
 
 /**
