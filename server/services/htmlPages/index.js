@@ -9,16 +9,18 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import {
-  HTML_PAGE_THEMES, HTML_PAGES_DEFAULT, HTML_PAGES_MAX, htmlPagePrompt, extractHtmlDocument, scoreHtmlPage, scoreHtmlPages,
+  HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
 import { listRuntimeModels } from '../localModelAssessments.js';
 import { generate } from '../modelCapabilityTests.js';
 import { createRun, deleteRun as deleteStoredRun, getRun, listRuns as listStoredRuns, mutateRun } from './db.js';
 
 const ACTIVE = new Set(['queued', 'generating']);
-// A designed page with inline script and styles runs several thousand tokens; a slow model needs minutes for one.
-const PAGE_MAX_TOKENS = 8000;
-const PAGE_TIMEOUT_MS = 10 * 60 * 1000;
+// Thinking models spend most of their budget reasoning before the page starts (a first version with 8,000 tokens left pages cut off mid-CSS), and a designed page itself runs several thousand tokens. A slow model needs minutes.
+const PAGE_MAX_TOKENS = 24_000;
+const PAGE_TIMEOUT_MS = 20 * 60 * 1000;
+// Within this share of the cap the model was cut off, not finished.
+const TRUNCATION_SHARE = 0.98;
 // Higher than the capability tests' 0.2: this brief asks for variety.
 const PAGE_TEMPERATURE = 0.8;
 // One page stored whole so the gallery can render it; this only bounds a runaway generation.
@@ -31,9 +33,6 @@ const runtimeLabel = (id) => LOCAL_RUNTIMES[id]?.label || id;
 const queue = [];
 const controllers = new Map();
 let draining = false;
-
-/** The themes a run of `pageCount` pages asks for, in order. */
-export const themesFor = (pageCount) => HTML_PAGE_THEMES.slice(0, pageCount);
 
 /** Every installed, chat-capable model across the assessable runtimes, for the picker. Disk/loopback only; no model is called. */
 export async function listSelectableModels() {
@@ -50,11 +49,11 @@ export async function listSelectableModels() {
   return {
     models,
     listErrors,
-    themes: [...HTML_PAGE_THEMES],
-    // Shown at the form so the person can read exactly what each page request sends before agreeing to a run.
-    promptExample: htmlPagePrompt(HTML_PAGE_THEMES[0]),
+    // What the form starts with, and the fixed text PortOS adds around each brief, so the form can show the exact prompt that will be sent.
+    defaultPages: [...HTML_PAGE_DEFAULT_BRIEFS],
+    promptParts: htmlPagePromptParts(),
     pageCountMax: HTML_PAGES_MAX,
-    pageCountDefault: HTML_PAGES_DEFAULT,
+    briefMaxChars: HTML_BRIEF_MAX_CHARS,
   };
 }
 
@@ -83,7 +82,7 @@ export const readRun = async (id) => {
 /**
  * Queue one run per selected model. The selection is checked against what is installed right now, so a typo or a stopped runtime is a 409 up front rather than a failed run later.
  */
-export async function startRuns({ models, pageCount = HTML_PAGES_DEFAULT }) {
+export async function startRuns({ models, pages }) {
   const { models: installed } = await listSelectableModels();
   const missing = models.filter((m) => !installed.some((i) => i.backend === m.backend && i.modelId === m.modelId));
   if (missing.length) {
@@ -91,14 +90,15 @@ export async function startRuns({ models, pageCount = HTML_PAGES_DEFAULT }) {
       status: 409, code: 'HTML_PAGES_MODEL_UNAVAILABLE', context: { missing: missing.length },
     });
   }
-  const themes = themesFor(pageCount);
+  // The exact prompt each page sends is recorded on the run, so a later change to the fixed text never rewrites what an old run was asked.
+  const prompts = pages.map(htmlPagePrompt);
   const runs = [];
   for (const m of models) {
-    const run = await createRun({ backend: m.backend, modelId: m.modelId, pageCount: themes.length, themes });
+    const run = await createRun({ backend: m.backend, modelId: m.modelId, pageCount: pages.length, themes: pages, prompts });
     queue.push(run.id);
     runs.push(run);
   }
-  console.log(`🧩 HTML pages: queued ${runs.length} run${runs.length === 1 ? '' : 's'} of ${themes.length} page${themes.length === 1 ? '' : 's'}`);
+  console.log(`🧩 HTML pages: queued ${runs.length} run${runs.length === 1 ? '' : 's'} of ${pages.length} page${pages.length === 1 ? '' : 's'}`);
   void drain();
   return runs;
 }
@@ -136,11 +136,11 @@ async function processRun(id) {
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
     console.log(`🧩 HTML pages: ${run.modelId} on ${runtimeLabel(run.backend)} — ${run.themes.length} page(s)`);
 
-    for (const theme of run.themes) {
+    for (const [index, theme] of run.themes.entries()) {
       if (controller.signal.aborted) return;
       const startedAt = Date.now();
       const result = await generate({
-        backend: run.backend, modelId: run.modelId, prompt: htmlPagePrompt(theme), maxTokens: PAGE_MAX_TOKENS,
+        backend: run.backend, modelId: run.modelId, prompt: run.prompts?.[index] ?? htmlPagePrompt(theme), maxTokens: PAGE_MAX_TOKENS,
         temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
       });
       if (controller.signal.aborted) return;
@@ -151,6 +151,8 @@ async function processRun(id) {
         html,
         ...scoreHtmlPage(html),
         error: result?.error || null,
+        // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
+        hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
         elapsedMs: Math.max(0, Date.now() - startedAt),
         tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
       };

@@ -429,7 +429,6 @@ export default function App() {
               <Route path="timeline" element={<VideoTimeline />} />
               <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
               <Route path="threejs" element={<ThreejsModels />} />
-              <Route path="pages" element={<HtmlPages />} />
               <Route path="threejs/:id" element={<ThreejsModelDetail />} />
               <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" />} />
             </Route>
@@ -472,6 +471,7 @@ export default function App() {
                 the detail page. */}
             <Route path="creative-commission" element={<CreativeCommissions />} />
             <Route path="creative-commission/new" element={<CreativeCommissions />} />
+            <Route path="html-pages" element={<HtmlPages />} />
             <Route path="game" element={<Game />} />
             <Route path="game/:id" element={<Game />} />
             <Route path="wiki/:tab" element={<Wiki />} />

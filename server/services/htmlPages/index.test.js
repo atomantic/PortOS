@@ -4,9 +4,9 @@ const store = new Map();
 vi.mock('./db.js', () => ({
   listRuns: vi.fn(async () => [...store.values()].filter((r) => !r.deleted)),
   getRun: vi.fn(async (id) => store.get(id) ?? null),
-  createRun: vi.fn(async ({ backend, modelId, pageCount, themes }) => {
+  createRun: vi.fn(async ({ backend, modelId, pageCount, themes, prompts }) => {
     const run = {
-      id: `run-${store.size + 1}`, backend, modelId, pageCount, themes, status: 'queued',
+      id: `run-${store.size + 1}`, backend, modelId, pageCount, themes, prompts, status: 'queued',
       progress: { done: 0, total: pageCount }, pages: [], detail: null, error: null, deleted: false,
     };
     store.set(run.id, run);
@@ -37,6 +37,7 @@ import { listRuns, listSelectableModels, readRun, removeRun, startRuns } from '.
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
 const model = { backend: 'ollama', modelId: 'example-coder:7b' };
+const PAGES = ['A lighthouse at dusk with a sweeping beam', 'A tide-pool you can poke'];
 const settled = (id) => vi.waitFor(async () => {
   const run = await readRun(id);
   expect(['complete', 'failed']).toContain(run.status);
@@ -53,29 +54,32 @@ describe('listSelectableModels', () => {
     const result = await listSelectableModels();
     expect(result.models).toEqual([expect.objectContaining({ backend: 'ollama', modelId: 'example-coder:7b' })]);
     expect(result.listErrors.some((e) => e.id === 'lmstudio')).toBe(true);
-    expect(result.themes.length).toBeGreaterThanOrEqual(result.pageCountMax);
-    expect(result.promptExample).toContain(result.themes[0]);
+    expect(result.defaultPages.length).toBeGreaterThanOrEqual(result.pageCountMax);
+    // The fixed text around a brief ships with the picker so the form can show the exact prompt.
+    expect(result.promptParts.before + result.defaultPages[0] + result.promptParts.after).toContain(result.defaultPages[0]);
   });
 });
 
 describe('startRuns', () => {
   it('refuses a model that is not installed before queueing anything', async () => {
-    await expect(startRuns({ models: [{ backend: 'ollama', modelId: 'missing:1b' }], pageCount: 2 }))
+    await expect(startRuns({ models: [{ backend: 'ollama', modelId: 'missing:1b' }], pages: PAGES }))
       .rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_MODEL_UNAVAILABLE' });
     expect(store.size).toBe(0);
     expect(generate).not.toHaveBeenCalled();
   });
 
-  it('runs one request per page with its own theme, extracts the HTML, and stores a scored complete run', async () => {
+  it('sends each page its own brief verbatim inside the fixed rules, records the prompts, and stores a scored complete run', async () => {
     generate.mockResolvedValue({ text: `Here you go:\n\`\`\`html\n${goodPage}\n\`\`\``, timings: { tokensPerSecond: 40 } });
-    const [queued] = await startRuns({ models: [model], pageCount: 2 });
-    expect(queued.themes).toHaveLength(2);
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
+    expect(queued.themes).toEqual(PAGES);
+    expect(queued.prompts[0]).toContain(PAGES[0]);
 
     const run = await settled(queued.id);
     expect(run.status).toBe('complete');
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(generate.mock.calls[0][0].prompt).toContain(queued.themes[0]);
-    expect(generate.mock.calls[1][0].prompt).toContain(queued.themes[1]);
+    expect(generate.mock.calls[0][0].prompt).toBe(queued.prompts[0]);
+    expect(generate.mock.calls[1][0].prompt).toBe(queued.prompts[1]);
+    expect(generate.mock.calls[1][0].prompt).toContain(`\n\n${PAGES[1]}\n\n`);
     expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
     expect(run.detail).toMatchObject({ verdict: 'passed', complete: 2, pageCount: 2 });
     expect(run.progress).toEqual({ done: 2, total: 2 });
@@ -85,16 +89,24 @@ describe('startRuns', () => {
     generate
       .mockResolvedValueOnce({ text: goodPage })
       .mockResolvedValueOnce({ text: goodPage.replace('</html>', '') });
-    const [queued] = await startRuns({ models: [model], pageCount: 2 });
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
     const run = await settled(queued.id);
     expect(run.status).toBe('complete');
     expect(run.pages[1].html.endsWith('</html>')).toBe(false);
     expect(run.detail.verdict).toBe('partial');
   });
 
+  it('flags a page the runtime cut off at the token limit, and does not call reasoning prose a page', async () => {
+    generate.mockResolvedValue({ text: 'Let me think about the <svg> and the <div> first. Then I will write the code.', timings: { completionTokens: 24_000 } });
+    const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
+    const run = await settled(queued.id);
+    expect(run.pages[0]).toMatchObject({ html: '', hitTokenLimit: true });
+    expect(run.detail.verdict).toBe('failed');
+  });
+
   it('marks the run failed with the runtime error when no page ever came back', async () => {
     generate.mockResolvedValue({ text: '', error: 'model server went away' });
-    const [queued] = await startRuns({ models: [model], pageCount: 1 });
+    const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
     expect(run).toMatchObject({ status: 'failed', error: 'model server went away' });
   });
@@ -109,7 +121,7 @@ describe('startRuns', () => {
       concurrent -= 1;
       return { text: goodPage };
     });
-    const runs = await startRuns({ models: [model, { ...model, modelId: 'example-coder:7b' }], pageCount: 1 });
+    const runs = await startRuns({ models: [model, { ...model, modelId: 'example-coder:7b' }], pages: PAGES.slice(0, 1) });
     await Promise.all(runs.map((r) => settled(r.id)));
     expect(peak).toBe(1);
   });
@@ -118,11 +130,11 @@ describe('startRuns', () => {
 describe('listRuns', () => {
   it('returns summaries without the generated HTML, while a single run read keeps it', async () => {
     generate.mockResolvedValue({ text: goodPage });
-    const [queued] = await startRuns({ models: [model], pageCount: 1 });
+    const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     await settled(queued.id);
     const [summary] = await listRuns();
     expect(summary.pages[0]).not.toHaveProperty('html');
-    expect(summary.pages[0]).toMatchObject({ theme: queued.themes[0], passed: 5, total: 5 });
+    expect(summary.pages[0]).toMatchObject({ theme: PAGES[0], passed: 6, total: 6 });
     expect((await readRun(queued.id)).pages[0].html).toBe(goodPage);
   });
 });
@@ -141,7 +153,7 @@ describe('interrupted and deleted runs', () => {
       release = () => resolve({ text: goodPage });
       signal.addEventListener('abort', release);
     }));
-    const [queued] = await startRuns({ models: [model], pageCount: 2 });
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
     await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
     await removeRun(queued.id);
     release();

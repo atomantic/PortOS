@@ -1,19 +1,18 @@
 /**
- * Fixed themes, prompt and mechanical page checks for the HTML Pages bench: ask a local model for one to five creative standalone HTML pages and judge them side by side.
+ * Default page briefs, prompt and mechanical page checks for the HTML Pages bench: ask a local model for one to five creative standalone HTML pages and judge them side by side.
  *
- * The brief is fixed so two models' galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
+ * The person writes each page's brief; PortOS only adds fixed standalone-file rules around it, shown beside it before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
  */
 
 /** The most pages one run may ask for; the default is what the form pre-selects. */
 export const HTML_PAGES_MAX = 5;
 export const HTML_PAGES_DEFAULT = 3;
 
+/** The longest page brief accepted; the prompt carries it verbatim, never truncated. */
+export const HTML_BRIEF_MAX_CHARS = 2000;
+
 /**
- * Fixed themes, in order: page N of a run is always theme N, for every model, so
- * two models' galleries are comparable page for page. They are deliberately
- * unlike each other (a simulation, a toy, a scene, an instrument, a diagram), so
- * "zero repetitive designs" is a property of the brief rather than something a
- * model has to remember across separate requests.
+ * The briefs the form starts with: page N of a default run is theme N, for every model. They are deliberately unlike each other (a simulation, a toy, a scene, an instrument, a diagram), so "zero repetitive designs" is a property of the brief. The person can edit, replace or clear them.
  */
 export const HTML_PAGE_THEMES = Object.freeze([
   'Rain on Glass: a window pane in a storm, with droplets that gather and run',
@@ -23,19 +22,31 @@ export const HTML_PAGE_THEMES = Object.freeze([
   'The Pentatonic Parlour: an instrument you can play with the mouse or keyboard',
 ]);
 
-/** The prompt for one page. One request per page, so each page gets the model's full attention and token budget. */
-export const htmlPagePrompt = (theme) => [
-  'Create one standalone HTML file.',
-  '',
-  `Theme: ${theme}.`,
-  '',
-  'Rules:',
-  '- It must look stunning.',
-  '- Go full creative mode: its own layout, palette, typography and motion. Do not use a generic template.',
-  '- Make it interactive or animated, not a static poster.',
-  '- Everything inline: one file with its own <style> and <script>. No external fonts, images, scripts or network requests.',
-  '- Reply with only the complete HTML document, starting at <!doctype html>.',
-].join('\n');
+/** Creative direction the default briefs carry as ordinary text, so the person sees it in the box and can change or drop it. */
+const DEFAULT_DIRECTION = 'It must look stunning: go full creative mode with its own layout, palette, typography and motion, and make it interactive or animated.';
+
+/** The briefs the form is pre-filled with. */
+export const HTML_PAGE_DEFAULT_BRIEFS = Object.freeze(HTML_PAGE_THEMES.map((theme) => `${theme}. ${DEFAULT_DIRECTION}`));
+
+/**
+ * The fixed text PortOS puts around a page brief. Exported on its own so the form can show exactly what is added before and after what the person typed, built by the same code that sends it.
+ */
+export const htmlPagePromptParts = () => ({
+  before: 'Create one standalone HTML file.\n\n',
+  after: [
+    '',
+    '',
+    'Rules:',
+    '- Everything inline: one file with its own <style> and <script>. No external fonts, images, scripts or network requests.',
+    '- Reply with only the complete HTML document, starting at <!doctype html>.',
+  ].join('\n'),
+});
+
+/** The prompt for one page: the brief exactly as written between the fixed parts. One request per page, so each page gets the model's full attention and token budget. */
+export const htmlPagePrompt = (brief) => {
+  const { before, after } = htmlPagePromptParts();
+  return `${before}${brief}${after}`;
+};
 
 // ---- scoring ----------------------------------------------------------------
 
@@ -45,10 +56,7 @@ const HTML_MIN_BYTES = 1200;
 /**
  * Pull the HTML document out of a model reply.
  *
- * Models wrap it in a fence or add a sentence of preamble even when told not to;
- * both are format slips, not failures of the page itself, so the document is cut
- * out rather than the whole reply being scored. The page is kept exactly as
- * written — nothing is repaired — so a truncated one still reads as truncated.
+ * Models wrap it in a fence or add a sentence of preamble even when told not to; both are format slips, not failures of the page itself, so the document is cut out rather than the whole reply being scored. A thinking model may also write its plan first and mention `<!doctype html>` or `<svg>` in it, so the LAST document start wins and prose that merely mentions tags is not a page. The page is kept exactly as written — nothing is repaired — so a truncated one still reads as truncated.
  *
  * @returns {string} the document, or '' when the reply holds no HTML at all
  */
@@ -56,9 +64,13 @@ export function extractHtmlDocument(text) {
   const raw = String(text || '');
   const fenced = /```(?:html)?[ \t]*\r?\n([\s\S]*?)(?:\r?\n```|$)/i.exec(raw);
   const body = fenced && /<(?:!doctype|html|body|style|div|canvas|svg)\b/i.test(fenced[1]) ? fenced[1] : raw;
-  const start = body.search(/<!doctype html|<html[\s>]/i);
+  // A doctype opens the document when there is one; `<html>` alone only when there is not, so the two never split a single document.
+  const lastIndex = (re) => [...body.matchAll(re)].reduce((_, match) => match.index, -1);
+  const doctype = lastIndex(/<!doctype html/gi);
+  const start = doctype >= 0 ? doctype : lastIndex(/<html[\s>]/gi);
   if (start >= 0) return body.slice(start).trim();
-  return /<(?:body|style|div|canvas|svg|script)\b/i.test(body) ? body.trim() : '';
+  // No document start: accept a bare fragment only when the whole reply is markup, never prose that mentions a tag.
+  return /^\s*<[a-z]/i.test(body) ? body.trim() : '';
 }
 
 /**
@@ -77,6 +89,8 @@ export function scoreHtmlPage(html) {
     { id: 'styled', label: 'Has its own styles', ok: /<style[\s>]/i.test(doc) },
     { id: 'interactive', label: 'Has script or animation', ok: /<script[\s>]/i.test(doc) || /@keyframes|animation\s*:/i.test(doc) },
     { id: 'self-contained', label: 'No external resources', ok: !external },
+    // A model that answers with an outline writes `<style>...</style>` and `<script>...</script>` instead of the code.
+    { id: 'real-code', label: 'Real code, not "..." placeholders', ok: !/<(style|script)\b[^>]*>\s*(?:\.{3}|…)\s*<\/\1>/i.test(doc) },
   ];
   const passed = checks.filter((c) => c.ok).length;
   return { checks, passed, total: checks.length, bytes: doc.length };
@@ -100,6 +114,6 @@ export function scoreHtmlPages(pages) {
     complete,
     rendered,
     pages: scored.map(({ checks, passed, total, bytes, error }) => ({ checks, passed, total, bytes, error })),
-    summary: `${complete} of ${scored.length} page${scored.length === 1 ? '' : 's'} complete and self-contained`,
+    summary: `${complete} of ${scored.length} page${scored.length === 1 ? '' : 's'} pass every check`,
   };
 }

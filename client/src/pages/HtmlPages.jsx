@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { AlertTriangle, Check, GalleryVertical, LoaderCircle, Play, Trash2, X } from 'lucide-react';
+import { Check, GalleryVertical, LoaderCircle, Play, Plus, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
@@ -23,8 +24,14 @@ const STATUS = {
 };
 const isActive = (run) => run.status === 'queued' || run.status === 'generating';
 
+// "Complete" is the generation finishing, which says nothing about whether the pages are usable, so a finished run is labelled by what its pages scored.
+const FINISHED_BY_VERDICT = {
+  partial: { label: 'Partial', cls: 'bg-port-warning/15 text-port-warning' },
+  failed: { label: 'No usable pages', cls: 'bg-port-error/15 text-port-error' },
+};
+
 function StatusChip({ run }) {
-  const meta = STATUS[run.status] || STATUS.failed;
+  const meta = (run.status === 'complete' && FINISHED_BY_VERDICT[run.detail?.verdict]) || STATUS[run.status] || STATUS.failed;
   return (
     <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] ${meta.cls}`}>
       {isActive(run) && <LoaderCircle size={11} className="animate-spin" aria-hidden="true" />}
@@ -33,10 +40,20 @@ function StatusChip({ run }) {
   );
 }
 
-/** Pick installed models, then queue one run per model. Names the models, page count and exact prompt before anything runs. */
+/** A short name for a page brief: its first clause, for column rows and frame titles. The full text is always kept on the run. */
+const briefLabel = (brief) => {
+  const first = String(brief || '').trim().split('\n')[0];
+  const clause = /^(.{1,40}?)[:.]/.exec(first)?.[1] || first;
+  return clause.length > 40 ? `${clause.slice(0, 40).trimEnd()}…` : clause;
+};
+
+/**
+ * Pick installed models and write the page briefs, then queue one run per model.
+ * The briefs are sent as typed, between fixed PortOS text that is shown here and in the full prompt. A blank or over-long brief blocks the run instead of being altered.
+ */
 function RunForm({ catalog, onStarted }) {
   const [selected, setSelected] = useState(() => new Set());
-  const [pageCount, setPageCount] = useState(catalog.pageCountDefault);
+  const [pages, setPages] = useState(() => catalog.defaultPages.slice(0, 3));
   const [starting, setStarting] = useState(false);
   const keyOf = (m) => `${m.backend}\u0000${m.modelId}`;
   const byRuntime = useMemo(() => {
@@ -50,14 +67,21 @@ function RunForm({ catalog, onStarted }) {
     if (next.has(keyOf(m))) next.delete(keyOf(m)); else next.add(keyOf(m));
     return next;
   });
+  const setBrief = (index, value) => setPages((prev) => prev.map((brief, i) => (i === index ? value : brief)));
+  const addPage = () => setPages((prev) => [...prev, catalog.defaultPages[prev.length] ?? '']);
+  const removePage = (index) => setPages((prev) => prev.filter((_, i) => i !== index));
 
+  const { before, after } = catalog.promptParts;
+  const problems = pages.map((brief) => (!brief.trim() ? 'Write a brief for this page, or remove it.' : (brief.length > catalog.briefMaxChars ? `${brief.length} characters — the limit is ${catalog.briefMaxChars}.` : null)));
   const chosen = catalog.models.filter((m) => selected.has(keyOf(m)));
+  const ready = chosen.length > 0 && problems.every((p) => !p);
+
   const start = async (event) => {
     event.preventDefault();
-    if (!chosen.length || starting) return;
+    if (!ready || starting) return;
     setStarting(true);
     const runs = await startHtmlPageRuns(
-      { models: chosen.map(({ backend, modelId }) => ({ backend, modelId })), pageCount },
+      { models: chosen.map(({ backend, modelId }) => ({ backend, modelId })), pages },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Could not start the runs'); return null; });
     setStarting(false);
@@ -67,23 +91,17 @@ function RunForm({ catalog, onStarted }) {
   };
 
   return (
-    <form onSubmit={start} className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
+    <form onSubmit={start} className="space-y-4 rounded-xl border border-port-border bg-port-card p-4">
       <div>
-        <h3 className="text-sm font-medium text-white">Run a comparison</h3>
+        <h2 className="text-sm font-medium text-white">Run a comparison</h2>
         <p className="mt-1 text-xs text-gray-400">
-          Each selected model is asked for the same fixed pages, one request per page, one after another. Pick as many installed models as you like.
+          Every selected model gets the same page briefs, one request per page, one model after another.
         </p>
       </div>
 
-      {catalog.listErrors.length > 0 && (
-        <p className="flex items-start gap-1.5 text-xs text-port-warning" role="alert">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
-          Could not read: {catalog.listErrors.map((e) => `${e.label}${e.offline ? ' (not running)' : ''}`).join(', ')}.
-        </p>
-      )}
-      {catalog.models.length === 0 && <p className="text-xs text-gray-500">No installed models were found on any runtime.</p>}
-
       <div className="space-y-2">
+        <h3 className="text-xs font-medium text-gray-300">Models</h3>
+        {catalog.models.length === 0 && <p className="text-xs text-gray-500">No installed models were found on any runtime.</p>}
         {byRuntime.map(([label, models]) => (
           <fieldset key={label} className="min-w-0">
             <legend className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">{label}</legend>
@@ -105,37 +123,74 @@ function RunForm({ catalog, onStarted }) {
         ))}
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label htmlFor="html-pages-count" className="mb-1 block text-xs text-gray-400">Pages per model</label>
-          <select id="html-pages-count" value={pageCount} onChange={(e) => setPageCount(Number(e.target.value))} className="min-h-[44px] rounded-lg border border-port-border bg-port-bg px-3 text-sm text-white focus:border-port-accent focus:outline-none">
-            {Array.from({ length: catalog.pageCountMax }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-medium text-gray-300">Pages to ask for</h3>
+          <button type="button" onClick={() => setPages(catalog.defaultPages.slice(0, 3))} className="min-h-[44px] rounded px-2 text-xs text-gray-400 hover:text-white">Reset to the defaults</button>
         </div>
-        <button type="submit" disabled={!chosen.length || starting} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 text-sm font-medium text-port-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
-          {starting ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
-          {chosen.length ? `Run ${chosen.length} model${chosen.length === 1 ? '' : 's'} × ${pageCount} page${pageCount === 1 ? '' : 's'}` : 'Select models to run'}
-        </button>
+        {pages.map((brief, index) => (
+          <div key={index} className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor={`html-page-brief-${index}`} className="text-xs text-gray-400">Page {index + 1}</label>
+              {pages.length > 1 && (
+                <button type="button" onClick={() => removePage(index)} aria-label={`Remove page ${index + 1}`} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-gray-500 hover:text-port-error"><X size={14} /></button>
+              )}
+            </div>
+            <textarea
+              id={`html-page-brief-${index}`}
+              value={brief}
+              onChange={(e) => setBrief(index, e.target.value)}
+              rows={3}
+              aria-invalid={Boolean(problems[index])}
+              className="w-full resize-y rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-port-accent focus:outline-none"
+            />
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className={problems[index] ? 'text-port-error' : 'text-gray-600'} role={problems[index] ? 'alert' : undefined}>{problems[index] || 'Sent exactly as written.'}</span>
+              <span className={brief.length > catalog.briefMaxChars ? 'text-port-error' : 'text-gray-600'}>{brief.length}/{catalog.briefMaxChars}</span>
+            </div>
+          </div>
+        ))}
+        {pages.length < catalog.pageCountMax && (
+          <button type="button" onClick={addPage} className="inline-flex min-h-[44px] items-center gap-1.5 rounded border border-dashed border-port-border px-3 text-xs text-gray-300 hover:border-port-accent hover:text-white">
+            <Plus size={12} /> Add a page
+          </button>
+        )}
+        <details className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
+          <summary className="cursor-pointer text-gray-300">Text PortOS adds around each brief</summary>
+          <p className="mt-2">Before your brief:</p>
+          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{before}</pre>
+          <p className="mt-2">After your brief:</p>
+          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{after}</pre>
+        </details>
+        <details className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
+          <summary className="cursor-pointer text-gray-300">Show the full prompt for each page</summary>
+          {pages.map((brief, index) => (
+            <div key={index} className="mt-2">
+              <p>Page {index + 1}</p>
+              <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{before + brief + after}</pre>
+            </div>
+          ))}
+        </details>
       </div>
 
-      <details className="text-xs text-gray-400">
-        <summary className="cursor-pointer text-gray-300">What PortOS will send</summary>
-        <p className="mt-2">Page N always uses theme N, so every model gets the same brief: {catalog.themes.slice(0, pageCount).map((t) => t.split(':')[0]).join(', ')}.</p>
-        <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-port-border bg-port-bg p-3 font-mono text-[11px] leading-relaxed text-gray-300">{catalog.promptExample}</pre>
-        <p className="mt-2">Pages are previewed in a sandbox with network access blocked. The model&apos;s HTML is stored exactly as it returned it.</p>
-      </details>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" disabled={!ready || starting} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 text-sm font-medium text-port-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+          {starting ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
+          {chosen.length ? `Run ${chosen.length} model${chosen.length === 1 ? '' : 's'} × ${pages.length} page${pages.length === 1 ? '' : 's'}` : 'Select models to run'}
+        </button>
+        <span className="text-[11px] text-gray-500">Pages preview in a sandbox with network access blocked. The model&apos;s HTML is stored exactly as it returned it.</span>
+      </div>
     </form>
   );
 }
 
 function RunCard({ run, selected, compareFull, onToggle, onDelete }) {
   const [confirming, setConfirming] = useState(false);
-  const checked = run.pages.filter((p) => p.passed === p.total).length;
   return (
     <li className={`flex flex-col gap-2 rounded-xl border bg-port-card p-3 ${selected ? 'border-port-accent' : 'border-port-border'}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h4 className="break-all font-mono text-sm text-white">{run.modelId}</h4>
+          <h3 className="break-all font-mono text-sm text-white">{run.modelId}</h3>
           <p className="text-[11px] text-gray-500">{run.backend} · {timeAgo(run.createdAt)}</p>
         </div>
         <StatusChip run={run} />
@@ -146,7 +201,6 @@ function RunCard({ run, selected, compareFull, onToggle, onDelete }) {
         {isActive(run) && `${run.progress?.done ?? 0} of ${run.progress?.total ?? run.pageCount} pages`}
         {run.status === 'complete' && run.finishedAt && run.startedAt ? ` · ${formatDurationMs(Date.parse(run.finishedAt) - Date.parse(run.startedAt))}` : ''}
       </p>
-      {run.pages.length > 0 && <p className="text-[11px] text-gray-500">{checked} of {run.pages.length} pages pass every check</p>}
       <div className="mt-auto flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => onToggle(run.id)} disabled={!selected && compareFull} aria-pressed={selected} className={`min-h-[44px] rounded border px-3 text-xs ${selected ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-300 hover:border-port-accent'} disabled:opacity-40`}>
           {selected ? 'In comparison' : 'Compare'}
@@ -176,7 +230,7 @@ function Comparison({ ids, onRemove }) {
   if (error) return <ListLoadError what="the selected runs" error={error} />;
   if (loading || !runs) return <PageSkeleton label="Loading the selected runs" />;
 
-  const themes = runs.reduce((longest, run) => (run.themes.length > longest.length ? run.themes : longest), []);
+  const rows = Math.max(0, ...runs.map((run) => run.themes.length));
   const columns = { gridTemplateColumns: `repeat(${runs.length}, minmax(17rem, 1fr))` };
   return (
     <section aria-label="Comparison" className="space-y-3">
@@ -194,20 +248,26 @@ function Comparison({ ids, onRemove }) {
               </div>
             </div>
           ))}
-          {themes.map((theme, row) => (
+          {Array.from({ length: rows }, (_, row) => (
             runs.map((run) => {
               const page = run.pages[row];
+              const brief = run.themes[row];
+              const label = briefLabel(brief);
               return (
                 <div key={`${run.id}:${row}`} className="min-w-0 space-y-1">
-                  <p className="truncate text-[11px] text-gray-400" title={theme}>{theme.split(':')[0]}</p>
+                  <p className="truncate text-[11px] text-gray-400" title={brief}>{label || '—'}</p>
                   {page
-                    ? <HtmlPreviewFrame html={page.html} title={`${run.modelId} — ${theme.split(':')[0]}`} />
+                    ? <HtmlPreviewFrame html={page.html} title={`${run.modelId} — ${label}`} />
                     : <div className="flex aspect-[16/10] items-center justify-center rounded-lg border border-dashed border-port-border text-xs text-gray-500">{isActive(run) ? 'Not generated yet' : 'No page'}</div>}
                   {page && (
-                    <p className="text-[11px] text-gray-500">
-                      {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs)}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
-                      {page.error ? <span className="text-port-warning"> · {page.error}</span> : ''}
-                    </p>
+                    <div className="space-y-0.5 text-[11px] text-gray-500">
+                      <p>
+                        {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs)}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
+                        {page.error ? <span className="text-port-warning"> · {page.error}</span> : ''}
+                      </p>
+                      {page.hitTokenLimit && <p className="text-port-warning">Stopped at the token limit — the model was cut off before it finished.</p>}
+                      {page.checks?.some((c) => !c.ok) && <p>Failed: {page.checks.filter((c) => !c.ok).map((c) => c.label).join('; ')}</p>}
+                    </div>
                   )}
                 </div>
               );
@@ -254,15 +314,11 @@ export default function HtmlPages() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-5">
-      <header className="flex items-start gap-3">
-        <GalleryVertical className="mt-0.5 h-7 w-7 shrink-0 text-port-accent" aria-hidden="true" />
-        <div>
-          <h2 className="text-xl font-semibold text-white">HTML Pages</h2>
-          <p className="mt-1 text-sm text-gray-400">
-            Ask local models for creative standalone web pages and compare them side by side. Every run is kept here as a reference.
-          </p>
-        </div>
-      </header>
+      <PageHeader
+        icon={GalleryVertical}
+        title="HTML Pages"
+        subtitle="Ask local models for creative standalone web pages and compare them side by side. Every run is kept here as a reference."
+      />
 
       {catalogError
         ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
@@ -271,7 +327,7 @@ export default function HtmlPages() {
       {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
 
       <section>
-        <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h3>
+        <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h2>
         {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
         {!error && loading && <PageSkeleton label="Loading runs" />}
         {!error && !loading && runs && runs.length === 0 && (
