@@ -181,7 +181,7 @@ async function handleTaskReady(task) {
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {
-        cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed' });
+        cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed', error: err?.message || String(err) });
       }
       // Same task-level error contract as the workspace-prep failure path.
       cosEvents.emit('agent:error', { taskId: task.id, error: err?.message || String(err) });

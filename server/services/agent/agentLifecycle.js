@@ -139,7 +139,7 @@ async function runAdmittedAgentSpawn(task, permit) {
       emit: optionRefusal ? null : 'agent:error',
     });
     if (task.metadata?.jobId) {
-      cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed' });
+      cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId, reason: 'failed', error: setupError });
     }
     return null;
   } finally {

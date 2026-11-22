@@ -1,8 +1,8 @@
 import { sortByLabel } from '../../lib/sortByLabel.js';
 import { useState, useEffect } from 'react';
-import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
+import { AlertTriangle, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
-import { updateCosJob } from '../../services/apiAgents.js';
+import { updateCosJob, acknowledgeCosJobIncident } from '../../services/apiAgents.js';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
 import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL, scheduleAnchorKindForInterval } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
@@ -418,6 +418,17 @@ export default function JobCard({
     onUpdate();
   };
 
+  const incident = job.openIncident;
+  const handleAcknowledge = async () => {
+    const result = await acknowledgeCosJobIncident(incident.id, { silent: true }).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    if (!result) return;
+    toast.success('Incident acknowledged');
+    onUpdate();
+  };
+
   const isDue = job.enabled && !isOnDemandSchedule(job)
     && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
@@ -457,6 +468,29 @@ export default function JobCard({
           </div>
           {job.description?.trim() && (
             <p className="text-xs text-gray-400 truncate mt-1" title={job.description}>{job.description}</p>
+          )}
+          {incident && (
+            <div className="flex items-center gap-2 text-xs mt-1 flex-wrap" data-testid="job-incident">
+              <span
+                className={`flex items-center gap-1 ${incident.state === 'acknowledged' ? 'text-gray-400' : 'text-port-error'}`}
+                title={incident.sampleError}
+              >
+                <AlertTriangle size={12} />
+                {job.lastStatus === 'blocked_config' ? 'Blocked by configuration' : 'Failing'}
+                {incident.occurrenceCount > 1 && ` ×${incident.occurrenceCount}`}
+                {incident.state === 'acknowledged' && ' (acknowledged)'}
+              </span>
+              <span className="text-gray-500 truncate max-w-full" title={incident.sampleError}>{incident.sampleError}</span>
+              {incident.state !== 'acknowledged' && (
+                <button
+                  type="button"
+                  onClick={handleAcknowledge}
+                  className="min-h-[44px] px-3 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
+                >
+                  Acknowledge
+                </button>
+              )}
+            </div>
           )}
           <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
             <span className="flex items-center gap-1">
