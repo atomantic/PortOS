@@ -75,14 +75,50 @@ export function sanitizeBoardForSync(raw) {
  *     unparseable-loses, tie → local). Tombstones ride the same path.
  * Returns `{ next, inserted, remoteWins, changed }`; `changed` is false when the
  * winner is byte-identical to local. The whole record is LWW-overwritten (no
- * field-union), so it is hashed in full by `contentHashForRecord`.
+ * field-union), so it is hashed in full by `contentHashForRecord`, except the
+ * video-pin preserve below: a sender that cannot represent `type: 'video'`
+ * must not erase pins the receiver already stored.
  */
-export function mergeBoardRecord(local, remoteRaw) {
+
+// moodBoards wire v2 is the first version that round-trips video pins
+// (`schemaVersions.js`). A later bump must not move this floor: a v2 sender
+// already owns video deletions.
+const MOOD_BOARDS_VIDEO_ITEM_VERSION = 2;
+
+function itemId(item) {
+  return item && typeof item.id === 'string' && item.id ? item.id : null;
+}
+
+// When a pre-v2 remote wins on a live board, append local video pins whose id
+// is absent from the remote items. Image and text pins stay the remote's.
+// A remote tombstone is applied as sent so a delete still removes the board.
+function preserveVideoPinsFromPreVideoSender(remote, local, senderSchemaVersions) {
+  if (remote.deleted === true) return remote;
+  const senderVersion = Number(senderSchemaVersions?.moodBoards) || 0;
+  if (senderVersion >= MOOD_BOARDS_VIDEO_ITEM_VERSION) return remote;
+  const remoteItems = Array.isArray(remote.items) ? remote.items : [];
+  const localItems = Array.isArray(local?.items) ? local.items : [];
+  const seen = new Set(remoteItems.map(itemId).filter(Boolean));
+  const kept = [];
+  for (const item of localItems) {
+    if (!item || item.type !== 'video') continue;
+    const id = itemId(item);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    kept.push(item);
+  }
+  if (kept.length === 0) return remote;
+  return { ...remote, items: [...remoteItems, ...kept] };
+}
+
+export function mergeBoardRecord(local, remoteRaw, { senderSchemaVersions = null } = {}) {
   const remote = sanitizeBoardForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
-  const next = remoteWins ? remote : local;
+  const next = remoteWins
+    ? preserveVideoPinsFromPreVideoSender(remote, local, senderSchemaVersions)
+    : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }
