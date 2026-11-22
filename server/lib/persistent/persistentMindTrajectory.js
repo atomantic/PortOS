@@ -511,13 +511,17 @@ export function assemblePersistentMindContext({
   const memoryBlock = memoryBudget > 0
     ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
     : '(omitted due to context budget)';
+  const identitySection = `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`;
+  const instructionsSection = `# Operating instructions\n${instructionsText || '(none)'}`;
+  const memorySection = `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`;
+  const journalSection = `# Decision journal\n${journalText || '(none)'}`;
   const prefix = [
-    `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
-    `# Operating instructions\n${instructionsText || '(none)'}`,
+    identitySection,
+    instructionsSection,
     // Ahead of the sections the final slice can cut, so an admitted note stays whole.
     ...(noteSection ? [noteSection] : []),
-    `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`,
-    `# Decision journal\n${journalText || '(none)'}`,
+    memorySection,
+    journalSection,
   ].join('\n\n');
   const summaryLines = effectiveReadyRollups
     .map((rollup) => `[events ${rollup.source.fromSequence}-${rollup.source.toSequence}; ${rollup.provenance.providerId || 'unknown'}/${rollup.provenance.model || 'default'}; prompt v${rollup.provenance.promptVersion}]\n${rollup.summary}`);
@@ -553,11 +557,9 @@ export function assemblePersistentMindContext({
     recentLines.unshift(line);
     recentChars += separator + line.length;
   }
-  const sections = [
-    prefix,
-    `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`,
-    `# Recent trajectory\n${recentLines.join('\n')}`,
-  ];
+  const olderSection = `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`;
+  const recentSection = `# Recent trajectory\n${recentLines.join('\n')}`;
+  const sections = [prefix, olderSection, recentSection];
   let text = sections.join('\n\n').slice(0, cap);
   let reflectionState = reflection?.state || 'disabled';
   let reflectionBlock = '';
@@ -596,6 +598,24 @@ export function assemblePersistentMindContext({
     journalActiveCount: journalSummary.activeCount,
     identityChars: identityText.length,
     instructionsChars: instructionsText.length,
+    // Aggregate rendered-character counts per prompt section (no text), for the
+    // context-window breakdown. Pre-final-slice, so they can sum to slightly
+    // more than `chars` when the hard cap cut the tail. The `memories*` figures
+    // split the baseline lines by origin (protected / recalled-for-this-message
+    // / ordinary); the fenced block adds the remaining framing.
+    sectionChars: {
+      identity: identitySection.length,
+      instructions: instructionsSection.length,
+      continuationNote: noteSection.length,
+      memories: memorySection.length,
+      memoriesProtected: protectedLines.join('\n').length,
+      memoriesRecalled: recalledLines.join('\n').length,
+      memoriesOrdinary: ordinaryLines.join('\n').length,
+      journalDigest: journalSection.length,
+      rollups: olderSection.length,
+      recentTrajectory: recentSection.length,
+      reflection: reflectionBlock.length,
+    },
   };
 }
 

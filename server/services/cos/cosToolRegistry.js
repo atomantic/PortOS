@@ -984,6 +984,31 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
   return renderSelection();
 };
 
+/**
+ * Read-only cost of the tool-catalog section a wake would currently render:
+ * total characters plus the full-schema characters each exposed family holds.
+ * Never ages a lease or logs (no turnId/isUserTurn/trace); `overheadChars` is
+ * the header, footer and discoverable-family index around the schemas. Names
+ * and counts only, no schema text.
+ */
+export const describePersistentMindToolCost = async (capabilities, recipes = []) => {
+  let selectedNames = [];
+  const prompt = await buildPersistentMindToolPrompt(capabilities, recipes, { onSelection: (names) => { selectedNames = names; } });
+  const byName = new Map(getCosToolCatalog({ scope: 'mind', capabilities, recipes }).tools.map((tool) => [tool.name, tool]));
+  const families = new Map();
+  for (const name of selectedNames) {
+    const tool = byName.get(name);
+    const family = tool?.family || 'other';
+    const entry = families.get(family) || { family, tools: 0, chars: 0 };
+    entry.tools += 1;
+    entry.chars += tool ? JSON.stringify(fullSchemaShape(tool)).length : 0;
+    families.set(family, entry);
+  }
+  const familyList = [...families.values()];
+  const schemaChars = familyList.reduce((sum, entry) => sum + entry.chars, 0);
+  return { totalChars: prompt.length, overheadChars: Math.max(0, prompt.length - schemaChars), families: familyList };
+};
+
 export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);
 
 const resolveTool = (name) => toolCatalog().find((tool) =>

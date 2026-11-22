@@ -308,12 +308,18 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
     memories,
     reflection,
   });
+  const { readPersistentMindContextBreakdown } = await import('../services/persistent/persistentMindContextBreakdownService.js');
+  const breakdown = await readPersistentMindContextBreakdown({
+    preview, provider, profile,
+    capabilities: normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities),
+  });
   res.json({
     prompt,
     playbook,
     playbookPhase,
     playbookCatalog: PERSISTENT_MIND_PLAYBOOK_CATALOG,
     preview,
+    breakdown,
     memories,
     rollups,
     harness: persistentMindHarnessInfo(provider),
