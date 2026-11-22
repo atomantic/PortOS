@@ -120,6 +120,8 @@ export default function AIProviders() {
   // just rotted should surface without the user reloading the page.
   const [modelPinReloadKey, setModelPinReloadKey] = useState(0);
   const [refreshing, setRefreshing] = useState({});
+  // A typed refusal (e.g. MTPLX stopped with no saved launch line) is rendered inline on the card rather than toasted — so the card can name the fix and link to it. Keyed by provider id.
+  const [refreshNotice, setRefreshNotice] = useState({});
   // `undefined` = this page has not asked the account endpoint yet; `null` =
   // the endpoint did not give a verdict. The distinction keeps a failed fetch
   // from posing as either signed out or ready.
@@ -598,6 +600,12 @@ export default function AIProviders() {
   // must not leave the stale map behind.
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
+    setRefreshNotice(prev => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     try {
       const result = await refreshProviderModels(id, { silent: true });
       if (result) {
@@ -619,7 +627,13 @@ export default function AIProviders() {
         toast.error('Failed to refresh models - provider may not support this feature');
       }
     } catch (error) {
-      toast.error(`Error refreshing models: ${error.message}`);
+      // The typed stopped result the card renders inline — nothing toasts, so
+      // the card is the one place the fix is named.
+      if (error?.code === 'MTPLX_STOPPED') {
+        setRefreshNotice(prev => ({ ...prev, [id]: { message: error.message } }));
+      } else {
+        toast.error(`Error refreshing models: ${error.message}`);
+      }
     } finally {
       setRefreshing(prev => ({ ...prev, [id]: false }));
     }
@@ -965,6 +979,7 @@ export default function AIProviders() {
           runnerAllowedCommands={runnerAllowedCommands}
           testResults={testResults}
           refreshing={refreshing}
+          refreshNotice={refreshNotice}
           recovering={recovering}
           addingTuiMode={addingTuiMode}
           servingModel={servingModel}
