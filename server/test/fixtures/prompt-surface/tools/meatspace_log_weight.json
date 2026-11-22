@@ -1,0 +1,28 @@
+{
+  "name": "meatspace_log_weight",
+  "description": "Log a body weight entry to MortalLoom / Meatspace tracking. Use when the user says \"log my weight at 180\", \"I weigh 175 today\", \"weigh-in at eighty kilos\". Defaults to today. Unit is lb unless the user explicitly mentions kg.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "weight": {
+        "type": "number",
+        "description": "Body weight value."
+      },
+      "unit": {
+        "type": "string",
+        "enum": [
+          "lb",
+          "kg"
+        ],
+        "description": "Unit (lb or kg). Default lb."
+      },
+      "date": {
+        "type": "string",
+        "description": "ISO date (YYYY-MM-DD). Omit for today."
+      }
+    },
+    "required": [
+      "weight"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "calendar.today",
+  "description": "Report today's calendar events. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max events to return (default 10, max 20)."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

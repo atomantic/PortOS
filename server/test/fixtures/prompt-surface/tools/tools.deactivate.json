@@ -1,0 +1,28 @@
+{
+  "name": "tools.deactivate",
+  "description": "Collapse one or more tool families back to their one-line discoverable index. Clears both this turn's selection and any retained lease. Omit families to clear all of them.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "families": {
+        "minItems": 1,
+        "maxItems": 7,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "tasks",
+            "issues",
+            "reports",
+            "mind",
+            "eidoverse",
+            "recipes",
+            "voice"
+          ]
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

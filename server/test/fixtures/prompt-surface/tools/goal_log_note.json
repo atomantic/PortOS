@@ -1,0 +1,25 @@
+{
+  "name": "goal_log_note",
+  "description": "Attach a free-form progress note to an EXISTING NAMED GOAL (without changing the percent). ONLY use when the user explicitly references a specific goal by its title or short name — phrasings like \"log on my <goal> goal that I talked to Y\", \"add a note to my jacket goal — found the pattern\", \"update my estate goal: signed the papers\". DO NOT use for generic life events like \"set up the cat litter box\", \"I went for a walk\", \"the dishwasher broke\" — those have no goal context and belong in daily_log_append. If the user did not say the word \"goal\" or name a specific known goal, this is the wrong tool. Matches the goal by fuzzy title match — but if the matched score is weak the call returns ok:false; do not invent a query that doesn't come from the user's words.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "goalQuery": {
+        "type": "string",
+        "description": "A distinctive word or phrase from the goal title."
+      },
+      "note": {
+        "type": "string",
+        "description": "The progress note in the user's words."
+      },
+      "durationMinutes": {
+        "type": "number",
+        "description": "Optional time spent on this activity (minutes)."
+      }
+    },
+    "required": [
+      "goalQuery",
+      "note"
+    ]
+  }
+}

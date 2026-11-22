@@ -1,0 +1,13 @@
+{
+  "name": "goal_list",
+  "description": "List the user's active goals with their current progress percent. Use when they ask \"what are my goals?\", \"how am I doing on my goals?\", \"what am I working on?\". Returns up to 10 goals ordered by urgency.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max goals to return (default 10)."
+      }
+    }
+  }
+}

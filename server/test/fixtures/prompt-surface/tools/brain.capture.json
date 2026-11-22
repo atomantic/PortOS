@@ -1,0 +1,18 @@
+{
+  "name": "brain.capture",
+  "description": "Capture a thought, note, idea, todo, reminder, or any free-form information to the user's brain inbox for later classification. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The content to capture, phrased naturally. Include who/what/when/why details if the user mentioned them."
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

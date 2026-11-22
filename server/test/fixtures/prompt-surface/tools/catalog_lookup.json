@@ -1,0 +1,32 @@
+{
+  "name": "catalog_lookup",
+  "description": "Search the creative ingredients catalog (characters, places, objects, ideas, scenes, concepts) by name or content. Use when the user asks \"do I have a character named X?\", \"find my places\", \"look up the scene where Y happens\", \"what concepts are in my catalog about Z\". Returns up to `limit` matches (default 5) with id, name, type, a short snippet, and link count. Pass `type` to narrow to a single kind.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Free-text search across name + payload content. Use the user's most distinctive phrasing."
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "character",
+          "place",
+          "object",
+          "idea",
+          "scene",
+          "concept"
+        ],
+        "description": "Optional: restrict to one ingredient kind."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Max results (default 5, max 20)."
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

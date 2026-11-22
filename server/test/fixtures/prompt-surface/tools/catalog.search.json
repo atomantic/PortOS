@@ -1,0 +1,34 @@
+{
+  "name": "catalog.search",
+  "description": "Search the creative ingredients catalog (characters, places, objects, ideas, scenes, concepts) by name or content. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Free-text search across name + payload content. Use the user's most distinctive phrasing."
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "character",
+          "place",
+          "object",
+          "idea",
+          "scene",
+          "concept"
+        ],
+        "description": "Optional: restrict to one ingredient kind."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Max results (default 5, max 20)."
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

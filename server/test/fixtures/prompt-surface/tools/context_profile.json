@@ -1,0 +1,15 @@
+{
+  "name": "context_profile",
+  "description": "Return the active context profile, scopes, exclusions, and budgets.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.status",
+  "description": "Read compact private Eidoverse setup, CoS presence, design versions, and resolved asset paths. Inspect this before building. An installed runtime may still need starting from the Eidoverse page.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

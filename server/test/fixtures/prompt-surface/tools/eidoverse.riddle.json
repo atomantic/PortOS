@@ -1,0 +1,50 @@
+{
+  "name": "eidoverse.riddle",
+  "description": "Play one explicit riddle-ledger round on an already installed, armed controller. Inspect state.revision, then pass expectedRevision and action: offer (clue, answer), guess (guess), or reveal. One guess per round; reveal before the next offer. No AI calls or recurring announcements. outcome applied means local progress persisted; delivery reports disabled, pending/unknown, acknowledged, or refused separately. Refused delivery does not undo progress and is never retried automatically. The answer stays out of world chat until reveal, but operator inspection includes it. No arbitrary foundation is executed or modified.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "expectedRevision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "offer",
+          "guess",
+          "reveal"
+        ]
+      },
+      "clue": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "answer": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "guess": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      }
+    },
+    "required": [
+      "id",
+      "expectedRevision",
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

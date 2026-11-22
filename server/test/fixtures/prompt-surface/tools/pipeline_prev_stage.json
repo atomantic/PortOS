@@ -1,0 +1,8 @@
+{
+  "name": "pipeline_prev_stage",
+  "description": "Go back to the previous stage of the current pipeline issue. Only works on a /pipeline/issues/... page.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

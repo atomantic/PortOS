@@ -1,0 +1,34 @@
+{
+  "name": "issues.list",
+  "description": "List a managed app's open GitHub/GitLab issues, newest activity first, with labels and a body preview. Read this before filing so you do not re-file work already tracked.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      },
+      "search": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "label": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60
+      }
+    },
+    "required": [
+      "appId"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

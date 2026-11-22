@@ -1,0 +1,15 @@
+{
+  "name": "brain.recent",
+  "description": "Read back the user's most recently captured brain-inbox entries. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "How many entries to return (default 5, max 10)."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

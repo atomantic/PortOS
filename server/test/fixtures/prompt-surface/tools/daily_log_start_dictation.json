@@ -1,0 +1,13 @@
+{
+  "name": "daily_log_start_dictation",
+  "description": "Begin voice dictation into the Daily Log: subsequent user speech is transcribed and appended verbatim to today's log until they say stop. Use when the user says \"start dictation\", \"record my log\", \"begin logging\", \"dictate this\", \"I want to start talking into my daily log\". After calling, do not comment further — just confirm briefly.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "date": {
+        "type": "string",
+        "description": "Target date YYYY-MM-DD; defaults to today."
+      }
+    }
+  }
+}

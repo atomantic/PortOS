@@ -1,0 +1,13 @@
+{
+  "name": "brain_list_recent",
+  "description": "Read back the user's most recently captured brain-inbox entries. Use when they ask \"what are my last notes?\", \"read me my recent captures\", \"what did I jot down today?\".",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "How many entries to return (default 5, max 10)."
+      }
+    }
+  }
+}

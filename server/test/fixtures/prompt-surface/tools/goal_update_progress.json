@@ -1,0 +1,21 @@
+{
+  "name": "goal_update_progress",
+  "description": "Update the progress percent on an active goal. Use when the user says \"bump my jacket goal to 40 percent\", \"set my estate goal to 25\", \"I'm halfway done with X\". Matches the goal by fuzzy title match — if multiple match, the most relevant wins but the alternatives are reported back.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "goalQuery": {
+        "type": "string",
+        "description": "A distinctive word or phrase from the goal title (\"jacket\", \"estate property\")."
+      },
+      "progress": {
+        "type": "number",
+        "description": "New progress percentage, 0 to 100."
+      }
+    },
+    "required": [
+      "goalQuery",
+      "progress"
+    ]
+  }
+}

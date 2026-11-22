@@ -1,0 +1,10 @@
+{
+  "name": "mind.thinking-presets",
+  "description": "List exact approved local thinking presets, current/default route and switching limits.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

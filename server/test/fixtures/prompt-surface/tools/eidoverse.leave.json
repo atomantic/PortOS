@@ -1,0 +1,18 @@
+{
+  "name": "eidoverse.leave",
+  "description": "Disconnect an Eidoverse guest visit.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "visitId": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{48}$"
+      }
+    },
+    "required": [
+      "visitId"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

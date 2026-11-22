@@ -1,0 +1,41 @@
+{
+  "name": "tools.activate",
+  "description": "Expand full schemas for one or more tool families (tasks, issues, reports, mind, eidoverse, recipes, voice) for the rest of this turn, plus a short retention window afterward. Supply up to five exact toolNames from those granted families to prioritize the next actions when family schemas are budget-limited; repeating family activation alone does not resolve that limit. This only changes which schemas you are shown here — it never grants a capability this mind does not already hold.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "families": {
+        "minItems": 1,
+        "maxItems": 7,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "tasks",
+            "issues",
+            "reports",
+            "mind",
+            "eidoverse",
+            "recipes",
+            "voice"
+          ]
+        }
+      },
+      "toolNames": {
+        "minItems": 1,
+        "maxItems": 5,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "required": [
+      "families"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

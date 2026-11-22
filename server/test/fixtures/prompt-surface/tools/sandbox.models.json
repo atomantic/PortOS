@@ -1,0 +1,10 @@
+{
+  "name": "sandbox.models",
+  "description": "List approved tool-free API workers and the trusted evaluator, without calling models.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

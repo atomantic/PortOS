@@ -1,0 +1,10 @@
+{
+  "name": "maintenance.refresh",
+  "description": "Read bounded maintainer evidence and refresh a stale watchdog through its shared ownership-safe dispatch path. Does not force an audit or bypass cadence, grants, budgets or active work.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

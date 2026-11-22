@@ -1,0 +1,10 @@
+{
+  "name": "system.processes.status",
+  "description": "Report the status of PortOS PM2 processes. ",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

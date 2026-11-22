@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.project",
+  "description": "Synchronize current PortOS apps, agents, tasks, features, peers, productivity, goals, memory summaries, storage, Jira, operations, and health into the private Eidoverse world using its saved deterministic recipe.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

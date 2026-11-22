@@ -1,0 +1,13 @@
+{
+  "name": "calendar_today",
+  "description": "Report today's calendar events. Use when the user asks \"what's on my calendar today?\", \"what do I have today?\", \"any meetings today?\". Reads from the user's synced calendar accounts (Google etc.). Returns up to 10 events with title, time, and location.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max events to return (default 10, max 20)."
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "daily_log_stop_dictation",
+  "description": "End voice dictation and return to normal conversation mode. Only useful if dictation is currently active. Use when the user says \"stop dictation\", \"end dictation\", \"I'm done\", \"exit dictation mode\".",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

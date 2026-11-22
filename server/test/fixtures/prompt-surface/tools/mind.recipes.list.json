@@ -1,0 +1,27 @@
+{
+  "name": "mind.recipes.list",
+  "description": "list saved read-tool recipe definitions. Read/list return paged definitions/history only. Create/update require schemaVersion:1, recipe.* name, purpose, closed parameters, 1-5 steps with {id,tool,arguments}, and outputs. Bindings are {literal:value}, {input:parameter}, or {step:id,path:[field]}.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "default": 10,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20
+      },
+      "offset": {
+        "default": 0,
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100000
+      }
+    },
+    "required": [
+      "limit",
+      "offset"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

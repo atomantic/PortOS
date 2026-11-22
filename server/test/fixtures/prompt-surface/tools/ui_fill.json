@@ -1,0 +1,21 @@
+{
+  "name": "ui_fill",
+  "description": "Type text into an input or textarea by its label. Use ui_select for dropdowns, ui_check for checkboxes.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string",
+        "description": "Visible label of the input."
+      },
+      "value": {
+        "type": "string",
+        "description": "Text to fill in."
+      }
+    },
+    "required": [
+      "label",
+      "value"
+    ]
+  }
+}

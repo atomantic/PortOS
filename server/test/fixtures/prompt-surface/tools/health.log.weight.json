@@ -1,0 +1,30 @@
+{
+  "name": "health.log.weight",
+  "description": "Log a body weight entry to MortalLoom / Meatspace tracking. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "weight": {
+        "type": "number",
+        "description": "Body weight value."
+      },
+      "unit": {
+        "type": "string",
+        "enum": [
+          "lb",
+          "kg"
+        ],
+        "description": "Unit (lb or kg). Default lb."
+      },
+      "date": {
+        "type": "string",
+        "description": "ISO date (YYYY-MM-DD). Omit for today."
+      }
+    },
+    "required": [
+      "weight"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

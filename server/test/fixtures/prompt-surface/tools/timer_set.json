@@ -1,0 +1,21 @@
+{
+  "name": "timer_set",
+  "description": "Set a one-shot timer or reminder. Use when the user says \"set a timer for 10 minutes\", \"remind me in 30 minutes to call mom\", \"ping me in an hour\". When the timer fires, PortOS raises a notification with the label. Specify the duration in minutes (or seconds for short timers).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "minutes": {
+        "type": "number",
+        "description": "Timer duration in minutes. Use this for most timers."
+      },
+      "seconds": {
+        "type": "number",
+        "description": "Timer duration in seconds. Use for short timers; added to minutes if both given."
+      },
+      "label": {
+        "type": "string",
+        "description": "What to remind the user about (e.g. \"tea is ready\", \"call mom\")."
+      }
+    }
+  }
+}

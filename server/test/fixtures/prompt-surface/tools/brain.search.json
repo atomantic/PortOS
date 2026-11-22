@@ -1,0 +1,22 @@
+{
+  "name": "brain.search",
+  "description": "Search the user's brain inbox for previously captured thoughts, notes, or ideas. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Substring to search for in captured text (case-insensitive). Use the most distinctive keyword the user mentioned."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Max results to return (default 5, max 10)."
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

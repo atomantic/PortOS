@@ -1,0 +1,23 @@
+{
+  "name": "feeds.mark-read",
+  "description": "Mark RSS feed items as read. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Distinctive phrase from the article title to fuzzy-match against currently unread items."
+      },
+      "all": {
+        "type": "boolean",
+        "description": "Mark every unread item as read. When true, `query` is ignored."
+      },
+      "feedQuery": {
+        "type": "string",
+        "description": "Optional: when `all` is true, restrict to a single feed by fuzzy-matching its title."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

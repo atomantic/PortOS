@@ -1,0 +1,8 @@
+{
+  "name": "pm2_status",
+  "description": "Report the status of PortOS PM2 processes. Use when the user asks \"is anything crashed?\", \"is everything running?\", \"any errors?\". Reports total, healthy, and any processes in errored/stopped states.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}
