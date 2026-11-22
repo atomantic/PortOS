@@ -73,6 +73,9 @@ const SHIPPED_NOT_REFRESHABLE = [
   // `models` subcommand prints that runtime's SETTINGS, not a catalog — nothing
   // here or on the Harnesses page can enumerate it.
   'openchamber-cli',
+  // Hermes has no model-listing subcommand (`hermes model` is an interactive picker), so no
+  // fetcher exists and the stored catalog stays empty: Hermes runs its own configured default.
+  'hermes-cli', 'hermes-tui',
 ];
 
 describe('MODEL_FETCHERS — shipped catalog visibility is unchanged', () => {

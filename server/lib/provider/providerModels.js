@@ -299,6 +299,20 @@ export function isKimiProvider(provider) {
   return id === 'kimi-cli' || id === 'kimi-tui' || commandBasename(provider?.command) === 'kimi';
 }
 
+export const HERMES_COMMAND = 'hermes';
+export const isHermesCommand = (command) => commandBasename(command) === HERMES_COMMAND;
+
+/**
+ * True when a provider is Hermes-Agent-flavored — the shipped `hermes-cli`/`hermes-tui` ids or any
+ * provider whose launch command basename is `hermes` (path/exe tolerant).
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isHermesProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'hermes-cli' || id === 'hermes-tui' || isHermesCommand(provider?.command);
+}
+
 /**
  * True when a provider is Antigravity-flavored — the shipped `antigravity-cli`/`antigravity-tui`
  * ids or any provider whose launch command basename is `agy`/`antigravity` (path/exe tolerant).
